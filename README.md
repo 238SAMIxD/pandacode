@@ -16,6 +16,14 @@ system's webview: no bundled Chromium, resident Node server, React runtime or
 embedded editor engine.
 
 <p align="center">
+  <b>Download:</b>
+  <a href="https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-macOS-arm64.dmg">macOS (Apple silicon)</a> ·
+  <a href="https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-Windows-x64-setup.exe">Windows x64</a> ·
+  <a href="https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-Linux-x86_64.AppImage">Linux x64</a> ·
+  <a href="https://github.com/aicodeking/pandacode/releases">All releases</a>
+</p>
+
+<p align="center">
   <img src="docs/screenshots/conversation.webp" alt="PandaCode with a finished Claude Code task: the reply explains the change, with the project's tasks in the sidebar and the composer below" width="100%">
 </p>
 
@@ -113,9 +121,9 @@ Download the latest build from
 
 | Platform | File | Requirements |
 | --- | --- | --- |
-| macOS (Apple silicon) | `PandaCode-macOS-arm64.dmg` | macOS 12+ |
-| Windows x64 | `PandaCode-Windows-x64-setup.exe` | Windows 10 1809+ or Windows 11 |
-| Linux x64 | `PandaCode-Linux-x86_64.AppImage` | Ubuntu 22.04+ or compatible, X11 or XWayland |
+| macOS (Apple silicon) | [`PandaCode-macOS-arm64.dmg`](https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-macOS-arm64.dmg) | macOS 12+ |
+| Windows x64 | [`PandaCode-Windows-x64-setup.exe`](https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-Windows-x64-setup.exe) | Windows 10 1809+ or Windows 11 |
+| Linux x64 | [`PandaCode-Linux-x86_64.AppImage`](https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-Linux-x86_64.AppImage) | Ubuntu 22.04+ or compatible, X11 or XWayland |
 
 Release builds are not code-signed, so your OS will warn the first time:
 

@@ -16,11 +16,17 @@ export function assertHostedRunner(env, target, platform = process.platform) {
 }
 
 export function selectPackage(names, version, target) {
-  const expected = target === 'windows-x86_64' ? `PandaCode_${version}_x64-setup.exe` : `PandaCode_${version}_amd64.AppImage`;
+  const expected = targetConfig(target).built(version);
   if (names.length > 100 || names.filter(name => name === expected).length !== 1) {
     throw new Error(`Expected exactly one built package: ${expected}`);
   }
   return expected;
+}
+
+/** Where Tauri leaves the target's installer, from the same config the build uses. */
+export function bundleDirectory(target, base = root) {
+  const config = targetConfig(target);
+  return join(base, 'src-tauri/target', config.triple, 'release/bundle', config.bundleDir);
 }
 
 export function smokeEnvironment(env, directory) {
@@ -132,7 +138,7 @@ async function main() {
   assertHostedRunner(process.env, target);
   const config = targetConfig(target);
   const { version } = JSON.parse(await readFile(join(root, 'src-tauri/tauri.conf.json'), 'utf8'));
-  const bundle = join(root, 'src-tauri/target', config.triple, 'release/bundle', config.bundle);
+  const bundle = bundleDirectory(target);
   const installer = join(bundle, selectPackage(await readdir(bundle), version, target));
   const size = (await stat(installer)).size;
   console.log(`Packaged installer: ${size} bytes (${(size / 1024 / 1024).toFixed(1)} MiB; release limit 200 MiB).`);

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdir, mkdtemp, readFile, rm, writeFile, access } from 'node:fs/promises';
-import { assertHostedRunner, selectPackage, smokeEnvironment, installArguments, observeProcess, linuxStartupCommand, cleanupSmokeDirectory, validatePackageSize } from './ci-startup-smoke.mjs';
+import { assertHostedRunner, bundleDirectory, selectPackage, smokeEnvironment, installArguments, observeProcess, linuxStartupCommand, cleanupSmokeDirectory, validatePackageSize } from './ci-startup-smoke.mjs';
 
 test('Linux starts Xvfb before the bus so portal services inherit the display', () => {
   assert.deepEqual(linuxStartupCommand('/tmp/build with spaces/PandaCode.AppImage'), { command: 'xvfb-run', args: ['--auto-servernum', '--server-args=-screen 0 1440x940x24', 'dbus-run-session', '--', '/tmp/build with spaces/PandaCode.AppImage'] });
@@ -93,4 +93,9 @@ test('startup observation stops a surviving fixture and bounds installer executi
   }
   await observeProcess(process.execPath, ['-e', 'process.exit(0)'], { ...options, durationMs: 1000, expectExit: true });
   await assert.rejects(observeProcess(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { ...options, expectExit: true }), /timeout/);
+});
+
+test('the startup check looks for the installer where the build leaves it', () => {
+  assert.equal(bundleDirectory('windows-x86_64', '/repo'), join('/repo', 'src-tauri/target', 'x86_64-pc-windows-msvc', 'release/bundle', 'nsis'));
+  assert.equal(bundleDirectory('linux-x86_64', '/repo'), join('/repo', 'src-tauri/target', 'x86_64-unknown-linux-gnu', 'release/bundle', 'appimage'));
 });
