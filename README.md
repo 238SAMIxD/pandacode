@@ -43,6 +43,9 @@ embedded editor engine.
 - **Simulators.** iOS Simulator and Android emulator tools for agents.
 - **Deploys.** Start a deploy task for Vercel, Cloudflare or AWS from the header,
   with approval-gated CLI runs.
+- **GitHub view.** Your repositories with their threads, pull requests and issues;
+  review, fix checks, merge or solve an issue in one click, each as a linked thread.
+  See [GitHub](docs/github.md).
 - **Git and worktrees.** Diffs, staging, commits, per-task [worktrees](docs/worktrees.md),
   and optional [GitHub](docs/github.md) issues and pull requests through `gh`.
 - **Review every turn.** Saved [turn changes](docs/turn-changes.md) with

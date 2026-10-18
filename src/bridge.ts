@@ -31,9 +31,9 @@ export async function subscribe(name: string, callback: (event: any) => void): P
   if (preview) return (await import('./preview')).listen(name, callback);
   return (await import('@tauri-apps/api/event')).listen(name, event => callback(event.payload));
 }
-export async function chooseFolder(): Promise<string | null> {
+export async function chooseFolder(title = 'Open a project in PandaCode'): Promise<string | null> {
   if (preview) return '/Users/you/Projects/new-project';
-  const result = await (await import('@tauri-apps/plugin-dialog')).open({ directory: true, multiple: false, title: 'Open a project in PandaCode' });
+  const result = await (await import('@tauri-apps/plugin-dialog')).open({ directory: true, multiple: false, title });
   return typeof result === 'string' ? result : null;
 }
 /** Files to attach to a message. The preview returns a fixed sample selection. */

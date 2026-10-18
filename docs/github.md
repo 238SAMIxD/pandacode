@@ -9,6 +9,27 @@ connected as *you* with the repository and its default branch) and has one
 switch. Off means no `gh` process runs and no GitHub control appears. Projects
 whose remote is not on GitHub simply show nothing.
 
+## GitHub view
+
+The header's **GitHub** view (beside Conversation and Board) lists the repositories your
+`gh` account can reach: your own, collaborations and organizations, most recently pushed
+first, with a dot on those checked out on this computer (matched by each project's
+`origin` remote). Choosing one shows three tabs:
+
+- **Threads**: the repository's tasks, and a box to start a new one.
+- **Pull requests**: open pull requests with review state, checks and size. **Review**
+  starts a thread that checks the pull request out and reviews it; the menu also offers
+  Open in thread, Fix failing checks, Address review comments and Merge when ready (which
+  merges only when checks pass, it's approved and it merges cleanly).
+- **Issues**: open issues. **Solve** starts a thread that fixes the issue on a branch;
+  **Open in thread** opens one with the prompt ready for you to finish.
+
+Every thread started here is an ordinary task, linked to its pull request or issue, and its
+prompt mentions `#123` so the item's content is attached as GitHub context. A row whose
+item already has a thread offers **Thread** to go back to it. A repository that is only on
+GitHub can be browsed and cloned into a folder you choose; it then opens as a project.
+Nothing is sent to GitHub except through `gh` and the agents you start.
+
 ## Mentions
 
 Type `@` in the prompt to search project files and, when connected, open issues

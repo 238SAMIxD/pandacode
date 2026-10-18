@@ -14,6 +14,7 @@ mod file_preview;
 mod run_script;
 mod github;
 mod github_pull;
+mod github_hub;
 mod simulator;
 mod vm;
 mod secret_store;
@@ -2216,6 +2217,31 @@ async fn describe_folder(path: String) -> Result<prompt_attachments::FolderSumma
 }
 
 #[tauri::command]
+async fn github_repos() -> Result<Vec<github_hub::HubRepo>> {
+    blocking(github_hub::repos).await
+}
+#[tauri::command]
+async fn github_repo_pulls(repo: String) -> Result<Vec<github_hub::HubPull>> {
+    blocking(move || github_hub::pulls(&repo)).await
+}
+#[tauri::command]
+async fn github_repo_issues(repo: String) -> Result<Vec<github_hub::HubIssue>> {
+    blocking(move || github_hub::issues(&repo)).await
+}
+/// Which local projects check out which GitHub repositories, by their `origin` remote.
+#[tauri::command]
+async fn github_project_repos(state: State<'_, AppState>) -> Result<Vec<github_hub::ProjectRepo>> {
+    let projects = state.store.lock().map_err(|e| e.to_string())?.projects()?;
+    blocking(move || Ok(projects.into_iter().filter_map(|project| github_hub::project_repo(std::path::Path::new(&project.path)).map(|repo| github_hub::ProjectRepo { project_id: project.id, repo })).collect())).await
+}
+/// Clones a repository into a folder the user chose and opens it as a project.
+#[tauri::command]
+async fn github_clone_repo(state: State<'_, AppState>, repo: String, parent: String) -> Result<Project> {
+    let destination = blocking(move || github_hub::clone(&repo, std::path::Path::new(&parent))).await?;
+    state.store.lock().map_err(|e| e.to_string())?.add_project(&destination)
+}
+
+#[tauri::command]
 async fn github_status(
     state: State<'_, AppState>,
     project_id: String,
@@ -2880,6 +2906,11 @@ pub fn run() {
                 remove_worktree,
                 recreate_worktree,
                 github_status,
+                github_repos,
+                github_repo_pulls,
+                github_repo_issues,
+                github_project_repos,
+                github_clone_repo,
                 github_search,
                 github_issues,
                 github_resolve,

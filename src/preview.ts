@@ -1,3 +1,4 @@
+import { previewHub, previewRepos } from './preview-github-hub';
 import type { AgentEvent, BrowserStatus, FileEntry, GitStatus, Message, MessagePage, Project, Provider, ProviderId, ProviderModel, Session, TaskStage, ToolActivity } from './types';
 import { fallbackModel } from './model-catalog';
 import { historicalProvider } from './provider-handoff';
@@ -144,6 +145,7 @@ function previewWorktree(source: Session, args: Record<string, any>): { path: st
   return { path, branch };
 }
 /** A tiny GitHub for the browser preview: one connected repository and a few issues. */
+const previewClones = new Map<string, string>();
 const previewGithub = (() => {
   const repos: Record<string, { nameWithOwner: string; defaultBranch: string; url: string }> = { 'project-1': { nameWithOwner: 'orbit-labs/orbit', defaultBranch: 'main', url: 'https://github.com/orbit-labs/orbit' } };
   const issues = [
@@ -975,6 +977,16 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     }
     case 'git_push': { const checkout = checkoutGit(args.sessionId); pushedBranches.add(checkout.branch); result = `branch '${checkout.branch}' set up to track 'origin/${checkout.branch}'.`; break; }
     case 'github_status': result = previewGithub.status(args.projectId); break;
+    case 'github_repos': result = structuredClone(previewRepos); break;
+    case 'github_repo_pulls': result = previewHub.pulls(String(args.repo)); break;
+    case 'github_repo_issues': result = previewHub.issues(String(args.repo)); break;
+    case 'github_project_repos': result = projects.filter(p => p.id === 'project-1' || previewClones.has(p.id)).map(p => ({ projectId: p.id, repo: previewClones.get(p.id) ?? 'orbit-labs/orbit' })); break;
+    case 'github_clone_repo': {
+      const repo = String(args.repo), name = repo.split('/')[1] ?? repo, path = `${String(args.parent).replace(/\/$/, '')}/${name}`;
+      if (projects.some(p => p.path === path)) throw new Error(`${path} already exists. Open it as a project instead, or choose another folder.`);
+      const added: Project = { id: `project-${++id}`, name, path };
+      projects = [...projects, added]; previewClones.set(added.id, repo); result = added; break;
+    }
     case 'github_search': result = previewGithub.search(args.projectId, String(args.query ?? '')); break;
     case 'github_issues': result = previewGithub.issues(args.projectId, args.filter ?? {}); break;
     case 'github_resolve': result = previewGithub.resolve(args.projectId, (args.numbers ?? []) as number[]); break;

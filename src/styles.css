@@ -89,7 +89,7 @@ button .icon{pointer-events:none}
 .status-dot{width:5px;height:5px;background:var(--success);border-radius:50%;display:inline-block;flex-shrink:0}
 .main-pane{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg)}
 .workspace-header{container-type:inline-size;container-name:workspace-header;height:55px;border-bottom:1px solid rgb(0 0 0 / .045);display:flex;align-items:center;justify-content:space-between;padding:0 19px 0 26px;gap:20px;flex-shrink:0;background:linear-gradient(180deg,#fffbee,#ffffff);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
-@container workspace-header (max-width:650px){.view-switch button span{display:none}.view-switch button{padding:0 5px}}
+@container workspace-header (max-width:760px){.view-switch button span{display:none}.view-switch button{padding:0 4px}}
 .breadcrumb{display:flex;align-items:center;gap:10px;min-width:0;overflow:hidden;color:var(--muted);font-size:.8rem}
 .breadcrumb>.icon{width:14px;height:14px}
 .breadcrumb>button{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--text);font-size:.8rem;white-space:nowrap;font-weight:500}
@@ -832,3 +832,13 @@ html[data-theme="dark"]:is([data-native-material="liquidGlass"],[data-native-mat
 @media(max-width:650px){.breadcrumb>.bot-crumb-settings span,.bot-crumb-where{display:none}.bot-welcome-avatar{width:44px;height:44px;font-size:1.25rem;margin-bottom:14px}}
 @media(prefers-reduced-motion:no-preference){.bot-crumb-state[data-state=working]{animation:bot-crumb-pulse 1.8s ease-in-out infinite}}
 @keyframes bot-crumb-pulse{50%{opacity:.6}}
+
+/* The GitHub view is full-width like the board: no task sidebar, the header clears the window controls. */
+.workspace.github-view{grid-template-columns:minmax(0,1fr) var(--inspector-width,302px)}
+.workspace.github-view.inspector-closed{grid-template-columns:minmax(0,1fr)}
+.github-view .workspace-header{padding-left:24px;gap:12px}
+html[data-native-platform=macos] .github-view .workspace-header{padding-left:104px}
+.github-view .sidebar-resize-handle{display:none}
+#github-hub{flex:1;min-width:0;min-height:0}
+#github-hub[hidden]{display:none}
+@container workspace-header (max-width:420px){.header-actions{gap:1px}.header-actions .icon-button{width:24px}.header-divider{margin:0 1px}}
