@@ -25,12 +25,11 @@ async function probe(page: Page, hook = ''): Promise<void> {
   await expect(prompt(page)).toBeEnabled();
 }
 
-test('one branch control: the prompt bar chip names the checkout and the statusbar names the folder', async ({ page }) => {
+test('one branch control: the prompt bar chip names the checkout and there is no statusbar', async ({ page }) => {
   await probe(page);
   await expect(page.locator('.composer-context')).toHaveCount(1);
   await expect(chip(page)).toContainText('feat/instant-search');
-  await expect(page.locator('#status-left button')).toHaveText('orbit');
-  await expect(page.locator('#status-left [data-action="worktree"]')).toHaveCount(0);
+  await expect(page.locator('.statusbar')).toHaveCount(0);
   await chip(page).click();
   await expect(menu(page).getByRole('menuitem', { name: /New task in a worktree/ })).toBeVisible();
   await expect(menu(page).getByRole('menuitem', { name: /Work in a new worktree/ })).toHaveCount(0);
@@ -61,7 +60,6 @@ test('an unstarted task converts in place and keeps its draft, title, and select
   await expect(prompt(page)).toHaveValue('Fix the login redirect loop when the session expires');
   await expect(page.locator('.composer-local')).toHaveText('Worktree');
   await expect(chip(page)).toContainText('pandacode/login-loop');
-  await expect(page.locator('#status-left button')).toHaveText('pandacode-login-loop');
   expect((await calls(page, 'attach_worktree')).at(-1).args).toMatchObject({ sessionId: taskId, branch: 'login-loop', base: 'main', existing: false });
   expect(await calls(page, 'create_worktree')).toHaveLength(0);
   await chip(page).click();

@@ -269,3 +269,27 @@ test('link pull request picks an open PR or takes a URL, and refuses other repos
   await expect(branchMenu.getByRole('menuitem', { name: /Link pull request/ })).toHaveCount(0);
   await page.keyboard.press('Escape');
 });
+
+test('a linked open pull request merges from its inspector tab after choosing a method', async ({ page }) => {
+  await probe(page);
+  await page.locator('#branch-chip').click();
+  await page.getByRole('dialog', { name: 'Branch and worktree', exact: true }).getByRole('menuitem', { name: /Link pull request/ }).click();
+  const dialog = page.getByRole('dialog', { name: 'Link pull request', exact: true });
+  await dialog.locator('[data-pull-number="130"]').click();
+  const view = page.locator('#inspector .pull-view');
+  await expect(view.locator('.pull-state')).toHaveText('Open');
+  await view.getByRole('button', { name: 'Merge', exact: true }).click();
+  // Nothing reaches GitHub until the method is confirmed; Cancel backs out.
+  const confirm = view.getByRole('group', { name: 'Merge pull request #130' });
+  await expect(confirm.getByRole('combobox', { name: 'Merge method' })).toHaveValue('squash');
+  await confirm.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(confirm).toHaveCount(0);
+  expect(await calls(page, 'github_merge_pull_request')).toHaveLength(0);
+  await view.getByRole('button', { name: 'Merge', exact: true }).click();
+  await confirm.getByRole('combobox', { name: 'Merge method' }).selectOption('rebase');
+  await confirm.getByRole('button', { name: 'Confirm merge', exact: true }).click();
+  await expect(page.locator('#toast')).toContainText('Merged pull request #130');
+  expect((await calls(page, 'github_merge_pull_request')).at(-1).args).toEqual({ sessionId: 'session-1', method: 'rebase' });
+  await expect(view.locator('.pull-state')).toHaveText('Merged');
+  await expect(view.getByRole('button', { name: 'Merge', exact: true })).toHaveCount(0);
+});

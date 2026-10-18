@@ -183,13 +183,15 @@ const previewGithub = (() => {
       });
     },
     diff: 'diff --git a/src/lib/search-index.ts b/src/lib/search-index.ts\nindex 3f2a1c0..9b8e7d4 100644\n--- a/src/lib/search-index.ts\n+++ b/src/lib/search-index.ts\n@@ -1,4 +1,6 @@\n-export function buildIndex(items: string[]) {\n+const cache = new WeakMap<string[], Map<string, number[]>>();\n+export function buildIndex(items: string[]) {\n+  const hit = cache.get(items); if (hit) return hit;\n   const index = new Map<string, number[]>();\n   items.forEach((item, i) => index.set(item, [i]));\n   return index;\ndiff --git a/src/components/search.ts b/src/components/search.ts\nindex 1111111..2222222 100644\n--- a/src/components/search.ts\n+++ b/src/components/search.ts\n@@ -3 +3 @@\n-input.addEventListener(\'input\', rebuild);\n+input.addEventListener(\'input\', debounce(rebuild, 120));\n',
+    merged: new Map<string, string>(),
     detail(projectId: string, number: number) {
       const pull = pulls.find(p => p.projectId === projectId && p.number === number);
       const at = (hours: number) => new Date(now - hours * 3600_000).toISOString();
+      const mergedAt = this.merged.get(`${projectId}:${number}`) ?? '';
       return {
         number, title: pull?.title ?? `Pull request ${number}`, body: pull?.body || 'Reuses **one** search index per dataset.\n\n- Debounces input\n- Caches the index', bodyTruncated: false,
-        state: 'open', url: url(projectId, 'pull', number), author: 'you', base: pull?.base ?? 'main', head: pull?.head ?? 'feat/instant-search',
-        additions: 4, deletions: 2, changedFiles: 2, createdAt: at(3), updatedAt: at(1), mergedAt: '', mergeable: 'mergeable', reviewDecision: 'approved', labels: ['performance'],
+        state: mergedAt ? 'merged' : 'open', url: url(projectId, 'pull', number), author: 'you', base: pull?.base ?? 'main', head: pull?.head ?? 'feat/instant-search',
+        additions: 4, deletions: 2, changedFiles: 2, createdAt: at(3), updatedAt: at(1), mergedAt, mergeable: 'mergeable', reviewDecision: 'approved', labels: ['performance'],
         checks: [{ name: 'CI / test', state: 'success', url: 'https://github.com/orbit-labs/orbit/actions/runs/1' }, { name: 'CI / lint', state: 'pending', url: '' }],
         files: [{ path: 'src/lib/search-index.ts', additions: 3, deletions: 1 }, { path: 'src/components/search.ts', additions: 1, deletions: 1 }],
         commits: [{ oid: 'a1b2c3d', headline: 'Cache the search index', author: 'you', date: at(3) }, { oid: 'e4f5a6b', headline: 'Debounce search input', author: 'you', date: at(2) }],
@@ -1015,6 +1017,13 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'github_pull_request': {
       const s = session(args.sessionId); if (!s.pullRequest) throw new Error('This task has no linked pull request.');
       result = previewGithub.detail(s.projectId, s.pullRequest.number); break;
+    }
+    case 'github_merge_pull_request': {
+      const s = session(args.sessionId); if (!s.pullRequest) throw new Error('This task has no linked pull request.');
+      if (!['squash', 'merge', 'rebase'].includes(String(args.method))) throw new Error('Choose squash, merge or rebase.');
+      previewGithub.merged.set(`${s.projectId}:${s.pullRequest.number}`, new Date().toISOString());
+      s.pullRequest = { ...s.pullRequest, state: 'merged', checkedAt: Date.now() };
+      result = s; break;
     }
     case 'github_pull_request_diff': {
       const s = session(args.sessionId); if (!s.pullRequest) throw new Error('This task has no linked pull request.');

@@ -7,6 +7,7 @@ import type { Provider, ProviderId } from './types';
 import { mountOverlaySettings } from './overlay-settings';
 import { mountSupportDetails } from './support-settings';
 import { aboutSettingsHtml, mountAboutSettings } from './about-settings';
+import { mountResourceUsage, resourceUsageHtml } from './resource-usage-settings';
 import { colorsSummary } from './theme-settings';
 import { mountAgentTeams, type AgentTeamsOptions } from './agent-teams';
 import { mountCloudSettings, type CloudSettingsHost } from './cloud-settings';
@@ -47,7 +48,7 @@ export const SECTIONS: { id: SettingsSection; label: string; icon: string; descr
   { id: 'tools', label: 'Tools & add-ons', icon: 'widget', description: 'App tools, MCP servers, skills and Jev.' },
   { id: 'cloud', label: 'Cloud sandboxes', icon: 'globe', description: 'Daytona, Cloudflare and AWS machines for your agents.' },
   { id: 'github', label: 'GitHub', icon: 'github', description: 'Issues, pull requests and repositories through the GitHub CLI.' },
-  { id: 'about', label: 'About & updates', icon: 'info', description: 'Version, updates, license and support.' },
+  { id: 'about', label: 'About & updates', icon: 'info', description: 'Version, updates, resource usage, license and support.' },
 ];
 
 const switchRow = (id: string, title: string, detail: string, checked: boolean) =>
@@ -81,7 +82,7 @@ function sectionHtml(id: SettingsSection, options: SettingsOptions): string {
       </div>`;
     case 'cloud': return '<div id="cloud-settings"></div>';
     case 'github': return '<div id="github-settings"></div>';
-    case 'about': return `${aboutSettingsHtml()}
+    case 'about': return `${aboutSettingsHtml()}${resourceUsageHtml()}
       <div class="settings-group settings-support"><div class="setting-row"><div><strong>Help & support</strong><small>Open an issue on GitHub.</small></div><button type="button" class="secondary-button" data-action="support">Open issues${icon('forward')}</button></div><details class="support-details"><summary>App details for support</summary><p>Only the app version, platform, and architecture. Nothing is sent automatically.</p><textarea aria-label="App details for support" rows="3" readonly spellcheck="false"></textarea><div class="support-details-actions"><button type="button" class="secondary-button support-copy" disabled>${icon('copy')}Copy app details</button><button type="button" class="secondary-button support-retry" hidden>Try again</button></div><p role="status" aria-live="polite"></p></details></div>`;
   }
 }
@@ -159,6 +160,7 @@ export function mountSettings(host: HTMLElement, options: SettingsOptions): Sett
     if (id === 'about') {
       cleanups.push(mountSupportDetails(panel.querySelector<HTMLDetailsElement>('.support-details')!));
       cleanups.push(mountAboutSettings(panel.querySelector<HTMLElement>('.settings-about')!));
+      cleanups.push(mountResourceUsage(panel.querySelector<HTMLElement>('.settings-resources')!));
     }
     if (id === 'agents' && !discovered) void refresh();
     for (const slot of panel.querySelectorAll<HTMLElement>('[data-embed]')) {

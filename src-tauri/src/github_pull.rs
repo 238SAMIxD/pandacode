@@ -287,9 +287,35 @@ pub fn lookup(root: &Path, number: i64) -> Result<TaskLink, String> {
     link_from(&json(&value)?).ok_or_else(|| "GitHub returned an unexpected pull request.".into())
 }
 
+/// The `gh pr merge` flag for a merge method the user picked; anything else is refused.
+pub fn merge_flag(method: &str) -> Result<&'static str, String> {
+    match method {
+        "squash" => Ok("--squash"),
+        "merge" => Ok("--merge"),
+        "rebase" => Ok("--rebase"),
+        _ => Err("Choose squash, merge or rebase.".into()),
+    }
+}
+
+/// Merge the pull request on GitHub, then read it back so the task's link shows it merged.
+/// Local branches and worktrees are left alone; GitHub's branch settings decide the rest.
+pub fn merge(root: &Path, number: i64, method: &str) -> Result<TaskLink, String> {
+    let flag = merge_flag(method)?;
+    run_gh(root, &["pr", "merge", &number.to_string(), flag], Duration::from_secs(60))?;
+    lookup(root, number)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merge_accepts_only_known_methods() {
+        assert_eq!(merge_flag("squash"), Ok("--squash"));
+        assert_eq!(merge_flag("merge"), Ok("--merge"));
+        assert_eq!(merge_flag("rebase"), Ok("--rebase"));
+        assert!(merge_flag("--admin").is_err());
+    }
 
     // Shaped like `gh pr view --json DETAIL_FIELDS` output.
     const RECORDED: &str = r#"{"number":42,"title":"Debounce search","body":"Reuses **one** index.","state":"OPEN","isDraft":false,"url":"https://github.com/o/r/pull/42","author":{"login":"octocat"},"baseRefName":"main","headRefName":"feat/debounce","additions":30,"deletions":4,"changedFiles":2,"createdAt":"2026-10-14T10:00:00Z","updatedAt":"2026-10-14T11:00:00Z","mergedAt":null,"mergeable":"MERGEABLE","reviewDecision":"APPROVED","labels":[{"name":"perf"}],

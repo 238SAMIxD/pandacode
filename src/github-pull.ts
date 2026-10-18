@@ -24,9 +24,14 @@ export type PullHost = {
   openUrl(url: string): Promise<void>;
   /** Remove the link from the task; the inspector falls back to Changes. */
   unlink(session: Session): Promise<void>;
+  /** The task came back with its link marked merged. */
+  merged(session: Session): void;
+  notify(message: string): void;
 };
 
 type Section = 'overview' | 'files' | 'commits';
+type MergeMethod = 'squash' | 'merge' | 'rebase';
+const MERGE_LABEL: Record<MergeMethod, string> = { squash: 'Squash and merge', merge: 'Create a merge commit', rebase: 'Rebase and merge' };
 const FRESH_FOR = 60_000;
 const STATE_LABEL: Record<string, string> = { open: 'Open', draft: 'Draft', merged: 'Merged', closed: 'Closed' };
 const REVIEW_LABEL: Record<string, string> = { approved: 'Approved', changes_requested: 'Changes requested', review_required: 'Review required' };
@@ -60,7 +65,7 @@ function checksSummary(checks: PullCheck[]): { tone: string; text: string } {
 export function createPullView(host: PullHost) {
   const details = new Map<string, { at: number; detail: PullDetail }>();
   const diffs = new Map<string, Promise<PullDiff>>();
-  let mounted: { key: string; session: Session; root: HTMLElement; section: Section; viewers: Map<string, DiffViewerController>; request: number } | undefined;
+  let mounted: { key: string; session: Session; root: HTMLElement; section: Section; viewers: Map<string, DiffViewerController>; request: number; merge: 'idle' | 'confirm' | 'merging'; method: MergeMethod } | undefined;
   let requests = 0;
 
   function dispose(): void {
@@ -79,7 +84,7 @@ export function createPullView(host: PullHost) {
     root.className = 'pull-view';
     root.addEventListener('click', event => void onClick(event));
     target.replaceChildren(root);
-    mounted = { key, session, root, section: 'overview', viewers: new Map(), request: 0 };
+    mounted = { key, session, root, section: 'overview', viewers: new Map(), request: 0, merge: 'idle', method: 'squash' };
     void load(false);
   }
 
@@ -102,7 +107,38 @@ export function createPullView(host: PullHost) {
     } finally { if (mounted === view && view.request === request) view.root.removeAttribute('aria-busy'); }
   }
 
-  function header(detail: PullDetail): string {
+  /** Open PRs offer Merge; it asks once for the method before anything reaches GitHub. */
+  function mergeControls(detail: PullDetail, view: NonNullable<typeof mounted>): string {
+    if (detail.state !== 'open') return '';
+    if (detail.mergeable === 'conflicting') return `<div class="pull-merge"><button class="primary-button" disabled title="Resolve the merge conflicts first">${icon('pull')}Merge</button><small>Resolve the conflicts before merging.</small></div>`;
+    if (view.merge === 'idle') return `<div class="pull-merge"><button class="primary-button" data-pull-action="merge-start">${icon('pull')}Merge</button></div>`;
+    const busy = view.merge === 'merging';
+    const options = (Object.keys(MERGE_LABEL) as MergeMethod[]).map(method => `<option value="${method}" ${method === view.method ? 'selected' : ''}>${MERGE_LABEL[method]}</option>`).join('');
+    return `<div class="pull-merge pull-merge-confirm" role="group" aria-label="Merge pull request #${detail.number}">
+      <select data-pull-merge-method aria-label="Merge method" ${busy ? 'disabled' : ''}>${options}</select>
+      <button class="primary-button" data-pull-action="merge-confirm" ${busy ? 'disabled' : ''}>${busy ? 'Merging…' : `Confirm merge`}</button>
+      <button class="secondary-button" data-pull-action="merge-cancel" ${busy ? 'disabled' : ''}>Cancel</button>
+    </div>`;
+  }
+
+  async function merge(view: NonNullable<typeof mounted>): Promise<void> {
+    const detail = details.get(view.key)?.detail; if (!detail || view.merge === 'merging') return;
+    view.method = (view.root.querySelector<HTMLSelectElement>('[data-pull-merge-method]')?.value as MergeMethod | undefined) ?? view.method;
+    view.merge = 'merging'; await render(view, detail);
+    try {
+      const saved = await host.call<Session>('github_merge_pull_request', { sessionId: view.session.id, method: view.method });
+      if (mounted === view) { view.session = saved; view.merge = 'idle'; }
+      host.notify(`Merged pull request #${detail.number}`);
+      host.merged(saved);
+      if (mounted === view) await load(true);
+    } catch (error) {
+      if (mounted !== view) return;
+      view.merge = 'confirm'; await render(view, detail);
+      host.notify(`Couldn’t merge #${detail.number}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  function header(detail: PullDetail, view: NonNullable<typeof mounted>): string {
     const state = detail.state || 'open';
     const review = REVIEW_LABEL[detail.reviewDecision];
     const checks = detail.checks.length ? checksSummary(detail.checks) : null;
@@ -120,6 +156,7 @@ export function createPullView(host: PullHost) {
       <p class="pull-stats"><span class="pull-added">+${detail.additions}</span><span class="pull-removed">−${detail.deletions}</span><span>${plural(detail.changedFiles, 'file')}</span><span>${plural(detail.commits.length, 'commit')}</span><span>${escape(state === 'merged' ? `merged ${ago(detail.mergedAt)}` : `updated ${ago(detail.updatedAt)}`)}</span></p>
       ${badges ? `<div class="pull-badges">${badges}</div>` : ''}
       ${detail.labels.length ? `<div class="pull-labels">${detail.labels.map(label => `<span>${escape(label)}</span>`).join('')}</div>` : ''}
+      ${mergeControls(detail, view)}
     </header>`;
   }
 
@@ -154,7 +191,7 @@ export function createPullView(host: PullHost) {
     if (mounted !== view) return;
     view.viewers.forEach(viewer => viewer.dispose()); view.viewers.clear();
     const tab = (id: Section, label: string) => `<button role="tab" data-pull-action="section" data-section="${id}" aria-selected="${view.section === id}">${label}</button>`;
-    view.root.innerHTML = `${header(detail)}<div class="pull-tabs" role="tablist" aria-label="Pull request sections">${tab('overview', 'Overview')}${tab('files', `Files <small>${detail.files.length}</small>`)}${tab('commits', `Commits <small>${detail.commits.length}</small>`)}</div><div class="pull-content" role="tabpanel">${content}</div>`;
+    view.root.innerHTML = `${header(detail, view)}<div class="pull-tabs" role="tablist" aria-label="Pull request sections">${tab('overview', 'Overview')}${tab('files', `Files <small>${detail.files.length}</small>`)}${tab('commits', `Commits <small>${detail.commits.length}</small>`)}</div><div class="pull-content" role="tabpanel">${content}</div>`;
     const tabs = view.root.querySelector<HTMLElement>('.pull-tabs')!;
     trackSegment(tabs, tabs.querySelector<HTMLElement>('[aria-selected="true"]'));
   }
@@ -186,6 +223,9 @@ export function createPullView(host: PullHost) {
       case 'refresh': await load(true); break;
       case 'open': if (target.dataset.url) await host.openUrl(target.dataset.url); break;
       case 'unlink': await host.unlink(view.session); break;
+      case 'merge-start': if (detail) { view.merge = 'confirm'; await render(view, detail); view.root.querySelector<HTMLElement>('[data-pull-action="merge-confirm"]')?.focus(); } break;
+      case 'merge-cancel': if (detail) { view.merge = 'idle'; await render(view, detail); } break;
+      case 'merge-confirm': await merge(view); break;
       case 'section': if (detail) { view.section = target.dataset.section as Section; await render(view, detail); view.root.querySelector<HTMLElement>('[aria-selected="true"]')?.focus(); } break;
       case 'file': await toggleFile(view, target); break;
     }

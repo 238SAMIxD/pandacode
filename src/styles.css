@@ -253,13 +253,6 @@ mark{background:color-mix(in srgb,var(--accent) 45%,transparent);color:inherit;b
 .attachments>span{display:flex;align-items:center;gap:5px;border:1px solid #ead99b;background:var(--accent-dim);padding:3px 5px 3px 7px;font-size:0.714286rem;border-radius:2px;color:var(--accent-ink)}
 .attachments .icon{width:11px;height:11px}
 .attachments button{padding:2px}
-.statusbar{display:flex;align-items:center;gap:14px;border-top:none;height:28px;flex-shrink:0;padding:0 18px;color:var(--muted);font-size:.72rem;background:var(--bg)}
-.statusbar>#status-left{min-width:0;overflow:hidden}
-.statusbar>#status-left button{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis}
-.statusbar>.preview-status{max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.statusbar>span:first-child{display:flex;align-items:center;gap:6px;min-width:0;flex:1}
-.statusbar button{font-size:.72rem;white-space:nowrap}
-.statusbar .icon{width:11px;height:11px}
 .inspector{position:relative;padding-left:8px;min-width:0;background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column;min-height:0;overflow:hidden}
 .inspector-heading{height:auto;min-height:55px;display:flex;align-items:center;justify-content:space-between;padding:10px 13px 10px 19px;border-bottom:1px solid rgb(0 0 0 / .045);flex-shrink:0;background:linear-gradient(180deg,var(--accent-tint),var(--panel))}
 .inspector-heading>.icon-button{width:24px;height:24px}
@@ -524,8 +517,6 @@ dialog input::placeholder{color:var(--muted)}
 .composer-footnote{font-size:0.571429rem}
 .composer-footnote>span:last-child{max-width:165px;text-align:right}
 .inspector{width:var(--inspector-width,min(320px,calc(100vw - 59px)));background:var(--panel)}
-.statusbar{padding:0 10px;gap:7px;background:var(--bg);border-top:none;color:var(--muted);font-size:.72rem}
-.statusbar>button{font-size:0.571429rem}
 .command-footer{gap:9px;font-size:0.571429rem}
 .approval-request{margin-left:0;background:#fff8db;border:1px solid #e6d59a;border-radius:4px}}
 @media(prefers-reduced-motion:reduce){
@@ -844,7 +835,7 @@ html[data-native-platform=macos] .github-view .workspace-header{padding-left:104
 @container workspace-header (max-width:420px){.header-actions{gap:1px}.header-actions .icon-button{width:24px}.header-divider{margin:0 1px}}
 
 /* An update is downloaded: one quiet, clickable line in the status bar. */
-.update-status{display:inline-flex;align-items:center;gap:5px;margin-left:auto;margin-right:8px;padding:2px 9px;border-radius:999px;background:var(--accent-dim);color:var(--accent-ink);font-size:.72rem;font-weight:600}
+.update-status{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;background:var(--accent-dim);color:var(--accent-ink);font-size:.72rem;font-weight:600}
 .update-status:hover{background:color-mix(in srgb,var(--accent) 30%,transparent)}
 .update-status:active{transform:scale(.97)}
 .update-status .icon{width:12px;height:12px}
@@ -856,3 +847,7 @@ html[data-native-platform=macos] .github-view .workspace-header{padding-left:104
 #settings-page{position:absolute;inset:0;z-index:40}
 #settings-page[hidden]{display:none}
 .workspace.settings-open>:is(.sidebar,.main-pane,.inspector,.sidebar-resize-handle){visibility:hidden}
+
+.settings-metric{font-family:var(--mono);font-size:.82rem;color:var(--text)}
+.preview-status{color:var(--muted);font-size:.72rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
+@media (max-width:900px){.preview-status{display:none}}

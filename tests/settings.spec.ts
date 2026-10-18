@@ -369,3 +369,17 @@ test('Antigravity installation and connection readiness are distinct with explic
   await expect(check.getByRole('status')).toHaveText('Connection ready');
   await expect(check).toContainText('No prompt was sent');
 });
+
+test('resource usage lives in Settings → About, not in a bottom status bar', async ({ page }) => {
+  await open(page);
+  await expect(page.locator('.statusbar')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Resource usage', exact: true })).toHaveCount(0);
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+,' : 'Control+,');
+  await tab(page, 'About & updates').click();
+  const usage = panel(page, 'About & updates').locator('.settings-resources');
+  await expect(usage).toContainText('Resource usage');
+  await expect(usage.locator('[data-metric="activeAgents"]')).toHaveText('0');
+  await expect(usage.locator('[data-metric="coreRssBytes"]')).toHaveText('—');
+  await usage.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(usage.getByRole('button', { name: 'Refresh', exact: true })).toBeEnabled();
+});

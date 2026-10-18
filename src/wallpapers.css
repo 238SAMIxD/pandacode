@@ -15,7 +15,7 @@ html .workspace[data-wallpaper] :is(.main-pane,.sidebar,.inspector){--muted:#505
 .workspace[data-wallpaper] .board-card-open:active{background:color-mix(in srgb,var(--accent) 6%,transparent)}
 .workspace[data-wallpaper] .board-card-start{background:color-mix(in srgb,var(--raised) 58%,transparent)}
 .workspace[data-wallpaper] .board-card-start:is(:hover,:active){background:color-mix(in srgb,var(--accent-dim) 66%,transparent)}
-html .workspace[data-wallpaper]>.main-pane>:is(.workspace-header,.statusbar){background:transparent;border:0;backdrop-filter:none;-webkit-backdrop-filter:none}
+html .workspace[data-wallpaper]>.main-pane>.workspace-header{background:transparent;border:0;backdrop-filter:none;-webkit-backdrop-filter:none}
 html[data-theme="dark"] .workspace-wallpaper::after{background:linear-gradient(180deg,rgb(28 28 27 / var(--wallpaper-scrim-edge,.8)),rgb(28 28 27 / var(--wallpaper-scrim-center,.856)) 48%,rgb(28 28 27 / var(--wallpaper-scrim-edge,.8)))}
 html[data-theme="dark"] .workspace[data-wallpaper] :is(.main-pane,.sidebar,.inspector){--muted:#d0cfc5;--faint:#c4c3b8}
 
@@ -95,7 +95,7 @@ html .workspace :is(.architect-panel,.subagents-panel).floating-menu{
   html[data-theme] .workspace[data-wallpaper]>.main-pane{background:var(--bg)}
   html[data-theme] .workspace[data-wallpaper]>.sidebar{background:var(--sidebar);border-right-color:var(--border);backdrop-filter:none;-webkit-backdrop-filter:none}
   html[data-theme] .workspace[data-wallpaper]>.inspector{background:var(--panel);border-color:var(--border);backdrop-filter:none;-webkit-backdrop-filter:none}
-  html .workspace[data-wallpaper]>.main-pane>:is(.workspace-header,.statusbar){background:var(--bg)}
+  html .workspace[data-wallpaper]>.main-pane>.workspace-header{background:var(--bg)}
   .workspace[data-wallpaper] :is(.project-board,.conversation-pane){background:var(--bg)}
   html:root .workspace[data-wallpaper] .view-switch{background:var(--panel);backdrop-filter:none;-webkit-backdrop-filter:none}
   html:root .workspace.board-view[data-wallpaper] .conversation-pane{background:var(--bg);backdrop-filter:none;-webkit-backdrop-filter:none}

@@ -131,7 +131,7 @@ async function captureEffortPresentation(page: Page): Promise<void> {
   await expect(modelPicker(page)).toHaveAttribute('data-popover-state', 'open');
   await reasoningSlider(page).focus();
   await page.evaluate(() => {
-    const selectors = ['.model-menu', '.model-menu-list', '.model-menu-option[aria-current="true"]', '.model-menu-settings', '.effort-range', '.effort-label', '.effort-particles', '#prompt', '#model-picker-trigger', '#breadcrumb button', '#status-left button'];
+    const selectors = ['.model-menu', '.model-menu-list', '.model-menu-option[aria-current="true"]', '.model-menu-settings', '.effort-range', '.effort-label', '.effort-particles', '#prompt', '#model-picker-trigger', '#breadcrumb button'];
     const nodes = selectors.map(selector => document.querySelector<HTMLElement>(selector)!);
     const list = document.querySelector<HTMLElement>('.model-menu-list')!;
     list.scrollTop = Math.min(40, list.scrollHeight - list.clientHeight);

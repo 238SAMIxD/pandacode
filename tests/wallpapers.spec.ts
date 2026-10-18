@@ -18,7 +18,7 @@ async function open(page: Page, time = '2026-09-14T09:00:00-04:00') {
 }
 
 async function expectClearBars(page: Page) {
-  for (const selector of ['.workspace-header', '.statusbar']) {
+  for (const selector of ['.workspace-header']) {
     const bar = page.locator(selector);
     await expect(bar).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
     await expect(bar).toHaveCSS('background-image', 'none');
@@ -37,7 +37,7 @@ async function expectSceneCoversBars(page: Page) {
   for (const edge of ['x', 'y', 'width', 'height'] as const) {
     expect(backdrop![edge]).toBeCloseTo(main![edge], 1);
   }
-  for (const selector of ['.sidebar', '.workspace-header', '.statusbar']) {
+  for (const selector of ['.sidebar', '.workspace-header']) {
     if (!await page.locator(selector).isVisible()) continue;
     const bounds = await page.locator(selector).boundingBox();
     expect(bounds).not.toBeNull();
@@ -49,7 +49,7 @@ async function expectSceneCoversBars(page: Page) {
 }
 
 async function barStyles(page: Page) {
-  return page.locator('.workspace-header,.statusbar,.sidebar').evaluateAll(bars => bars.map(bar => {
+  return page.locator('.workspace-header,.sidebar').evaluateAll(bars => bars.map(bar => {
     const style = getComputedStyle(bar);
     return {
       background: style.backgroundColor,
@@ -86,7 +86,7 @@ test('wallpapers load one scene shared by thread and board without remounting it
 });
 
 for (const theme of ['light', 'dark']) {
-  test(`wallpapers restore normal header and statusbar surfaces when disabled or contrast increases in ${theme} mode`, async ({ page }) => {
+  test(`wallpapers restore normal header surfaces when disabled or contrast increases in ${theme} mode`, async ({ page }) => {
     await page.addInitScript(theme => {
       localStorage.setItem('pandacode.theme', theme);
       localStorage.setItem('pandacode.wallpapers', 'false');

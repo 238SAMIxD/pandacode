@@ -2391,6 +2391,19 @@ async fn github_pull_request_diff(state: State<'_, AppState>, session_id: String
     blocking(move || github_pull::diff(&root, number)).await
 }
 
+/// Merge the task's linked pull request with the chosen method; returns the task with its link updated.
+#[tauri::command]
+async fn github_merge_pull_request(state: State<'_, AppState>, session_id: String, method: String) -> Result<Session> {
+    let (root, number) = linked_pull(&state, &session_id)?;
+    github_pull::merge_flag(&method)?;
+    let store = state.store.clone();
+    blocking(move || {
+        let link = github_pull::merge(&root, number, &method)?;
+        store.lock().map_err(|e| e.to_string())?.set_task_link(&session_id, "pull", Some(&link))
+    })
+    .await
+}
+
 /// After a turn, link the pull request the agent opened, if any. Returns the task only when it changed.
 #[tauri::command]
 async fn github_detect_pull_request(state: State<'_, AppState>, session_id: String) -> Result<Option<Session>> {
@@ -2934,6 +2947,7 @@ pub fn run() {
                 github_create_pull_request,
                 github_pull_request,
                 github_pull_request_diff,
+                github_merge_pull_request,
                 github_detect_pull_request,
                 github_link_pull_request,
                 simulator::commands::simulator_status,
