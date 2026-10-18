@@ -827,8 +827,15 @@ html[data-theme="dark"]:is([data-native-material="liquidGlass"],[data-native-mat
 /* The GitHub view is full-width like the board: no task sidebar, the header clears the window controls. */
 .workspace.github-view{grid-template-columns:minmax(0,1fr) var(--inspector-width,302px)}
 .workspace.github-view.inspector-closed{grid-template-columns:minmax(0,1fr)}
+/* The repository list runs the full window height like the main sidebar; the header starts beside it. */
+.workspace.github-view{--gh-repos-width:252px}
+.github-view .main-pane{position:relative;padding-left:var(--gh-repos-width)}
+.github-view .work-area{position:static}
 .github-view .workspace-header{padding-left:24px;gap:12px}
-html[data-native-platform=macos] .github-view .workspace-header{padding-left:104px}
+.github-view .gh-hub{grid-template-columns:minmax(0,1fr)}
+.github-view .gh-repos{position:absolute;inset:0 auto 0 0;width:var(--gh-repos-width)}
+html[data-native-platform=macos] .github-view .gh-repos-head{padding-left:84px}
+@media (max-width:900px){.workspace.github-view{--gh-repos-width:200px}}
 .github-view .sidebar-resize-handle{display:none}
 #github-hub{flex:1;min-width:0;min-height:0}
 #github-hub[hidden]{display:none}

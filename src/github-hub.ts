@@ -57,7 +57,7 @@ export function mountGithubHub(root: HTMLElement, host: HubHost): HubView {
 
   root.classList.add('gh-hub');
   root.innerHTML = `<aside class="gh-repos" aria-label="GitHub repositories">
-      <div class="gh-repos-head">${icon('github')}<span>GitHub</span><button type="button" class="icon-button" data-gh="refresh" aria-label="Refresh" title="Refresh">${icon('refresh')}</button></div>
+      <div class="gh-repos-head" data-tauri-drag-region>${icon('github')}<span data-tauri-drag-region>GitHub</span><button type="button" class="icon-button" data-gh="refresh" aria-label="Refresh" title="Refresh">${icon('refresh')}</button></div>
       <label class="gh-filter">${icon('search')}<input type="search" data-gh-filter="repos" placeholder="Filter repositories" aria-label="Filter repositories" autocomplete="off" spellcheck="false"></label>
       <div class="gh-repo-list" role="listbox" aria-label="Repositories"></div>
     </aside>

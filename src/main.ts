@@ -1391,8 +1391,8 @@ function setWorkspaceView(view: WorkspaceView): void {
   render();
   // The chosen view rises into place; board cards arrive as a short cascade.
   if (view === 'board') { enterView($('#project-board'), 8); cascade($('#project-board').querySelectorAll<HTMLElement>('.board-card'), 18, 160); }
-  else if (view === 'github') enterView($('#github-hub'), 8);
-  else enterView($('.conversation-pane'), 8);
+  // The GitHub view appears at once: a transform would move its full-height repository list.
+  else if (view !== 'github') enterView($('.conversation-pane'), 8);
 }
 async function editBoardTask(): Promise<void> {
   const task = session(), generation = state.generation;
