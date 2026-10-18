@@ -4,7 +4,7 @@ import type { Activity, BotDetail, Channel, Schedule } from './bots';
 import { channelGuide, connectChange, connectClick, connectSection, connectSubmit, kindLabel } from './bots-connect';
 import { age } from './bots';
 
-export type Tab = 'chat' | 'memory' | 'schedules' | 'channels' | 'rules' | 'activity';
+export type Tab = 'conversations' | 'memory' | 'schedules' | 'channels' | 'rules' | 'activity';
 export interface PanelContext {
   call<T>(command: string, args?: Record<string, unknown>): Promise<T>;
   notify(text: string): void;
@@ -35,12 +35,14 @@ function threadLabel(detail: BotDetail, channelId: string, externalId: string): 
   return channel?.kind === 'web' ? kind : `${kind} · ${externalId.length > 14 ? `…${externalId.slice(-8)}` : externalId}`;
 }
 
-function chatPanel(detail: BotDetail, context: PanelContext): string {
-  const others = detail.threads.filter(thread => thread.channelId !== 'desktop').sort((a, b) => b.updatedAt - a.updatedAt);
+/** Every conversation the bot has: this app, each channel thread, and its scheduled work. Each opens as a task. */
+function conversationsPanel(detail: BotDetail, context: PanelContext): string {
+  const threads = [...detail.threads].sort((a, b) => Number(b.channelId === 'desktop') - Number(a.channelId === 'desktop') || b.updatedAt - a.updatedAt);
   const web = detail.channels.find(item => item.kind === 'web' && item.enabled);
-  return `<div class="bots-chat-host"></div>
-    ${web ? `<div class="bots-callout">${icon('globe')}<span>Also chat from any browser on this computer.</span><button type="button" class="secondary-button" data-web-open="${escape(web.id)}">Open web chat</button></div>` : ''}
-    ${others.length ? `<h4>Other conversations</h4><ul class="bots-items">${others.map(thread => `<li><span class="bots-item-main"><b>${escape(threadLabel(detail, thread.channelId, thread.externalId))}</b><small>${context.running(thread.sessionId) ? 'Working…' : escape(age(thread.updatedAt))}</small></span><button type="button" class="secondary-button" data-open-task="${escape(thread.sessionId)}">Open</button></li>`).join('')}</ul>` : ''}`;
+  const row = (thread: BotDetail['threads'][number]) => `<li><span class="bots-item-main"><b>${escape(threadLabel(detail, thread.channelId, thread.externalId))}</b><small>${context.running(thread.sessionId) ? 'Working…' : escape(age(thread.updatedAt))}</small></span><button type="button" class="secondary-button" data-open-task="${escape(thread.sessionId)}">Open</button></li>`;
+  return `${sectionHead('chat', 'Conversations', `Each conversation is a task with its own model and history. Open one to read or reply.`)}
+    ${threads.length ? `<ul class="bots-items">${threads.map(row).join('')}</ul>` : '<p class="bots-empty-note">No conversations yet. Open chat to start one.</p>'}
+    ${web ? `<div class="bots-callout">${icon('globe')}<span>Also chat from any browser on this computer.</span><button type="button" class="secondary-button" data-web-open="${escape(web.id)}">Open web chat</button></div>` : ''}`;
 }
 
 function memoryPanel(detail: BotDetail): string {
@@ -133,7 +135,7 @@ async function loadActivity(context: PanelContext, older: boolean): Promise<void
 
 export function renderPanel(tab: Tab, detail: BotDetail, context: PanelContext): string {
   switch (tab) {
-    case 'chat': return chatPanel(detail, context);
+    case 'conversations': return conversationsPanel(detail, context);
     case 'memory': return memoryPanel(detail);
     case 'schedules': return schedulesPanel(detail);
     case 'channels': return channelsPanel(detail);
@@ -181,7 +183,6 @@ export function panelSubmit(form: HTMLFormElement, _tab: Tab, context: PanelCont
   const data = new FormData(form);
   const text = (name: string) => String(data.get(name) ?? '').trim();
   const done = async (message: string) => { invalidateActivity(); context.notify(message); await context.reload(); };
-  if (form.matches('.bots-chat')) return;
   if (form.matches('.bots-memory')) {
     const content = text('content'); if (!content) return;
     void context.work(async () => { await context.call('bot_remember', { botId: bot.id, content }); await done('Remembered'); });

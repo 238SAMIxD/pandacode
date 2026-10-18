@@ -75,6 +75,7 @@ function previewIdentity(input: any): { name: string; link: string | null; invit
   }
 }
 
+const briefed = new Set<string>();
 async function desktopThread(host: PreviewBotsHost, entry: Store): Promise<Thread> {
   let thread = entry.threads.find(item => item.channelId === 'desktop');
   if (!thread) {
@@ -128,7 +129,10 @@ export async function invokeBots<T>(command: string, args: Record<string, any>, 
       const thread = await desktopThread(host, entry);
       thread.updatedAt = Date.now();
       log(entry, 'inbound', `You (desktop): ${text.slice(0, 160)}`);
-      await host.invoke('send_message', { sessionId: thread.sessionId, text, imageIds: [], moodboardIds: [] });
+      // Like the native gateway, the first message of a thread carries the bot's brief; the transcript folds it.
+      const brief = briefed.has(thread.sessionId) ? '' : `\n\nBot brief:\nYou are ${entry.bot.name}. ${entry.bot.instructions}`.trimEnd();
+      briefed.add(thread.sessionId);
+      await host.invoke('send_message', { sessionId: thread.sessionId, text: text + brief, imageIds: [], moodboardIds: [] });
       result = thread.sessionId; changed(); break;
     }
     case 'bot_schedule_create': {

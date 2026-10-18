@@ -259,7 +259,7 @@ $app.innerHTML = `<div class="workspace">
   </aside>
   <main class="main-pane">
     <header class="workspace-header" data-tauri-drag-region><div class="header-leading" data-tauri-drag-region>${button('toggle-sidebar', 'Hide sidebar', 'sidebar', 'sidebar-toggle', 'id="sidebar-toggle" aria-controls="workspace-sidebar" aria-expanded="true" aria-keyshortcuts="Meta+B Control+B"')}<div id="breadcrumb" class="breadcrumb" data-tauri-drag-region></div></div><div class="header-actions"><div class="view-switch" role="group" aria-label="Workspace view"><button data-action="conversation-view" aria-label="Conversation view" aria-pressed="true">${icon('chat')}<span>Conversation</span></button><button data-action="board-view" aria-label="Board view" aria-pressed="false">${icon('board')}<span>Board</span></button></div><button type="button" class="header-run" id="run-project-button" data-action="run-project" aria-label="Run project" title="Run pandacode-run.sh" hidden>${icon('play')}<span>Run</span></button>${button('deploy', 'Deploy', 'upload', '', 'id="deploy-button" aria-haspopup="dialog"')}<span class="header-divider" aria-hidden="true"></span>${button('moodboards', 'Project moodboards', 'images')}${button('browser', 'Open browser', 'globe', '', 'id="browser-toggle"')}${button('terminal', `Toggle terminal (${shortcut('J')})`, 'terminal', '', 'id="terminal-toggle" aria-controls="terminal-drawer" aria-expanded="false"')}<span class="header-divider" aria-hidden="true"></span>${button('toggle-inspector', `Toggle inspector (${shortcut('B', true)})`, 'panel', 'active', 'id="inspector-toggle"')}${button('task-menu', 'Task actions', 'more', '', 'id="task-menu-trigger" aria-haspopup="dialog" aria-expanded="false"')}</div></header>
-    <div class="work-area"><section id="project-board" class="project-board" aria-label="Project board" hidden></section><section id="bot-page" class="bot-page" aria-label="Bot" hidden></section><section class="conversation-pane"><div id="task-details-heading" class="task-details-heading" hidden></div><div id="subagents-host" class="subagents-host" hidden></div><div id="transcript" class="transcript" role="log" aria-label="Conversation" aria-live="off"></div><div id="composer-area" class="composer-area"></div></section></div>
+    <div class="work-area"><section id="project-board" class="project-board" aria-label="Project board" hidden></section><section class="conversation-pane"><div id="task-details-heading" class="task-details-heading" hidden></div><div id="subagents-host" class="subagents-host" hidden></div><div id="transcript" class="transcript" role="log" aria-label="Conversation" aria-live="off"></div><div id="composer-area" class="composer-area"></div></section></div>
     <div id="terminal-drawer" class="terminal-drawer" hidden><div class="drawer-heading"><span>${icon('terminal')}<span id="terminal-project" class="muted"></span></span><div class="terminal-tabs" role="tablist" aria-label="Terminal tabs"></div><div class="terminal-heading-actions"><button class="icon-button" data-terminal-action="new" aria-label="New terminal" title="New terminal">${icon('plus')}</button><button class="icon-button" data-terminal-action="minimize" aria-label="Minimize terminal" title="Minimize terminal">${icon('minimize')}</button><button class="icon-button" data-terminal-action="close" aria-label="Close terminal" title="Close terminal" aria-haspopup="dialog">${icon('close')}</button></div></div><div id="terminal-host"></div></div>
     <footer class="statusbar"><span id="status-left"></span>${preview ? '<span class="preview-status">Browser preview · sample data</span>' : ''}<button data-action="metrics" id="resource-status" title="Resource usage" aria-label="Resource usage">${icon('bamboo')}</button></footer>
   </main>
@@ -847,9 +847,10 @@ function renderHeader(): void {
   const p = project();
   terminalPanel.select(p ? workspaceContext() : undefined, p?.name ?? '');
   projectRunner.paint();
-  const fresh = newTaskView();
+  const fresh = newTaskView(), bot = botForThread();
   $('.conversation-pane').classList.toggle('new-task-page', fresh);
-  $('#breadcrumb').innerHTML = p && !fresh ? `${icon('folder')}<button data-action="select-project" data-id="${escape(p.id)}">${escape(p.name)}</button>` : '';
+  $('.conversation-pane').classList.toggle('bot-thread', Boolean(bot));
+  $('#breadcrumb').innerHTML = bot ? botCrumb(bot) : p && !fresh ? `${icon('folder')}<button data-action="select-project" data-id="${escape(p.id)}">${escape(p.name)}</button>` : '';
   // The statusbar answers "where on disk"; the prompt bar's branch chip owns Git actions.
   const path = workspacePath();
   $('#status-left').innerHTML = p ? `${icon(session()?.worktreePath ? 'worktree' : 'folder')}<button data-action="copy-path" title="Copy path · ${escape(path)}" aria-label="Copy checkout path">${escape(path.split('/').pop() || p.name)}</button>` : '';
@@ -858,6 +859,26 @@ function renderHeader(): void {
     const markup = worktrees.contextBar(s, fresh);
     if (bar.outerHTML !== markup && !bar.querySelector('[aria-expanded="true"]')) bar.outerHTML = markup;
   }
+}
+/** What the empty prompt invites: a task, or a message to the bot whose thread this is. */
+function composerPlaceholder(): string { const bot = botForThread(); return bot ? `Message ${escape(bot.name)}…` : 'Describe a task…'; }
+/** A bot thread's header: who you're talking to, its state, and its settings. */
+function botCrumb(bot: import('./bots').Bot): string {
+  const s = session();
+  const working = state.sessions.some(task => task.projectId === bot.projectId && isRunning(task.id));
+  const status = bot.paused ? 'Paused' : working ? 'Working' : 'Ready';
+  const glyph = bot.avatar.trim() || bot.name.trim().slice(0, 1).toUpperCase();
+  // Channel threads and scheduled work name where they come from; the bot's own chat needs no label.
+  const where = s && s.id !== bot.desktopSession ? s.title.split(' · ').slice(1).join(' · ') : '';
+  return `<span class="bot-crumb"><span class="bot-crumb-avatar" aria-hidden="true">${escape(glyph)}</span><strong>${escape(bot.name)}</strong>${where ? `<span class="bot-crumb-where">${escape(where)}</span>` : ''}<span class="bot-crumb-state" data-state="${status.toLowerCase()}">${status}</span></span><button class="icon-button bot-crumb-action" data-action="bot-pause" data-bot="${escape(bot.id)}" aria-label="${bot.paused ? 'Resume' : 'Pause'} ${escape(bot.name)}" title="${bot.paused ? 'Resume: schedules, check-ins and channels continue' : 'Pause: stop work and hold schedules and messages'}" aria-pressed="${bot.paused}">${icon(bot.paused ? 'play' : 'pause')}</button><button class="bot-crumb-settings" data-action="bot-settings" data-bot="${escape(bot.id)}" aria-label="${escape(bot.name)} settings" title="Profile, memory, schedules, channels and rules">${icon('settings')}<span>Settings</span></button>`;
+}
+/** An empty bot conversation: who it is, a few things to ask, and the settings that make it useful. */
+function botWelcome(bot: import('./bots').Bot): string {
+  const glyph = bot.avatar.trim() || bot.name.trim().slice(0, 1).toUpperCase();
+  const asks = ['What can you help me with?', 'Remember that I prefer short, direct answers.', 'Every weekday at 9, send me a summary of what changed.'];
+  const setup = ([['profile', 'edit', 'Instructions'], ['memory', 'leaf', 'Memory'], ['schedules', 'refresh', 'Schedules'], ['channels', 'globe', 'Channels']] as const)
+    .map(([tab, glyphName, label]) => `<button data-action="bot-settings" data-bot="${escape(bot.id)}" data-tab="${tab}">${icon(glyphName)}${label}</button>`).join('');
+  return `<div class="new-task-welcome bot-welcome"><span class="bot-welcome-avatar" aria-hidden="true">${escape(glyph)}</span><h1>Chat with ${escape(bot.name)}</h1><p>${escape(bot.role || 'Your bot remembers, works on a schedule and answers you here or in your channels.')}</p><div class="prompt-suggestions">${asks.map(text => `<button data-action="suggest" data-text="${escape(text)}">${escape(text)} ${icon('chevron')}</button>`).join('')}</div><div class="bot-welcome-setup" role="group" aria-label="Set up ${escape(bot.name)}">${setup}</div></div>`;
 }
 function refreshTeamProgress(): void {
   const host = document.querySelector<HTMLElement>('#team-progress-host');
@@ -884,6 +905,8 @@ function renderTranscript(preservePosition = false): void {
     transcript.innerHTML = '<p class="pending-comments">Start this task when you’re ready. Agent updates and your replies will appear here.</p><div id="stream-region"></div>';
     return;
   }
+  const bot = botForThread();
+  if (newTaskView() && bot) { transcript.innerHTML = `${botWelcome(bot)}<div id="stream-region"></div>`; return; }
   if (newTaskView()) {
     const name = project()?.name ?? 'this project';
     transcript.innerHTML = `<div class="new-task-welcome"><span class="new-task-mark" aria-hidden="true">${icon('bamboo')}</span><h1 aria-label="What should we build in ${escape(name)}?">What should we build in <button id="welcome-project" class="welcome-project" data-action="change-task-project" aria-label="Change task project" aria-haspopup="dialog" aria-expanded="false" title="${escape(project()?.path)}" ${s.worktreePath ? 'disabled' : ''}>${escape(name)}</button>?</h1></div><div id="stream-region"></div>`;
@@ -1170,7 +1193,7 @@ function renderComposer(): void {
   const previous = state.drafts.get(s.id) ?? '';
   const running = isRunning(), behavior = approvalMode(s.provider, s.mode);
   const team = teams.get(s.id), modelLocked = running && !team;
-  $('#composer-area').innerHTML = `<form id="composer" class="composer ${running ? 'composer-running' : ''}"><div id="attachments" class="attachments">${attachmentBar(s)}</div><textarea id="prompt" data-session-id="${escape(s.id)}" aria-label="Message your coding agent" placeholder="${running ? (canSteer(s.provider) ? 'Queue a follow-up · ⌘↩ steers now' : 'Queue a follow-up…') : 'Describe a task…'}" aria-description="${running ? `Enter to queue for when the agent finishes.${canSteer(s.provider) ? ' Command Enter to steer the running turn.' : ''}` : 'Enter to send. Shift Enter for a new line.'}" rows="2"></textarea><div class="composer-toolbar"><div class="composer-tools">${button('attach', 'Attach files for context', 'plus', '', 'type="button"')}<button type="button" id="model-picker-trigger" class="model-picker" data-action="model" aria-label="Choose harness and model" aria-description="${escape([modelLabel(s), teamModelLabel(s)].filter(Boolean).join(' '))}" aria-haspopup="dialog" aria-expanded="false" title="${team && !team.config.auto ? 'Choose team profile and models' : 'Choose harness and model'}" ${modelLocked ? 'disabled' : ''}><span class="provider-small ${s.provider}">${providerLogo(s.provider)}</span><span class="model-detail" data-model-label>${escape(modelLabel(s))}</span><span class="team-model-count" data-team-model-label ${teamModelLabel(s) ? '' : 'hidden'}>${teamModelLabel(s)}</span>${icon('down')}</button><span class="composer-separator"></span><button type="button" id="mode-picker-trigger" class="mode-picker" data-action="mode" data-mode="${behavior.id}" title="${escape(behavior.description)}" aria-haspopup="dialog" aria-expanded="false" ${running ? 'disabled' : ''}>${icon(behavior.icon)}<span>${escape(behavior.label)}</span>${icon('down')}</button>${teamButton(s)}${tokenSaver.button(s.id)}</div>${running ? '<button type="button" class="send-button stop-button" data-action="stop" title="Stop task (Esc)" aria-label="Stop task">' + icon('stop') + '</button>' : '<button type="submit" class="send-button" title="Send message (' + shortcut('Enter') + ')" aria-label="Send message">' + icon('arrow') + '</button>'}</div></form>${s.archived ? '<div class="composer-footnote"><span>Archived task</span></div>' : ''}`;
+  $('#composer-area').innerHTML = `<form id="composer" class="composer ${running ? 'composer-running' : ''}"><div id="attachments" class="attachments">${attachmentBar(s)}</div><textarea id="prompt" data-session-id="${escape(s.id)}" aria-label="Message your coding agent" placeholder="${running ? (canSteer(s.provider) ? 'Queue a follow-up · ⌘↩ steers now' : 'Queue a follow-up…') : composerPlaceholder()}" aria-description="${running ? `Enter to queue for when the agent finishes.${canSteer(s.provider) ? ' Command Enter to steer the running turn.' : ''}` : 'Enter to send. Shift Enter for a new line.'}" rows="2"></textarea><div class="composer-toolbar"><div class="composer-tools">${button('attach', 'Attach files for context', 'plus', '', 'type="button"')}<button type="button" id="model-picker-trigger" class="model-picker" data-action="model" aria-label="Choose harness and model" aria-description="${escape([modelLabel(s), teamModelLabel(s)].filter(Boolean).join(' '))}" aria-haspopup="dialog" aria-expanded="false" title="${team && !team.config.auto ? 'Choose team profile and models' : 'Choose harness and model'}" ${modelLocked ? 'disabled' : ''}><span class="provider-small ${s.provider}">${providerLogo(s.provider)}</span><span class="model-detail" data-model-label>${escape(modelLabel(s))}</span><span class="team-model-count" data-team-model-label ${teamModelLabel(s) ? '' : 'hidden'}>${teamModelLabel(s)}</span>${icon('down')}</button><span class="composer-separator"></span><button type="button" id="mode-picker-trigger" class="mode-picker" data-action="mode" data-mode="${behavior.id}" title="${escape(behavior.description)}" aria-haspopup="dialog" aria-expanded="false" ${running ? 'disabled' : ''}>${icon(behavior.icon)}<span>${escape(behavior.label)}</span>${icon('down')}</button>${teamButton(s)}${tokenSaver.button(s.id)}</div>${running ? '<button type="button" class="send-button stop-button" data-action="stop" title="Stop task (Esc)" aria-label="Stop task">' + icon('stop') + '</button>' : '<button type="submit" class="send-button" title="Send message (' + shortcut('Enter') + ')" aria-label="Send message">' + icon('arrow') + '</button>'}</div></form>${s.archived ? '<div class="composer-footnote"><span>Archived task</span></div>' : ''}`;
   $('#composer-area').insertAdjacentHTML('afterbegin', worktrees.contextBar(s, newTaskView()));
   $('#composer').insertAdjacentHTML('beforebegin', (running ? '' : limitBanner(s)) + queuePanel({ entries: state.queues.get(s.id) ?? [], hold: state.queueHolds.get(s.id) ?? null, running, steerable: canSteer(s.provider) && !team, editingId: state.queueEditing || null, busy: state.queueBusy.has(s.id) }));
   void github.status(s.projectId);
@@ -1409,7 +1432,7 @@ async function startBoardTask(id: string): Promise<void> {
   } finally { startingBoardTasks.delete(id); configuringSessions.delete(id); }
 }
 
-function render(): void { renderNavigation(); renderHeader(); renderTranscript(); renderComposer(); syncBotPage(); }
+function render(): void { renderNavigation(); renderHeader(); renderTranscript(); renderComposer(); }
 function setMessagePage(page: MessagePage): void {
   const firstId = page.messages[0]?.id;
   const earlier = firstId && page.hasOlder ? state.messages.filter(message => message.id > 0 && message.id < firstId) : [];
@@ -1980,7 +2003,8 @@ function completeTurnChanges(event: AgentEvent): void {
   }
 }
 function onAgent(event: AgentEvent): void {
-  if (botsView || botPage) queueMicrotask(() => { botsView?.agent(event.sessionId, event.kind); botPage?.view.agent(event.sessionId, event.kind); });
+  if (botsView) queueMicrotask(() => botsView?.agent(event.sessionId, event.kind));
+  if ((event.kind === 'done' || event.kind === 'turn_start') && botForThread()) queueMicrotask(renderHeader);
   if (deletedSessions.has(event.sessionId)) return;
   // Managed workers are deliberately absent from sidebar/board task summaries.
   // Route their live output and approval forms to the team's worker inspector.
@@ -2889,18 +2913,8 @@ function botsOptions(providers: Provider[]): import('./bots').BotsOptions {
     call, providers, notify,
     defaultModel: provider => rememberedModel(provider),
     running: id => isRunning(id),
-    live: id => { const current = state.streams.get(id); return current ? { text: current.text, status: current.status, approvals: [...current.approvals.entries()] } : null; },
-    approve: async (sessionId, requestId, approved) => {
-      const current = state.streams.get(sessionId), key = sessionId + requestId;
-      if (!current?.approvals.has(requestId) || pendingApprovals.has(key)) return;
-      pendingApprovals.add(key);
-      try {
-        await call('respond_approval', { sessionId, requestId, approved });
-        current.approvals.delete(requestId);
-        if (!current.approvals.size && current.status === 'Waiting for approval') current.status = 'Continuing task';
-      } finally { pendingApprovals.delete(key); current.revision++; if (sessionId === state.sessionId) renderStream(); renderNavigation(); }
-    },
     openTask: id => run((async () => { closeModal(); await reloadSessions(); await selectSession(id, true); })()),
+    openChat: id => run((async () => { closeModal(); await openBot(id); })()),
   };
 }
 async function showBots(open: { botId?: string; startNew?: boolean } = {}): Promise<void> {
@@ -2917,6 +2931,19 @@ async function showBots(open: { botId?: string; startNew?: boolean } = {}): Prom
     if (dialog.open && host.isConnected) host.innerHTML = '<p role="alert">Unable to open bots. Close this window and try again.</p>';
   }
 }
+/** One bot's settings as a modal: profile, conversations, memory, schedules, channels, rules and activity. */
+async function showBotSettings(botId: string, tab?: import('./bots').Section): Promise<void> {
+  const name = sidebarBots.find(bot => bot.id === botId)?.name;
+  const dialog = modal(name ? `${name} settings` : 'Bot settings', '<div id="bots-host"><p role="status">Loading…</p></div>', 'bot-settings-dialog');
+  const host = dialog.querySelector<HTMLElement>('#bots-host')!;
+  try {
+    const [{ mountBots }, providers] = await Promise.all([import('./bots'), state.providers.length ? Promise.resolve(state.providers) : call<Provider[]>('list_providers')]);
+    if (!dialog.open || !host.isConnected) return;
+    botsView = mountBots(host, { ...botsOptions(providers), layout: 'settings', initialBot: botId, initialTab: tab, onDeleted: () => run((async () => { closeModal(); await reloadBotProjects(); await reloadSessions(); if (!session()) state.sessionId = ''; render(); })()) });
+  } catch {
+    if (dialog.open && host.isConnected) host.innerHTML = '<p role="alert">Unable to open bot settings. Close this window and try again.</p>';
+  }
+}
 /** Bots shown in the sidebar. Their workspaces stay out of the project tree, and their
  * conversations deliver queued messages natively, so the window never sends them twice. */
 let sidebarBots: import('./bots').Bot[] = [];
@@ -2930,7 +2957,7 @@ async function reloadBotProjects(withProjects = true): Promise<void> {
   if (botProjects.has(state.projectFilter)) setProjectFilter('');
   // A new bot brings a workspace project; a renamed bot renames it.
   if (withProjects) state.projects = await call<Project[]>('list_projects');
-  renderNavigation(); syncBotPage();
+  renderNavigation(); renderHeader();
 }
 const userProjects = (): Project[] => state.projects.filter(project => !botProjects.has(project.id));
 function renderBots(): void {
@@ -2947,33 +2974,10 @@ function renderBots(): void {
   const html = `<div class="sidebar-bots-heading"><span>Bots</span><button class="icon-button" data-action="new-bot" aria-label="Add bot" title="Add bot">${icon('plus')}</button></div><div class="sidebar-bots-list">${sidebarBots.map(row).join('') || `<button class="bot-row-add" data-action="new-bot">${icon('plus')}<span>Add a bot</span></button>`}</div>`;
   if (host.innerHTML !== html) host.innerHTML = html;
 }
-/** A bot's own conversation shows as its page: the chat with its settings beside it. */
-let botPage: { botId: string; view: import('./bots').BotsView } | undefined;
-let botPageLoading = '';
-function botForPage(): import('./bots').Bot | undefined {
-  return state.view === 'conversation' && state.sessionId ? sidebarBots.find(bot => bot.desktopSession === state.sessionId) : undefined;
-}
-function syncBotPage(): void {
-  const host = document.querySelector<HTMLElement>('#bot-page'), pane = document.querySelector<HTMLElement>('.conversation-pane');
-  if (!host || !pane) return;
-  const bot = botForPage();
-  if (!bot) {
-    if (botPage) { botPage.view.dispose(); botPage = undefined; host.replaceChildren(); host.className = 'bot-page'; }
-    host.hidden = true; pane.classList.remove('bot-replaced');
-    return;
-  }
-  // A class, not `hidden`: the board layout owns the pane's hidden state.
-  host.hidden = false; pane.classList.add('bot-replaced');
-  if (botPage?.botId === bot.id || botPageLoading === bot.id) return;
-  botPage?.view.dispose(); botPage = undefined; botPageLoading = bot.id;
-  host.replaceChildren(); host.className = 'bot-page';
-  run((async () => {
-    try {
-      const [{ mountBots }, providers] = await Promise.all([import('./bots'), state.providers.length ? Promise.resolve(state.providers) : call<Provider[]>('list_providers')]);
-      if (botForPage()?.id !== bot.id) return;
-      botPage = { botId: bot.id, view: mountBots(host, { ...botsOptions(providers), layout: 'page', initialBot: bot.id, onDeleted: () => run((async () => { await reloadBotProjects(); await reloadSessions(); render(); })()) }) };
-    } finally { botPageLoading = ''; syncBotPage(); }
-  })());
+/** The bot whose workspace holds the open conversation: its own chat, a channel thread or scheduled work. */
+function botForThread(): import('./bots').Bot | undefined {
+  const s = state.view === 'conversation' ? session() : undefined;
+  return s ? sidebarBots.find(bot => bot.projectId === s.projectId) : undefined;
 }
 /** Opens a bot's conversation in this app, creating it the first time. */
 async function openBot(botId: string): Promise<void> {
@@ -3067,7 +3071,8 @@ async function action(name: string, element: HTMLElement): Promise<void> {
     case 'agent-usage': await showAgentUsage(); break;
     case 'bots': await showBots(); break;
     case 'new-bot': await showBots({ startNew: true }); break;
-    case 'bot-settings': if (element.dataset.bot) await showBots({ botId: element.dataset.bot }); break;
+    case 'bot-settings': if (element.dataset.bot) await showBotSettings(element.dataset.bot, element.dataset.tab as import('./bots').Section | undefined); break;
+    case 'bot-pause': if (element.dataset.bot) { const bot = sidebarBots.find(item => item.id === element.dataset.bot); if (bot) { await call('bot_set_paused', { botId: bot.id, paused: !bot.paused }); notify(bot.paused ? `${bot.name} resumed` : `${bot.name} paused`); await reloadBotProjects(false); } } break;
     case 'open-bot': if (element.dataset.bot) await openBot(element.dataset.bot); break;
     case 'import-conversations': await showConversationImport(); break;
     case 'agent-updates': await agentUpdates.show(); break;
@@ -3221,7 +3226,7 @@ async function boot(): Promise<void> {
   // An agent started or asked to show a VM: bring the panel forward.
   run(subscribe('vm-changed', event => { if (event && !Array.isArray(event) && event.show) openVm(); void vmPanel?.refresh(); }).then(() => undefined));
   run(subscribe('simulator-changed', event => { if (event?.show) openSimulator(); void simulatorPanel?.refresh(); }).then(() => undefined));
-  run(subscribe('bots-changed', () => run((async () => { botProjectsLoad = reloadBotProjects(); await botProjectsLoad; botsView?.refresh(); botPage?.view.refresh(); })())).then(() => undefined));
+  run(subscribe('bots-changed', () => run((async () => { botProjectsLoad = reloadBotProjects(); await botProjectsLoad; botsView?.refresh(); })())).then(() => undefined));
   run(subscribe('bot-notification', event => { if (event?.text) notify(String(event.text).replace(/\s+/g, ' ').slice(0, 160)); }).then(() => undefined));
   // Bots appear in the sidebar once loaded; startup does not wait for them.
   botProjectsLoad = reloadBotProjects(false); run(botProjectsLoad);
