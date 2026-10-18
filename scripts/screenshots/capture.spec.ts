@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 
 /* Captures the README screenshots from the browser preview: full windows and close-ups at
- * 2x, each framed on a soft background and saved as WebP in docs/screenshots/. The sample
+ * 2x, each framed with a soft shadow on a transparent background and saved as WebP in docs/screenshots/. The sample
  * data comes from showcase.js and the replacements below, applied only while capturing. */
 const out = new URL('../../docs/screenshots/', import.meta.url).pathname;
 const raw = '/tmp/pandacode-screenshots/raw/';
@@ -63,18 +63,17 @@ async function element(page: Page, name: string, selector: string, pad = 0, maxH
   await page.screenshot({ path: `${raw}${name}.png`, clip: { x: Math.max(0, box.x - pad), y: Math.max(0, box.y - pad), width: box.width + pad * 2, height: Math.min(maxHeight, box.height + pad * 2) } });
 }
 
-/** Frames a capture: rounded corners and a soft shadow on a background matching its theme. */
+/** Frames a capture: rounded corners and a soft shadow on a transparent background, so it
+ * sits cleanly on any page (GitHub's light and dark themes alike). */
 async function frame(page: Page, name: string, { dark = false, zoom = false } = {}): Promise<void> {
   const image = readFileSync(`${raw}${name}.png`).toString('base64');
-  const background = dark
-    ? 'radial-gradient(120% 90% at 15% 0%, #3a4a3e 0%, #1c231f 55%, #141815 100%)'
-    : 'radial-gradient(120% 90% at 15% 0%, #fff7d6 0%, #eef2e2 45%, #dbe7d5 100%)';
-  const pad = zoom ? 56 : 72;
+  const pad = zoom ? 40 : 56;
+  const edge = dark ? 'rgba(255,255,255,.1)' : 'rgba(0,0,0,.08)';
   await page.setViewportSize({ width: 1700, height: 1200 });
-  await page.setContent(`<!doctype html><html><body style="margin:0"><div id="frame" style="display:inline-block;padding:${pad}px;background:${background}"><img src="data:image/png;base64,${image}" style="display:block;border-radius:${zoom ? 14 : 12}px;box-shadow:0 40px 90px -30px rgba(20,32,22,${dark ? '.7' : '.38'}),0 0 0 1px rgba(${dark ? '255,255,255,.08' : '30,40,30,.08'})"></div></body></html>`);
+  await page.setContent(`<!doctype html><html><body style="margin:0;background:transparent"><div id="frame" style="display:inline-block;padding:${pad}px ${pad}px ${pad + 16}px"><img src="data:image/png;base64,${image}" style="display:block;border-radius:${zoom ? 14 : 12}px;box-shadow:0 24px 60px -24px rgba(0,0,0,.42),0 6px 16px -8px rgba(0,0,0,.18),0 0 0 1px ${edge}"></div></body></html>`);
   // Shown at half its pixel size, so the 2x frame keeps every captured pixel.
   await page.locator('#frame img').evaluate(async (img: HTMLImageElement) => { await img.decode(); img.style.width = `${img.naturalWidth / 2}px`; });
-  await page.locator('#frame').screenshot({ path: `${raw}${name}-framed.png` });
+  await page.locator('#frame').screenshot({ path: `${raw}${name}-framed.png`, omitBackground: true });
   execFileSync('cwebp', ['-quiet', '-q', '88', '-m', '6', ...(zoom ? [] : ['-resize', '2000', '0']), `${raw}${name}-framed.png`, '-o', `${out}${name}.webp`]);
 }
 
