@@ -1,0 +1,131 @@
+name: Release
+# Pushing a tag vX.Y.Z builds macOS (Apple silicon), Windows x64 and Linux x64
+# installers and publishes them on a GitHub Release whose notes come from
+# releases/X.Y.Z.md. A manual run builds the installers as workflow artifacts
+# and publishes only when `publish` is checked. See docs/releasing.md.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Create the GitHub Release (tags vX.Y.Z at this commit if needed)'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Read and check the version
+        id: version
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match the app version $version. Run npm run release:version first."
+            exit 1
+          fi
+          if [ ! -s "releases/$version.md" ]; then
+            echo "::error::releases/$version.md is missing or empty."
+            exit 1
+          fi
+
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, target: darwin-aarch64, triple: aarch64-apple-darwin }
+          - { os: windows-2022, target: windows-x86_64, triple: x86_64-pc-windows-msvc }
+          - { os: ubuntu-22.04, target: linux-x86_64, triple: x86_64-unknown-linux-gnu }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      RELEASE_TARGET: ${{ matrix.target }}
+      # Optional macOS signing. When APPLE_CERTIFICATE is not set, the app gets
+      # an ad-hoc signature instead (see docs/releasing.md).
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with: { node-version: '22', cache: npm }
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          targets: ${{ matrix.triple }}
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libdbus-1-dev libayatana-appindicator3-dev librsvg2-dev libfuse2 patchelf xvfb dbus-x11 xdg-utils
+      - run: npm ci
+      - run: npm run test:release
+      - name: Configure Apple signing keychain
+        if: runner.os == 'macOS' && env.APPLE_CERTIFICATE != ''
+        run: node scripts/release/ci-apple.mjs
+        env:
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+      - name: Build installer
+        run: node scripts/release/build.mjs
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && env.APPLE_CERTIFICATE != '' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      - name: Check packaged app startup (not GUI behavior)
+        if: runner.os != 'macOS'
+        timeout-minutes: 4
+        run: node scripts/release/ci-startup-smoke.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pandacode-${{ needs.prepare.outputs.version }}-${{ matrix.target }}
+          path: release/${{ needs.prepare.outputs.version }}/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove Apple signing keychain
+        if: always() && runner.os == 'macOS' && env.APPLE_CERTIFICATE != ''
+        run: node scripts/release/ci-apple.mjs cleanup
+
+  publish:
+    needs: [prepare, build]
+    if: github.ref_type == 'tag' || inputs.publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          path: assets
+          pattern: pandacode-${{ needs.prepare.outputs.version }}-*
+          merge-multiple: true
+      - name: Write release notes
+        run: |
+          {
+            cat "releases/$VERSION.md"
+            printf '\n\n## Installing\n\n'
+            printf -- '- **macOS (Apple silicon):** open `PandaCode-macOS-arm64.dmg` and drag PandaCode to Applications. If macOS says it cannot verify the app, open System Settings > Privacy & Security and choose **Open Anyway**.\n'
+            printf -- '- **Windows x64:** run `PandaCode-Windows-x64-setup.exe`. If SmartScreen warns about an unknown publisher, choose **More info > Run anyway**.\n'
+            printf -- '- **Linux x64:** `chmod +x PandaCode-Linux-x86_64.AppImage` and run it.\n\n'
+            printf 'Each file has a `.sha256` checksum beside it. Build from source: see CONTRIBUTING.md.\n'
+          } > "$RUNNER_TEMP/notes.md"
+      - name: Create GitHub Release
+        run: |
+          ls -l assets
+          gh release create "v$VERSION" assets/* \
+            --title "PandaCode $VERSION" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --target "$GITHUB_SHA"

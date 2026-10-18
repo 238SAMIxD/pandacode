@@ -1,0 +1,203 @@
+import { expect, test, type Page } from '@playwright/test';
+
+test('provider connections show Claude credential conflicts and let users prefer the saved login', async ({ page }) => {
+  await page.route('**/src/preview.ts*', async route => {
+    const response = await route.fetch();
+    const source = await response.text();
+    await route.fulfill({ response, body: source.replace(/switch\s*\(command\)\s*\{/, `
+      window.__claudeMode ??= 'inherit';
+      if (command === 'provider_claude_status') return {
+        mode:window.__claudeMode, source:window.__claudeMode === 'inherit' ? 'Environment API key' : 'Saved Claude login',
+        environmentVariables:['ANTHROPIC_API_KEY','ANTHROPIC_BASE_URL'], endpoint:window.__claudeMode === 'inherit' ? 'https://gateway.example' : null,
+        savedLogin:'signedIn', conflict:window.__claudeMode === 'inherit'
+      };
+      if (command === 'provider_set_claude_connection_mode') { window.__claudeMode=args.mode; return {...await invoke('provider_configuration'),claudeConnectionMode:args.mode}; }
+      switch(command) {`) });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+  await page.getByRole('button', { name: 'Set up', exact: true }).click();
+  const card = page.locator('#claude-connection');
+  await expect(card.getByRole('status')).toContainText('Environment API key');
+  await expect(card).toContainText('https://gateway.example');
+  await expect(card).toContainText('can override your saved Claude login');
+  const mode = card.getByLabel('Claude connection', { exact: true });
+  await expect(mode).toHaveValue('inherit');
+  await mode.selectOption('subscription');
+  await expect(card.getByRole('status')).toContainText('Saved Claude login');
+  await expect(card.locator('.claude-auth-conflict')).toBeHidden();
+  await expect(card.locator('.claude-auth-endpoint')).toBeHidden();
+  expect(await page.evaluate(() => (window as any).__claudeMode)).toBe('subscription');
+  await mode.selectOption('inherit');
+  await expect(card.getByRole('status')).toContainText('Environment API key');
+});
+
+async function delayedConnections(page: Page): Promise<void> {
+  await page.route('**/src/preview.ts*', async route => {
+    const response = await route.fetch();
+    const source = await response.text();
+    await route.fulfill({ response, body: source.replace(/switch\s*\(command\)\s*\{/, `
+      if (command === 'provider_configuration') return new Promise(resolve => {
+        window.releaseProviderConfiguration = () => resolve({ executablePaths: { opencode: '/installed/opencode', antigravity: '/installed/agy_acp_server.par' }, glmKeySaved: false, glmKeyFromEnvironment: false, mimoKeySaved: false, mimoKeyFromEnvironment: false, mimoEndpoint: 'token-plan-ams', mimoEndpoints: [{ id: 'token-plan-ams', url: 'https://token-plan-ams.xiaomimimo.com/anthropic', label: 'Token Plan · Europe cluster' }], secureStorageAvailable: false });
+      });
+      if (command === 'provider_set_executable') return new Promise(resolve => {
+        window.releaseProviderSave = () => { delete window.releaseProviderSave; resolve({ executablePaths: { opencode: args.path.replaceAll('//', '/'), antigravity: '/installed/agy_acp_server.par' }, glmKeySaved: false, glmKeyFromEnvironment: false, mimoKeySaved: false, mimoKeyFromEnvironment: false, mimoEndpoint: 'token-plan-ams', mimoEndpoints: [{ id: 'token-plan-ams', url: 'https://token-plan-ams.xiaomimimo.com/anthropic', label: 'Token Plan · Europe cluster' }], secureStorageAvailable: false }); };
+      });
+      switch (command) {
+    `) });
+  });
+  await page.goto('/');
+  await expect(page.locator('.task-item.selected .task-title')).toHaveText('Make search feel instant');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+  await page.getByRole('button', { name: 'Set up', exact: true }).click();
+  await expect(page.locator('#dialog details summary')).toHaveCount(3);
+  for (const summary of await page.locator('#dialog details summary').all()) await summary.click();
+}
+
+test('provider connections preserve other drafts and edits made during a save', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await delayedConnections(page);
+  const opencode = page.getByLabel('OpenCode executable', { exact: true });
+  const antigravity = page.getByLabel('Antigravity ACP executable', { exact: true });
+  await antigravity.fill('/draft/agy_acp_server.par');
+  await page.evaluate(() => (window as any).releaseProviderConfiguration());
+  await expect(opencode).toHaveValue('/installed/opencode');
+  await expect(antigravity).toHaveValue('/draft/agy_acp_server.par');
+  await opencode.fill('/opt//bin/opencode');
+  const apply = page.locator('form[data-provider="opencode"]').getByRole('button', { name: 'Apply', exact: true });
+  await apply.click();
+  await expect(apply).toBeDisabled();
+  await opencode.fill('/next//opencode');
+  await page.waitForFunction(() => typeof (window as any).releaseProviderSave === 'function');
+  await page.evaluate(() => (window as any).releaseProviderSave());
+  await expect(apply).toBeEnabled();
+  await expect(opencode).toHaveValue('/next//opencode');
+  await expect(antigravity).toHaveValue('/draft/agy_acp_server.par');
+  await apply.click();
+  await expect(apply).toBeDisabled();
+  await page.waitForFunction(() => typeof (window as any).releaseProviderSave === 'function');
+  await page.evaluate(() => (window as any).releaseProviderSave());
+  await expect(opencode).toHaveValue('/next/opencode');
+  await expect(antigravity).toHaveValue('/draft/agy_acp_server.par');
+  expect(errors).toEqual([]);
+});
+
+test('provider connections ignore a late initial configuration after a successful save', async ({ page }) => {
+  await delayedConnections(page);
+  const opencode = page.getByLabel('OpenCode executable', { exact: true });
+  await opencode.fill('/new/opencode');
+  const apply = page.locator('form[data-provider="opencode"]').getByRole('button', { name: 'Apply', exact: true });
+  await apply.click();
+  await expect(apply).toBeDisabled();
+  await page.waitForFunction(() => typeof (window as any).releaseProviderSave === 'function');
+  await page.evaluate(() => (window as any).releaseProviderSave());
+  await expect(apply).toBeEnabled();
+  await page.evaluate(() => (window as any).releaseProviderConfiguration());
+  await expect(opencode).toHaveValue('/new/opencode');
+});
+
+test('provider connections are grouped in Agents and never accept secrets in browser preview', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/');
+  await expect(page.locator('.task-item.selected .task-title')).toHaveText('Make search feel instant');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+  await page.getByRole('button', { name: 'Set up', exact: true }).click();
+  const dialog = page.locator('#dialog');
+  await expect(dialog.getByRole('heading', { name: 'Provider connections', exact: true })).toBeVisible();
+  await expect(dialog.getByLabel('Z.ai API key', { exact: true })).toBeDisabled();
+  await expect(dialog.locator('#glm-key-form').getByRole('button', { name: 'Save key', exact: true })).toBeDisabled();
+  await expect(dialog.getByText('opencode auth login', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('agy', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('grok login', { exact: true })).toBeVisible();
+  const paths = dialog.locator('details');
+  await paths.last().locator('summary').click();
+  await dialog.getByLabel('Grok executable', { exact: true }).fill('/tmp/my-grok');
+  await paths.last().getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect(dialog.getByRole('status').last()).toContainText('desktop app');
+  await dialog.getByRole('button', { name: 'Back to settings', exact: true }).click();
+  await expect(page.getByRole('tab', { name: 'General', exact: true })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test('the MiMo Token Plan card offers the documented clusters and keeps the key native-only', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/');
+  await expect(page.locator('.task-item.selected .task-title')).toHaveText('Make search feel instant');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+  await page.getByRole('button', { name: 'Set up', exact: true }).click();
+  const card = page.locator('.connection-card', { hasText: 'MiMo Token Plan' });
+  await expect(card).toBeVisible();
+  await expect(card.getByRole('link', { name: /Token Plan/ })).toHaveAttribute('href', 'https://platform.xiaomimimo.com/token-plan');
+  const endpoint = card.getByLabel('Endpoint', { exact: true });
+  await expect(endpoint.locator('option')).toHaveText(['Choose your cluster…', 'Token Plan · China cluster', 'Token Plan · Singapore cluster', 'Token Plan · Europe cluster', 'Pay-as-you-go API']);
+  await expect(endpoint).toHaveValue('');
+  await expect(card.locator('#mimo-endpoint-hint')).toContainText('Required before MiMo tasks can start');
+  // The key lives in the platform store only; the preview never accepts one.
+  await expect(card.getByLabel('MiMo API key', { exact: true })).toBeDisabled();
+  await expect(card.getByRole('button', { name: 'Save key', exact: true })).toBeDisabled();
+  await expect(card.locator('#mimo-key-status')).toContainText('MIMO_API_KEY');
+  await endpoint.selectOption('token-plan-sgp');
+  await expect(page.locator('#dialog .connection-feedback')).toContainText('desktop app');
+  expect(errors).toEqual([]);
+});
+
+test('a delayed configuration fills the saved MiMo cluster and its URL', async ({ page }) => {
+  await delayedConnections(page);
+  await page.evaluate(() => (window as any).releaseProviderConfiguration());
+  const card = page.locator('.connection-card', { hasText: 'MiMo Token Plan' });
+  await expect(card.getByLabel('Endpoint', { exact: true })).toHaveValue('token-plan-ams');
+  await expect(card.locator('#mimo-endpoint-hint')).toHaveText('https://token-plan-ams.xiaomimimo.com/anthropic');
+});
+
+test('provider connections expose all new harnesses and real GLM model names', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('.task-item.selected .task-title')).toHaveText('Make search feel instant');
+  await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
+  await expect(page.getByText('OpenCode', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('GLM Coding Plan', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('Antigravity', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('Grok Build', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('MiMo Token Plan', { exact: true }).first()).toBeVisible();
+  await page.getByText('GLM Coding Plan', { exact: true }).first().click();
+  await expect(page.getByText('GLM-4.7', { exact: true }).first()).toBeVisible();
+});
+
+for (const providerId of ['claude', 'codex', 'kimi', 'opencode', 'glm', 'antigravity', 'grok', 'mimo']) {
+  test(`provider connections start ${providerId} tasks with Full access and retain explicit restrictions when switching`, async ({ page }) => {
+    await page.addInitScript(provider => localStorage.setItem('pandacode.provider', provider), providerId);
+    await page.route('**/src/preview.ts*', async route => {
+      const response = await route.fetch();
+      const source = await response.text();
+      await route.fulfill({response, body: source.replace(/switch\s*\(command\)\s*\{/, `
+        window.__approvalPreview = invoke;
+        if (command === 'list_providers') return structuredClone(providers.map(provider => ({...provider, installed:true})));
+        switch (command) {`)});
+    });
+    await page.goto('/');
+    const permissions = page.locator('#mode-picker-trigger');
+    // An already saved task retains its approval setting.
+    await expect(permissions).toHaveText('Standard');
+    await page.locator('.new-task-button').click();
+    await expect(permissions).toHaveText('Full access');
+    const readTask = () => page.evaluate(async () => {
+      const sessionId = (document.querySelector('#prompt') as HTMLElement).dataset.sessionId;
+      return (window as any).__approvalPreview('get_task', {sessionId});
+    });
+    await expect.poll(readTask).toMatchObject({provider:providerId, mode:'full'});
+    await permissions.click();
+    await page.getByRole('dialog', {name:'Permissions',exact:true}).getByRole('menuitemradio', {name:providerId === 'codex' ? 'Read only' : 'Plan mode',exact:true}).click();
+    await expect.poll(readTask).toMatchObject({mode:'plan'});
+    await page.getByRole('button', {name:'Choose harness and model',exact:true}).click();
+    const next = providerId === 'codex' ? 'claude' : 'codex';
+    await page.getByRole('dialog', {name:'Harness and model',exact:true}).locator(`button[data-provider="${next}"][data-model="${next === 'codex' ? 'gpt-6-astra' : 'sonnet'}"]`).click();
+    await expect.poll(readTask).toMatchObject({provider:next, mode:'plan'});
+    await expect(permissions).toHaveText(next === 'codex' ? 'Read only' : 'Plan mode');
+    await page.locator('.new-task-button').click();
+    await expect(permissions).toHaveText('Full access');
+    await expect.poll(readTask).toMatchObject({provider:next, mode:'full'});
+  });
+}

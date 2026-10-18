@@ -1,0 +1,50 @@
+{
+  "name": "pandacode",
+  "private": true,
+  "version": "0.3.0",
+  "description": "Open-source desktop workspace for coding agents: Claude Code, Codex, Kimi Code, OpenCode and more.",
+  "license": "MIT",
+  "homepage": "https://github.com/aicodeking/pandacode#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aicodeking/pandacode.git"
+  },
+  "bugs": {
+    "url": "https://github.com/aicodeking/pandacode/issues"
+  },
+  "type": "module",
+  "scripts": {
+    "site:dev": "npm --prefix website run dev",
+    "site:build": "npm --prefix website run build",
+    "site:preview": "npm --prefix website run preview",
+    "dev": "vite --host 127.0.0.1 --port 1420 --strictPort",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 1420 --strictPort",
+    "tauri": "tauri",
+    "desktop": "tauri dev",
+    "package": "tauri build",
+    "test": "node --test tests/*.test.mjs",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "release:version": "node scripts/release/set-version.mjs",
+    "release:build": "node scripts/release/build.mjs",
+    "test:release": "node --test scripts/release/*.test.mjs"
+  },
+  "dependencies": {
+    "@pierre/diffs": "1.4.2",
+    "@tauri-apps/api": "^2.10.0",
+    "@tauri-apps/plugin-dialog": "^2.6.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "dompurify": "^3.3.0",
+    "katex": "^0.16.47",
+    "marked": "^17.0.0",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.0",
+    "@tauri-apps/cli": "^2.10.0",
+    "@types/three": "^0.186.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.0"
+  }
+}
