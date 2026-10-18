@@ -65,7 +65,7 @@ async function element(page: Page, name: string, selector: string, pad = 0, maxH
 
 /** Frames a capture: rounded corners and a soft shadow on a transparent background, so it
  * sits cleanly on any page (GitHub's light and dark themes alike). */
-async function frame(page: Page, name: string, { dark = false, zoom = false } = {}): Promise<void> {
+async function frame(page: Page, name: string, { dark = true, zoom = false } = {}): Promise<void> {
   const image = readFileSync(`${raw}${name}.png`).toString('base64');
   const pad = zoom ? 40 : 56;
   const edge = dark ? 'rgba(255,255,255,.1)' : 'rgba(0,0,0,.08)';
@@ -80,7 +80,7 @@ async function frame(page: Page, name: string, { dark = false, zoom = false } = 
 test.beforeAll(() => { rmSync(raw, { recursive: true, force: true }); mkdirSync(raw, { recursive: true }); mkdirSync(out, { recursive: true }); });
 
 test('conversation', async ({ page }) => {
-  await prepare(page, 'light', 'mon-morning');
+  await prepare(page, 'dark', 'mon-night');
   await open(page, 'Make search feel instant');
   await page.locator('#transcript .agent-message').last().waitFor();
   await shot(page, 'conversation');
@@ -94,7 +94,7 @@ test('conversation', async ({ page }) => {
 });
 
 test('streaming', async ({ page }) => {
-  await prepare(page, 'light', 'wed-afternoon');
+  await prepare(page, 'dark', 'wed-night');
   await open(page, 'Add keyboard shortcuts');
   await reply(page, 'I’ll add a command palette on **⌘K** and move the navigation into it.\n\n1. **Palette.** A fuzzy finder over projects, tasks and commands, with recent items first.\n2. **Shortcuts.** Every action gets a binding, listed in a `?` cheat sheet.\n3. **Focus.** Arrow keys move through results; Escape returns focus where it was.\n\nStarting with the palette component and its tests.');
   await page.locator('#prompt').fill('Make every navigation action reachable from the keyboard, with a ⌘K palette');
@@ -107,7 +107,7 @@ test('streaming', async ({ page }) => {
 });
 
 test('board', async ({ page }) => {
-  await prepare(page, 'light', 'sat-morning');
+  await prepare(page, 'dark', 'sat-night');
   await page.getByRole('button', { name: 'Board view' }).click();
   await page.locator('.board-card, .board-task').first().waitFor();
   await shot(page, 'board');
@@ -115,7 +115,7 @@ test('board', async ({ page }) => {
 });
 
 test('agent team', async ({ page }) => {
-  await prepare(page, 'light', 'mon-morning');
+  await prepare(page, 'dark', 'thu-night');
   await open(page, 'Refine the navigation');
   await page.locator('[data-action="team-toggle"]').click();
   await page.locator('[data-action="team-toggle"][aria-pressed="true"]').waitFor();
@@ -128,7 +128,7 @@ test('agent team', async ({ page }) => {
 });
 
 test('simulator and diff', async ({ page }) => {
-  await prepare(page, 'light', 'mon-morning');
+  await prepare(page, 'dark', 'sun-night');
   await open(page, 'Make search feel instant');
   if (!(await page.locator('#inspector').isVisible())) await page.locator('#inspector-toggle').click();
   await page.locator('.inspector-tabs [data-action="tab-simulator"]').click();
@@ -162,6 +162,6 @@ test('bot', async ({ page }) => {
   await page.getByRole('dialog', { name: 'Scout settings' }).getByRole('tab', { name: /Channels/ }).click();
   await page.waitForTimeout(700);
   await element(page, 'bot-settings', '#dialog .dialog-plate, #dialog');
-  await frame(page, 'bot', { dark: true });
-  await frame(page, 'bot-settings', { dark: true, zoom: true });
+  await frame(page, 'bot');
+  await frame(page, 'bot-settings', { zoom: true });
 });

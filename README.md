@@ -76,7 +76,7 @@ inspector on a lifelike device, so you can tap through what an agent just built.
 the same streaming, composer and model picker; reach it from Telegram, Slack,
 Discord, WhatsApp or a browser too.
 
-<img src="docs/screenshots/bot.webp" alt="A bot named Scout replying with a morning digest, in dark mode" width="100%">
+<img src="docs/screenshots/bot.webp" alt="A bot named Scout replying with a morning digest" width="100%">
 
 <table>
   <tr>
