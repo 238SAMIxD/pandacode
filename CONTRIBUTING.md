@@ -75,6 +75,11 @@ The full browser suite takes several minutes; pass file paths or `-g "title"`
 for a subset. Ordinary tests never call paid models. Live provider tests are
 `#[ignore]`d and opt-in.
 
+When a change alters how the app looks, refresh the README screenshots with
+`npm run screenshots` (needs `cwebp`, e.g. `brew install webp`). It captures the
+browser preview with the sample data in `scripts/screenshots/showcase.js` and
+writes framed WebP images to `docs/screenshots/`.
+
 CI (`.github/workflows/ci.yml`) runs the typecheck, unit tests, website build,
 and `cargo check`/`cargo test --lib`/Clippy on Linux for every pull request.
 

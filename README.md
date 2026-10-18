@@ -15,6 +15,10 @@ Built with Tauri 2, Rust, SQLite and plain TypeScript. It uses the operating
 system's webview: no bundled Chromium, resident Node server, React runtime or
 embedded editor engine.
 
+<p align="center">
+  <img src="docs/screenshots/conversation.webp" alt="PandaCode with a finished Claude Code task: the reply explains the change, with the project's tasks in the sidebar and the composer below" width="100%">
+</p>
+
 ## Features
 
 - **Every harness in one place.** Pick the harness, model and reasoning effort
@@ -43,6 +47,46 @@ embedded editor engine.
   ([agent updates](docs/agent-updates.md)).
 - **Attachments.** Images, PDFs, documents, folders and a built-in mockup
   sketcher ([attachments](docs/attachments.md)).
+
+## Screenshots
+
+**A board for everything in flight.** Tasks from every project move from Pending to
+Review, each with its harness, model and linked issue.
+
+<img src="docs/screenshots/board.webp" alt="The task board with Pending, In progress, Review and Completed columns" width="100%">
+
+<table>
+  <tr>
+    <td width="62%" valign="top"><img src="docs/screenshots/streaming.webp" alt="A reply streaming in, with the live working row and tool activity above it" width="100%"><br><sub><b>Live replies.</b> Responses stream in as Markdown, with tool activity folded above.</sub></td>
+    <td width="38%" valign="top"><img src="docs/screenshots/model-picker.webp" alt="The harness and model picker listing Claude Code, Codex and Kimi Code models" width="100%"><br><sub><b>Any harness, any model.</b> Switch per task, with context size and reasoning effort.</sub></td>
+  </tr>
+</table>
+
+**Agent teams.** An architect plans the work, runs workers in parallel across
+harnesses, and reviews what they bring back.
+
+<img src="docs/screenshots/agent-team.webp" alt="An agent team's finished run: the architect's summary, the combined changed files and two completed workers" width="100%">
+
+**Your app beside the chat.** The iOS Simulator and Android emulator run in the
+inspector on a lifelike device, so you can tap through what an agent just built.
+
+<img src="docs/screenshots/simulator.webp" alt="The inspector showing an iPhone 17 Pro simulator next to the conversation" width="100%">
+
+**Bots that keep working.** A bot's conversation is an ordinary task thread, with
+the same streaming, composer and model picker; reach it from Telegram, Slack,
+Discord, WhatsApp or a browser too.
+
+<img src="docs/screenshots/bot.webp" alt="A bot named Scout replying with a morning digest, in dark mode" width="100%">
+
+<table>
+  <tr>
+    <td width="58%" valign="top"><img src="docs/screenshots/diff.webp" alt="The changed-files viewer with a syntax-highlighted unified diff" width="100%"><br><sub><b>Review every turn.</b> Each turn saves its changes, with unified and split diffs.</sub></td>
+    <td width="42%" valign="top"><img src="docs/screenshots/bot-settings.webp" alt="Bot settings with tabs for profile, conversations, memory, schedules, channels, rules and activity" width="100%"><br><sub><b>Bot settings.</b> Memory, schedules, channels and rules, in one place.</sub></td>
+  </tr>
+</table>
+
+<sub>Screenshots come from the browser preview with sample data. Regenerate them with
+`npm run screenshots` (see [`scripts/screenshots`](scripts/screenshots/capture.spec.ts)).</sub>
 
 ## Privacy
 
