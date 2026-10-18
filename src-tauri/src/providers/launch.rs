@@ -263,6 +263,17 @@ pub(crate) fn executable_path() -> Result<OsString, String> {
     executable_path_for(cfg!(windows), &|name| std::env::var_os(name))
 }
 
+/// Widens this process's PATH to the installed-tool locations, once, at startup. Apps opened
+/// from Finder or the Dock start with PATH=/usr/bin:/bin, and every agent, script and helper
+/// PandaCode launches inherits it: without this, an agent cannot run `gh`, `node` or anything
+/// else installed with Homebrew, even though the user's terminal can. Existing entries keep
+/// their order; missing standard locations are appended.
+pub(crate) fn widen_process_path() {
+    if let Ok(path) = executable_path() {
+        std::env::set_var("PATH", path);
+    }
+}
+
 fn executable_path_for(
     windows: bool,
     env: &impl Fn(&str) -> Option<OsString>,

@@ -39,7 +39,7 @@ mod kimi_models;
 mod launch;
 mod diagnostics;
 pub(crate) mod claude_auth;
-pub(crate) use launch::{command, pty_command, external_path, executable_path};
+pub(crate) use launch::{command, pty_command, external_path, executable_path, widen_process_path};
 #[cfg(test)]
 mod kimi_stream_tests;
 #[cfg(test)]

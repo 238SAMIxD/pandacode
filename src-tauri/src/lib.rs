@@ -2672,6 +2672,11 @@ async fn list_local_servers() -> Result<Vec<local_servers::LocalServer>> {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Process-wide setup that must happen before any thread or child process starts.
+pub fn prepare_environment() {
+    providers::widen_process_path();
+}
+
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
