@@ -15,6 +15,7 @@ mod run_script;
 mod github;
 mod github_pull;
 mod github_hub;
+mod project_icon;
 mod simulator;
 mod vm;
 mod secret_store;
@@ -2216,6 +2217,12 @@ async fn describe_folder(path: String) -> Result<prompt_attachments::FolderSumma
     blocking(move || prompt_attachments::describe_folder(std::path::Path::new(&path))).await
 }
 
+/// The project's own app icon for its sidebar rows, as a `data:` URL; None shows the default.
+#[tauri::command]
+async fn project_icon(state: State<'_, AppState>, project_id: String) -> Result<Option<String>> {
+    let path = state.store.lock().map_err(|e| e.to_string())?.projects()?.into_iter().find(|project| project.id == project_id).map(|project| project.path).ok_or("This project no longer exists.")?;
+    blocking(move || Ok(project_icon::find(std::path::Path::new(&path)))).await
+}
 #[tauri::command]
 async fn github_repos() -> Result<Vec<github_hub::HubRepo>> {
     blocking(github_hub::repos).await
@@ -2915,6 +2922,7 @@ pub fn run() {
                 recreate_worktree,
                 github_status,
                 github_repos,
+                project_icon,
                 github_repo_pulls,
                 github_repo_issues,
                 github_project_repos,

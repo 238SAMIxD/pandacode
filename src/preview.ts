@@ -978,6 +978,8 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'git_push': { const checkout = checkoutGit(args.sessionId); pushedBranches.add(checkout.branch); result = `branch '${checkout.branch}' set up to track 'origin/${checkout.branch}'.`; break; }
     case 'github_status': result = previewGithub.status(args.projectId); break;
     case 'github_repos': result = structuredClone(previewRepos); break;
+    // The sample orbit project has an app icon; others show the sidebar's default.
+    case 'project_icon': result = args.projectId === 'project-1' ? 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAzMiAzMic+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSdnJyB4MT0nMCcgeTE9JzAnIHgyPScxJyB5Mj0nMSc+PHN0b3Agb2Zmc2V0PScwJyBzdG9wLWNvbG9yPScjN2M5Y2ZmJy8+PHN0b3Agb2Zmc2V0PScxJyBzdG9wLWNvbG9yPScjNWI1YmQ2Jy8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PHJlY3Qgd2lkdGg9JzMyJyBoZWlnaHQ9JzMyJyByeD0nOCcgZmlsbD0ndXJsKCNnKScvPjxjaXJjbGUgY3g9JzE2JyBjeT0nMTYnIHI9JzcnIGZpbGw9J25vbmUnIHN0cm9rZT0nd2hpdGUnIHN0cm9rZS13aWR0aD0nMycvPjxjaXJjbGUgY3g9JzIzJyBjeT0nOScgcj0nMi41JyBmaWxsPSd3aGl0ZScvPjwvc3ZnPg==' : null; break;
     case 'github_repo_pulls': result = previewHub.pulls(String(args.repo)); break;
     case 'github_repo_issues': result = previewHub.issues(String(args.repo)); break;
     case 'github_project_repos': result = projects.filter(p => p.id === 'project-1' || previewClones.has(p.id)).map(p => ({ projectId: p.id, repo: previewClones.get(p.id) ?? 'orbit-labs/orbit' })); break;

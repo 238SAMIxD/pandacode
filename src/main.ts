@@ -49,6 +49,7 @@ import { bindFileLinkContext, configureFileLinks, isPreviewableFile, refreshFile
 import { createWorktrees } from './worktrees';
 import { createGithub, githubEnabled } from './github';
 import { startAppUpdates } from './app-updates';
+import { projectIconHtml } from './project-icons';
 import { createPullView } from './github-pull';
 import { createTokenSaver } from './token-saver-panel';
 import { MAX_IMAGES, mountPromptAttachments, type PromptImage } from './attachments';
@@ -783,7 +784,18 @@ function renderNavigation(): void {
     const live = state.streams.get(s.id);
     const status = live && (live.approvals.size || live.inputs.size) ? 'attention' : isRunning(s.id) ? 'running' : limitActive(s, now) ? 'limited' : '';
     const statusLabel = status === 'attention' ? live?.inputs.size ? 'Needs your answer' : 'Needs approval' : status === 'limited' ? `Usage limit · ${resetLabel(s.limitedUntil, now)}` : 'Running';
-    return `<button class="task-item ${s.id === state.sessionId ? 'selected' : ''}" data-action="select-task" data-id="${escape(s.id)}" data-activity="${activeTask(s, now) ? 'active' : 'inactive'}" draggable="true" data-pinned="${Boolean(s.pinned)}" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" ${s.id === state.sessionId ? 'aria-current="page"' : ''} aria-description="${shortProvider(s.provider)}" title="${escape(s.title)}">${providerLogo(s.provider, 'task-provider')}<span class="task-title">${escape(s.title)}</span>${s.pinned ? `<span class="task-pin" role="img" aria-label="Pinned">${icon('pin')}</span>` : ''}${s.worktreePath ? `<span class="task-worktree" role="img" aria-label="Worktree" title="${escape(s.worktreePath)}">${icon('worktree')}</span>` : ''}<span class="task-project">${escape(p?.name ?? 'Project')}</span>${status ? `<span class="task-indicator ${status}" role="img" aria-label="${statusLabel}" title="${statusLabel}"></span>` : ''}${age ? `<span class="task-age" title="Last message: ${escape(new Date(activityAt!).toLocaleString())}">${age}</span>` : ''}</button>`;
+    // Three lines, like a card: where (app icon, checkout, age), what (title), and the branch,
+    // linked pull request or issue, and the agent working on it.
+    const checkout = s.worktreePath ? s.worktreePath.split(/[\\/]/).filter(Boolean).pop() ?? p?.name ?? 'Project' : p?.name ?? 'Project';
+    const link = s.pullRequest ?? s.issue;
+    const linkMark = link ? `<span class="task-link ${link.kind === 'pull' ? 'pull' : 'issue'}" title="${escape(`${link.kind === 'pull' ? 'Pull request' : 'Issue'} #${link.number}: ${link.title}`)}">#${link.number}</span>` : '';
+    // Worktree tasks show their branch; the worktree mark keeps its accessible name either way.
+    const worktreeMark = s.worktreePath ? `<span class="task-worktree" role="img" aria-label="Worktree" title="${escape(s.worktreePath)}">${icon('worktree')}</span>` : '';
+    const branch = s.worktreePath ? `<span class="task-branch">${worktreeMark}${s.worktreeBranch ? `<span>${escape(s.worktreeBranch)}</span>` : ''}</span>` : '';
+    return `<button class="task-item ${s.id === state.sessionId ? 'selected' : ''}" data-action="select-task" data-id="${escape(s.id)}" data-activity="${activeTask(s, now) ? 'active' : 'inactive'}" draggable="true" data-pinned="${Boolean(s.pinned)}" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" ${s.id === state.sessionId ? 'aria-current="page"' : ''} aria-description="${shortProvider(s.provider)}" title="${escape(s.title)}">`
+      + `<span class="task-line task-head">${projectIconHtml(s.projectId, p?.name ?? '', projectId => call<string | null>('project_icon', { projectId }), () => renderNavigation())}<span class="task-checkout">${escape(checkout)}</span>${status ? `<span class="task-indicator ${status}" role="img" aria-label="${statusLabel}" title="${statusLabel}"></span>` : ''}${age ? `<span class="task-age" title="Last message: ${escape(new Date(activityAt!).toLocaleString())}">${age}</span>` : ''}</span>`
+      + `<span class="task-title">${escape(s.title)}</span>`
+      + `<span class="task-line task-meta">${branch}${linkMark}${s.pinned ? `<span class="task-pin" role="img" aria-label="Pinned">${icon('pin')}</span>` : ''}<span class="task-project">${escape(p?.name ?? 'Project')}</span>${providerLogo(s.provider, 'task-provider')}</span></button>`;
   };
   const pinned = visible.filter(s => s.pinned).sort(compareThreadOrder);
   const folders = folderGroups({
