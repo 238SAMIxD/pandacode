@@ -2833,7 +2833,6 @@ async function showSettings(section?: import('./settings').SettingsSection): Pro
       },
       close: closeSettings,
     });
-    enterView(host, 6);
   }).finally(() => { settingsOpening = undefined; });
   await settingsOpening;
 }

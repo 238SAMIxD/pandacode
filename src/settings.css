@@ -11,7 +11,7 @@ html[data-native-platform=macos] .settings-nav-head{padding-left:72px}
 .settings-back .icon{width:15px;height:15px}
 .settings-nav-title{margin:14px 10px 10px;font-size:1.25rem;font-weight:650;letter-spacing:-.022em}
 .settings-nav-list{display:flex;flex-direction:column;gap:1px;min-height:0;overflow-y:auto}
-.settings-nav-list>button{display:flex;align-items:center;gap:10px;min-height:32px;padding:0 10px;border-radius:3px;text-align:left;font-size:.86rem;color:var(--text);transition:background 90ms}
+.settings-nav-list>button{display:flex;align-items:center;gap:10px;min-height:32px;padding:0 10px;border-radius:3px;text-align:left;font-size:.86rem;color:var(--text)}
 .settings-nav-list>button:hover{background:color-mix(in srgb,var(--text) 6%,transparent)}
 .settings-nav-list>button:active{background:color-mix(in srgb,var(--text) 9%,transparent)}
 .settings-nav-list>button[aria-selected="true"]{background:var(--accent-dim);color:var(--text);font-weight:550}
@@ -31,8 +31,6 @@ html[data-native-platform=macos] .settings-nav-head{padding-left:72px}
 .settings-embed{min-width:0}
 .settings-embed-error{font-size:.82rem;color:var(--danger)}
 .workspace[data-wallpaper] .settings-page-root .settings-group{background:var(--workspace-frost-surface);backdrop-filter:var(--workspace-frost);-webkit-backdrop-filter:var(--workspace-frost);border-color:color-mix(in srgb,var(--text) 12%,transparent)}
-@media (prefers-reduced-motion:no-preference){.settings-panel:not([hidden]){animation:settings-panel-in 220ms cubic-bezier(.2,.9,.3,1)}}
-@keyframes settings-panel-in{from{opacity:0;transform:translateY(6px)}}
 @media (max-width:760px){.settings-page-root{grid-template-columns:180px minmax(0,1fr)}.settings-panel{width:calc(100% - 32px);padding-top:24px}}
 @media (prefers-reduced-transparency:reduce),(prefers-contrast:more){.workspace[data-wallpaper] .settings-nav,.workspace[data-wallpaper] .settings-page-root .settings-group{background:var(--panel);backdrop-filter:none;-webkit-backdrop-filter:none}.workspace[data-wallpaper] .settings-content{background:var(--bg)}}
 .settings-group{border:1px solid var(--border);border-radius:.36rem;overflow:hidden;background:var(--panel)}

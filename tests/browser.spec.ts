@@ -406,11 +406,9 @@ test.describe('browser workspace', () => {
     }, guest);
     await expect.poll(async () => (await commandCalls(page, 'browser_bounds')).at(-1)?.args.visible).toBe(false);
     await page.keyboard.press('Escape');
-    const closingMenu = page.locator('.floating-menu[data-popover-state="closing"]');
-    await expect(closingMenu).toHaveCount(1);
-    await expect(closingMenu).toHaveAttribute('aria-hidden', 'true');
+    // Menus close instantly, so the guest returns as soon as the menu is gone.
+    await expect(page.locator('.floating-menu')).toHaveCount(0);
     await expect.poll(async () => (await commandCalls(page, 'browser_bounds')).at(-1)?.args.visible).toBe(true);
-    await expect(closingMenu).toHaveCount(1);
   });
 
   test('keeps manual URL opening available when local server discovery fails', async ({ page }) => {

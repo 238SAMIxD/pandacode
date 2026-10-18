@@ -29,8 +29,7 @@ dialog.bot-settings-dialog{width:min(720px,calc(100vw - 32px));max-height:88dvh}
 .bp-actions .icon-button .icon{width:16px;height:16px}
 .bp-more{position:relative;display:flex}
 .bp-menu{position:absolute;right:0;top:calc(100% + 6px);z-index:30;display:flex;flex-direction:column;min-width:260px;padding:5px;border-radius:5px;border:.5px solid var(--glass-edge,var(--border));background:linear-gradient(180deg,var(--glass-warm,var(--panel)),var(--glass-tint,var(--panel)));backdrop-filter:blur(30px) saturate(1.6);-webkit-backdrop-filter:blur(30px) saturate(1.6);box-shadow:0 0 0 .5px var(--glass-ring,transparent),0 16px 40px -14px var(--glass-shadow-deep,rgb(0 0 0 / .3))}
-@media(prefers-reduced-motion:no-preference){.bp-menu{animation:bp-menu-in 180ms cubic-bezier(.2,.9,.3,1);transform-origin:100% 0}}
-@keyframes bp-menu-in{from{opacity:0;transform:scale(.96) translateY(-4px)}}
+
 .bp-menu>button{display:grid;grid-template-columns:16px minmax(0,1fr);column-gap:10px;align-items:center;padding:8px 10px;border-radius:3px;text-align:left;font-size:.86rem;color:var(--text)}
 .bp-menu>button:hover,.bp-menu>button:focus-visible{background:var(--glass-fill-hover,var(--raised))}
 .bp-menu>button .icon{width:15px;height:15px;color:var(--muted)}

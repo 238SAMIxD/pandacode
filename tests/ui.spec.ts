@@ -1220,23 +1220,12 @@ test('finds and selects projects beyond the first hundred filter options', async
   await expect(openTaskProject(page)).toHaveText('Fixture project 119');
 });
 
-test('keeps model search and selection usable before the entrance animation finishes', async ({ page }) => {
-  await page.evaluate(() => {
-    const animate = Element.prototype.animate;
-    (window as any).__pandacodePausedMenus = [];
-    Element.prototype.animate = function (...args) {
-      const animation = animate.apply(this, args);
-      if (this.matches('.floating-menu')) {
-        animation.pause();
-        (window as any).__pandacodePausedMenus.push(animation);
-      }
-      return animation;
-    };
-  });
+test('menus open and close instantly and stay usable', async ({ page }) => {
   await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
   const menu = page.getByRole('dialog', { name: 'Harness and model', exact: true });
   const search = menu.getByRole('searchbox', { name: 'Search harnesses and models', exact: true });
-  await expect.poll(() => page.evaluate(() => (window as any).__pandacodePausedMenus.length)).toBeGreaterThan(0);
+  await expect(menu).toHaveAttribute('data-popover-state', 'open');
+  expect(await menu.evaluate(element => element.getAnimations().length)).toBe(0);
   await expect(search).toBeFocused();
   await page.keyboard.type('animation-ready-model');
   await expect(search).toHaveValue('animation-ready-model');
