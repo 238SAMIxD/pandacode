@@ -71,7 +71,7 @@ test('hero, supported harnesses, and complete page have valid resources and resp
   await expect(page.locator('#preview-notes')).toContainText('free, open-source software');
   await expect(page.locator('#preview-notes')).toContainText('provider subscriptions and model usage are separate');
   await expect(page.locator('#preview-notes')).toContainText('Apple silicon Macs, Windows x64, and Linux x64 are published on GitHub Releases');
-  await expect(page.locator('#preview-notes').getByRole('link', { name: 'MIT License' })).toHaveAttribute('href', '/license/');
+  await expect(page.locator('#preview-notes').getByRole('link', { name: 'PandaCode License' })).toHaveAttribute('href', '/license/');
   await expect(page.locator('#preview-notes').getByRole('link', { name: /Report an issue/ })).toHaveAttribute('href', issues);
   await expect.poll(() => page.locator('img:visible').evaluateAll(images => images.filter(image => !(image as HTMLImageElement).complete || !(image as HTMLImageElement).naturalWidth).map(image => (image as HTMLImageElement).src))).toEqual([]);
   const resources = await page.evaluate(() => performance.getEntriesByType('resource').map(entry => {
@@ -150,7 +150,7 @@ async function expectComparison(page: Page) {
   }
   await expect(table).toHaveAccessibleName(/PandaCode.*T3 Code.*Conductor.*Herdr/);
   expect(await table.locator('tbody tr').count()).toBeGreaterThan(1);
-  await expect(table.getByRole('row', {name: /Price & license/})).toContainText('Open source · MIT · No account');
+  await expect(table.getByRole('row', {name: /Price & license/})).toContainText('Open source · MIT-based · No account');
   await expect(table).not.toContainText('$20');
   const sources = await comparison.locator('a[href^="https://"]').evaluateAll(links => links.map(link => ({name: link.textContent?.trim(), href: (link as HTMLAnchorElement).href})));
   expect(new Set(sources.map(source => new URL(source.href).hostname)).size).toBeGreaterThanOrEqual(3);
@@ -218,12 +218,12 @@ test('the open-source section explains the license, privacy and building from so
   await page.goto('/');
   const pill = page.locator('.hero-pills').getByRole('link', { name: /Free & open source/ });
   await expect(pill).toBeVisible();
-  await expect(pill).toContainText('MIT');
+  await expect(pill).toContainText('OSS');
   await pill.click();
   const section = page.locator('#open-source');
   await expect(section).toBeInViewport();
   await expect(section.getByRole('heading', { level: 2 })).toHaveText('Free to use.Open to everyone.');
-  for (const fact of ['MIT licensed.', 'No account.', 'No telemetry.', 'Bring your own agents.', 'Built in the open.']) await expect(section).toContainText(fact);
+  for (const fact of ['MIT-based license.', 'No account.', 'No telemetry.', 'Bring your own agents.', 'Built in the open.']) await expect(section).toContainText(fact);
   const build = section.locator('pre');
   for (const command of [`git clone ${repo}.git`, 'cd pandacode', 'npm ci', 'npm run desktop']) await expect(build).toContainText(command);
   await expect(section.getByRole('link', { name: /Star on GitHub/ })).toHaveAttribute('href', repo);

@@ -1,10 +1,10 @@
 import { test as base, expect, type Page } from '@playwright/test';
-import { readdir } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 
 const repo = 'https://github.com/aicodeking/pandacode';
 
 /* The reading pages: /changelog lists every releases/X.Y.Z.md, /privacy states that
- * PandaCode collects nothing, /license carries the MIT text, and all three work without scripts. */
+ * PandaCode collects nothing, /license carries the LICENSE text word for word, and all three work without scripts. */
 const test = base.extend<{ browserHealth: void }>({
   browserHealth: [async ({ page }, use) => {
     const errors: string[] = [];
@@ -78,23 +78,21 @@ test('privacy policy says PandaCode collects nothing, with a contents rail', asy
   await expect(page.locator('.legal-toc a.is-current')).toHaveText('This website');
   await expect(prose.getByRole('link', { name: 'GitHub issues' })).toHaveAttribute('href', `${repo}/issues`);
   await expect(prose.getByRole('link', { name: 'security policy' })).toHaveAttribute('href', `${repo}/security/policy`);
-  await expect(prose.getByRole('link', { name: 'MIT License' })).toHaveAttribute('href', '/license/');
+  await expect(prose.getByRole('link', { name: 'PandaCode License' })).toHaveAttribute('href', '/license/');
   await expect(page.locator('.nav-links a[aria-current="page"]')).toHaveText('Privacy');
   await expectNoOverflow(page);
 });
 
-test('license page carries the full MIT License and the agent permissions note', async ({ page }) => {
+test('license page carries LICENSE word for word, including the fork credit, and the agent permissions note', async ({ page }) => {
   await page.goto('/license/');
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('The MIT License.');
-  const text = page.locator('.license-text');
-  for (const line of [
-    'MIT License',
-    'Copyright (c) 2026 PandaCode contributors',
-    'Permission is hereby granted, free of charge, to any person obtaining a copy',
-    'The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.',
-    'THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND',
-    'IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE',
-  ]) await expect(text).toContainText(line);
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('The PandaCode License.');
+  // Same paragraphs as the repository's LICENSE; only quote marks are typeset.
+  const normalize = (text: string) => text.replace(/[“”]/g, '"').replace(/’/g, "'").replace(/\s+/g, ' ').trim();
+  const license = (await readFile(new URL('../../LICENSE', import.meta.url), 'utf8')).split(/\n\s*\n/).map(normalize).filter(Boolean);
+  const shown = (await page.locator('.license-text p').allTextContents()).map(normalize);
+  expect(shown).toEqual(license);
+  expect(license.join(' ')).toContain('"This is a fork of PandaCode" together with a link to https://github.com/aicodeking/pandacode');
+  await expect(page.locator('#summary')).toContainText('This is a fork of PandaCode');
   await expect(page.locator('#agents')).toContainText('act with the permissions you grant');
   await expect(page.locator('.legal-prose').getByRole('link', { name: 'GitHub issues' })).toHaveAttribute('href', `${repo}/issues`);
   await expect(page.locator('.legal-prose').getByRole('link', { name: 'Privacy Policy' })).toHaveAttribute('href', '/privacy/');

@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.3.0",
   "description": "Open-source desktop workspace for coding agents: Claude Code, Codex, Kimi Code, OpenCode and more.",
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "homepage": "https://github.com/aicodeking/pandacode#readme",
   "repository": {
     "type": "git",

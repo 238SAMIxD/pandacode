@@ -130,6 +130,7 @@ test('Settings shows an About section with the version and GitHub links', async 
     'https://github.com/aicodeking/pandacode/releases',
   ]));
   await expect(about.getByRole('button', { name: 'Releases on GitHub' })).toBeVisible();
+  await expect(about.getByRole('button', { name: 'PandaCode License' })).toBeVisible();
   await expect(settings).not.toContainText('License & updates');
   await about.getByRole('button', { name: 'Releases on GitHub' }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__supportFixture.opened)).toEqual([

@@ -16,7 +16,7 @@ const link = (label: string, url: string) =>
 export function aboutSettingsHtml(): string {
   return `<div class="settings-group settings-about" aria-labelledby="settings-about-heading">
     <div class="setting-row"><div><strong id="settings-about-heading">About PandaCode</strong><small class="settings-about-version">Version …</small></div></div>
-    <div class="setting-row"><div><strong>License</strong><small>Open source. No account, no telemetry.</small></div>${link('MIT License', PROJECT_LINKS.license)}</div>
+    <div class="setting-row"><div><strong>License</strong><small>Open source (MIT-based). No account, no telemetry.</small></div>${link('PandaCode License', PROJECT_LINKS.license)}</div>
     <div class="setting-row"><div><strong>Updates</strong><small>Never checked automatically.</small></div>${link('Releases on GitHub', PROJECT_LINKS.releases)}</div>
     <div class="setting-row"><div><strong>Source code</strong><small>Report bugs and follow development.</small></div><div class="settings-row-actions">${link('GitHub repository', PROJECT_LINKS.repository)}${link('Issues', PROJECT_LINKS.issues)}</div></div>
   </div>`;

@@ -6,7 +6,9 @@ Plan and Xiaomi MiMo** (through Claude Code), **Antigravity and xAI's Grok
 Build** (through ACP) — side by side, with your projects, Git, a terminal and a
 browser in one window.
 
-PandaCode is free and open source under the [MIT license](LICENSE). There is no
+PandaCode is free and open source under the [PandaCode License](LICENSE), the MIT
+License with one addition: forks that are used commercially or released publicly
+must say "This is a fork of PandaCode" and link to this repository. There is no
 account, no license key and no telemetry.
 
 Built with Tauri 2, Rust, SQLite and plain TypeScript. It uses the operating
@@ -200,5 +202,6 @@ open, and removing a project from the app never deletes its files.
 
 ## License
 
-[MIT](LICENSE) © 2026 PandaCode contributors. Provider names and logos belong to
+[PandaCode License](LICENSE) (MIT with an attribution requirement for forks) ©
+2026 PandaCode contributors. Provider names and logos belong to
 their owners and do not imply endorsement ([brand assets](docs/brand-assets.md)).

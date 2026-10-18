@@ -1,4 +1,4 @@
-MIT License
+PandaCode License (MIT License with an attribution requirement)
 
 Copyright (c) 2026 PandaCode contributors
 
@@ -11,6 +11,14 @@ furnished to do so, subject to the following conditions:
 
 The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.
+
+If a modified version of the Software, or any work based on it (a "fork"), is
+used commercially or released publicly in any form (including as source code,
+a binary, an app, a hosted service or a website), the fork must state "This is
+a fork of PandaCode" together with a link to
+https://github.com/aicodeking/pandacode. The statement must appear in the
+fork's README or main documentation, and in a place its users can readily see,
+such as its About screen, website or store listing.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,

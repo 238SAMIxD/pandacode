@@ -1,7 +1,7 @@
 # PandaCode website
 
 The static PandaCode website: the landing page, the changelog,
-the privacy policy and the MIT License. PandaCode is free, open source and collects nothing,
+the privacy policy and the PandaCode License (MIT-based). PandaCode is free, open source and collects nothing,
 and the site follows suit: no cookies, no analytics, no remote fonts or scripts, and no
 third-party requests of any kind. Downloads link to
 [GitHub Releases](https://github.com/aicodeking/pandacode/releases/latest); the source is at

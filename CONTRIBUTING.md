@@ -1,6 +1,7 @@
 # Contributing to PandaCode
 
-Thanks for helping. PandaCode is an MIT-licensed desktop app built with Tauri 2
+Thanks for helping. PandaCode is an open-source desktop app (MIT-based
+[PandaCode License](LICENSE)) built with Tauri 2
 (Rust in `src-tauri/`), plain TypeScript (`src/`) and an Astro website
 (`website/`). This guide covers setup, checks and pull requests. Code
 conventions for humans and coding agents are in [AGENTS.md](AGENTS.md).
@@ -104,4 +105,4 @@ Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`.
   OS keychain (`secret_store.rs`).
 - Keep files small and focused, and handle errors explicitly.
 - By contributing, you agree your contributions are licensed under the
-  [MIT License](LICENSE).
+  [PandaCode License](LICENSE).
