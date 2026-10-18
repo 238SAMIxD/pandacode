@@ -29,3 +29,17 @@ test('the host maps to its native target', () => {
 test('missing variables fail without revealing other values', () => {
   assert.throws(() => required('MISSING', { SECRET: 'dontlogme' }), { message: 'Missing MISSING. Set it in your shell or CI environment.' });
 });
+
+test('the updater manifest points every signed platform at its release asset', async () => {
+  const { updaterManifest } = await import('./common.mjs');
+  const manifest = updaterManifest('0.3.1', ' Notes \n', { 'darwin-aarch64': 'sig-mac\n', 'linux-x86_64': 'sig-linux' }, '2026-10-18T00:00:00Z');
+  assert.deepEqual(manifest, {
+    version: '0.3.1', notes: 'Notes', pub_date: '2026-10-18T00:00:00Z',
+    platforms: {
+      'darwin-aarch64': { signature: 'sig-mac', url: 'https://github.com/aicodeking/pandacode/releases/download/v0.3.1/PandaCode-macOS-arm64.app.tar.gz' },
+      'linux-x86_64': { signature: 'sig-linux', url: 'https://github.com/aicodeking/pandacode/releases/download/v0.3.1/PandaCode-Linux-x86_64.AppImage' },
+    },
+  });
+  assert.throws(() => updaterManifest('0.3.1', '', {}), /No signed updater files/);
+  assert.throws(() => updaterManifest('0.3.1', '', { 'windows-x86_64': ' ' }), /Missing updater signature/);
+});

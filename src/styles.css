@@ -842,3 +842,12 @@ html[data-native-platform=macos] .github-view .workspace-header{padding-left:104
 #github-hub{flex:1;min-width:0;min-height:0}
 #github-hub[hidden]{display:none}
 @container workspace-header (max-width:420px){.header-actions{gap:1px}.header-actions .icon-button{width:24px}.header-divider{margin:0 1px}}
+
+/* An update is downloaded: one quiet, clickable line in the status bar. */
+.update-status{display:inline-flex;align-items:center;gap:5px;margin-left:auto;margin-right:8px;padding:2px 9px;border-radius:999px;background:var(--accent-dim);color:var(--accent-ink);font-size:.72rem;font-weight:600}
+.update-status:hover{background:color-mix(in srgb,var(--accent) 30%,transparent)}
+.update-status:active{transform:scale(.97)}
+.update-status .icon{width:12px;height:12px}
+.update-status[hidden]{display:none}
+@media (prefers-reduced-motion:no-preference){.update-status:not([hidden]){animation:update-in 320ms var(--spring-fast,cubic-bezier(.2,.9,.3,1))}}
+@keyframes update-in{from{opacity:0;transform:translateY(4px)}}

@@ -78,6 +78,10 @@ jobs:
       - name: Build installer
         run: node scripts/release/build.mjs
         env:
+          # Signs the in-app update file. Without these secrets the installers still
+          # build, but the release offers no automatic update.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && env.APPLE_CERTIFICATE != '' && secrets.APPLE_SIGNING_IDENTITY || '' }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
@@ -120,8 +124,15 @@ jobs:
             printf -- '- **macOS (Apple silicon):** open `PandaCode-macOS-arm64.dmg` and drag PandaCode to Applications. If macOS says it cannot verify the app, open System Settings > Privacy & Security and choose **Open Anyway**.\n'
             printf -- '- **Windows x64:** run `PandaCode-Windows-x64-setup.exe`. If SmartScreen warns about an unknown publisher, choose **More info > Run anyway**.\n'
             printf -- '- **Linux x64:** `chmod +x PandaCode-Linux-x86_64.AppImage` and run it.\n\n'
-            printf 'Each file has a `.sha256` checksum beside it. Build from source: see CONTRIBUTING.md.\n'
+            printf 'Each file has a `.sha256` checksum beside it. Installed copies update themselves from this page. Build from source: see CONTRIBUTING.md.\n'
           } > "$RUNNER_TEMP/notes.md"
+      - name: Write the updater manifest
+        run: |
+          if ls assets/*.sig >/dev/null 2>&1; then
+            node scripts/release/updater-manifest.mjs assets "$VERSION" "releases/$VERSION.md"
+          else
+            echo "::warning::No signed update files; this release will not update installed apps."
+          fi
       - name: Create GitHub Release
         run: |
           ls -l assets

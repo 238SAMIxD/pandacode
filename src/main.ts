@@ -48,6 +48,7 @@ import { mountFileMentions, type MentionEntry } from './file-mentions';
 import { bindFileLinkContext, configureFileLinks, isPreviewableFile, refreshFileLinks, type FileLinkContext, type ResolvedFile } from './file-links';
 import { createWorktrees } from './worktrees';
 import { createGithub, githubEnabled } from './github';
+import { startAppUpdates } from './app-updates';
 import { createPullView } from './github-pull';
 import { createTokenSaver } from './token-saver-panel';
 import { MAX_IMAGES, mountPromptAttachments, type PromptImage } from './attachments';
@@ -262,7 +263,7 @@ $app.innerHTML = `<div class="workspace">
     <header class="workspace-header" data-tauri-drag-region><div class="header-leading" data-tauri-drag-region>${button('toggle-sidebar', 'Hide sidebar', 'sidebar', 'sidebar-toggle', 'id="sidebar-toggle" aria-controls="workspace-sidebar" aria-expanded="true" aria-keyshortcuts="Meta+B Control+B"')}<div id="breadcrumb" class="breadcrumb" data-tauri-drag-region></div></div><div class="header-actions"><div class="view-switch" role="group" aria-label="Workspace view"><button data-action="conversation-view" aria-label="Conversation view" aria-pressed="true">${icon('chat')}<span>Conversation</span></button><button data-action="board-view" aria-label="Board view" aria-pressed="false">${icon('board')}<span>Board</span></button><button data-action="github-view" aria-label="GitHub view" aria-pressed="false">${icon('github')}<span>GitHub</span></button></div><button type="button" class="header-run" id="run-project-button" data-action="run-project" aria-label="Run project" title="Run pandacode-run.sh" hidden>${icon('play')}<span>Run</span></button>${button('deploy', 'Deploy', 'upload', '', 'id="deploy-button" aria-haspopup="dialog"')}<span class="header-divider" aria-hidden="true"></span>${button('moodboards', 'Project moodboards', 'images')}${button('browser', 'Open browser', 'globe', '', 'id="browser-toggle"')}${button('terminal', `Toggle terminal (${shortcut('J')})`, 'terminal', '', 'id="terminal-toggle" aria-controls="terminal-drawer" aria-expanded="false"')}<span class="header-divider" aria-hidden="true"></span>${button('toggle-inspector', `Toggle inspector (${shortcut('B', true)})`, 'panel', 'active', 'id="inspector-toggle"')}${button('task-menu', 'Task actions', 'more', '', 'id="task-menu-trigger" aria-haspopup="dialog" aria-expanded="false"')}</div></header>
     <div class="work-area"><section id="project-board" class="project-board" aria-label="Project board" hidden></section><section id="github-hub" aria-label="GitHub" hidden></section><section class="conversation-pane"><div id="task-details-heading" class="task-details-heading" hidden></div><div id="subagents-host" class="subagents-host" hidden></div><div id="transcript" class="transcript" role="log" aria-label="Conversation" aria-live="off"></div><div id="composer-area" class="composer-area"></div></section></div>
     <div id="terminal-drawer" class="terminal-drawer" hidden><div class="drawer-heading"><span>${icon('terminal')}<span id="terminal-project" class="muted"></span></span><div class="terminal-tabs" role="tablist" aria-label="Terminal tabs"></div><div class="terminal-heading-actions"><button class="icon-button" data-terminal-action="new" aria-label="New terminal" title="New terminal">${icon('plus')}</button><button class="icon-button" data-terminal-action="minimize" aria-label="Minimize terminal" title="Minimize terminal">${icon('minimize')}</button><button class="icon-button" data-terminal-action="close" aria-label="Close terminal" title="Close terminal" aria-haspopup="dialog">${icon('close')}</button></div></div><div id="terminal-host"></div></div>
-    <footer class="statusbar"><span id="status-left"></span>${preview ? '<span class="preview-status">Browser preview · sample data</span>' : ''}<button data-action="metrics" id="resource-status" title="Resource usage" aria-label="Resource usage">${icon('bamboo')}</button></footer>
+    <footer class="statusbar"><span id="status-left"></span><button type="button" id="update-status" class="update-status" hidden>${icon('refresh')}<span>Restart to update</span></button>${preview ? '<span class="preview-status">Browser preview · sample data</span>' : ''}<button data-action="metrics" id="resource-status" title="Resource usage" aria-label="Resource usage">${icon('bamboo')}</button></footer>
   </main>
   <aside id="inspector" class="inspector" aria-label="Project inspector"><header class="inspector-heading"><div class="inspector-tabs"><button class="selected" data-action="tab-changes">Changes <span id="changes-count"></span></button><button data-action="tab-files">Files</button><button data-action="browser">Browser</button><button data-action="tab-pull" hidden>PR</button><button data-action="tab-simulator" aria-label="Simulators" title="iOS & Android simulators" ${isMac ? '' : 'hidden'}>${icon('phone')}</button><button data-action="tab-vm" aria-label="Virtual machines" title="Virtual machines" ${isMac ? '' : 'hidden'}>${icon('monitor')}</button></div>${button('refresh-inspector', 'Refresh project', 'refresh')}</header><div id="inspector-content" class="inspector-content"></div><section id="browser-panel" class="browser-panel" aria-label="Browser" hidden></section><section id="simulator-panel" class="simulator-panel" aria-label="Simulators" hidden></section><section id="vm-panel" class="vm-panel" aria-label="Virtual machines" hidden></section></aside>
 </div><div id="toast" class="toast" role="status" hidden></div><dialog id="dialog"></dialog>`;
@@ -3324,6 +3325,21 @@ async function boot(): Promise<void> {
   const first = state.sessions.find(s => !s.archived && s.projectId === state.projectId); if (first) await selectSession(first.id); else { render(); await refreshInspector(); }
   if (state.view === 'board') { state.boardPanel = false; renderInspector(); renderBoardView(); }
   if (!preview && !state.providers.some(p => p.installed)) notify('Open Settings to check your installed agent CLIs.');
+}
+// PandaCode's own updates: checked on GitHub Releases, installed when no agent is working.
+const updates = startAppUpdates({ busy: () => state.sessions.some(task => isRunning(task.id)), notify });
+{
+  const pill = $('#update-status');
+  const paint = () => {
+    const current = updates.state;
+    pill.hidden = current.kind !== 'ready' && current.kind !== 'installing';
+    if (current.kind !== 'ready' && current.kind !== 'installing') return;
+    pill.title = current.kind === 'ready' ? `PandaCode ${current.version} is ready. Restart now, or it restarts on its own when your agents are done.` : `Installing ${current.version}…`;
+    (pill as HTMLButtonElement).disabled = current.kind === 'installing';
+  };
+  updates.subscribe(paint);
+  pill.addEventListener('click', () => { void updates.restart(); });
+  paint();
 }
 const agentUpdates = initializeAgentUpdates({
   modal, closeModal, report, providers: () => state.providers,

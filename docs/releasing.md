@@ -25,6 +25,29 @@ do not contain the version, so
 always serves the newest build. There is no Intel Mac, Windows ARM or Linux ARM
 release target.
 
+## Automatic updates
+
+Installed copies update themselves from GitHub Releases with Tauri's updater
+(`src/app-updates.ts`, `plugins.updater` in `src-tauri/tauri.conf.json`). Each release
+also carries:
+
+- `PandaCode-macOS-arm64.app.tar.gz` and a `.sig` for each platform's update file
+  (Windows and Linux update from their installer and AppImage), signed with the
+  update key;
+- `latest.json`, written by `scripts/release/updater-manifest.mjs`, naming the version,
+  notes and each platform's file and signature.
+
+The app reads `releases/latest/download/latest.json`, so publishing a release is what
+ships the update. Signing needs two repository secrets, `TAURI_SIGNING_PRIVATE_KEY`
+and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; without them the installers still build but
+the release updates nobody. The matching public key is in `tauri.conf.json`.
+
+**Keep the private key safe.** Installed apps accept only updates signed by it. If it
+is lost, existing installs can no longer update and people must reinstall a build with
+a new key; if it leaks, rotate it the same way. The maintainer's copy lives outside the
+repository (never commit it). Update downloads need the release to be publicly
+readable, so automatic updates start working once the repository is public.
+
 ## 1. Prepare the version
 
 Work on `main` (or land your branch there first) with a clean, reviewed tree.

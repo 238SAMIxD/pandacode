@@ -39,7 +39,7 @@ for (const [platform, modifier, key] of [['MacIntel', '⌘', 'Meta'], ['Win32', 
     await page.keyboard.press(`${key}+,`);
     await expect(page.getByRole('dialog', {name:'Settings', exact:true})).toBeVisible();
     await expect(page.locator('.text-size-setting')).toContainText(`${modifier} + / −`);
-    await expect(page.locator('.settings-about')).toContainText('Releases on GitHub');
+    await expect(page.locator('.settings-about')).toContainText('Releases');
   });
 }
 

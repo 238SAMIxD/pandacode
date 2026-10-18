@@ -5,7 +5,9 @@
 //   node scripts/release/build.mjs [darwin-aarch64|windows-x86_64|linux-x86_64]
 //
 // Signing is optional. Without Apple credentials the macOS app gets an ad-hoc
-// signature; Windows and Linux builds are unsigned.
+// signature; Windows and Linux builds are unsigned. With TAURI_SIGNING_PRIVATE_KEY
+// (the release workflow's secret) the build also produces the signed update file and
+// its `.sig` for the in-app updater.
 import { readFile, writeFile, mkdir, copyFile, readdir, readlink, mkdtemp, rmdir, chmod } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -13,9 +15,9 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { root, version, json, run, digest, targetConfig, hostTarget, appImageBundleOptions, releaseDirectory } from './common.mjs';
 
-// Never forwarded to the build: the app has no updater or license check, and
-// stale values in a developer shell must not change the output.
-const STRIPPED = /^(TAURI_SIGNING_|PANDACODE_(LICENSE|UPDATE)_PUBLIC_KEY$)/;
+// Never forwarded to the build: leftovers of the old license check in a developer
+// shell must not change the output.
+const STRIPPED = /^PANDACODE_(LICENSE|UPDATE)_PUBLIC_KEY$/;
 
 export function macosSigning(env) {
   const identity = env.APPLE_SIGNING_IDENTITY?.trim();
@@ -36,7 +38,8 @@ export function buildPlan(releaseTarget, inherited, platform = process.platform,
   const config = targetConfig(releaseTarget);
   if (platform !== config.platform || arch !== config.arch) throw new Error(`Build ${releaseTarget} on its native ${config.platform}/${config.arch} host.`);
   const base = Object.fromEntries(Object.entries(inherited).filter(([name]) => !STRIPPED.test(name)));
-  const shared = { createUpdaterArtifacts: false, ...appImageBundleOptions(releaseTarget) };
+  // Update files need the signing key; local builds without it skip them.
+  const shared = { createUpdaterArtifacts: Boolean(base.TAURI_SIGNING_PRIVATE_KEY?.trim()), ...appImageBundleOptions(releaseTarget) };
   const cargoTarget = { CARGO_TARGET_DIR: resolve(root, 'src-tauri/target') };
   if (releaseTarget === 'darwin-aarch64') {
     const signing = macosSigning(base);
@@ -54,7 +57,7 @@ export function buildPlan(releaseTarget, inherited, platform = process.platform,
 }
 
 function plan(config, env, mode, bundle) {
-  return { env, signing: { mode }, args: ['build', '--target', config.triple, '--bundles', config.bundles, '--config', JSON.stringify({ bundle })] };
+  return { env, signing: { mode }, updater: bundle.createUpdaterArtifacts, args: ['build', '--target', config.triple, '--bundles', config.bundles, '--config', JSON.stringify({ bundle })] };
 }
 
 export function builtArtifact(names, releaseVersion, releaseTarget) {
@@ -133,6 +136,11 @@ async function main() {
   await copyFile(source, destination);
   if (releaseTarget === 'linux-x86_64') await chmod(destination, 0o755);
   await writeFile(`${destination}.sha256`, checksumLine(await digest(destination), config.asset));
+  if (build.updater) {
+    const updater = resolve(bundleRoot, config.updater(releaseVersion));
+    if (config.updaterAsset !== config.asset) await copyFile(updater, resolve(output, config.updaterAsset));
+    await copyFile(`${updater}.sig`, resolve(output, `${config.updaterAsset}.sig`));
+  }
   console.log(`Built ${config.asset} (${build.signing.mode}) in ${output}. Nothing was uploaded.`);
 }
 

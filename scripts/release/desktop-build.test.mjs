@@ -6,13 +6,16 @@ import { appImageBundleOptions } from './common.mjs';
 const env = { PANDACODE_LICENSE_PUBLIC_KEY: 'stale', PANDACODE_UPDATE_PUBLIC_KEY: 'stale', TAURI_SIGNING_PRIVATE_KEY: 'stale', APPLE_ID: 'someone', APPLE_SIGNING_IDENTITY: 'Developer ID Application: Someone', PATH: 'test-path' };
 const config = plan => JSON.parse(plan.args.at(-1));
 
-test('builds require the native host and never forward updater, license or Apple variables to Windows and Linux', () => {
+test('builds require the native host and never forward old license keys or Apple variables to Windows and Linux', () => {
   for (const [target, platform] of [['windows-x86_64', 'win32'], ['linux-x86_64', 'linux']]) {
     const plan = buildPlan(target, env, platform, 'x64');
-    for (const name of ['APPLE_ID', 'APPLE_SIGNING_IDENTITY', 'TAURI_SIGNING_PRIVATE_KEY', 'PANDACODE_LICENSE_PUBLIC_KEY', 'PANDACODE_UPDATE_PUBLIC_KEY']) assert.equal(plan.env[name], undefined, name);
+    for (const name of ['APPLE_ID', 'APPLE_SIGNING_IDENTITY', 'PANDACODE_LICENSE_PUBLIC_KEY', 'PANDACODE_UPDATE_PUBLIC_KEY']) assert.equal(plan.env[name], undefined, name);
     assert.equal(plan.env.PATH, 'test-path');
     assert.equal(plan.signing.mode, 'unsigned');
-    assert.equal(config(plan).bundle.createUpdaterArtifacts, false);
+    // The update signing key is the one secret a build needs: it signs the in-app update file.
+    assert.equal(plan.env.TAURI_SIGNING_PRIVATE_KEY, 'stale');
+    assert.equal(config(plan).bundle.createUpdaterArtifacts, true);
+    assert.equal(config(buildPlan(target, { PATH: 'p' }, platform, 'x64')).bundle.createUpdaterArtifacts, false);
     assert.equal(config(plan).plugins, undefined);
     assert.throws(() => buildPlan(target, env, 'darwin', 'arm64'), /native/);
   }

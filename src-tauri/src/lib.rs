@@ -2675,6 +2675,9 @@ async fn list_local_servers() -> Result<Vec<local_servers::LocalServer>> {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // Updates come only from GitHub Releases, verified against the public key in tauri.conf.json.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             if let Ok(cache) = app.path().app_cache_dir() {
                 turn_changes::cleanup_cache(&cache.join("turn-captures"));

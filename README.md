@@ -116,6 +116,7 @@ information:
 | --- | --- | --- |
 | Latest versions of installed coding CLIs | `formulae.brew.sh`, `downloads.claude.ai`, `api.github.com`, `cdn.kimi.com` | About every 6 hours |
 | Public model price list (for cost estimates) | `raw.githubusercontent.com` | Daily |
+| PandaCode's own updates (`latest.json` on this repository's latest release) | `github.com` | At launch and about every 6 hours; turn off in Settings → About |
 
 ## Install
 
@@ -136,8 +137,11 @@ Release builds are not code-signed, so your OS will warn the first time:
 - **Linux:** `chmod +x PandaCode-Linux-x86_64.AppImage`, then run it. Some
   distributions need FUSE 2 (`libfuse2`), or set `APPIMAGE_EXTRACT_AND_RUN=1`.
 
-Each file has a `.sha256` checksum beside it. New versions are announced on the
-Releases page. See [platform support](docs/platform-support.md) for details.
+Each file has a `.sha256` checksum beside it. Once installed, PandaCode updates
+itself: it checks the latest release, downloads a newer version in the background,
+verifies its signature, and restarts to install it when no agent is working and
+you've stepped away (or when you click **Restart to update**). Turn this off in
+Settings → About. See [platform support](docs/platform-support.md) for details.
 
 Then install Git and at least one coding CLI and sign in with its normal login.
 PandaCode does not include provider plans or usage.
