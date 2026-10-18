@@ -16,8 +16,7 @@ test('provider connections show Claude credential conflicts and let users prefer
   });
   await page.goto('/');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
-  await page.getByRole('button', { name: 'Set up', exact: true }).click();
+  await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('tab', { name: 'Providers', exact: true }).click();
   const card = page.locator('#claude-connection');
   await expect(card.getByRole('status')).toContainText('Environment API key');
   await expect(card).toContainText('https://gateway.example');
@@ -50,10 +49,9 @@ async function delayedConnections(page: Page): Promise<void> {
   await page.goto('/');
   await expect(page.locator('.task-item.selected .task-title')).toHaveText('Make search feel instant');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
-  await page.getByRole('button', { name: 'Set up', exact: true }).click();
-  await expect(page.locator('#dialog details summary')).toHaveCount(3);
-  for (const summary of await page.locator('#dialog details summary').all()) await summary.click();
+  await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('tab', { name: 'Providers', exact: true }).click();
+  await expect(page.locator('#settings-panel-providers details summary')).toHaveCount(3);
+  for (const summary of await page.locator('#settings-panel-providers details summary').all()) await summary.click();
 }
 
 test('provider connections preserve other drafts and edits made during a save', async ({ page }) => {
@@ -98,15 +96,15 @@ test('provider connections ignore a late initial configuration after a successfu
   await expect(opencode).toHaveValue('/new/opencode');
 });
 
-test('provider connections are grouped in Agents and never accept secrets in browser preview', async ({ page }) => {
+test('provider connections are grouped in Providers and never accept secrets in browser preview', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto('/');
   await expect(page.locator('.task-item.selected .task-title')).toHaveText('Make search feel instant');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
-  await page.getByRole('button', { name: 'Set up', exact: true }).click();
-  const dialog = page.locator('#dialog');
-  await expect(dialog.getByRole('heading', { name: 'Provider connections', exact: true })).toBeVisible();
+  await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('tab', { name: 'Providers', exact: true }).click();
+  const settings = page.getByRole('region', { name: 'Settings', exact: true });
+  const dialog = settings.getByRole('tabpanel', { name: 'Providers', exact: true });
+  await expect(dialog.getByRole('heading', { name: 'Providers', exact: true })).toBeVisible();
   await expect(dialog.getByLabel('Z.ai API key', { exact: true })).toBeDisabled();
   await expect(dialog.locator('#glm-key-form').getByRole('button', { name: 'Save key', exact: true })).toBeDisabled();
   await expect(dialog.getByText('opencode auth login', { exact: true })).toBeVisible();
@@ -117,8 +115,9 @@ test('provider connections are grouped in Agents and never accept secrets in bro
   await dialog.getByLabel('Grok executable', { exact: true }).fill('/tmp/my-grok');
   await paths.last().getByRole('button', { name: 'Apply', exact: true }).click();
   await expect(dialog.getByRole('status').last()).toContainText('desktop app');
-  await dialog.getByRole('button', { name: 'Back to settings', exact: true }).click();
-  await expect(page.getByRole('tab', { name: 'General', exact: true })).toBeVisible();
+  await settings.getByRole('button', { name: 'Back to the workspace', exact: true }).click();
+  await expect(settings).toBeHidden();
+  await expect(page.locator('.sidebar')).toBeVisible();
   expect(errors).toEqual([]);
 });
 
@@ -127,8 +126,7 @@ test('the MiMo Token Plan card offers the documented clusters and keeps the key 
   await page.goto('/');
   await expect(page.locator('.task-item.selected .task-title')).toHaveText('Make search feel instant');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
-  await page.getByRole('button', { name: 'Set up', exact: true }).click();
+  await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('tab', { name: 'Providers', exact: true }).click();
   const card = page.locator('.connection-card', { hasText: 'MiMo Token Plan' });
   await expect(card).toBeVisible();
   await expect(card.getByRole('link', { name: /Token Plan/ })).toHaveAttribute('href', 'https://platform.xiaomimimo.com/token-plan');
@@ -141,7 +139,7 @@ test('the MiMo Token Plan card offers the documented clusters and keeps the key 
   await expect(card.getByRole('button', { name: 'Save key', exact: true })).toBeDisabled();
   await expect(card.locator('#mimo-key-status')).toContainText('MIMO_API_KEY');
   await endpoint.selectOption('token-plan-sgp');
-  await expect(page.locator('#dialog .connection-feedback')).toContainText('desktop app');
+  await expect(page.locator('#settings-page .connection-feedback')).toContainText('desktop app');
   expect(errors).toEqual([]);
 });
 

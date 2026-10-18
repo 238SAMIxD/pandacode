@@ -37,8 +37,10 @@ for (const [platform, modifier, key] of [['MacIntel', '⌘', 'Meta'], ['Win32', 
     await expect(prompt(page)).not.toHaveAttribute('data-session-id', previous!);
     await expect(prompt(page)).toBeEnabled();
     await page.keyboard.press(`${key}+,`);
-    await expect(page.getByRole('dialog', {name:'Settings', exact:true})).toBeVisible();
+    const settings = page.getByRole('region', {name:'Settings', exact:true});
+    await expect(settings).toBeVisible();
     await expect(page.locator('.text-size-setting')).toContainText(`${modifier} + / −`);
+    await settings.getByRole('tab', {name:'About & updates', exact:true}).click();
     await expect(page.locator('.settings-about')).toContainText('Releases');
   });
 }
@@ -193,10 +195,10 @@ test('layout preferences clamp text scaling and restore the saved size after rel
   await expect.poll(() => rootSize(page)).toBe(14);
 });
 
-test('layout preferences offer text size controls in Settings without replacing the dialog', async ({ page }) => {
+test('layout preferences offer text size controls in Settings without replacing the page', async ({ page }) => {
   await open(page);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  const settings = page.locator('#dialog');
+  const settings = page.getByRole('region', { name: 'Settings', exact: true });
   const row = settings.locator('.setting-row').filter({ hasText: 'Text size' });
   await expect(row).toBeVisible();
   const node = await row.elementHandle();
@@ -346,7 +348,7 @@ test('layout preferences keep controls readable at 160 percent in wide and narro
     }
 
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    const settings = page.locator('#dialog');
+    const settings = page.getByRole('region', { name: 'Settings', exact: true });
     const controls = settings.getByRole('group', { name: 'Text size', exact: true });
     await controls.scrollIntoViewIfNeeded();
     await expect(controls.getByRole('button', { name: 'Increase text size', exact: true })).toBeDisabled();
@@ -357,12 +359,13 @@ test('layout preferences keep controls readable at 160 percent in wide and narro
     for (let index = 1; index < bounds.length; index++) {
       expect(bounds[index]!.x).toBeGreaterThanOrEqual(bounds[index - 1]!.x + bounds[index - 1]!.width);
     }
-    const dialogBounds = (await settings.boundingBox())!;
+    const dialogBounds = (await settings.getByRole('tabpanel', { name: 'General', exact: true }).boundingBox())!;
     const controlBounds = (await controls.boundingBox())!;
     expect(controlBounds.x).toBeGreaterThanOrEqual(dialogBounds.x);
     expect(controlBounds.x + controlBounds.width).toBeLessThanOrEqual(dialogBounds.x + dialogBounds.width);
     await page.screenshot({ path: testInfo.outputPath(`geometry-${width}.png`), animations: 'disabled' });
-    await settings.getByRole('button', { name: 'Done', exact: true }).click();
+    await settings.getByRole('button', { name: 'Back to the workspace', exact: true }).click();
+    await expect(settings).toBeHidden();
   }
   // A wide sidebar can leave only 330px for the conversation at this viewport.
   await separator(page).focus();

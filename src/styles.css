@@ -851,3 +851,8 @@ html[data-native-platform=macos] .github-view .workspace-header{padding-left:104
 .update-status[hidden]{display:none}
 @media (prefers-reduced-motion:no-preference){.update-status:not([hidden]){animation:update-in 320ms var(--spring-fast,cubic-bezier(.2,.9,.3,1))}}
 @keyframes update-in{from{opacity:0;transform:translateY(4px)}}
+
+/* Settings is a full page over the workspace (src/settings.ts). Laid out here so it never flashes in. */
+#settings-page{position:absolute;inset:0;z-index:40}
+#settings-page[hidden]{display:none}
+.workspace.settings-open>:is(.sidebar,.main-pane,.inspector,.sidebar-resize-handle){visibility:hidden}

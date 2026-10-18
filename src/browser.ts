@@ -65,7 +65,8 @@ export async function mountBrowser(host: HTMLElement, options: Options): Promise
   function obscured(rect: BrowserBounds): boolean {
     // A modal's scrim covers the whole app. Other menus only obscure the guest
     // when they overlap it; composer completions normally sit beside the browser.
-    if (document.querySelector('dialog[open]')) return true;
+    // So does the full-page Settings.
+    if (document.querySelector('dialog[open], #settings-page:not([hidden])')) return true;
     return [...document.querySelectorAll<HTMLElement>('.floating-menu:not([aria-hidden="true"])')].some(menu => {
       const box = menu.getBoundingClientRect();
       return box.width > 0 && box.height > 0 && getComputedStyle(menu).visibility !== 'hidden'
@@ -193,7 +194,7 @@ export async function mountBrowser(host: HTMLElement, options: Options): Promise
   const overlays = new MutationObserver(records => {
     // Dismissal becomes effective before the menu's exit animation finishes.
     // Do not wait for WebKit's animation/timer callbacks to reveal the guest.
-    const selector = '.floating-menu,dialog';
+    const selector = '.floating-menu,dialog,#settings-page';
     if (records.some(record => record.type === 'attributes'
       ? record.target === document.documentElement || record.target instanceof Element && record.target.matches(selector)
       : [...record.addedNodes, ...record.removedNodes].some(node => node instanceof Element && (node.matches(selector) || node.querySelector(selector))))) {

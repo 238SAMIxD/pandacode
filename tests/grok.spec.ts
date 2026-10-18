@@ -95,8 +95,7 @@ test('a Grok task takes documents and folders but explains that images are not a
 test('the Provider connections settings explain how to install and sign in to Grok Build', async ({ page }) => {
   await newGrokTask(page);
   await page.keyboard.press('Meta+,');
-  await page.getByRole('tab', { name: 'Agents' }).click();
-  await page.getByRole('button', { name: 'Set up', exact: true }).click();
+  await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('tab', { name: 'Providers', exact: true }).click();
   const card = page.locator('.connection-card', { hasText: 'Grok Build' });
   await expect(card).toBeVisible();
   await expect(card).toContainText('grok login');

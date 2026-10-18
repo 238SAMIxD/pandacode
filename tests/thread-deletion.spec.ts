@@ -177,7 +177,7 @@ test.describe('task deletion', () => {
     await expect.poll(() => page.evaluate(() => typeof (window as any).__releaseDeletion)).toBe('function');
     await page.keyboard.press('Escape');
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+    const settings = page.getByRole('region', { name: 'Settings', exact: true });
     await expect(settings).toBeVisible();
     await page.evaluate(() => (window as any).__releaseDeletion());
     await expect.poll(async () => (await stored(page)).sessions.some(task => task.id === 'session-1')).toBe(false);

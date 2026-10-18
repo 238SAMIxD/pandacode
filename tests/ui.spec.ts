@@ -34,12 +34,25 @@ const appearanceSurfaces = (page: Page) => page.evaluate(() => {
     mainContrast: (Math.max(background, foreground) + 0.05) / (Math.min(background, foreground) + 0.05),
   };
 });
-async function disableWallpapers(page: Page): Promise<void> {
+const settingsPage = (page: Page) => page.getByRole('region', { name: 'Settings', exact: true });
+/** Opens the full-page Settings from the sidebar, then one of its groups. */
+async function openSettings(page: Page, group?: string): Promise<Locator> {
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const settings = settingsPage(page);
+  await expect(settings).toBeVisible();
+  if (group) await settings.getByRole('tab', { name: group, exact: true }).click();
+  return settings;
+}
+async function closeSettings(page: Page): Promise<void> {
+  await settingsPage(page).getByRole('button', { name: 'Back to the workspace', exact: true }).click();
+  await expect(settingsPage(page)).toBeHidden();
+}
+async function disableWallpapers(page: Page): Promise<void> {
+  await openSettings(page, 'Appearance');
   await page.getByRole('checkbox', { name: 'Daily wallpapers', exact: true }).uncheck();
   await expect(page.locator('.workspace')).not.toHaveAttribute('data-wallpaper');
   await expect(page.locator('.workspace-wallpaper img')).toHaveCount(0);
-  await page.locator('#dialog').getByRole('button', { name: 'Done', exact: true }).click();
+  await closeSettings(page);
 }
 const newTaskHeading = (page: Page) => page.getByRole('heading', { name: /^What should we build in/ });
 const taskProjectPicker = (page: Page) => page.getByRole('dialog', { name: 'Choose project', exact: true });
@@ -1036,10 +1049,9 @@ for (const outcome of ['resolve', 'reject'] as const) {
     await expect.poll(requestCount).toBe(1);
     await page.keyboard.press('Escape');
     await page.evaluate(() => { (window as any).__catalogRace.version = 2; });
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+    await openSettings(page, 'Agents');
     await expect(page.getByRole('button', { name: 'Refresh agents', exact: true })).toBeEnabled();
-    await page.getByRole('button', { name: 'Done', exact: true }).click();
+    await closeSettings(page);
     await trigger.click();
     await expect.poll(requestCount).toBe(2);
     if (outcome === 'resolve') {
@@ -1429,10 +1441,8 @@ test('locks the approval behaviour while a task is running and keeps it after st
   await expect.poll(() => savedPermission(page)).toBe('plan');
 });
 
-test('chooses the default agent inside Settings without closing its parent dialog', async ({ page }) => {
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
-  const settings = page.locator('#dialog');
+test('chooses the default agent inside Settings without closing the Settings page', async ({ page }) => {
+  const settings = await openSettings(page, 'Agents');
   const trigger = settings.getByRole('button', { name: 'Default agent for new tasks', exact: true });
   await trigger.click();
   const menu = page.getByRole('dialog', { name: 'Default agent', exact: true });
@@ -1459,8 +1469,8 @@ test('chooses the default agent inside Settings without closing its parent dialo
   await expect(menu.getByRole('menuitemradio', { name: 'Kimi Code', exact: true })).toHaveAttribute('aria-checked', 'true');
   await page.keyboard.press('Tab');
   await expect(menu).toHaveCount(0);
-  await expect(settings.getByRole('button', { name: 'Manage', exact: true })).toBeFocused();
-  await settings.getByRole('button', { name: 'Done', exact: true }).click();
+  await expect(settings.getByRole('button', { name: 'Check updates', exact: true })).toBeFocused();
+  await closeSettings(page);
   await page.locator('.new-task-button').click();
   await expect(newTaskHeading(page)).toBeVisible();
   await expect.poll(() => savedSelection(page)).toEqual({ provider: 'kimi', model: 'default' });
@@ -1469,9 +1479,7 @@ test('chooses the default agent inside Settings without closing its parent dialo
 
 test('keeps the Settings agent menu clickable at the minimum desktop window size', async ({ page }) => {
   await page.setViewportSize({ width: 860, height: 580 });
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
-  const settings = page.locator('#dialog');
+  const settings = await openSettings(page, 'Agents');
   await settings.getByRole('button', { name: 'Default agent for new tasks', exact: true }).click();
   const menu = page.getByRole('dialog', { name: 'Default agent', exact: true });
   await expect(menu.getByRole('menuitemradio', { name: 'Claude Code', exact: true })).toBeFocused();
@@ -1485,7 +1493,7 @@ test('keeps the Settings agent menu clickable at the minimum desktop window size
   expect(hitTargets.every(target => target.inViewport && target.reachable)).toBe(true);
   await menu.getByRole('menuitemradio', { name: 'Kimi Code', exact: true }).click();
   await expect(settings.getByRole('button', { name: 'Default agent for new tasks', exact: true })).toHaveText('Kimi Code');
-  await expect(settings.getByRole('button', { name: 'Done', exact: true })).toBeVisible();
+  await expect(settings.getByRole('button', { name: 'Back to the workspace', exact: true })).toBeVisible();
 });
 
 test('keeps menus readable and usable with reduced motion, transparency, and high contrast', async ({ page }) => {
@@ -2479,9 +2487,7 @@ test('renders provider logos in task rows, composer, messages, picker, and setti
     await expect(picker.locator(`.model-menu-option .provider-logo[data-provider="${provider}"]`).first()).toBeVisible();
   }
   await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
-  const settings = page.getByRole('dialog');
+  const settings = await openSettings(page, 'Agents');
   for (const provider of ['claude', 'codex', 'kimi']) {
     await expect(settings.locator(`.provider-diagnostic .provider-logo[data-provider="${provider}"]`)).toBeVisible();
   }
@@ -2736,9 +2742,9 @@ for (const delayedCommand of ['add_project', 'list_projects']) {
     await dialog.getByRole('button', { name: 'Open project', exact: true }).click();
     await expect.poll(() => page.evaluate(() => typeof (window as any).__pandacodeReleaseFolder)).toBe('function');
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    await expect(dialog.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
-    await expect(dialog.getByRole('button', { name: 'Done', exact: true })).toBeVisible();
+    const settings = await openSettings(page);
+    await expect(settings.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
+    await expect(settings.getByRole('button', { name: 'Back to the workspace', exact: true })).toBeVisible();
     await page.evaluate(() => {
       const navigation = document.querySelector('#navigation')!;
       const observer = new MutationObserver(() => {
@@ -2752,10 +2758,12 @@ for (const delayedCommand of ['add_project', 'list_projects']) {
     });
     await expect.poll(() => page.evaluate(() => (window as any).__pandacodeFolderNavigationUpdated)).toBe(true);
     expect(await previewProjectNames(page)).toContain('canceled-task-folder');
-    await expect(dialog.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
+    await expect(settings.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
+    // The workspace behind the page is hidden from assistive technology, so read the composer directly.
+    await expect(page.locator('#prompt')).toHaveAttribute('data-session-id', sessionId!);
+    await closeSettings(page);
     await expect(prompt(page)).toHaveAttribute('data-session-id', sessionId!);
     await expect(openTaskProject(page)).toHaveText('orbit');
-    await dialog.getByRole('button', { name: 'Done', exact: true }).click();
     await expect(newTaskHeading(page)).toHaveAccessibleName('What should we build in orbit?');
     await expect(prompt(page)).toHaveValue('Keep this task and draft after canceling its folder request');
   });
@@ -2963,9 +2971,10 @@ test('navigates the command palette using the keyboard', async ({ page }) => {
   await page.keyboard.press('ControlOrMeta+k');
   await page.getByRole('textbox', { name: 'Search tasks and commands' }).fill('Settings');
   await page.keyboard.press('Enter');
-  await expect(page.getByRole('dialog').getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
-  await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).not.toBeVisible();
+  await expect(settingsPage(page).getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(settingsPage(page)).toBeHidden();
 });
 
 test('keeps composer and navigation usable in a narrow desktop window', async ({ page }) => {
@@ -3215,13 +3224,12 @@ test('does not dismiss Settings when canceled worktree creation finishes', async
   await submitWorktree(page, 'codex/worktree-canceled');
   await expect.poll(() => page.evaluate(() => typeof (window as any).__pandacodeReleaseWorktree)).toBe('function');
   await page.locator('#dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  const settings = page.locator('#dialog');
+  const settings = await openSettings(page);
   await page.evaluate(() => { (window as any).__pandacodeReleaseWorktree(); });
   await expect(page.locator('#navigation .task-worktree')).toHaveCount(1);
   await expect(settings).toBeVisible();
   await expect(page.locator('.task-item.selected')).toHaveAttribute('data-id', 'session-1');
-  await settings.getByRole('button', { name: 'Done', exact: true }).click();
+  await closeSettings(page);
   await expect(prompt(page)).toHaveValue('Keep the original task draft');
 });
 

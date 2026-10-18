@@ -116,8 +116,8 @@ test('shares the project read-only when asked, and a VM can be deleted', async (
 
 async function connect(page: Page, provider: string, fields: Record<string, string>, sandboxes = false): Promise<void> {
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  const settings = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Settings', exact: true }) });
-  await settings.getByRole('tab', { name: 'Agents', exact: true }).click();
+  const settings = page.getByRole('region', { name: 'Settings', exact: true });
+  await settings.getByRole('tab', { name: 'Cloud sandboxes', exact: true }).click();
   await settings.getByRole('button', { name: `Connect ${provider}`, exact: true }).click();
   const form = settings.getByRole('form', { name: `Connect ${provider}` });
   for (const [label, value] of Object.entries(fields)) await form.getByRole('textbox', { name: `${provider} ${label}` }).or(form.getByLabel(`${provider} ${label}`)).fill(value);
@@ -127,14 +127,15 @@ async function connect(page: Page, provider: string, fields: Record<string, stri
     await settings.getByRole('button', { name: 'Set up sandboxes', exact: true }).click();
     await expect(settings.getByText(/sandboxes ready/)).toBeVisible();
   }
-  await settings.getByRole('button', { name: 'Done', exact: true }).click();
+  await settings.getByRole('button', { name: 'Back to the workspace', exact: true }).click();
+  await expect(settings).toBeHidden();
 }
 
 test('connecting a cloud provider checks the key and offers its machines', async ({ page }) => {
   await open(page);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  const settings = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Settings', exact: true }) });
-  await settings.getByRole('tab', { name: 'Agents', exact: true }).click();
+  const settings = page.getByRole('region', { name: 'Settings', exact: true });
+  await settings.getByRole('tab', { name: 'Cloud sandboxes', exact: true }).click();
   await settings.getByRole('button', { name: 'Connect Daytona', exact: true }).click();
   const form = settings.getByRole('form', { name: 'Connect Daytona' });
   await form.locator('[type="submit"]').click();
@@ -148,7 +149,8 @@ test('connecting a cloud provider checks the key and offers its machines', async
   await expect(settings.getByRole('button', { name: 'Disconnect Daytona', exact: true })).toBeVisible();
   const connect = (await calls(page, 'cloud_connect')).at(-1);
   expect(connect).toEqual({ provider: 'daytona', key: 'dtn_good', options: { organization: 'org-1', apiUrl: '' } });
-  await settings.getByRole('button', { name: 'Done', exact: true }).click();
+  await settings.getByRole('button', { name: 'Back to the workspace', exact: true }).click();
+  await expect(settings).toBeHidden();
   // The panel now offers a Daytona desktop even before Tart is set up.
   await expect(panel(page).getByRole('button', { name: /^Daytona desktop/ })).toBeVisible();
 });

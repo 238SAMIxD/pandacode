@@ -10,6 +10,8 @@ const prompt = (page: Page) => page.getByRole('textbox', { name: 'Message your c
 const setButton = (page: Page, name: string) => page.getByRole('button', { name: `${name} wallpaper set`, exact: true });
 const defaultButton = (page: Page, day: string, period: string) => page.getByRole('button', { name: `Set ${day} ${period} as default`, exact: true });
 const automatic = (page: Page) => page.getByRole('button', { name: 'Automatic weekly rotation', exact: true });
+const settings = (page: Page) => page.getByRole('region', { name: 'Settings', exact: true });
+const appearance = (page: Page) => settings(page).getByRole('tab', { name: 'Appearance', exact: true }).click();
 const preferences = (page: Page) => page.evaluate(key => JSON.parse(localStorage.getItem(key) ?? 'null'), storageKey);
 
 async function open(page: Page): Promise<void> {
@@ -21,8 +23,8 @@ async function open(page: Page): Promise<void> {
 
 async function customize(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByRole('button', { name: 'Customize wallpapers', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Wallpapers', exact: true })).toBeVisible();
+  await appearance(page);
+  await expect(settings(page).getByRole('heading', { name: 'Wallpapers', exact: true })).toBeVisible();
   await expect(slider(page)).toBeVisible();
 }
 
@@ -75,11 +77,11 @@ test('wallpapers settings drag visibility live without replacing controls, draft
   expect(await originalPreview!.evaluate(node => node.isConnected)).toBe(true);
   expect(await originalPrompt!.evaluate(node => node === document.querySelector('#prompt'))).toBe(true);
   expect(await originalScene!.evaluate(node => node === document.querySelector('.workspace-wallpaper img'))).toBe(true);
-  await expect(prompt(page)).toHaveValue('Keep this draft while I choose a wallpaper.');
+  await expect(page.locator('#prompt')).toHaveValue('Keep this draft while I choose a wallpaper.');
   expect(requests).toHaveLength(1);
   await page.keyboard.press('Escape');
-  await expect(page.locator('#dialog')).not.toBeVisible();
-  await expect(page.locator('#wallpaper-settings-content img')).toHaveCount(0);
+  await expect(settings(page)).toBeHidden();
+  await expect(page.locator('#settings-page img')).toHaveCount(0);
   expect(await originalPreview!.evaluate(node => node.isConnected)).toBe(false);
   expect((await preferences(page)).visibility).toBe(finalValue);
 });
@@ -125,7 +127,7 @@ test('wallpapers settings drag blur live while keeping text sharp and the scene 
   });
   expect(Object.values(coverage).every(bleed => bleed >= finalBlur * 3 - 1)).toBe(true);
   await expect(slider(page)).toHaveValue(originalVisibility);
-  await expect(prompt(page)).toHaveValue('Keep this draft sharp while the scenery softens.');
+  await expect(page.locator('#prompt')).toHaveValue('Keep this draft sharp while the scenery softens.');
   expect(await originalScene!.evaluate(node => node === document.querySelector('.workspace-wallpaper img'))).toBe(true);
   expect(await originalPrompt!.evaluate(node => node === document.querySelector('#prompt'))).toBe(true);
   expect(await originalBlur!.evaluate(node => node.isConnected)).toBe(true);
@@ -280,14 +282,13 @@ test('wallpapers settings migrate the disabled preference and retain a favorite 
   await open(page);
   await expect(sceneImages(page)).toHaveCount(0);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await appearance(page);
   const enabled = page.getByRole('checkbox', { name: 'Daily wallpapers', exact: true });
   await expect(enabled).not.toBeChecked();
-  await page.getByRole('button', { name: 'Customize wallpapers', exact: true }).click();
   await expect(slider(page)).toHaveValue('0');
   await setButton(page, 'Tuesday').click();
   await defaultButton(page, 'Tuesday', 'afternoon').click();
   await expect(workspace(page)).toHaveAttribute('data-wallpaper', 'tue-afternoon');
-  await page.getByRole('button', { name: 'Back to settings', exact: true }).click();
   await enabled.uncheck();
   await expect(sceneImages(page)).toHaveCount(0);
   expect(await page.evaluate(() => localStorage.getItem('pandacode.wallpapers'))).toBe('false');
@@ -295,11 +296,10 @@ test('wallpapers settings migrate the disabled preference and retain a favorite 
   await expect(prompt(page)).toBeEnabled();
   await expect(sceneImages(page)).toHaveCount(0);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await appearance(page);
   await expect(enabled).not.toBeChecked();
-  await page.getByRole('button', { name: 'Customize wallpapers', exact: true }).click();
   await expect(slider(page)).toHaveValue('0');
   await expect(defaultButton(page, 'Tuesday', 'afternoon')).toHaveAttribute('aria-pressed', 'true');
-  await page.getByRole('button', { name: 'Back to settings', exact: true }).click();
   await enabled.check();
   await expect(workspace(page)).toHaveAttribute('data-wallpaper', 'tue-afternoon');
   expect(await page.evaluate(() => localStorage.getItem('pandacode.wallpapers'))).toBe('true');
@@ -364,14 +364,15 @@ test('wallpapers settings keep their picker within a narrow window without loadi
   await expect(workspace(page)).toHaveAttribute('data-wallpaper', 'mon-morning');
   // The collapsed sidebar has no Settings button at this width; the standard shortcut remains available.
   await page.keyboard.press('Meta+,');
-  await page.getByRole('button', { name: 'Customize wallpapers', exact: true }).click();
+  await appearance(page);
   await expect(slider(page)).toBeVisible();
-  const dialog = page.locator('#dialog');
-  const bounds = await dialog.boundingBox();
+  const bounds = await settings(page).boundingBox();
   expect(bounds).not.toBeNull();
   expect(bounds!.x).toBeGreaterThanOrEqual(0);
   expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(620);
-  expect(await dialog.evaluate(node => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
+  expect(await settings(page).locator('.settings-content').evaluate(node => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
+  const picker = await page.locator('.wallpaper-settings').boundingBox();
+  expect(picker!.x + picker!.width).toBeLessThanOrEqual(620);
   await setButton(page, 'Sunday').scrollIntoViewIfNeeded();
   await expect(setButton(page, 'Sunday')).toBeVisible();
   await page.clock.runFor(500);

@@ -57,11 +57,13 @@ test('@ mentions offer issues and pull requests, insert #numbers, and send their
 test('the GitHub switch hides mentions, imports, and pull requests without running gh', async ({ page }) => {
   await probe(page);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  const dialog = page.locator('#dialog');
-  await expect(dialog.locator('.github-settings-status')).toContainText('Connected as you · orbit-labs/orbit');
-  await dialog.getByRole('checkbox', { name: 'GitHub integration', exact: true }).uncheck();
-  await expect(dialog.locator('.github-settings-status')).toContainText('Off · no gh commands run');
-  await dialog.getByRole('button', { name: 'Done', exact: true }).click();
+  const settings = page.getByRole('region', { name: 'Settings', exact: true });
+  await settings.getByRole('tab', { name: 'GitHub', exact: true }).click();
+  await expect(settings.locator('.github-settings-status')).toContainText('Connected as you · orbit-labs/orbit');
+  await settings.getByRole('checkbox', { name: 'GitHub integration', exact: true }).uncheck();
+  await expect(settings.locator('.github-settings-status')).toContainText('Off · no gh commands run');
+  await settings.getByRole('button', { name: 'Back to the workspace', exact: true }).click();
+  await expect(settings).toBeHidden();
   const before = (await calls(page, 'github_search')).length + (await calls(page, 'github_status')).length;
   await prompt(page).fill('Look at @keyboard');
   await expect(menu(page)).toContainText('Project files');

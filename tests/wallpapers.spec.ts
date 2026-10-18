@@ -3,6 +3,11 @@ import { expect, test, type Page } from '@playwright/test';
 test.use({ timezoneId: 'America/New_York' });
 const scene = (page: Page) => page.locator('.workspace');
 const images = (page: Page) => page.locator('.workspace-wallpaper img');
+/** Daily wallpapers live in Settings → Appearance. */
+async function appearance(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('tab', { name: 'Appearance', exact: true }).click();
+}
 async function open(page: Page, time = '2026-09-14T09:00:00-04:00') {
   const requestedTime = new Date(time);
   // Leave startup room before the tested boundary, then advance only when the test asks.
@@ -91,7 +96,7 @@ for (const theme of ['light', 'dark']) {
     await page.emulateMedia({ contrast: 'more' });
     const highContrast = await barStyles(page);
     await page.emulateMedia({ contrast: 'no-preference' });
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await appearance(page);
     const toggle = page.getByRole('checkbox', { name: 'Daily wallpapers', exact: true });
     await toggle.check();
     await expect(scene(page)).toHaveAttribute('data-wallpaper', 'mon-morning');
@@ -142,7 +147,7 @@ test('wallpapers switch weekday at midnight and catch up after a clock change on
 test('wallpapers can be disabled and the preference survives reopening the app', async ({ page }) => {
   await open(page);
   await expect(images(page)).toHaveCount(1);
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await appearance(page);
   const toggle = page.getByRole('checkbox', { name: 'Daily wallpapers', exact: true });
   await toggle.uncheck();
   await expect(images(page)).toHaveCount(0);
@@ -150,7 +155,7 @@ test('wallpapers can be disabled and the preference survives reopening the app',
   await page.reload();
   await expect(page.locator('.task-item.selected')).toBeVisible();
   await expect(images(page)).toHaveCount(0);
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await appearance(page);
   await expect(toggle).not.toBeChecked();
   await toggle.check();
   await expect(scene(page)).toHaveAttribute('data-wallpaper', 'mon-morning');
@@ -189,7 +194,7 @@ test('wallpapers ignore a stale decode after being disabled', async ({ page }) =
   });
   await open(page);
   await expect.poll(() => Boolean(release)).toBe(true);
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await appearance(page);
   await page.getByRole('checkbox', { name: 'Daily wallpapers', exact: true }).uncheck();
   release!();
   await page.clock.runFor(1000);

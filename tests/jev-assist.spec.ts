@@ -70,7 +70,7 @@ test('decisions opt in independently and missing Jev keys do not block normal ap
   await page.locator('[data-assist-close]').click();
   await expect(page.locator('#prompt')).toBeEnabled();
   await page.getByRole('button',{name:'Settings',exact:true}).click();
-  await page.getByRole('tab',{name:'Agents',exact:true}).click();
+  await page.getByRole('tab',{name:'Tools & add-ons',exact:true}).click();
   await page.getByRole('button',{name:'Set up Jev',exact:true}).click();
   await expect(page.locator('#jev-decisions-enabled')).not.toBeChecked();
   await page.locator('#jev-decisions-enabled').check(); await page.locator('[data-jev-save]').click();

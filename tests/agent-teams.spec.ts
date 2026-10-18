@@ -1,10 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
 
-// Settings → Agents: the classic Team setup switch, and named agent teams that appear in the
+// Settings → Agent teams: the classic Team setup switch, and named agent teams that appear in the
 // model picker and orchestrate only their own models.
 const errors = new WeakMap<Page, string[]>();
 const calls = (page: Page, command: string): Promise<any[]> => page.evaluate(command => (window as any).__agentTeams.calls.filter((entry: any) => entry.command === command), command);
-const settings = (page: Page) => page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Settings', exact: true }) });
+const settings = (page: Page) => page.getByRole('region', { name: 'Settings', exact: true });
 const picker = (page: Page) => page.getByRole('dialog', { name: 'Harness and model', exact: true });
 const modelButton = (page: Page) => page.getByRole('button', { name: 'Choose harness and model', exact: true });
 
@@ -30,10 +30,10 @@ async function install(page: Page): Promise<void> {
 
 async function openAgents(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await settings(page).getByRole('tab', { name: 'Agents', exact: true }).click();
+  await settings(page).getByRole('tab', { name: 'Agent teams', exact: true }).click();
 }
 async function closeSettings(page: Page): Promise<void> {
-  await settings(page).getByRole('button', { name: 'Done', exact: true }).click();
+  await settings(page).getByRole('button', { name: 'Back to the workspace', exact: true }).click();
   await expect(settings(page)).toBeHidden();
 }
 

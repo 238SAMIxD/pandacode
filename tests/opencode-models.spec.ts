@@ -1,7 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
 
 const selectedKey = 'pandacode.preview.opencode-models';
-const dialog = (page: Page) => page.locator('#dialog');
+// OpenCode models are embedded in Settings → Agents.
+const settings = (page: Page) => page.getByRole('region', { name: 'Settings', exact: true });
+const dialog = (page: Page) => settings(page).locator('#settings-panel-agents [data-embed="openCodeModels"]');
 const modelCheckbox = (page: Page, name: string) => dialog(page).getByRole('checkbox', { name: new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) });
 const picker = (page: Page) => page.getByRole('dialog', { name: 'Harness and model', exact: true });
 const savedIds = (page: Page) => page.evaluate(key => JSON.parse(localStorage.getItem(key) ?? '[]') as string[], selectedKey);
@@ -16,9 +18,8 @@ async function boot(page: Page): Promise<void> {
 
 async function openModels(page: Page, firstModel = 'Big Pickle'): Promise<void> {
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
-  await page.getByRole('button', { name: 'Choose models', exact: true }).click();
-  await expect(dialog(page).getByRole('heading', { name: 'OpenCode models', exact: true })).toBeVisible();
+  await settings(page).getByRole('tab', { name: 'Agents', exact: true }).click();
+  await expect(settings(page).getByRole('heading', { name: 'OpenCode models', exact: true })).toBeVisible();
   await expect(modelCheckbox(page, firstModel)).toBeVisible();
 }
 
@@ -28,7 +29,7 @@ async function saveModels(page: Page): Promise<void> {
 }
 
 async function openPicker(page: Page): Promise<void> {
-  if (await dialog(page).isVisible()) await dialog(page).getByRole('button', { name: 'Close dialog', exact: true }).click();
+  if (await settings(page).isVisible()) await settings(page).getByRole('button', { name: 'Back to the workspace', exact: true }).click();
   await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
   await picker(page).getByRole('searchbox', { name: 'Search harnesses and models', exact: true }).fill('OpenCode');
   await expect(picker(page).getByRole('button', { name: 'OpenCode · Default', exact: true })).toBeVisible();

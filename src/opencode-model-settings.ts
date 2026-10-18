@@ -122,7 +122,8 @@ export function mountOpenCodeModels(host: HTMLElement, saved: () => void): () =>
   search.addEventListener('input', filter); list.addEventListener('change', change);
   moreButton.addEventListener('click', more);
   refreshButton.addEventListener('click', refresh); saveButton.addEventListener('click', save);
-  void refresh(); search.focus({preventScroll: true});
+  // Its own dialog starts in the search; embedded in the Settings page, focus stays on the group list.
+  void refresh(); if (host.closest('dialog')) search.focus({preventScroll: true});
   return () => {
     disposed = true; rows.clear(); search.removeEventListener('input', filter); moreButton.removeEventListener('click', more);
     list.removeEventListener('change', change); refreshButton.removeEventListener('click', refresh); saveButton.removeEventListener('click', save);

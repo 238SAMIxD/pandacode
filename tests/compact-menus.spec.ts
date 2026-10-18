@@ -84,25 +84,28 @@ test('dialogs fold long descriptions and static field hints behind marks while k
   await expect(dialog).toBeHidden();
 });
 
-test('setting rows are one line with help behind a mark and live status inline', async ({ page }) => {
+test('setting rows on the Settings page stay one line tall with notes and live status inline', async ({ page }) => {
   await open(page);
   await page.keyboard.press('Meta+,');
-  const general = page.locator('#dialog .settings-group .setting-row').first();
-  await expect(general).toBeVisible();
-  const rows = page.locator('#dialog .setting-row');
+  const settings = page.getByRole('region', { name: 'Settings', exact: true });
+  const group = (name: string) => settings.getByRole('tab', { name, exact: true });
+  const rows = settings.locator('.settings-panel:not([hidden]) .setting-row');
+  await expect(rows.first()).toBeVisible();
   const heights = await rows.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().height));
   for (const height of heights) expect(height).toBeLessThanOrEqual(64);
-  // A short note stays beside the title; the GitHub status stays live and inline.
+  // The page is wide enough for notes to stay readable beside each title, without marks.
   const compact = rows.filter({ hasText: 'Compact conversation' });
   await expect(compact.locator('small')).toBeVisible();
   await expect(compact.locator('.info-mark')).toHaveCount(0);
+  await group('Tools & add-ons').click();
+  const jev = rows.filter({ hasText: 'Jev' });
+  await expect(jev.locator('small')).toBeVisible();
+  await expect(jev.locator('small')).toHaveText('Browser tests and decision assistance. Your agents work without it.');
+  await expect(jev.locator('.info-mark')).toHaveCount(0);
+  expect((await jev.boundingBox())!.height).toBeLessThanOrEqual(64);
+  // The GitHub status stays live and inline.
+  await group('GitHub').click();
   const github = rows.filter({ hasText: 'GitHub' });
   await expect(github.locator('.github-settings-status')).toHaveText('Connected as you · orbit-labs/orbit');
   await expect(github.locator('.info-mark')).toHaveCount(0);
-  // A long note becomes a mark and stays readable to assistive technology.
-  await page.getByRole('tab', { name: 'Agents' }).click();
-  const jev = page.locator('#dialog .setting-row').filter({ hasText: 'Jev' });
-  await expect(jev.locator('small')).toHaveClass(/sr-only/);
-  await expect(jev.locator('.info-mark')).toHaveAttribute('data-tip', 'Browser tests and decision assistance. Your agents work without it.');
-  await expect(jev).toContainText('Your agents work without it.');
 });

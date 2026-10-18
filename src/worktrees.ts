@@ -147,7 +147,7 @@ export function createWorktrees(host: WorktreeHost) {
     try {
       const saved = await host.call<Session>(mode === 'attach' ? 'attach_worktree' : 'create_worktree', { sessionId: session.id, branch, ...(base ? { base } : {}), existing });
       // A dialog dismissed meanwhile must not steal navigation or close whatever replaced it.
-      const live = form.isConnected;
+      const live = form.isConnected && Boolean(form.closest('dialog[open]'));
       if (mode === 'attach') await host.afterAttach(saved, live); else await host.afterCreate(saved, live, host.session()?.id === session.id);
       host.notify(mode === 'attach' ? `Working in ${saved.worktreeBranch ?? finalBranchName(branch)}` : 'Worktree task created');
     } catch (cause) {

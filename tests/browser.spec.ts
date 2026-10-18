@@ -362,13 +362,22 @@ test.describe('browser workspace', () => {
     expect(after).toEqual(before);
   });
 
-  test('closes the native guest when leaving the browser and hides it behind modal dialogs', async ({ page }) => {
+  test('closes the native guest when leaving the browser and hides it behind modal dialogs and Settings', async ({ page }) => {
     await openBrowser(page);
     await navigate(page, 'localhost:3000');
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    await expect(page.locator('dialog[open]')).toBeVisible();
+    const settings = page.getByRole('region', { name: 'Settings', exact: true });
+    await expect(settings).toBeVisible();
     await expect.poll(async () => (await commandCalls(page, 'browser_bounds')).at(-1)?.args.visible).toBe(false);
+    await settings.getByRole('tab', { name: 'Tools & add-ons', exact: true }).click();
+    await settings.getByRole('button', { name: 'Manage', exact: true }).click();
+    await expect(page.locator('dialog[open]')).toBeVisible();
     await page.keyboard.press('Escape');
+    await expect(page.locator('dialog[open]')).toHaveCount(0);
+    await expect(settings).toBeVisible();
+    expect((await commandCalls(page, 'browser_bounds')).at(-1)?.args.visible).toBe(false);
+    await page.keyboard.press('Escape');
+    await expect(settings).toBeHidden();
     await expect.poll(async () => (await commandCalls(page, 'browser_bounds')).at(-1)?.args.visible).toBe(true);
     const closes = (await commandCalls(page, 'browser_close')).length;
     await page.getByRole('button', { name: 'Files', exact: true }).click();

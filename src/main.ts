@@ -266,6 +266,7 @@ $app.innerHTML = `<div class="workspace">
     <div id="terminal-drawer" class="terminal-drawer" hidden><div class="drawer-heading"><span>${icon('terminal')}<span id="terminal-project" class="muted"></span></span><div class="terminal-tabs" role="tablist" aria-label="Terminal tabs"></div><div class="terminal-heading-actions"><button class="icon-button" data-terminal-action="new" aria-label="New terminal" title="New terminal">${icon('plus')}</button><button class="icon-button" data-terminal-action="minimize" aria-label="Minimize terminal" title="Minimize terminal">${icon('minimize')}</button><button class="icon-button" data-terminal-action="close" aria-label="Close terminal" title="Close terminal" aria-haspopup="dialog">${icon('close')}</button></div></div><div id="terminal-host"></div></div>
     <footer class="statusbar"><span id="status-left"></span><button type="button" id="update-status" class="update-status" hidden>${icon('refresh')}<span>Restart to update</span></button>${preview ? '<span class="preview-status">Browser preview · sample data</span>' : ''}<button data-action="metrics" id="resource-status" title="Resource usage" aria-label="Resource usage">${icon('bamboo')}</button></footer>
   </main>
+  <section id="settings-page" aria-label="Settings" hidden></section>
   <aside id="inspector" class="inspector" aria-label="Project inspector"><header class="inspector-heading"><div class="inspector-tabs"><button class="selected" data-action="tab-changes">Changes <span id="changes-count"></span></button><button data-action="tab-files">Files</button><button data-action="browser">Browser</button><button data-action="tab-pull" hidden>PR</button><button data-action="tab-simulator" aria-label="Simulators" title="iOS & Android simulators" ${isMac ? '' : 'hidden'}>${icon('phone')}</button><button data-action="tab-vm" aria-label="Virtual machines" title="Virtual machines" ${isMac ? '' : 'hidden'}>${icon('monitor')}</button></div>${button('refresh-inspector', 'Refresh project', 'refresh')}</header><div id="inspector-content" class="inspector-content"></div><section id="browser-panel" class="browser-panel" aria-label="Browser" hidden></section><section id="simulator-panel" class="simulator-panel" aria-label="Simulators" hidden></section><section id="vm-panel" class="vm-panel" aria-label="Virtual machines" hidden></section></aside>
 </div><div id="toast" class="toast" role="status" hidden></div><dialog id="dialog"></dialog>`;
 publishSpringEasings();
@@ -2402,7 +2403,6 @@ async function stage(paths: string[], staged: boolean): Promise<void> {
 
 let previousFocus: HTMLElement | null = null;
 let wallpaperSettingsCleanup: (() => void) | undefined;
-let settingsCleanup: (() => void) | undefined;
 let changeReviewCleanup: (() => void) | undefined;
 let providerSettingsCleanup: (() => void) | undefined;
 let agentUsageCleanup: (() => void) | undefined;
@@ -2420,7 +2420,6 @@ function disposeSettingsViews(): void {
   openCodeModelsCleanup?.(); openCodeModelsCleanup = undefined;
   changeReviewCleanup?.(); changeReviewCleanup = undefined;
   architectSetupCleanup?.(); architectSetupCleanup = undefined;
-  settingsCleanup?.(); settingsCleanup = undefined;
   wallpaperSettingsCleanup?.(); wallpaperSettingsCleanup = undefined;
 }
 function modal(title: string, body: string, cls = ''): HTMLDialogElement {
@@ -2798,19 +2797,53 @@ async function discoverSettingsProviders(): Promise<Provider[]> {
   state.providers = providers;
   return providers;
 }
-async function showSettings(): Promise<void> {
-  const dialog = modal('Settings', '<div id="settings-content"><div class="dialog-loading">Loading settings…</div></div><div class="dialog-footer"><button class="primary-button" data-action="close-dialog">Done</button></div>', 'settings-dialog settings-home-dialog');
-  const host = dialog.querySelector<HTMLElement>('#settings-content')!;
-  const { mountSettings } = await import('./settings');
-  if (!dialog.open || !host.isConnected) return;
-  settingsCleanup = mountSettings(host, {
-    providers: state.providers, defaultProvider: state.defaultProvider,
-    compact: document.body.classList.contains('compact'), wallpapers: wallpapers.enabled,
-    preview, discover: discoverSettingsProviders,
-    github: target => github.mountSettings(target, project()?.id ?? state.projects[0]?.id ?? ''),
-    teams: { loadModels, call },
-    cloud: { call, listen: (name, callback) => subscribe(name, callback) },
-  });
+/** Settings is a full page over the workspace; Back or Escape returns to where you were. */
+let settingsView: import('./settings').SettingsView | undefined;
+let settingsOpening: Promise<void> | undefined;
+let settingsReturnFocus: HTMLElement | null = null;
+async function showSettings(section?: import('./settings').SettingsSection): Promise<void> {
+  // "Back to settings" in a dialog returns here; the dialog closes first.
+  if (document.querySelector<HTMLDialogElement>('#dialog')?.open) closeModal();
+  closeMenus();
+  const host = $('#settings-page');
+  if (settingsView) { if (section) settingsView.show(section); return; }
+  if (settingsOpening) { await settingsOpening; if (section) (settingsView as import("./settings").SettingsView | undefined)?.show(section); return; }
+  settingsReturnFocus = document.activeElement as HTMLElement | null;
+  host.hidden = false;
+  $('.workspace').classList.add('settings-open');
+  settingsOpening = import('./settings').then(({ mountSettings }) => {
+    if (host.hidden) return;
+    settingsView = mountSettings(host, {
+      providers: state.providers, defaultProvider: state.defaultProvider,
+      compact: document.body.classList.contains('compact'), wallpapers: wallpapers.enabled,
+      theme: currentTheme(), preview, section, discover: discoverSettingsProviders,
+      github: target => github.mountSettings(target, project()?.id ?? state.projects[0]?.id ?? ''),
+      teams: { loadModels, call },
+      cloud: { call, listen: (name, callback) => subscribe(name, callback) },
+      embed: {
+        colors: async target => (await import('./theme-settings')).mountThemeSettings(target, { call, notify, chooseVsix: () => import('./bridge').then(bridge => bridge.chooseVsix()) }),
+        wallpapers: async target => {
+          const cleanup = (await import('./wallpaper-settings')).mountWallpaperSettings(target, wallpapers);
+          // Choosing a scene or dragging visibility turns wallpapers on or off; keep the Daily wallpapers switch beside it in step.
+          const unsubscribe = wallpapers.subscribe(() => { const box = host.querySelector<HTMLInputElement>('#daily-wallpapers'); if (box) box.checked = wallpapers.enabled; });
+          return () => { unsubscribe(); cleanup(); };
+        },
+        providerConnections: async target => (await import('./provider-settings')).mountProviderSettings(target, async () => { modelCatalogs.clear(); await discoverSettingsProviders(); renderComposer(); }),
+        openCodeModels: async target => (await import('./opencode-model-settings')).mountOpenCodeModels(target, () => invalidateModels('opencode')),
+      },
+      close: closeSettings,
+    });
+    enterView(host, 6);
+  }).finally(() => { settingsOpening = undefined; });
+  await settingsOpening;
+}
+function closeSettings(): void {
+  settingsView?.dispose(); settingsView = undefined;
+  const host = $('#settings-page');
+  host.hidden = true; host.replaceChildren();
+  $('.workspace').classList.remove('settings-open');
+  (settingsReturnFocus?.isConnected ? settingsReturnFocus : $('#prompt'))?.focus({ preventScroll: true });
+  settingsReturnFocus = null;
 }
 /** Light and dark belong to PandaCode's palette; switching leaves a VS Code theme. */
 function toggleTheme(): void {
@@ -2819,6 +2852,7 @@ function toggleTheme(): void {
   if (vsix) palette.setVsix(null);
   setTheme(next); renderThemeToggle();
   if (vsix) notify(`${vsix.name} turned off · PandaCode ${next}`);
+  if (settingsView) { closeSettings(); void showSettings('appearance'); }
 }
 let colorsSettingsCleanup: (() => void) | undefined;
 async function showColorsSettings(): Promise<void> {
@@ -3261,6 +3295,7 @@ document.addEventListener('keydown', event => {
     else if (finishingStreams.has(state.sessionId)) run(enqueueFromComposer()); else run(send());
   }
   else if (event.key === 'Enter' && (event.target as HTMLElement).classList.contains('queue-edit') && (event.metaKey || event.ctrlKey)) { event.preventDefault(); run(saveQueueEdit()); }
+  else if (event.key === 'Escape' && settingsView && !event.defaultPrevented && !document.querySelector<HTMLDialogElement>('#dialog')?.open && !document.querySelector('.floating-menu')) { event.preventDefault(); closeSettings(); }
   else if (event.key === 'Escape' && state.view === 'board' && state.boardPanel && !event.defaultPrevented) { event.preventDefault(); closeMenus(); state.boardPanel = false; renderBoardView(); }
   else if (event.key === 'Escape' && isRunning() && !terminalPanel.open && !event.defaultPrevented) { event.preventDefault(); runEndings.set(state.sessionId, 'stopped'); run(call(teams.get(state.sessionId) ? 'architect_control' : 'stop_session', { sessionId: state.sessionId, ...(teams.get(state.sessionId) ? { action: 'stop' } : {}) })); }
 });

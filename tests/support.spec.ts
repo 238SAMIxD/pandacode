@@ -119,7 +119,8 @@ test('Help stays visible in narrow windows with large interface text', async ({ 
 test('Settings shows an About section with the version and GitHub links', async ({ page }) => {
   await open(page);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+  const settings = page.getByRole('region', { name: 'Settings', exact: true });
+  await settings.getByRole('tab', { name: 'About & updates', exact: true }).click();
   const about = settings.locator('.settings-about');
   await expect(about).toBeVisible();
   await expect(about.locator('.settings-about-version')).toHaveText('Version Preview');

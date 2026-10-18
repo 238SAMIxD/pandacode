@@ -4,7 +4,7 @@ import { expect, test, type Page } from '@playwright/test';
 // Cloudflare's container sandboxes are a separate one-time setup.
 const errors = new WeakMap<Page, string[]>();
 const calls = (page: Page, command: string): Promise<any[]> => page.evaluate(command => (window as any).__deployCalls.filter((entry: any) => entry.command === command).map((entry: any) => entry.args), command);
-const settings = (page: Page) => page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Settings', exact: true }) });
+const settings = (page: Page) => page.getByRole('region', { name: 'Settings', exact: true });
 
 test.afterEach(async ({ page }) => { expect(errors.get(page) ?? []).toEqual([]); });
 
@@ -26,7 +26,7 @@ async function open(page: Page): Promise<void> {
 }
 async function connect(page: Page, provider: string, fields: Record<string, string>): Promise<void> {
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await settings(page).getByRole('tab', { name: 'Agents', exact: true }).click();
+  await settings(page).getByRole('tab', { name: 'Cloud sandboxes', exact: true }).click();
   await settings(page).getByRole('button', { name: `Connect ${provider}`, exact: true }).click();
   const form = settings(page).getByRole('form', { name: `Connect ${provider}` });
   for (const [label, value] of Object.entries(fields)) await form.getByLabel(`${provider} ${label}`).fill(value);
@@ -42,7 +42,8 @@ test('deploy offers connected platforms and starts a task with the brief', async
   await page.keyboard.press('Escape');
   await connect(page, 'Vercel', { 'Access token': 'vcp_token', 'Team slug': 'acme' });
   expect((await calls(page, 'cloud_connect')).at(-1)).toEqual({ provider: 'vercel', key: 'vcp_token', options: { team: 'acme' } });
-  await settings(page).getByRole('button', { name: 'Done', exact: true }).click();
+  await settings(page).getByRole('button', { name: 'Back to the workspace', exact: true }).click();
+  await expect(settings(page)).toBeHidden();
   const before = await page.locator('#prompt').getAttribute('data-session-id');
   await page.getByRole('button', { name: 'Deploy', exact: true }).click();
   await expect(menu.getByRole('menuitem', { name: 'Deploy to AWS' })).toBeDisabled();

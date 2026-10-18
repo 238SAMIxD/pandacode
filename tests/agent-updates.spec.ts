@@ -44,7 +44,7 @@ async function automatic(page: Page): Promise<void> {
 }
 async function manual(page: Page): Promise<void> {
   await page.keyboard.press('Meta+,');
-  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+  await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('tab', { name: 'Agents', exact: true }).click();
   await page.getByRole('button', { name: 'Check updates', exact: true }).click();
   await expect(dialog(page)).toBeVisible();
 }
@@ -110,11 +110,13 @@ test.describe('Agent updates', () => {
   test('does not interrupt an existing dialog and shows the popup after it closes', async ({ page }) => {
     await open(page);
     await page.keyboard.press('Meta+,');
-    const settings = page.getByRole('dialog', {name:'Settings', exact:true});
-    await expect(settings).toBeVisible();
+    await page.getByRole('region', {name:'Settings', exact:true}).getByRole('tab', {name:'Tools & add-ons', exact:true}).click();
+    await page.getByRole('button', {name:'Manage', exact:true}).click();
+    const tools = page.getByRole('dialog', {name:'Tools & integrations', exact:true});
+    await expect(tools).toBeVisible();
     await page.clock.fastForward(9000);
     await expect(popup(page)).toBeHidden();
-    await expect(settings).toBeVisible();
+    await expect(tools).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(popup(page)).toBeVisible();
   });

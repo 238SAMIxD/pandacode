@@ -1,8 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
 
-const dialog = (page: Page) => page.locator('#dialog');
-const tab = (page: Page, name: string) => page.getByRole('tab', { name, exact: true });
-const panel = (page: Page, name: string) => page.getByRole('tabpanel', { name, exact: true });
+// Settings is a full page (a region over the workspace) with a vertical list of groups.
+const dialog = (page: Page) => page.getByRole('region', { name: 'Settings', exact: true });
+const tab = (page: Page, name: string) => dialog(page).getByRole('tab', { name, exact: true });
+const panel = (page: Page, name: string) => dialog(page).getByRole('tabpanel', { name, exact: true });
+const back = (page: Page) => dialog(page).getByRole('button', { name: 'Back to the workspace', exact: true });
+const GROUPS = ['General', 'Appearance', 'Agents', 'Providers', 'Agent teams', 'Tools & add-ons', 'Cloud sandboxes', 'GitHub', 'About & updates'];
 const prompt = (page: Page) => page.getByRole('textbox', { name: 'Message your coding agent' });
 const providerCalls = (page: Page) => page.evaluate(() => (window as any).__settingsProviders.calls);
 
@@ -43,6 +46,7 @@ test('support details are loaded on demand and copied only by the customer', asy
   });
   await open(page);
   await settings(page);
+  await tab(page, 'About & updates').click();
   expect(await page.evaluate(() => (window as any).__settingsSupport.calls)).toBe(0);
   const details = page.locator('.support-details');
   await expect(details.getByRole('textbox')).toBeHidden();
@@ -62,6 +66,7 @@ test('support details recover from a fetch error and offer manual copying when c
   await page.addInitScript(() => Object.defineProperty(navigator, 'clipboard', { value: { writeText: async () => { throw new Error('Clipboard denied'); } }, configurable: true }));
   await open(page);
   await settings(page);
+  await tab(page, 'About & updates').click();
   await page.evaluate(() => { (window as any).__settingsSupport.fail = true; });
   const details = page.locator('.support-details');
   await details.locator('summary').click();
@@ -79,6 +84,7 @@ async function settings(page: Page): Promise<void> {
   await page.keyboard.press('Meta+,');
   await expect(dialog(page).getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
   await expect(tab(page, 'General')).toHaveAttribute('aria-selected', 'true');
+  await expect(tab(page, 'General')).toBeFocused();
 }
 
 for (const pending of [false, true]) {
@@ -127,7 +133,8 @@ for (const pending of [false, true]) {
     await expect.poll(() => page.evaluate(() => (window as any).__refreshModels.discoveries.length)).toBe(before + 1);
     await expect(refresh).toBeEnabled();
     expect(await page.evaluate(() => (window as any).__refreshModels.discoveries.at(-1))).toBe(true);
-    await dialog(page).getByRole('button', { name: 'Done', exact: true }).click();
+    await back(page).click();
+    await expect(dialog(page)).toBeHidden();
     await trigger.click();
     const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
     await expect.poll(calls).toBe(2);
@@ -146,7 +153,7 @@ for (const pending of [false, true]) {
   });
 }
 
-test('settings organization opens General immediately and supports keyboard tabs during agent discovery', async ({ page }) => {
+test('settings organization opens General immediately and supports keyboard groups during agent discovery', async ({ page }) => {
   await open(page);
   const startupCalls = await providerCalls(page);
   await page.evaluate(() => { (window as any).__settingsProviders.hold = true; });
@@ -158,13 +165,17 @@ test('settings organization opens General immediately and supports keyboard tabs
   expect(await providerCalls(page)).toBe(startupCalls);
   const retainedGeneral = await panel(page, 'General').elementHandle();
   await tab(page, 'General').focus();
-  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowDown');
+  await expect(tab(page, 'Appearance')).toBeFocused();
+  expect(await providerCalls(page)).toBe(startupCalls);
+  await page.keyboard.press('ArrowDown');
   await expect(tab(page, 'Agents')).toBeFocused();
   await expect(tab(page, 'Agents')).toHaveAttribute('aria-selected', 'true');
   await expect(panel(page, 'Agents')).toBeVisible();
   await expect.poll(() => providerCalls(page)).toBe(startupCalls + 1);
   await expect(page.getByRole('button', { name: 'Refresh agents', exact: true })).toBeDisabled();
-  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('ArrowUp');
   await expect(tab(page, 'General')).toBeFocused();
   await expect(tab(page, 'General')).toHaveAttribute('aria-selected', 'true');
   await expect(panel(page, 'General')).toBeVisible();
@@ -173,8 +184,8 @@ test('settings organization opens General immediately and supports keyboard tabs
   await expect(tab(page, 'General')).toHaveAttribute('aria-selected', 'true');
   expect(await retainedGeneral!.evaluate(node => node.isConnected)).toBe(true);
   await page.keyboard.press('End');
-  await expect(tab(page, 'Agents')).toBeFocused();
-  await expect(tab(page, 'Agents')).toHaveAttribute('aria-selected', 'true');
+  await expect(tab(page, 'About & updates')).toBeFocused();
+  await expect(tab(page, 'About & updates')).toHaveAttribute('aria-selected', 'true');
   await page.keyboard.press('Home');
   await expect(tab(page, 'General')).toBeFocused();
   await expect(tab(page, 'General')).toHaveAttribute('aria-selected', 'true');
@@ -202,7 +213,8 @@ test('settings organization keeps agent diagnostics collapsed and retains the de
   await page.getByRole('dialog', { name: 'Default agent', exact: true }).getByRole('menuitemradio', { name: 'Kimi Code', exact: true }).click();
   await expect(defaultAgent).toHaveText('Kimi Code');
   await expect.poll(() => page.evaluate(() => localStorage.getItem('pandacode.provider'))).toBe('kimi');
-  await dialog(page).getByRole('button', { name: 'Done', exact: true }).click();
+  await back(page).click();
+  await expect(dialog(page)).toBeHidden();
   await page.reload();
   await expect(prompt(page)).toBeEnabled();
   await settings(page);
@@ -222,8 +234,7 @@ test('settings organization does not let a late provider refresh replace wallpap
   await refresh.click();
   await expect.poll(() => page.evaluate(() => (window as any).__settingsProviders.pending)).toBe(true);
   await expect(refresh).toBeDisabled();
-  await tab(page, 'General').click();
-  await page.getByRole('button', { name: 'Customize wallpapers', exact: true }).click();
+  await tab(page, 'Appearance').click();
   const blur = page.getByRole('slider', { name: 'Wallpaper blur', exact: true });
   await expect(blur).toBeVisible();
   await blur.focus();
@@ -234,10 +245,55 @@ test('settings organization does not let a late provider refresh replace wallpap
   await expect(dialog(page).getByRole('heading', { name: 'Wallpapers', exact: true })).toBeVisible();
   await expect(blur).toHaveValue('24');
   expect(await retainedBlur!.evaluate(node => node.isConnected)).toBe(true);
-  await page.getByRole('button', { name: 'Back to settings', exact: true }).click();
-  await expect(tab(page, 'General')).toHaveAttribute('aria-selected', 'true');
+  await expect(tab(page, 'Appearance')).toHaveAttribute('aria-selected', 'true');
+  await back(page).click();
+  await expect(dialog(page)).toBeHidden();
   await expect(prompt(page)).toHaveValue('Keep my task draft through settings refresh.');
   expect(await retainedPrompt!.evaluate(node => node === document.querySelector('#prompt'))).toBe(true);
+});
+
+test('settings organization lists groups in order, moves between them by keyboard, embeds Appearance and closes with Escape', async ({ page }) => {
+  await open(page);
+  await expect(page.locator('.sidebar')).toBeVisible();
+  const opener = page.getByRole('button', { name: 'Settings', exact: true });
+  await opener.focus();
+  await page.keyboard.press('Enter');
+  await expect(dialog(page)).toBeVisible();
+  await expect(page.locator('.sidebar')).toBeHidden();
+  const list = dialog(page).getByRole('tablist', { name: 'Settings', exact: true });
+  await expect(list).toHaveAttribute('aria-orientation', 'vertical');
+  await expect(list.getByRole('tab')).toHaveText(GROUPS);
+  await expect(tab(page, 'General')).toBeFocused();
+  await expect(panel(page, 'General').getByRole('heading', { name: 'General', exact: true })).toBeVisible();
+  await expect(dialog(page).getByRole('tabpanel')).toHaveCount(1);
+  // Arrow keys move through the groups in order and wrap around.
+  for (const name of GROUPS.slice(1)) {
+    await page.keyboard.press('ArrowDown');
+    await expect(tab(page, name)).toBeFocused();
+    await expect(tab(page, name)).toHaveAttribute('aria-selected', 'true');
+    await expect(panel(page, name)).toBeVisible();
+  }
+  await page.keyboard.press('ArrowDown');
+  await expect(tab(page, 'General')).toBeFocused();
+  await page.keyboard.press('ArrowUp');
+  await expect(tab(page, 'About & updates')).toBeFocused();
+  await page.keyboard.press('Home');
+  await page.keyboard.press('ArrowDown');
+  await expect(tab(page, 'Appearance')).toHaveAttribute('aria-selected', 'true');
+  await expect(tab(page, 'General')).toHaveAttribute('aria-selected', 'false');
+  // Colors and wallpapers live inline in Appearance instead of separate dialogs.
+  const appearance = panel(page, 'Appearance');
+  await expect(appearance.getByRole('heading', { name: /^Colors/ })).toBeVisible();
+  await expect(appearance.getByRole('radio', { name: 'Classic', exact: true })).toBeVisible();
+  await expect(appearance.getByRole('heading', { name: 'Wallpapers', exact: true })).toBeVisible();
+  await expect(appearance.getByRole('slider', { name: 'Wallpaper visibility', exact: true })).toBeVisible();
+  await expect(appearance.getByRole('checkbox', { name: 'Daily wallpapers', exact: true })).toBeVisible();
+  await expect(page.locator('#dialog')).not.toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dialog(page)).toBeHidden();
+  await expect(page.locator('.sidebar')).toBeVisible();
+  await expect(opener).toBeFocused();
+  await expect(prompt(page)).toBeEnabled();
 });
 
 for (const layout of [{ width: 860, scale: 1.4 }, { width: 540, scale: 1.6 }]) {
@@ -249,7 +305,7 @@ for (const layout of [{ width: 860, scale: 1.4 }, { width: 540, scale: 1.6 }]) {
     const size = (await dialog(page).boundingBox())!;
     expect(size.x).toBeGreaterThanOrEqual(0);
     expect(size.x + size.width).toBeLessThanOrEqual(layout.width);
-    expect(await dialog(page).evaluate(node => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
+    expect(await dialog(page).locator('.settings-content').evaluate(node => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
     const rows = panel(page, 'General').locator('.setting-row');
     const bounds = await rows.evaluateAll(nodes => nodes.map(node => {
       const row = node.getBoundingClientRect();
@@ -276,11 +332,10 @@ for (const layout of [{ width: 860, scale: 1.4 }, { width: 540, scale: 1.6 }]) {
       }
     }
     await page.screenshot({ path: testInfo.outputPath(`settings-${layout.width}-${layout.scale}.png`), animations: 'disabled' });
-    await page.getByRole('button', { name: 'Customize wallpapers', exact: true }).click();
+    await tab(page, 'Appearance').click();
     await expect(page.getByRole('slider', { name: 'Wallpaper blur', exact: true })).toBeVisible();
-    expect(await dialog(page).evaluate(node => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
-    await page.getByRole('button', { name: 'Back to settings', exact: true }).click();
-    await dialog(page).getByRole('button', { name: 'Done', exact: true }).click();
+    expect(await dialog(page).locator('.settings-content').evaluate(node => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
+    await back(page).click();
     await expect(dialog(page)).not.toBeVisible();
   });
 }

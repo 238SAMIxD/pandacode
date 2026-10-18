@@ -10,7 +10,7 @@ const pin = (page: Page, scene: string) => page.addInitScript(scene => {
 }, scene);
 async function openColors(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByRole('button', { name: 'Customize colors' }).click();
+  await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('tab', { name: 'Appearance', exact: true }).click();
   await expect(page.locator('.vsix-list')).toHaveAttribute('aria-busy', 'false');
 }
 
@@ -80,7 +80,7 @@ test('the light and dark toggle leaves a VS Code theme for PandaCode\'s own pale
   await page.getByRole('radio', { name: /GitHub Light Default/ }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   expect(await token(page, '--accent')).toBe('#0969da');
-  await page.getByRole('button', { name: 'Done' }).click();
+  await page.getByRole('button', { name: 'Back to the workspace', exact: true }).click();
   await page.locator('[data-action="toggle-theme"]').click();
   await expect(page.locator('#toast')).toContainText('GitHub Light Default turned off');
   await expect(page.locator('html')).not.toHaveAttribute('data-vsix', '');
