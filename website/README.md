@@ -1,6 +1,6 @@
 # PandaCode website
 
-The static site for [pandacode.ai](https://pandacode.ai): the landing page, the changelog,
+The static PandaCode website: the landing page, the changelog,
 the privacy policy and the MIT License. PandaCode is free, open source and collects nothing,
 and the site follows suit: no cookies, no analytics, no remote fonts or scripts, and no
 third-party requests of any kind. Downloads link to
@@ -71,8 +71,9 @@ npx wrangler login        # once; or set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACC
 npx wrangler deploy
 ```
 
-No account ID or secret is stored in the repository. Attach the `pandacode.ai` custom
-domain to the Worker in the Cloudflare dashboard. Any other static host works too:
+No account ID or secret is stored in the repository. Attach a custom
+domain to the Worker in the Cloudflare dashboard if you have one; once you do,
+add canonical URLs and a sitemap for it. Any other static host works too:
 serve `dist/` and apply the headers from `public/_headers`.
 
 ## Tests

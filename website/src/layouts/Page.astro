@@ -8,8 +8,8 @@ import PreviewTag from '../components/PreviewTag.astro';
 import SiteFooter from '../components/SiteFooter.astro';
 import { project } from '../lib/distribution';
 
-interface Props { title: string; description: string; path: string; eyebrow: string; heading: string; lede?: string; current: 'changelog' | 'privacy' | 'license' }
-const { title, description, path, eyebrow, heading, lede, current } = Astro.props;
+interface Props { title: string; description: string; eyebrow: string; heading: string; lede?: string; current: 'changelog' | 'privacy' | 'license' }
+const { title, description, eyebrow, heading, lede, current } = Astro.props;
 const links = [['/changelog/', 'Changelog', 'changelog'], ['/privacy/', 'Privacy', 'privacy'], ['/license/', 'License', 'license']] as const;
 ---
 <!doctype html>
@@ -20,11 +20,9 @@ const links = [['/changelog/', 'Changelog', 'changelog'], ['/privacy/', 'Privacy
   <meta name="theme-color" content="#f8f9f2">
   <title>{title} — PandaCode</title>
   <meta name="description" content={description}>
-  <link rel="canonical" href={`https://pandacode.ai${path}`}>
   <meta property="og:type" content="website">
   <meta property="og:title" content={`${title} — PandaCode`}>
   <meta property="og:description" content={description}>
-  <meta property="og:url" content={`https://pandacode.ai${path}`}>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 </head>
 <body class="page-body">

@@ -10,7 +10,7 @@ const months = releases.reduce<{ label: string; versions: string[] }[]>((groups,
   return last?.label === label ? [...groups.slice(0, -1), { label, versions: [...last.versions, release.version] }] : [...groups, { label, versions: [release.version] }];
 }, []);
 ---
-<Page title="Changelog" path="/changelog/" current="changelog" eyebrow="LITTLE BY LITTLE"
+<Page title="Changelog" current="changelog" eyebrow="LITTLE BY LITTLE"
   heading="What’s new in PandaCode."
   description={`Every PandaCode release, newest first. Latest: ${latest.version}${latest.date ? `, ${formatDate(latest.date)}` : ''}.`}
   lede={`${releases.length} releases and counting. Every release is published on GitHub, with its source.`}>
