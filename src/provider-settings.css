@@ -1,7 +1,7 @@
 .provider-connections-dialog{width:min(43rem,calc(100vw - 2rem))}
 .provider-connections{display:grid;gap:1rem}
 .provider-connections>.dialog-description{margin:0 0 .2rem}
-.connection-card{padding:1.05rem 1.15rem;border-radius:1rem;background:color-mix(in srgb,var(--panel) 52%,transparent);border:1px solid var(--border)}
+.connection-card{padding:1.05rem 1.15rem;border-radius:.4rem;background:color-mix(in srgb,var(--panel) 52%,transparent);border:1px solid var(--border)}
 .connection-card h3{display:flex;align-items:center;gap:.6rem;margin:0;font-size:1rem;letter-spacing:-.02em}
 .connection-card h3>.provider-logo{width:1.3rem;height:1.3rem}
 .connection-card h3 small{font-size:.75rem;color:var(--muted);font-weight:400;letter-spacing:0;margin-left:auto}
@@ -15,7 +15,7 @@
 .connection-key-status{display:flex;gap:.7rem;align-items:center;justify-content:space-between;margin:.65rem 0;color:var(--muted);font-size:.73rem;line-height:1.5}
 .connection-key-status button{font-size:.72rem;padding:.4rem .6rem}
 .connection-select{display:flex;align-items:center;gap:.7rem}
-.connection-select select{flex:1;min-width:0;font-size:.82rem;padding:.55rem .7rem;border-radius:.6rem;border:1px solid var(--border);background:color-mix(in srgb,var(--panel) 70%,transparent);color:var(--text)}
+.connection-select select{flex:1;min-width:0;font-size:.82rem;padding:.55rem .7rem;border-radius:.24rem;border:1px solid var(--border);background:color-mix(in srgb,var(--panel) 70%,transparent);color:var(--text)}
 .connection-endpoint-hint{display:block;font-size:.7rem;color:var(--muted);margin:.35rem 0 0;font-family:var(--mono,ui-monospace,monospace);overflow-wrap:anywhere}
 .connection-endpoint-hint.error{color:var(--red,#ff908b);font-family:inherit}
 .connection-path{margin-top:.9rem}

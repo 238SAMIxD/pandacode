@@ -1,5 +1,5 @@
-.view-switch{display:flex;gap:2px;padding:4px;border-radius:8px;background:var(--panel);margin-right:8px;align-items:center}
-.view-switch button{height:24px;padding:0 9px;gap:5px;color:var(--muted);border-radius:5px;font-size:.72rem}
+.view-switch{display:flex;gap:2px;padding:4px;border-radius:3px;background:var(--panel);margin-right:8px;align-items:center}
+.view-switch button{height:24px;padding:0 9px;gap:5px;color:var(--muted);border-radius:2px;font-size:.72rem}
 .view-switch .icon{width:13px;height:13px}
 .workspace.board-view{grid-template-columns:minmax(0,1fr) var(--inspector-width,302px)}
 .workspace.board-view.inspector-closed{grid-template-columns:minmax(0,1fr)}
@@ -10,7 +10,7 @@
 .board-eyebrow{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:.72rem}
 .board-heading h1{font-size:1.6rem;line-height:1.25;font-weight:600;letter-spacing:-.04em;margin:5px 0 0}
 .board-project-heading{min-width:0}
-.board-project-filter{max-width:100%;text-align:left;justify-content:flex-start;gap:10px;border-radius:6px}
+.board-project-filter{max-width:100%;text-align:left;justify-content:flex-start;gap:10px;border-radius:2px}
 .board-project-filter>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .board-project-filter>.icon{width:15px;height:15px;color:var(--muted);transition:transform 160ms ease}
 .board-project-filter[aria-expanded=true]>.icon{transform:rotate(180deg)}
@@ -30,7 +30,7 @@
 [data-stage=review] .stage-dot{background:#a59adc}
 [data-stage=completed] .stage-dot{background:#76ac8f}
 .board-cards{display:flex;flex-direction:column;gap:9px;min-height:0;overflow-y:auto;padding:2px 3px 12px}
-.board-card{position:relative;border:1px solid var(--border);border-radius:16px;background:var(--bg);box-shadow:0 2px 3px #00000004;overflow:hidden;flex-shrink:0;transition:border-color 140ms,background 140ms,transform var(--spring-fast-duration,240ms) var(--spring-fast,ease),box-shadow 200ms}
+.board-card{position:relative;border:1px solid var(--border);border-radius:6px;background:var(--bg);box-shadow:0 2px 3px #00000004;overflow:hidden;flex-shrink:0;transition:border-color 140ms,background 140ms,transform var(--spring-fast-duration,240ms) var(--spring-fast,ease),box-shadow 200ms}
 .board-card:hover{border-color:color-mix(in srgb,var(--muted) 50%,var(--border));transform:translateY(-1px);box-shadow:0 8px 20px -12px rgb(0 0 0 / .2)}
 .board-card:has(.board-card-open:active){transform:translateY(0) scale(.99)}
 .board-card.selected{border-color:color-mix(in srgb,var(--accent) 55%,var(--border));background:color-mix(in srgb,var(--accent) 5%,var(--bg))}
@@ -43,15 +43,15 @@
 .board-card-meta .provider-logo{width:14px;height:14px}
 .board-card-meta .icon{width:12px;height:12px}
 .board-card-links{display:flex;flex-wrap:wrap;gap:5px;padding:0 12px 10px}
-.board-card-start{padding:6px 11px;margin:0 10px 10px;border-radius:5px;font-size:.71rem;color:var(--muted);background:var(--raised);gap:5px}
+.board-card-start{padding:6px 11px;margin:0 10px 10px;border-radius:2px;font-size:.71rem;color:var(--muted);background:var(--raised);gap:5px}
 .board-card-start:hover{color:var(--text);background:var(--accent-dim)}
 .board-card-start .icon{width:12px;height:12px}
 .board-running{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--accent);flex-shrink:0}
-.board-empty{padding:15px 10px;border:1px dashed var(--border);border-radius:9px;font-size:.72rem;color:var(--faint);text-align:center}
+.board-empty{padding:15px 10px;border:1px dashed var(--border);border-radius:4px;font-size:.72rem;color:var(--faint);text-align:center}
 .board-footnote{font-size:.68rem;color:var(--faint);margin:12px 4px 0}
 .board-view .workspace-header{padding-left:24px;gap:12px}
 html[data-native-platform=macos] .board-view .workspace-header{padding-left:104px}
-.board-view .conversation-pane{flex:0 0 min(49%,570px);width:min(49%,570px);margin:8px;border-radius:20px;background:var(--bg);position:relative;z-index:2;animation:task-panel-in var(--spring-duration,340ms) var(--spring,ease-out)}
+.board-view .conversation-pane{flex:0 0 min(49%,570px);width:min(49%,570px);margin:8px;border-radius:8px;background:var(--bg);position:relative;z-index:2;animation:task-panel-in var(--spring-duration,340ms) var(--spring,ease-out)}
 .board-view .conversation-pane.new-task-page{justify-content:initial}
 .task-details-heading{flex-shrink:0;max-height:42%;overflow:auto;padding:0 24px}
 .task-detail-toolbar{display:flex;align-items:center;justify-content:space-between;height:48px}
@@ -79,7 +79,7 @@ html[data-native-platform=macos] .board-view .workspace-header{padding-left:104p
 .board-view .turn-activity-body .message{margin:8px 0 10px}
 .board-view .tool-activity{padding-left:0}
 .board-view .composer-area{padding:10px 16px 8px;max-width:none;width:100%}
-.board-view .composer{border-radius:11px;padding:12px 12px 8px;box-shadow:0 3px 16px #00000008}
+.board-view .composer{border-radius:4px;padding:12px 12px 8px;box-shadow:0 3px 16px #00000008}
 .board-view .composer textarea{font-size:.82rem;min-height:48px}
 .board-view .composer-context{margin:0 4px;padding:2px 8px;min-height:32px;gap:10px}
 .board-view .composer-context .composer-project,.board-view .composer-context .composer-local{display:none}
@@ -89,7 +89,7 @@ html[data-native-platform=macos] .board-view .workspace-header{padding-left:104p
 .board-view .composer-separator{display:none}
 .board-view .send-button{width:28px;height:28px;flex-shrink:0}
 .board-view .pending-comments{font-size:.78rem;color:var(--muted);padding:16px 0;line-height:1.6}
-.board-completed-note{padding:12px;font-size:.78rem;color:var(--muted);text-align:center;border:1px solid var(--border);border-radius:10px}
+.board-completed-note{padding:12px;font-size:.78rem;color:var(--muted);text-align:center;border:1px solid var(--border);border-radius:4px}
 .board-task-form textarea{width:100%;padding:10px 12px;min-height:120px;line-height:1.6;margin-bottom:14px}
 .board-task-form .field-label{margin-top:14px}
 .board-task-project{display:flex;gap:7px;align-items:center;color:var(--muted);font-size:.8rem;margin:0 0 12px}

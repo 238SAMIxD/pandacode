@@ -1,4 +1,4 @@
-.usage-heatmap { --heatmap-gap:3px; --heatmap-empty:color-mix(in srgb,var(--text) 7%,transparent); margin:.4rem 0 .2rem; padding:1rem 1rem .85rem; border-radius:.9rem; background:color-mix(in srgb,var(--text) 3%,transparent); border:1px solid color-mix(in srgb,var(--border) 55%,transparent); min-width:0; }
+.usage-heatmap { --heatmap-gap:3px; --heatmap-empty:color-mix(in srgb,var(--text) 7%,transparent); margin:.4rem 0 .2rem; padding:1rem 1rem .85rem; border-radius:.36rem; background:color-mix(in srgb,var(--text) 3%,transparent); border:1px solid color-mix(in srgb,var(--border) 55%,transparent); min-width:0; }
 .heatmap-heading { display:flex; align-items:baseline; justify-content:space-between; gap:.8rem; margin-bottom:.75rem; min-width:0; }
 .heatmap-heading h3 { margin:0; font-size:.9286rem; font-weight:600; letter-spacing:-.01em; }
 .heatmap-summary { min-width:0; color:var(--muted); font-size:.7857rem; font-variant-numeric:tabular-nums; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -14,7 +14,7 @@
 /* Focus lives on the chosen day rather than boxing the whole calendar. */
 .heatmap:focus-visible > .heatmap-cell[aria-selected=true] { box-shadow:0 0 0 2px var(--focus); }
 .heatmap-month { grid-row:1; align-self:start; font-size:.6786rem; color:var(--muted); line-height:1; white-space:nowrap; width:0; }
-.heatmap-cell { display:block; width:var(--cell,10px); height:var(--cell,10px); border-radius:calc(var(--cell,10px) * .28); background:var(--heatmap-empty); box-shadow:inset 0 0 0 .5px color-mix(in srgb,var(--text) 5%,transparent); cursor:default; }
+.heatmap-cell { display:block; width:var(--cell,10px); height:var(--cell,10px); border-radius:calc(var(--cell,4px) * .28); background:var(--heatmap-empty); box-shadow:inset 0 0 0 .5px color-mix(in srgb,var(--text) 5%,transparent); cursor:default; }
 .heatmap-cell[data-level="1"] { background:color-mix(in srgb,var(--accent) 28%,transparent); }
 .heatmap-cell[data-level="2"] { background:color-mix(in srgb,var(--accent) 50%,transparent); }
 .heatmap-cell[data-level="3"] { background:color-mix(in srgb,var(--accent) 74%,transparent); }

@@ -5,7 +5,7 @@
 .vm-panel[hidden],.vm-panel [hidden]{display:none!important}
 .vm-stage{position:relative;flex:1;min-height:220px;display:flex;align-items:center;justify-content:center;padding:14px;outline:none;overflow:hidden}
 .vm-stage:focus-visible{box-shadow:inset 0 0 0 2px var(--focus)}
-.vm-screen{display:block;max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;border-radius:10px;background:#000;box-shadow:0 0 0 1px color-mix(in srgb,var(--text) 14%,transparent),0 14px 40px rgb(0 0 0 / .28);cursor:default;user-select:none;touch-action:none}
+.vm-screen{display:block;max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;border-radius:4px;background:#000;box-shadow:0 0 0 1px color-mix(in srgb,var(--text) 14%,transparent),0 14px 40px rgb(0 0 0 / .28);cursor:default;user-select:none;touch-action:none}
 .vm-stage.vm-live:focus .vm-screen,.vm-stage.vm-live:focus-within .vm-screen{box-shadow:0 0 0 2px var(--focus),0 14px 40px rgb(0 0 0 / .28)}
 .vm-empty{display:flex;flex-direction:column;align-items:center;gap:8px;max-width:340px;text-align:center;font-size:.8rem;color:var(--muted)}
 .vm-empty strong{font-size:.9rem;font-weight:600;color:var(--text)}
@@ -25,8 +25,8 @@
 .vm-detail{font-size:.7rem;color:var(--muted);white-space:nowrap}
 .vm-detail:not(:empty)::before{content:"· "}
 @container vm (max-width:300px){.vm-detail{display:none}}
-.vm-actions{display:flex;gap:2px;padding:4px;border-radius:14px;background:var(--vm-glass);border:1px solid var(--border);box-shadow:0 6px 20px rgb(0 0 0 / .12);backdrop-filter:var(--vm-blur);-webkit-backdrop-filter:var(--vm-blur)}
-.vm-actions .icon-button{width:32px;height:30px;border-radius:10px}
+.vm-actions{display:flex;gap:2px;padding:4px;border-radius:6px;background:var(--vm-glass);border:1px solid var(--border);box-shadow:0 6px 20px rgb(0 0 0 / .12);backdrop-filter:var(--vm-blur);-webkit-backdrop-filter:var(--vm-blur)}
+.vm-actions .icon-button{width:32px;height:30px;border-radius:4px}
 .vm-actions .icon-button:disabled{opacity:.38}
 .vm-actions [aria-pressed="true"]{color:var(--accent-ink);background:var(--accent-dim)}
 html[data-theme="dark"] .vm-actions [aria-pressed="true"]{color:var(--accent)}

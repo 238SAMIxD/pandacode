@@ -12,7 +12,7 @@ html[data-theme] dialog.change-review-dialog::backdrop{background:rgb(0 0 0 / .1
 .change-review-notice{font-size:.77rem;color:var(--muted);margin:0 0 12px;overflow-wrap:anywhere}
 .change-review-workspace{display:grid;grid-template-columns:minmax(180px,23%) minmax(0,1fr);flex:1;min-height:0;gap:16px}
 .change-review-files{min-width:0;overflow:auto;scrollbar-width:thin}
-.change-review-files>button{width:100%;min-height:40px;padding:9px 8px;text-align:left;justify-content:flex-start;border-radius:8px;gap:7px;margin-bottom:3px;color:var(--muted);font-size:.77rem;flex-wrap:wrap}
+.change-review-files>button{width:100%;min-height:40px;padding:9px 8px;text-align:left;justify-content:flex-start;border-radius:3px;gap:7px;margin-bottom:3px;color:var(--muted);font-size:.77rem;flex-wrap:wrap}
 .change-review-files>button:hover{background:color-mix(in srgb,var(--raised) 45%,transparent)}
 .change-review-files>button[aria-pressed=true]{background:color-mix(in srgb,var(--accent-dim) 66%,transparent);color:var(--text)}
 .change-review-files .icon{width:14px;height:14px}

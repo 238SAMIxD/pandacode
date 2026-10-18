@@ -4,7 +4,7 @@
 .overlay-shortcut-heading>label{font-size:.8rem;font-weight:500}
 .overlay-shortcut-heading>.info-mark{margin-left:0}
 .overlay-shortcut-controls{display:flex;gap:.5rem;align-items:center}
-.overlay-shortcut-controls>input{min-width:0;flex:1;font-family:var(--mono);font-size:.74rem;min-height:2.35rem;padding:.5rem .65rem;background:var(--bg);border:1px solid var(--border);border-radius:.5rem;color:var(--text)}
+.overlay-shortcut-controls>input{min-width:0;flex:1;font-family:var(--mono);font-size:.74rem;min-height:2.35rem;padding:.5rem .65rem;background:var(--bg);border:1px solid var(--border);border-radius:.2rem;color:var(--text)}
 .overlay-shortcut-form>small{display:block;margin-top:.6rem;font-size:.71rem;color:var(--muted);line-height:1.5}
 .overlay-settings-status{font-size:.75rem;color:var(--muted);margin:.6rem 0 0;overflow-wrap:anywhere}
 .overlay-settings-status.error{color:var(--danger,#e98c82)}

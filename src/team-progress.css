@@ -1,13 +1,13 @@
-.team-progress{margin:12px 0 25px;padding:10px 12px;border-radius:14px;background:color-mix(in srgb,var(--panel) 56%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--border) 38%,transparent);font-size:.8rem;min-width:0}
+.team-progress{margin:12px 0 25px;padding:10px 12px;border-radius:6px;background:color-mix(in srgb,var(--panel) 56%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--border) 38%,transparent);font-size:.8rem;min-width:0}
 .team-progress-heading{display:flex;align-items:center;gap:8px;min-height:30px;margin-bottom:5px}
 .team-progress-heading strong{font-size:.8rem;font-weight:550;flex:1;min-width:0}
-.team-progress-heading button{font-size:.72rem;color:var(--muted);gap:4px;padding:5px 6px;border-radius:7px;white-space:nowrap}
+.team-progress-heading button{font-size:.72rem;color:var(--muted);gap:4px;padding:5px 6px;border-radius:3px;white-space:nowrap}
 .team-progress-heading button>.icon,.team-progress-worker>.icon{width:12px;height:12px;color:var(--muted);flex-shrink:0}
 .team-progress-indicator{width:6px;height:6px;border-radius:50%;background:var(--muted);flex-shrink:0}
 .team-progress[data-status=running] .team-progress-indicator,.team-progress[data-status=waiting] .team-progress-indicator{background:var(--accent-ink)}
 .team-progress[data-status=completed] .team-progress-indicator{background:var(--success)}
 .team-progress[data-status=failed] .team-progress-indicator{background:var(--danger)}
-.team-progress-worker{display:flex;align-items:center;gap:9px;width:100%;min-width:0;text-align:left;padding:8px 6px;border-radius:9px;transition:background-color 120ms ease}
+.team-progress-worker{display:flex;align-items:center;gap:9px;width:100%;min-width:0;text-align:left;padding:8px 6px;border-radius:4px;transition:background-color 120ms ease}
 .team-progress-worker:hover,.team-progress-heading button:hover{background:color-mix(in srgb,var(--raised) 55%,transparent)}
 .team-progress-worker:active{background:color-mix(in srgb,var(--raised) 75%,transparent)}
 .team-progress-logo{flex-shrink:0;display:flex;align-items:center}.team-progress-logo .provider-logo{width:20px;height:20px}

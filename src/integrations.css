@@ -10,7 +10,7 @@
 .integration-group summary > span { margin-left:auto; }
 .integration-group > summary::before, .integration-server > summary::before { content:''; width:5px; height:5px; border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor; transform:rotate(-45deg); transition:transform 160ms ease; flex:none; }
 .integration-group[open] > summary::before, .integration-server[open] > summary::before { transform:rotate(45deg); }
-.integration-group > summary:focus-visible, .integration-server > summary:focus-visible { outline:2px solid var(--focus); outline-offset:3px; border-radius:3px; }
+.integration-group > summary:focus-visible, .integration-server > summary:focus-visible { outline:2px solid var(--focus); outline-offset:3px; border-radius:1px; }
 @media(prefers-reduced-motion:reduce) { .integration-group summary::before { transition:none; } }
 .integration-group[open] > summary { color:var(--accent); }
 .integration-row { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:10px 0; }

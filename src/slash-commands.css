@@ -3,7 +3,7 @@
 .slash-menu-header strong{font-size:.79rem;font-weight:550}.slash-menu-logo{display:flex;align-items:center;color:var(--muted)}
 .slash-menu-logo :is(.icon,.provider-logo){width:16px;height:16px}.slash-menu-header .icon-button{margin-left:auto;width:27px;height:27px}
 .slash-menu-list{min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
-.slash-menu-option{display:flex;align-items:center;gap:9px;width:100%;min-height:32px;padding:5px 10px;border-radius:8px;text-align:left;font-size:.83rem;color:var(--text)}
+.slash-menu-option{display:flex;align-items:center;gap:9px;width:100%;min-height:32px;padding:5px 10px;border-radius:3px;text-align:left;font-size:.83rem;color:var(--text)}
 .slash-menu-option[aria-selected=true]{background:var(--accent-dim)}.slash-menu-option:hover:not(:disabled){background:var(--raised)}
 .slash-menu-option:disabled{opacity:.68;cursor:default}.slash-menu-copy{flex:1;min-width:0;display:flex;align-items:baseline;gap:8px}.slash-menu-title{display:flex;gap:7px;align-items:baseline;min-width:0;flex:0 0 auto;max-width:100%}
 .slash-menu-title strong{font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.slash-menu-title>span{min-width:0;font-size:.72rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

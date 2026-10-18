@@ -8,7 +8,7 @@
   overflow: hidden;
   color: var(--text);
   background: color-mix(in srgb, var(--panel) 82%, transparent);
-  border-radius: 10px;
+  border-radius: 4px;
 }
 .diff-viewer-toolbar {
   display: flex;
@@ -35,14 +35,14 @@
   display: flex;
   align-items: center;
   padding: 3px;
-  border-radius: 8px;
+  border-radius: 3px;
   background: color-mix(in srgb, var(--bg) 68%, transparent);
 }
 .diff-viewer-button {
   min-height: 30px;
   padding: 5px 9px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 2px;
   background: transparent;
   color: var(--muted);
   font: inherit;

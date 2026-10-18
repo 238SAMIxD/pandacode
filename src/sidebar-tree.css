@@ -4,7 +4,7 @@
 
 .sidebar .sidebar-actions{padding:6px 8px 14px;gap:1px}
 .sidebar .sidebar-actions>button,
-html[data-theme] .sidebar .sidebar-actions>.new-task-button{height:var(--tree-row);width:100%;padding:0 9px;gap:10px;justify-content:flex-start;border:0;border-radius:8px;background:transparent;box-shadow:none;color:var(--text);font-size:.86rem;font-weight:500}
+html[data-theme] .sidebar .sidebar-actions>.new-task-button{height:var(--tree-row);width:100%;padding:0 9px;gap:10px;justify-content:flex-start;border:0;border-radius:3px;background:transparent;box-shadow:none;color:var(--text);font-size:.86rem;font-weight:500}
 .sidebar .sidebar-actions>button:hover,
 html[data-theme] .sidebar .sidebar-actions>.new-task-button:hover{background:var(--raised);box-shadow:none;color:var(--text)}
 html[data-theme] .sidebar .sidebar-actions>.new-task-button:not(:disabled):active{background:var(--raised);transform:scale(.98)}
@@ -28,7 +28,7 @@ html[data-theme] .sidebar .new-task-button>.icon{color:var(--focus)}
 .sidebar .group-heading>.icon{width:13px;height:13px;color:var(--focus)}
 .sidebar .group-heading>span{font-size:.7rem;font-weight:400;color:var(--faint);font-variant-numeric:tabular-nums}
 
-.folder-heading{display:flex;align-items:center;gap:9px;width:100%;height:var(--tree-row);padding:0 9px;border-radius:8px;justify-content:flex-start;color:var(--text);font-size:.86rem;font-weight:500;--press:1}
+.folder-heading{display:flex;align-items:center;gap:9px;width:100%;height:var(--tree-row);padding:0 9px;border-radius:3px;justify-content:flex-start;color:var(--text);font-size:.86rem;font-weight:500;--press:1}
 .folder-heading:hover{background:var(--raised)}
 .folder-heading>.icon{width:16px;height:16px;flex:none;color:var(--muted)}
 .folder-heading>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -40,10 +40,10 @@ html[data-theme] .sidebar .new-task-button>.icon{color:var(--focus)}
 .sidebar .task-list{gap:1px}
 /* Each task is a three-line card: where (app icon, checkout, age), what (title), and the
    branch, linked pull request and agent. Quiet until hovered or selected. */
-.sidebar .task-item{display:grid;grid-template-columns:minmax(0,1fr);row-gap:3px;min-height:0;height:auto;padding:8px 10px 8px 9px;border-radius:10px;align-items:center;font-size:.84rem;font-weight:400;color:var(--text)}
+.sidebar .task-item{display:grid;grid-template-columns:minmax(0,1fr);row-gap:3px;min-height:0;height:auto;padding:8px 10px 8px 9px;border-radius:4px;align-items:center;font-size:.84rem;font-weight:400;color:var(--text)}
 .sidebar .task-line{display:flex;align-items:center;gap:6px;min-width:0}
 .sidebar .task-head{font-size:.74rem;color:var(--muted)}
-.sidebar .task-app-icon{flex:none;width:16px;height:16px;border-radius:4px;object-fit:contain}
+.sidebar .task-app-icon{flex:none;width:16px;height:16px;border-radius:2px;object-fit:contain}
 .sidebar .task-app-default{display:grid;place-items:center;background:color-mix(in srgb,var(--text) 10%,transparent);color:var(--muted);font-size:.6rem;font-weight:650;line-height:1}
 .sidebar .task-checkout{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sidebar .task-title{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.88rem;font-weight:500;letter-spacing:-.005em;color:var(--text)}
@@ -72,7 +72,7 @@ html:not([data-theme=dark]) .sidebar .task-link.pull{color:#7c3aed}
 .sidebar .task-item.selected{font-weight:500}
 .sidebar .task-project{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 
-.folder-more{display:block;width:100%;height:26px;padding:0 8px 0 29px;border-radius:7px;text-align:left;font-size:.76rem;color:var(--muted);--press:1}
+.folder-more{display:block;width:100%;height:26px;padding:0 8px 0 29px;border-radius:3px;text-align:left;font-size:.76rem;color:var(--muted);--press:1}
 .folder-more:hover{color:var(--text);background:var(--raised)}
 .sidebar .folder-tasks>.no-tasks{padding:5px 8px 6px;font-size:.74rem}
 .sidebar .single-project .task-list{gap:1px}
@@ -80,7 +80,7 @@ html:not([data-theme=dark]) .sidebar .task-link.pull{color:#7c3aed}
 /* "N more in other projects" sits under the list as a single quiet line. */
 .sidebar-note{flex:none;padding:4px 8px 2px;border-top:1px solid var(--tree-guide)}
 .sidebar-note[hidden]{display:none}
-.sidebar .sidebar-note .filter-note{display:flex;align-items:center;gap:8px;width:100%;height:28px;margin:0;padding:0 9px;border-radius:7px;background:transparent;font-size:.74rem;line-height:1;color:var(--muted)}
+.sidebar .sidebar-note .filter-note{display:flex;align-items:center;gap:8px;width:100%;height:28px;margin:0;padding:0 9px;border-radius:3px;background:transparent;font-size:.74rem;line-height:1;color:var(--muted)}
 .sidebar .sidebar-note .filter-note>span{margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:inherit;font-weight:400}
 .sidebar .sidebar-note .filter-note>strong{margin-left:auto;flex:none;font-weight:550;color:var(--focus)}
 .sidebar .sidebar-note .filter-note:hover{background:var(--raised);color:var(--text)}
@@ -100,9 +100,9 @@ html:not([data-theme=dark]) .sidebar .task-link.pull{color:#7c3aed}
 .sidebar-bots-heading>.icon-button:hover{color:var(--text)}
 .sidebar-bots-list{display:flex;flex-direction:column;gap:1px;max-height:calc(var(--tree-row) * 5 + 4px);overflow-y:auto;scrollbar-width:none}
 .sidebar-bots-list::-webkit-scrollbar{display:none}
-.bot-row{position:relative;display:flex;align-items:center;border-radius:7px}
+.bot-row{position:relative;display:flex;align-items:center;border-radius:3px}
 .bot-row:hover,.bot-row.selected{background:var(--raised)}
-.bot-row-open{flex:1;min-width:0;display:flex;align-items:center;gap:8px;height:var(--tree-row);padding:0 30px 0 7px;border-radius:7px;justify-content:flex-start;color:var(--text);font-size:.84rem;--press:.985}
+.bot-row-open{flex:1;min-width:0;display:flex;align-items:center;gap:8px;height:var(--tree-row);padding:0 30px 0 7px;border-radius:3px;justify-content:flex-start;color:var(--text);font-size:.84rem;--press:.985}
 .bot-row.selected .bot-row-open{font-weight:500}
 .bot-row-avatar{display:grid;place-items:center;flex:none;width:18px;height:18px;border-radius:50%;background:color-mix(in srgb,var(--accent) 55%,var(--raised));color:var(--on-accent);font-size:.66rem;font-weight:700;line-height:1}
 .bot-row.paused .bot-row-avatar{filter:grayscale(.8);opacity:.6}
@@ -114,7 +114,7 @@ html:not([data-theme=dark]) .sidebar .task-link.pull{color:#7c3aed}
 .bot-row-settings .icon{width:13px;height:13px}
 .bot-row:hover .bot-row-settings,.bot-row:focus-within .bot-row-settings{opacity:1}
 .bot-row-settings:hover{color:var(--text)}
-.bot-row-add{display:flex;align-items:center;gap:8px;width:100%;height:var(--tree-row);padding:0 9px;border-radius:7px;justify-content:flex-start;color:var(--muted);font-size:.82rem}
+.bot-row-add{display:flex;align-items:center;gap:8px;width:100%;height:var(--tree-row);padding:0 9px;border-radius:3px;justify-content:flex-start;color:var(--muted);font-size:.82rem}
 .bot-row-add:hover{background:var(--raised);color:var(--text)}
 .bot-row-add .icon{width:13px;height:13px}
 @media(hover:none){.bot-row-settings{opacity:1}}
