@@ -92,10 +92,21 @@ pub struct IssueFilter {
     pub query: Option<String>,
 }
 
-fn gh_command(root: &Path, args: &[&str]) -> Command {
-    let mut command = Command::new("gh");
+/// `gh` as the user's shell finds it. Apps opened from Finder or the Dock inherit a
+/// minimal PATH without Homebrew, so look where coding CLIs are found too, and pass that
+/// PATH on for the `git` that `gh` runs.
+fn gh_base(root: &Path) -> Command {
+    let program = crate::providers::tool_path("gh").unwrap_or_else(|| "gh".into());
+    let mut command = Command::new(program);
+    command.current_dir(root);
+    if let Ok(path) = crate::providers::executable_path() {
+        command.env("PATH", path);
+    }
     command
-        .current_dir(root)
+}
+fn gh_command(root: &Path, args: &[&str]) -> Command {
+    let mut command = gh_base(root);
+    command
         .args(args)
         .env("GH_PROMPT_DISABLED", "1")
         .env("GH_NO_UPDATE_NOTIFIER", "1")
@@ -183,9 +194,8 @@ pub fn status(root: &Path) -> GithubStatus {
         .next()
         .unwrap_or_default()
         .to_string();
-    let mut command = Command::new("gh");
+    let mut command = gh_base(root);
     command
-        .current_dir(root)
         .args(["auth", "status"])
         .env("GH_PROMPT_DISABLED", "1")
         .env("GH_NO_UPDATE_NOTIFIER", "1")
@@ -476,6 +486,18 @@ pub fn create_pull_request(root: &Path, title: &str, body: &str, base: &str, hea
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn gh_runs_with_the_tool_search_path_even_from_a_minimal_gui_path() {
+        // Finder and the Dock start apps with PATH=/usr/bin:/bin; gh must still find Homebrew.
+        let command = super::gh_command(std::path::Path::new("/"), &["--version"]);
+        let path = command.get_envs().find(|(key, _)| *key == "PATH").and_then(|(_, value)| value).expect("gh gets a PATH");
+        let dirs: Vec<_> = std::env::split_paths(path).collect();
+        for dir in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"] {
+            assert!(dirs.contains(&std::path::PathBuf::from(dir)), "{dir} is searched");
+        }
+    }
+
     use super::*;
 
     #[test]

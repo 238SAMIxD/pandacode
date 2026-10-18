@@ -30,3 +30,10 @@ test('ages read like a tracker: minutes, hours, days', () => {
   assert.equal(age('2026-10-15T12:00:00Z', now), '3d');
   assert.equal(age('not a date', now), '');
 });
+
+test('the connect screen says what to do for the error gh gave', async () => {
+  const { connectAdvice } = await import('../src/github-hub-prompts.ts');
+  assert.match(connectAdvice('Failed to start GitHub CLI: No such file or directory (os error 2)'), /brew install gh/);
+  assert.match(connectAdvice('To get started with GitHub CLI, please run:  gh auth login'), /gh auth login/);
+  assert.match(connectAdvice('error connecting to api.github.com'), /Check your connection/);
+});

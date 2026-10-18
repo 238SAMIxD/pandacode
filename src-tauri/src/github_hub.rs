@@ -221,6 +221,17 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Live: lists the signed-in account's repositories. Run it with a Finder-like
+    /// environment (`env -i HOME=$HOME PATH=/usr/bin:/bin <test binary> --ignored`) to
+    /// check that `gh` is found without the shell's PATH.
+    #[test]
+    #[ignore]
+    fn live_lists_repositories_from_a_minimal_path() {
+        let list = repos().expect("gh lists repositories");
+        assert!(!list.is_empty());
+        assert!(list.iter().all(|repo| valid_repo(&repo.name_with_owner).is_ok()));
+    }
+
     #[test]
     fn repositories_must_be_owner_and_name() {
         assert_eq!(valid_repo(" orbit-labs/orbit ").unwrap(), "orbit-labs/orbit");

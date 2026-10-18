@@ -152,3 +152,4 @@ button.gh-row:active{background:color-mix(in srgb,var(--text) 8%,transparent)}
 @media (prefers-reduced-transparency:reduce),(prefers-contrast:more){.workspace[data-wallpaper] :is(.gh-repos,.gh-tabs,.gh-compose){background:var(--panel);backdrop-filter:none;-webkit-backdrop-filter:none}}
 @media (prefers-contrast:more){.gh-row:is(:hover,:focus-within){box-shadow:inset 0 0 0 1px var(--border)}.gh-label{box-shadow:inset 0 0 0 1px var(--border)}}
 @media (max-width:900px){.gh-hub{grid-template-columns:200px minmax(0,1fr)}.gh-row .gh-label,.gh-author,.gh-diff{display:none}.gh-head,.gh-bar{padding-inline:18px}}
+.gh-error-detail{display:block;max-width:100%;margin-top:8px;padding:6px 9px;border-radius:7px;background:var(--gh-inset);font:500 .72rem/1.45 var(--mono,ui-monospace,monospace);color:var(--muted);overflow-wrap:anywhere;text-align:left}

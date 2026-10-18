@@ -7,7 +7,7 @@ import { escape, icon } from './dom';
 import { cascade, trackSegment } from './motion';
 import { providerLogo } from './provider-logos';
 import { taskStage } from './task-board';
-import { age, issuePrompt, PULL_ACTIONS, pullPrompt, threadTitle, type IssueAction, type PullAction } from './github-hub-prompts';
+import { age, connectAdvice, issuePrompt, PULL_ACTIONS, pullPrompt, threadTitle, type IssueAction, type PullAction } from './github-hub-prompts';
 import type { Project, Session, TaskLink } from './types';
 
 export interface HubRepo { nameWithOwner: string; description: string; private: boolean; fork: boolean; archived: boolean; pushedAt: string; url: string; defaultBranch: string; openIssues: number; language: string }
@@ -134,7 +134,7 @@ export function mountGithubHub(root: HTMLElement, host: HubHost): HubView {
 
   function renderBody(): void {
     const body = $('.gh-body'), item = repo();
-    if (reposError && !repos?.length) { body.innerHTML = emptyState('github', 'Connect GitHub', 'PandaCode uses the GitHub CLI. Install it, run <code>gh auth login</code> in a terminal, then try again.', '<button type="button" class="secondary-button" data-gh="refresh">Try again</button>'); return; }
+    if (reposError && !repos?.length) { body.innerHTML = connectState(reposError); return; }
     if (!item) { body.innerHTML = repos ? emptyState('github', 'Choose a repository', 'Its threads, pull requests and issues appear here.') : skeleton(6); return; }
     const project = projectFor(item.nameWithOwner);
     if (tab === 'threads') body.innerHTML = threadsBody(project);
@@ -292,6 +292,9 @@ export function mountGithubHub(root: HTMLElement, host: HubHost): HubView {
 
 function skeleton(rows: number, cls = 'gh-row'): string {
   return `<div class="gh-skeleton" aria-hidden="true">${Array.from({ length: rows }, () => `<span class="${cls} gh-ghost"></span>`).join('')}</div><p class="sr-only" role="status">Loading…</p>`;
+}
+function connectState(error: string): string {
+  return emptyState('github', 'Connect GitHub', `${connectAdvice(error)}<small class="gh-error-detail">${escape(error)}</small>`, '<button type="button" class="secondary-button" data-gh="refresh">Try again</button>');
 }
 function emptyState(symbol: string, title: string, text: string, action = ''): string {
   return `<div class="gh-empty"><span class="gh-empty-mark">${icon(symbol)}</span><b>${escape(title)}</b><p>${text}</p>${action}</div>`;

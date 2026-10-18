@@ -128,3 +128,19 @@ test('the GitHub view is reachable from Go to anything', async ({ page }) => {
   await page.locator('#command-results').getByRole('button', { name: 'GitHub' }).click();
   await expect(hub(page)).toBeVisible();
 });
+
+test('when gh fails, the view says why and how to fix it', async ({ page }) => {
+  await page.route('**/src/preview.ts*', async route => {
+    const response = await route.fetch();
+    const body = (await response.text()).replace(/case "github_repos":/, 'case "github_repos": throw new Error("Failed to start GitHub CLI: No such file or directory (os error 2)");');
+    await route.fulfill({ response, body });
+  });
+  await page.goto('/');
+  await page.locator('#navigation .task-item').first().waitFor();
+  await page.getByRole('button', { name: 'GitHub view' }).click();
+  const empty = hub(page).locator('.gh-empty');
+  await expect(empty).toContainText('Connect GitHub');
+  await expect(empty).toContainText('brew install gh');
+  await expect(empty.locator('.gh-error-detail')).toHaveText('Failed to start GitHub CLI: No such file or directory (os error 2)');
+  await expect(empty.getByRole('button', { name: 'Try again' })).toBeVisible();
+});
