@@ -1109,6 +1109,18 @@ test('chooses a project filter from its anchored menu using the keyboard', async
   await expect(page.locator('#navigation .task-item')).toHaveCount(4);
 });
 
+test('all projects: folder headings show the project icon and rows leave the project name to them', async ({ page }) => {
+  const folders = page.locator('#navigation .folder-group:not(.single-project)');
+  await expect(page.locator('#navigation .folder-heading')).toHaveCount(2);
+  await expect(page.locator('#navigation .folder-heading > .task-app-icon')).toHaveCount(2);
+  await expect(page.locator('#navigation .folder-heading > svg.icon')).toHaveCount(0);
+  await expect(folders.locator('.task-item .task-checkout')).toHaveCount(0);
+  await expect(folders.locator('.task-item .task-top .task-title').first()).toBeVisible();
+  // One project on its own keeps the where-line, since nothing above names it.
+  await chooseProjectFilter(page, 'pandacode');
+  await expect(page.locator('#navigation .task-item .task-checkout')).toHaveText(['pandacode']);
+});
+
 test('says how many tasks the project filter hides and shows them all in one click', async ({ page }) => {
   const note = page.locator('#sidebar-note .filter-note');
   await expect(note).toHaveCount(0);
@@ -2159,7 +2171,7 @@ test('the turn header names what the agent is doing, with no separate status lin
   await expect(prompt(page)).toBeEnabled();
 });
 
-test('approvals wait in one slim bar above the prompt, one line each and grouped when there are several', async ({ page }) => {
+test('approvals wait in one slim bar above the prompt and its context bar, one line each and grouped when there are several', async ({ page }) => {
   const sessionId = await startControlledStatusStream(page);
   const bar = page.locator('#composer-area .approval-bar');
   // The sample harness holds each answer until the test lets it through.
@@ -2172,9 +2184,12 @@ test('approvals wait in one slim bar above the prompt, one line each and grouped
   await expect(bar).toBeVisible();
   await expect(bar.locator('.approval-summary')).toHaveText('Run npm test');
   expect((await lineHeights()).every(height => height <= 36)).toBe(true);
-  const [barBox, composerBox] = [(await bar.boundingBox())!, (await page.locator('#composer').boundingBox())!];
-  expect(composerBox.y - (barBox.y + barBox.height)).toBeGreaterThanOrEqual(0);
-  expect(composerBox.y - (barBox.y + barBox.height)).toBeLessThan(12);
+  // It leads the composer area, above the context bar that rides on the prompt.
+  await expect(page.locator('#composer-area > :first-child')).toHaveAttribute('id', 'approval-bar');
+  const barBox = (await bar.boundingBox())!;
+  for (const below of [page.locator('#composer-area .composer-context'), page.locator('#composer')]) {
+    if (await below.count()) expect((await below.boundingBox())!.y).toBeGreaterThanOrEqual(barBox.y + barBox.height);
+  }
   await expect(page.locator('#transcript .approval-bar')).toHaveCount(0);
   // The full request is one click away.
   await bar.locator('.approval-summary').click();
