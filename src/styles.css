@@ -59,7 +59,7 @@ button .icon{pointer-events:none}
 .task-item:hover{background:var(--raised)}
 .task-item.selected{background:var(--accent-dim);color:var(--text);font-weight:550}
 .task-indicator{width:5px;height:5px;background:#a4a49d;border-radius:50%;flex-shrink:0}
-.selected .task-indicator{background:#a47c00}
+.selected .task-indicator{background:var(--accent-ink)}
 .task-indicator.running{background:#ac8100;box-shadow:none;animation:breathe 1.5s infinite}
 .task-indicator.attention{background:#a45e13;box-shadow:0 0 0 3px rgb(var(--accent-rgb) / .3)}
 .provider-logo{width:20px;height:20px;display:inline-block;object-fit:contain;flex-shrink:0;vertical-align:middle;pointer-events:none}
@@ -679,8 +679,9 @@ html:is([data-native-material="liquidGlass"],[data-native-material="vibrancy"]) 
   box-shadow:inset -1px 0 0 rgb(255 255 255 / .4);
 }
 html:is([data-native-material="liquidGlass"],[data-native-material="vibrancy"]) .sidebar .task-item.selected{
-  background:linear-gradient(115deg,rgb(255 223 99 / .5),rgb(255 244 195 / .36));
-  box-shadow:inset 0 1px 0 rgb(255 255 255 / .42),inset 0 0 0 1px rgb(156 116 12 / .09);
+  /* The selected task is a solid fill of the accent chosen in Settings. */
+  background:rgb(var(--accent-rgb) / .22);
+  box-shadow:none;
 }
 html:is([data-native-material="liquidGlass"],[data-native-material="vibrancy"]) .sidebar .search-trigger:hover{background:var(--raised);border-radius:3px}
 html:is([data-native-material="liquidGlass"],[data-native-material="vibrancy"]) .sidebar .project-filter:not([aria-expanded="true"]):hover{background:var(--raised)}
@@ -767,7 +768,7 @@ html[data-theme="dark"]:is([data-native-material="liquidGlass"],[data-native-mat
   background:linear-gradient(160deg,rgb(46 42 28 / .55),rgb(24 25 25 / .45) 70%);
   border-right-color:rgb(255 255 255 / .1);box-shadow:inset -1px 0 0 rgb(255 255 255 / .04);
 }
-html[data-theme="dark"]:is([data-native-material="liquidGlass"],[data-native-material="vibrancy"]) .sidebar .task-item.selected{background:linear-gradient(115deg,rgb(116 94 23 / .5),rgb(85 74 30 / .4));box-shadow:inset 0 1px 0 rgb(var(--accent-rgb) / .08),inset 0 0 0 1px rgb(var(--accent-rgb) / .1)}
+html[data-theme="dark"]:is([data-native-material="liquidGlass"],[data-native-material="vibrancy"]) .sidebar .task-item.selected{background:rgb(var(--accent-rgb) / .24);box-shadow:none}
 
 @media(max-width:650px){.sidebar-bottom{flex-direction:column}#theme-toggle{margin-left:0}}
 @media(prefers-reduced-transparency:reduce),(prefers-contrast:more){

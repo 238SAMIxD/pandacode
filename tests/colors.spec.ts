@@ -85,3 +85,19 @@ test('the light and dark toggle leaves a VS Code theme for PandaCode\'s own pale
   await expect(page.locator('#toast')).toContainText('GitHub Light Default turned off');
   await expect(page.locator('html')).not.toHaveAttribute('data-vsix', '');
 });
+
+for (const theme of ['dark', 'light'] as const) {
+  test(`the selected task is a solid fill of the chosen accent over the native sidebar material in ${theme} mode`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: theme });
+    await page.addInitScript(value => { localStorage.setItem('pandacode.theme', value); localStorage.setItem('pandacode.wallpapers', 'false'); }, theme);
+    await page.goto('/');
+    const card = page.locator('#navigation .task-item.selected');
+    await card.waitFor();
+    await page.evaluate(() => { document.documentElement.dataset.nativeMaterial = 'vibrancy'; });
+    const fill = () => card.evaluate(el => {
+      const style = getComputedStyle(el);
+      return { image: style.backgroundImage, rgb: style.backgroundColor.replace(/^rgba?\((\d+), (\d+), (\d+).*$/, '$1 $2 $3'), accent: style.getPropertyValue('--accent-rgb').trim().replace(/\s+/g, ' ') };
+    });
+    await expect.poll(async () => { const value = await fill(); return value.image === 'none' && value.rgb === value.accent; }).toBe(true);
+  });
+}
