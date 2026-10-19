@@ -18,7 +18,7 @@ export function projectIconHtml(projectId: string, name: string, load: (projectI
   }
   if (known) return `<img class="task-app-icon" src="${escape(known)}" alt="" aria-hidden="true" draggable="false">`;
   const initial = (name.trim()[0] ?? '·').toUpperCase();
-  return `<span class="task-app-icon task-app-default" aria-hidden="true">${escape(initial)}</span>`;
+  return `<span class="task-app-icon task-app-default" data-initial="${escape(initial)}" aria-hidden="true"></span>`;
 }
 
 /** Forget a project's icon so it is looked up again (after it changes on disk). */

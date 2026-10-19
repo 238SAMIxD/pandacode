@@ -255,7 +255,7 @@ $app.innerHTML = `<div class="workspace">
   <aside id="workspace-sidebar" class="sidebar" aria-label="Projects and tasks">
     <div class="brand" data-tauri-drag-region><span class="brand-name" data-tauri-drag-region>PandaCode</span></div>
     <div class="sidebar-actions"><button class="new-task-button" data-action="new-task">${icon('plus')}<span>New task</span><kbd>${shortcut('N')}</kbd></button><button class="search-trigger" data-action="search">${icon('search')}<span>Search</span><kbd>${shortcut('K')}</kbd></button></div>
-    <div class="sidebar-projects"><button id="project-filter" class="project-filter" data-action="filter-projects" aria-label="Filter projects" aria-haspopup="dialog" aria-expanded="false"><span>All projects</span>${icon('down')}</button>${button('import-conversations', 'Import conversations', 'download', 'import-trigger')}${button('add-project', 'Open project', 'plus')}</div>
+    <div class="sidebar-projects"><button id="project-filter" class="project-filter" data-action="filter-projects" aria-label="Filter projects" aria-haspopup="dialog" aria-expanded="false"><span data-filter-label>All projects</span>${icon('down')}</button>${button('import-conversations', 'Import conversations', 'download', 'import-trigger')}${button('add-project', 'Open project', 'plus')}</div>
     <div id="navigation" class="navigation"></div>
     <div id="sidebar-note" class="sidebar-note" hidden></div>
     <section id="sidebar-bots-panel" class="bots-panel" aria-label="Bots"></section>
@@ -775,14 +775,19 @@ function renderNavigation(): void {
   // Preserve the native drag source while agent updates arrive in the background.
   if (sidebarDragging) return;
   const now = Date.now();
-  const filterLabel = $('#project-filter').querySelector('span')!;
-  const filterName = state.projects.find(p => p.id === state.projectFilter)?.name ?? 'All projects';
+  const filterLabel = $('#project-filter').querySelector('[data-filter-label]')!;
+  const filtered = state.projects.find(p => p.id === state.projectFilter);
+  const filterName = filtered?.name ?? 'All projects';
   if (filterLabel.textContent !== filterName) filterLabel.textContent = filterName;
+  // A chosen project leads with its own icon.
+  const filterIcon = filtered ? projectAppIcon(filtered.id, filtered.name) : '';
+  const shownIcon = filterLabel.previousElementSibling;
+  if ((shownIcon?.outerHTML ?? '') !== filterIcon) { shownIcon?.remove(); if (filterIcon) filterLabel.insertAdjacentHTML('beforebegin', filterIcon); }
   const visible = listedSessions().filter(s => s.archived === state.archived && !botProjects.has(s.projectId) && (!state.projectFilter || s.projectId === state.projectFilter) && s.title.toLowerCase().includes(state.query.toLowerCase()));
   renderBots();
   $('#archive-toggle').classList.toggle('active', state.archived);
   $('#archive-toggle').setAttribute('aria-pressed', String(state.archived));
-  const row = (s: Session, inFolder = false): string => {
+  const row = (s: Session, inFolder = false, inProject = false): string => {
     const p = state.projects.find(p => p.id === s.projectId);
     const activityAt = lastActivity(s);
     const age = activityAt == null ? '' : responseAge(activityAt, now);
@@ -804,7 +809,11 @@ function renderNavigation(): void {
     // Inside a project's folder the heading already names the project: one line with the
     // title, then the worktree mark, linked PR or issue, status, age and harness.
     if (inFolder) return `${button}<span class="task-line task-top"><span class="task-title">${escape(s.title)}</span>${worktreeMark}${linkMark}${pin}${projectName}${signals}${providerLogo(s.provider, 'task-provider')}</span></button>`;
-    return `${button}<span class="task-line task-head">${projectAppIcon(s.projectId, p?.name ?? '')}<span class="task-checkout">${escape(checkout)}</span>${signals}</span><span class="task-title">${escape(s.title)}</span>`
+    // With one project chosen the filter names it: two lines, the title and then the rest.
+    const head = inProject
+      ? `<span class="task-line task-top"><span class="task-title">${escape(s.title)}</span>${signals}</span>`
+      : `<span class="task-line task-head">${projectAppIcon(s.projectId, p?.name ?? '')}<span class="task-checkout">${escape(checkout)}</span>${signals}</span><span class="task-title">${escape(s.title)}</span>`;
+    return `${button}${head}`
       + `<span class="task-line task-meta">${branch}${linkMark}${pin}${projectName}${providerLogo(s.provider, 'task-provider')}</span></button>`;
   };
   const pinned = visible.filter(s => s.pinned).sort(compareThreadOrder);
@@ -819,7 +828,7 @@ function renderNavigation(): void {
     const rows = shownTasks(tasks, expanded, state.sessionId, limit);
     const more = tasks.length > rows.length || expanded && tasks.length > limit
       ? `<button class="folder-more" data-action="toggle-folder-more" data-project="${escape(project.id)}">${expanded ? 'Show less' : `Show ${tasks.length - rows.length} more`}</button>` : '';
-    if (single) return `<section class="task-group folder-group single-project" data-thread-group="project:${escape(project.id)}" data-project="${escape(project.id)}" aria-label="${escape(project.name)} tasks"><div class="task-list">${rows.map(s => row(s)).join('') || '<div class="no-tasks">No tasks yet</div>'}${more}</div></section>`;
+    if (single) return `<section class="task-group folder-group single-project" data-thread-group="project:${escape(project.id)}" data-project="${escape(project.id)}" aria-label="${escape(project.name)} tasks"><div class="task-list">${rows.map(s => row(s, false, true)).join('') || '<div class="no-tasks">No tasks yet</div>'}${more}</div></section>`;
     return `<section class="task-group folder-group" data-thread-group="project:${escape(project.id)}" data-project="${escape(project.id)}" aria-label="${escape(project.name)} tasks"><button class="folder-heading ${tasks.length ? '' : 'empty'}" data-action="toggle-folder" data-project="${escape(project.id)}" aria-expanded="${open}" aria-controls="folder-tasks-${index}" title="${escape(project.path)}">${projectAppIcon(project.id, project.name)}<span>${escape(project.name)}</span></button><div id="folder-tasks-${index}" class="task-list folder-tasks" ${open ? '' : 'hidden'}>${rows.map(s => row(s, true)).join('') || '<div class="no-tasks">No tasks yet</div>'}${more}</div></section>`;
   };
   const nav = $('#navigation');
@@ -836,7 +845,7 @@ function renderNavigation(): void {
   note.hidden = !note.innerHTML;
   nav.innerHTML = !userProjects().length ? '<div class="sidebar-empty">Open a project to get started.</div>' : state.archived
     ? `<section class="task-group archived-group" data-thread-group="archived" aria-label="Archived tasks"><div class="group-heading">Archived<span>${visible.length}</span></div><div class="task-list">${[...visible].sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || compareThreadOrder(a, b)).map(s => row(s)).join('') || '<div class="no-tasks">No archived tasks</div>'}</div></section>`
-    : `${pinned.length ? `<section class="task-group pinned-group" data-thread-group="pinned" aria-label="Pinned tasks"><div class="group-heading">${icon('pin')}Pinned</div><div class="task-list">${pinned.map(s => row(s)).join('')}</div></section>` : ''}${folders.map(folder).join('') || (state.query ? '<div class="no-tasks">No matching tasks</div>' : '')}`;
+    : `${pinned.length ? `<section class="task-group pinned-group" data-thread-group="pinned" aria-label="Pinned tasks"><div class="group-heading">${icon('pin')}Pinned</div><div class="task-list">${pinned.map(s => row(s, false, Boolean(state.projectFilter))).join('')}</div></section>` : ''}${folders.map(folder).join('') || (state.query ? '<div class="no-tasks">No matching tasks</div>' : '')}`;
   if (retainedRow) {
     const replacement = nav.querySelector<HTMLElement>(`.task-item[data-id="${CSS.escape(retainedRow.dataset.id!)}"]`);
     if (replacement) {

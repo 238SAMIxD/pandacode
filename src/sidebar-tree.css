@@ -14,7 +14,7 @@ html[data-theme] .sidebar .new-task-button>.icon{color:var(--focus)}
 
 /* "All projects" doubles as the section label and the project filter. */
 .sidebar .sidebar-projects{padding:2px 8px 4px 17px;gap:2px}
-.sidebar .project-filter{flex:0 1 auto;gap:4px;padding:3px 6px;color:var(--muted);font-size:.76rem;font-weight:550}
+.sidebar .project-filter{flex:0 1 auto;gap:4px;padding:3px 6px;margin-left:-6px;color:var(--muted);font-size:.76rem;font-weight:550}
 .sidebar .project-filter:hover{color:var(--text)}
 .sidebar .project-filter>.icon:last-child{position:static;width:10px;height:10px;opacity:.7}
 .sidebar .sidebar-projects>.icon-button{width:24px;height:24px;margin-left:0;color:var(--muted)}
@@ -51,6 +51,9 @@ html[data-theme] .sidebar .new-task-button>.icon{color:var(--focus)}
 .sidebar .task-checkout{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* In a folder each task is one line: the title, then its PR, harness, status and age. */
 .sidebar .task-item.task-oneline{padding-top:7px;padding-bottom:7px}
+.sidebar .project-filter>.task-app-icon{flex:none;width:14px;height:14px;border-radius:3px;object-fit:contain}
+.sidebar .project-filter>.task-app-default{display:grid;place-items:center;background:color-mix(in srgb,var(--text) 10%,transparent);color:var(--muted);font-size:.55rem;font-weight:650;line-height:1}
+.sidebar .project-filter:has(>.task-app-icon){gap:6px}
 .sidebar .task-top{gap:7px}
 .sidebar .task-top .task-title{flex:1 1 auto}
 .sidebar .task-top .task-provider{margin-left:0;width:14px;height:14px}
@@ -117,3 +120,6 @@ html:not([data-theme=dark]) .sidebar .task-link.pull{color:#7c3aed}
 .bot-row-add:hover{background:var(--raised);color:var(--text)}
 .bot-row-add .icon{width:13px;height:13px}
 @media(hover:none){.bot-row-settings{opacity:1}}
+
+/* The default tile's letter is drawn, so it never joins the text of the label it sits in. */
+.task-app-default::before{content:attr(data-initial)}
