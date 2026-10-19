@@ -89,6 +89,14 @@ function workspaceHref(href: string): string {
 // Compile the parser as soon as the app starts, so the first message renders formatted
 // rather than as raw text that reflows. A microtask, not a timer, so nothing delays it.
 void Promise.resolve().then(() => import('./enriched-markdown')).then(engine => engine.parseMarkdown('')).catch(() => { /* markdownHtml falls back when it is needed. */ });
+/* Formatted Markdown by source text. Reopening a thread draws its final layout in one
+ * frame instead of raw text that reflows once the parser answers. */
+const RENDERED_LIMIT = 800;
+const rendered = new Map<string, string>();
+function remember(value: string, html: string): void {
+  rendered.delete(value); rendered.set(value, html);
+  if (rendered.size > RENDERED_LIMIT) rendered.delete(rendered.keys().next().value as string);
+}
 let sanitizer: Promise<(html: string) => string> | undefined;
 let fallback: Promise<(value: string) => string | Promise<string>> | undefined;
 /** Markdown to safe HTML through the Enriched Markdown engine (md4c), with `marked` as a
@@ -108,10 +116,14 @@ export async function markdownHtml(value: string): Promise<string> {
     });
     html = await (await fallback)(value);
   }
-  return enriched.typesetMath(sanitize(html));
+  const result = await enriched.typesetMath(sanitize(html));
+  remember(value, result);
+  return result;
 }
 export async function markdown(target: HTMLElement, value: string, scroll?: HTMLElement): Promise<void> {
   captureFileLinkContext(target);
+  const known = rendered.get(value);
+  if (known !== undefined) { target.innerHTML = known; decorateFileLinks(target, target); return; }
   target.textContent = value;
   const html = await markdownHtml(value);
   if (target.isConnected && target.textContent === value) {
@@ -120,4 +132,32 @@ export async function markdown(target: HTMLElement, value: string, scroll?: HTML
     decorateFileLinks(target, target);
     restore?.();
   }
+}
+
+/** Update `target`'s children to match `html`, touching only what changed. Unchanged rows
+ *  keep their nodes (images stay decoded, hover and focus stay put); `depth` bounds how far
+ *  it descends before replacing a subtree whose shape changed. */
+export function morph(target: Element, html: string, depth = 4): void {
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  morphChildren(target, template.content, depth);
+}
+function morphChildren(from: Element, to: ParentNode, depth: number): void {
+  const before = [...from.childNodes], after = [...to.childNodes];
+  if (depth <= 0 || before.length !== after.length || before.some((node, i) => node.nodeName !== after[i].nodeName)) {
+    from.replaceChildren(...after);
+    return;
+  }
+  before.forEach((node, i) => {
+    const next = after[i];
+    if (node instanceof Element && next instanceof Element) {
+      if (node.outerHTML === next.outerHTML) return;
+      // An element never changes what it stands for: a row whose task moved is replaced, so a
+      // click landing during a background update still reaches the row under the pointer.
+      if (node.id !== next.id || node.getAttribute('data-id') !== next.getAttribute('data-id')) { node.replaceWith(next); return; }
+      for (const { name } of [...node.attributes]) if (!next.hasAttribute(name)) node.removeAttribute(name);
+      for (const { name, value } of [...next.attributes]) if (node.getAttribute(name) !== value) node.setAttribute(name, value);
+      morphChildren(node, next, depth - 1);
+    } else if (node.nodeValue !== next.nodeValue) node.nodeValue = next.nodeValue;
+  });
 }

@@ -16,7 +16,7 @@ export function projectIconHtml(projectId: string, name: string, load: (projectI
       .catch(() => { icons.set(projectId, null); })
       .finally(() => { pending.delete(projectId); loaded(); });
   }
-  if (known) return `<img class="task-app-icon" src="${escape(known)}" alt="" aria-hidden="true" draggable="false">`;
+  if (known) return `<img class="task-app-icon" src="${escape(known)}" alt="" aria-hidden="true" draggable="false" decoding="sync">`;
   const initial = (name.trim()[0] ?? '·').toUpperCase();
   return `<span class="task-app-icon task-app-default" data-initial="${escape(initial)}" aria-hidden="true"></span>`;
 }

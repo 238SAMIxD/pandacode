@@ -21,7 +21,7 @@ import { mountWallpapers } from './wallpapers';
 import type { AgentEvent, BrowserAttachment, ContextUsage, FileEntry, GitStatus, Message, MessagePage, Mode, Project, Provider, ProviderId, ProviderModel, Session, TaskLink, ToolActivity, TurnChanges } from './types';
 import type { BrowserPanel } from './browser';
 import { call, chooseFolder, preview, subscribe } from './bridge';
-import { $, button, escape, icon, markdown } from './dom';
+import { $, button, escape, icon, markdown, morph } from './dom';
 import { bindMessageActions, messageActionsHtml } from './message-actions';
 import { providerLogo } from './provider-logos';
 import { decodeToolActivity, groupToolRuns, renderToolActivity, renderToolGroup, renderToolStatus } from './tool-activity';
@@ -843,9 +843,10 @@ function renderNavigation(): void {
   const note = $('#sidebar-note');
   note.innerHTML = hidden && !state.archived ? `<button class="filter-note" data-action="show-all-projects" title="Show tasks from every project"><span>${hidden} more in other projects</span><strong>Show all</strong></button>` : '';
   note.hidden = !note.innerHTML;
-  nav.innerHTML = !userProjects().length ? '<div class="sidebar-empty">Open a project to get started.</div>' : state.archived
+  // Morph rather than replace: unchanged rows keep their nodes, so nothing flickers.
+  morph(nav, !userProjects().length ? '<div class="sidebar-empty">Open a project to get started.</div>' : state.archived
     ? `<section class="task-group archived-group" data-thread-group="archived" aria-label="Archived tasks"><div class="group-heading">Archived<span>${visible.length}</span></div><div class="task-list">${[...visible].sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || compareThreadOrder(a, b)).map(s => row(s)).join('') || '<div class="no-tasks">No archived tasks</div>'}</div></section>`
-    : `${pinned.length ? `<section class="task-group pinned-group" data-thread-group="pinned" aria-label="Pinned tasks"><div class="group-heading">${icon('pin')}Pinned</div><div class="task-list">${pinned.map(s => row(s, false, Boolean(state.projectFilter))).join('')}</div></section>` : ''}${folders.map(folder).join('') || (state.query ? '<div class="no-tasks">No matching tasks</div>' : '')}`;
+    : `${pinned.length ? `<section class="task-group pinned-group" data-thread-group="pinned" aria-label="Pinned tasks"><div class="group-heading">${icon('pin')}Pinned</div><div class="task-list">${pinned.map(s => row(s, false, Boolean(state.projectFilter))).join('')}</div></section>` : ''}${folders.map(folder).join('') || (state.query ? '<div class="no-tasks">No matching tasks</div>' : '')}`);
   if (retainedRow) {
     const replacement = nav.querySelector<HTMLElement>(`.task-item[data-id="${CSS.escape(retainedRow.dataset.id!)}"]`);
     if (replacement) {
@@ -1598,13 +1599,26 @@ async function forkAtMessage(sessionId: string, messageId: number): Promise<void
   } finally { pendingMessageForks.delete(key); }
 }
 
+/* Each thread's last page. Switching back draws it in the same frame as the click; the
+ * saved history then refreshes behind it and redraws only if something changed. */
+const THREAD_PAGES = 24;
+const threadPages = new Map<string, MessagePage>();
+function rememberThread(id: string): void {
+  const messages = state.messages.filter(message => message.id > 0);
+  // Only a page that really is this thread's: other paths can switch tasks without a reload.
+  if (!id || !messages.length || messages.some(message => message.sessionId !== id)) return;
+  threadPages.delete(id); threadPages.set(id, { messages, hasOlder: state.hasOlder });
+  if (threadPages.size > THREAD_PAGES) threadPages.delete(threadPages.keys().next().value as string);
+}
+const pageSignature = (messages: Message[]): string => messages.filter(message => message.id > 0).map(message => `${message.id}:${message.content.length}`).join(',');
+
 async function selectSession(id: string, focusComposer = false): Promise<void> {
   if (deletedSessions.has(id)) return;
   const s = state.sessions.find(s => s.id === id); if (!s) return;
   closeMenus();
   if (document.querySelector('#dialog')?.classList.contains('change-review-dialog')) closeModal();
   const previousTask = session(), changingTask = previousTask?.id !== id;
-  if (changingTask) { leaveDraft(id); saveThreadPanel(); }
+  if (changingTask) { if (previousTask) rememberThread(previousTask.id); leaveDraft(id); saveThreadPanel(); }
   if (previousTask && previousTask.id !== id) {
     if (previousTask.taskDescription) previousTask.taskDescription = [...previousTask.taskDescription].slice(0, 512).join('');
     fullTaskDescription = undefined;
@@ -1613,13 +1627,16 @@ async function selectSession(id: string, focusComposer = false): Promise<void> {
   // A bot's conversation lives in the Bots section; it never re-points the project filter.
   if (state.projectFilter && state.projectFilter !== s.projectId && !botProjects.has(s.projectId)) setProjectFilter(s.projectId);
   if (state.collapsedFolders.delete(s.projectId)) saveCollapsedFolders();
-  state.sessionId = s.id; activateProject(s.projectId, false); if (changingTask) restoreThreadPanel(s); state.archived = s.archived; state.attachments = []; state.messages = []; state.messagesLoading = true; state.messagesError = ''; state.hasOlder = false;
+  state.sessionId = s.id; activateProject(s.projectId, false); if (changingTask) restoreThreadPanel(s); state.archived = s.archived; state.attachments = [];
+  const remembered = changingTask ? threadPages.get(id) : undefined;
+  state.messages = remembered ? [...remembered.messages] : []; state.messagesLoading = !remembered; state.messagesError = ''; state.hasOlder = remembered?.hasOlder ?? false;
   const generation = ++state.generation;
   renderInspector();
   if (changingTask) run(restoreSelectedFile());
   const requestedMessages = state.messages;
   const requestedStream = state.streams.get(id), requestedFinishing = finishingStreams.get(id);
   render();
+  if (remembered) $('#transcript').scrollTop = $('#transcript').scrollHeight;
   if (focusComposer) document.querySelector<HTMLTextAreaElement>('#prompt')?.focus();
   let page: MessagePage, details: Session;
   try { [page, details] = await Promise.all([latestMessagePage(id), call<Session>('get_task', { sessionId: id }), loadTeam(id)]); }
@@ -1634,6 +1651,7 @@ async function selectSession(id: string, focusComposer = false): Promise<void> {
   const loaded = state.sessions.find(task => task.id === id);
   // A send or completed turn can replace the transcript while this earlier
   // history request is in flight. Keep that newer state instead of erasing it.
+  const shown = pageSignature(state.messages);
   if (state.messages === requestedMessages) {
     if (loaded && state.streams.get(id) === requestedStream && finishingStreams.get(id) === requestedFinishing) {
       Object.assign(loaded, details, { pinned: loaded.pinned, sidebarOrder: loaded.sidebarOrder }); if (state.streams.has(id)) { loaded.taskStage = 'in_progress'; loaded.status = 'running'; }
@@ -1642,13 +1660,15 @@ async function selectSession(id: string, focusComposer = false): Promise<void> {
   }
   state.messagesLoading = false;
   if (!state.streams.has(id) && finishingStreams.get(id) === requestedFinishing) finishingStreams.delete(id);
-  renderHeader(); renderTranscript(); renderComposer();
-  if (changingTask) enterView($('#transcript'), 8);
+  // A remembered page that is still current is already on screen; leave it untouched.
+  const changed = !remembered || pageSignature(state.messages) !== shown;
+  renderHeader(); if (changed) renderTranscript(); renderComposer();
   // A saved team can select a harness whose catalog has not been opened this run.
   // Resolve its display name in place, without delaying the task or replacing input.
   if (provider(details.provider)?.installed) void loadModels(details.provider).catch(() => { /* Keep the exact model ID if discovery is unavailable. */ });
   if (focusComposer) document.querySelector<HTMLTextAreaElement>('#prompt')?.focus();
-  $('#transcript').scrollTop = $('#transcript').scrollHeight;
+  if (changed) $('#transcript').scrollTop = $('#transcript').scrollHeight;
+  rememberThread(id);
   if (generation !== state.generation) return;
   await refreshInspector(); renderHeader();
 }

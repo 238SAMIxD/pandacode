@@ -3302,3 +3302,31 @@ test('the interface is instant: no transitions, no entrance motion, and presses 
   expect(await send.evaluate(el => getComputedStyle(el).transform)).toBe(before);
   await page.mouse.up();
 });
+
+test('switching back to a thread draws it at once: formatted, at the bottom, with no loading frame', async ({ page }) => {
+  const transcript = page.locator('#transcript');
+  await expect(page.locator('.task-item.selected')).toHaveAttribute('data-id', 'session-1');
+  await expect(transcript.locator('.message').first()).toBeVisible();
+  await page.locator('.task-item[data-id="session-2"]').click();
+  await expect(page.locator('.task-item.selected')).toHaveAttribute('data-id', 'session-2');
+  await expect(transcript.locator('.history-notice')).toHaveCount(0);
+  // Record every frame right after the click: the remembered thread must already be final.
+  const frames = await page.evaluate(() => new Promise<Array<{ loading: boolean; bottom: boolean; raw: boolean; messages: number }>>(resolve => {
+    const transcript = document.querySelector<HTMLElement>('#transcript')!;
+    const seen: Array<{ loading: boolean; bottom: boolean; raw: boolean; messages: number }> = [];
+    const sample = () => seen.push({
+      loading: Boolean(transcript.querySelector('.history-notice')),
+      bottom: transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 2,
+      // Raw Markdown is plain text with no element children while the parser runs.
+      raw: [...transcript.querySelectorAll('[data-markdown]')].some(node => node.childElementCount === 0 && (node.textContent ?? '').length > 0),
+      messages: transcript.querySelectorAll('.message').length,
+    });
+    document.querySelector<HTMLElement>('.task-item[data-id="session-1"]')!.click();
+    sample();
+    let count = 0;
+    const tick = () => { sample(); if (++count < 8) requestAnimationFrame(tick); else resolve(seen); };
+    requestAnimationFrame(tick);
+  }));
+  expect(frames.every(frame => !frame.loading && frame.bottom && !frame.raw && frame.messages > 0)).toBe(true);
+  await expect(page.locator('.task-item.selected')).toHaveAttribute('data-id', 'session-1');
+});
