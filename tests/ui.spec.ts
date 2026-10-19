@@ -1109,13 +1109,17 @@ test('chooses a project filter from its anchored menu using the keyboard', async
   await expect(page.locator('#navigation .task-item')).toHaveCount(4);
 });
 
-test('all projects: folder headings show the project icon and rows leave the project name to them', async ({ page }) => {
+test('all projects: folder headings show the project icon and rows are one line without the project name', async ({ page }) => {
   const folders = page.locator('#navigation .folder-group:not(.single-project)');
   await expect(page.locator('#navigation .folder-heading')).toHaveCount(2);
   await expect(page.locator('#navigation .folder-heading > .task-app-icon')).toHaveCount(2);
   await expect(page.locator('#navigation .folder-heading > svg.icon')).toHaveCount(0);
   await expect(folders.locator('.task-item .task-checkout')).toHaveCount(0);
   await expect(folders.locator('.task-item .task-top .task-title').first()).toBeVisible();
+  // Each row is one line, with its harness and linked PR beside the title.
+  await expect(folders.locator('.task-item .task-meta')).toHaveCount(0);
+  await expect(folders.locator('.task-item .task-top .task-provider').first()).toBeVisible();
+  for (const height of await folders.locator('.task-item').evaluateAll(rows => rows.map(row => row.getBoundingClientRect().height))) expect(height).toBeLessThan(36);
   // One project on its own keeps the where-line, since nothing above names it.
   await chooseProjectFilter(page, 'pandacode');
   await expect(page.locator('#navigation .task-item .task-checkout')).toHaveText(['pandacode']);

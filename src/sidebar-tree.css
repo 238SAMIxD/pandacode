@@ -49,9 +49,12 @@ html[data-theme] .sidebar .new-task-button>.icon{color:var(--focus)}
 .sidebar .task-app-icon{flex:none;width:16px;height:16px;border-radius:2px;object-fit:contain}
 .sidebar .task-app-default{display:grid;place-items:center;background:color-mix(in srgb,var(--text) 10%,transparent);color:var(--muted);font-size:.6rem;font-weight:650;line-height:1}
 .sidebar .task-checkout{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* In a folder, the title leads and the status and age sit at its end. */
-.sidebar .task-top{gap:8px}
+/* In a folder each task is one line: the title, then its PR, harness, status and age. */
+.sidebar .task-item.task-oneline{padding-top:7px;padding-bottom:7px}
+.sidebar .task-top{gap:7px}
 .sidebar .task-top .task-title{flex:1 1 auto}
+.sidebar .task-top .task-provider{margin-left:0;width:14px;height:14px}
+.sidebar .task-top .task-age{margin-left:0;min-width:2ch;text-align:right}
 .sidebar .task-title{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.88rem;font-weight:500;letter-spacing:-.005em;color:var(--text)}
 .sidebar .task-item[data-activity=inactive] .task-title{color:color-mix(in srgb,var(--text) 82%,var(--muted))}
 .sidebar .task-item:hover .task-title,.sidebar .task-item.selected .task-title{color:var(--text)}
