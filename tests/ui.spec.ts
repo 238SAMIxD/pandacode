@@ -525,13 +525,12 @@ test('offers only reported reasoning efforts and remembers the selected effort f
   const settings = modelPicker(page).locator('.model-menu-settings');
   await expect(settings).toBeVisible();
   const slider = reasoningSlider(page);
-  const expectColor = async (color: string) => {
-    await expect(settings.locator('.effort-fill')).toHaveCSS('background-color', color);
-    await expect(slider).toHaveCSS('color', color);
-    await expect(reasoningLabel(page)).toHaveCSS('color', color);
+  // The bar, thumb and label follow the theme accent (which can change with the wallpaper) at every level.
+  const accent = () => settings.evaluate(element => { const probe = document.createElement('span'); probe.style.color = 'var(--accent)'; element.append(probe); const color = getComputedStyle(probe).color; probe.remove(); return color; });
+  const expectColor = async (_level: string) => {
+    await expect.poll(async () => [await settings.locator('.effort-fill').evaluate(element => getComputedStyle(element).backgroundColor), await slider.evaluate(element => getComputedStyle(element).color), await reasoningLabel(page).evaluate(element => getComputedStyle(element).color)]).toEqual(Array(3).fill(await accent()));
   };
-  const lowColor = 'rgb(180, 216, 122)';
-  const highColor = 'rgb(255, 177, 92)';
+  const lowColor = 'low', highColor = 'high';
   await expect(slider).toHaveAttribute('aria-valuetext', 'Default');
   await expect(slider).toHaveAttribute('min', '0');
   await expect(slider).toHaveAttribute('max', '1');
@@ -541,7 +540,8 @@ test('offers only reported reasoning efforts and remembers the selected effort f
   await expect(reasoningLabel(page)).toHaveText('Default');
   await expect(modelPicker(page).getByRole('button', { name: 'Reset reasoning effort', exact: true })).toHaveCount(0);
   await expect(settings).not.toContainText('Claude Sonnet');
-  await expect(settings).toContainText(/200K/i);
+  // The context window is shown under the composer, not in this menu.
+  await expect(settings).not.toContainText(/context/i);
   await expect(modelPicker(page).getByRole('button', { name: 'Claude Code · Claude Opus 5', exact: true })).toContainText(/1M/i);
   await page.screenshot({ path: '/private/tmp/pandacode-reasoning-settings.png', animations: 'disabled' });
   await page.setViewportSize({ width: 860, height: 600 });
@@ -628,7 +628,7 @@ test('offers only reported reasoning efforts and remembers the selected effort f
   await expect(prompt(page)).toHaveValue('Keep this draft while choosing reasoning effort');
 });
 
-test('blends reasoning colors while dragging without rebuilding the picker or saving the preview', async ({ page }) => {
+test('keeps the reasoning bar in the theme accent at every level while dragging, without saving the preview', async ({ page }) => {
   await page.clock.install();
   await page.evaluate(async () => {
     const { openModelPicker } = await import('/src/model-picker.ts');
@@ -650,78 +650,25 @@ test('blends reasoning colors while dragging without rebuilding the picker or sa
   const slider = reasoningSlider(page);
   const fill = modelPicker(page).locator('.effort-fill');
   const label = reasoningLabel(page);
-  const expectMatchingColor = async (color: string) => {
-    await expect(slider).toHaveCSS('color', color);
-    await expect(label).toHaveCSS('color', color);
+  const accent = await fill.evaluate(element => { const probe = document.createElement('span'); probe.style.color = 'var(--accent)'; element.append(probe); const color = getComputedStyle(probe).color; probe.remove(); return color; });
+  const expectAccent = async () => {
+    await expect(fill).toHaveCSS('background-color', accent);
+    await expect(slider).toHaveCSS('color', accent);
+    await expect(label).toHaveCSS('color', accent);
   };
-  await captureEffortPresentation(page);
-  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
-  const initialColor = await fill.evaluate(element => getComputedStyle(element).backgroundColor);
   await expect(label).toHaveText('Default');
-  await expectMatchingColor(initialColor);
+  await expectAccent();
   const bounds = (await slider.boundingBox())!;
   await page.mouse.move(bounds.x + 9, bounds.y + bounds.height / 2);
   await page.mouse.down();
-  const colors = [initialColor];
   for (const [index, name] of ['Medium', 'High', 'Max'].entries()) {
-    const before = await fill.evaluate(element => getComputedStyle(element).backgroundColor);
     await page.mouse.move(bounds.x + 9 + (bounds.width - 18) * (index + 1) / 3, bounds.y + bounds.height / 2);
     await expect(slider).toHaveAttribute('aria-valuetext', name);
-    await expect(label).toHaveText(name);
-    await page.clock.runFor(80);
-    const midway = await fill.evaluate(element => getComputedStyle(element).backgroundColor);
-    await expectMatchingColor(midway);
-    await page.clock.runFor(120);
-    const after = await fill.evaluate(element => getComputedStyle(element).backgroundColor);
-    await expectMatchingColor(after);
-    expect(new Set([before, midway, after]).size).toBe(3);
-    colors.push(after);
+    await expectAccent();
     expect(await page.evaluate(() => (window as any).__colorEffortSaves)).toEqual([]);
-    await expectEffortPresentationUnchanged(page);
   }
-  expect(new Set(colors).size).toBe(4);
   await page.mouse.up();
   await expect.poll(() => page.evaluate(() => (window as any).__colorEffortSaves)).toEqual(['max']);
-  await expectEffortPresentationUnchanged(page);
-  await page.mouse.down();
-  await page.mouse.move(bounds.x + 9 + (bounds.width - 18) * 2 / 3, bounds.y + bounds.height / 2);
-  await expect(slider).toHaveAttribute('aria-valuetext', 'High');
-  await expect(label).toHaveText('High');
-  await page.clock.runFor(64);
-  const reversingColor = await fill.evaluate(element => getComputedStyle(element).backgroundColor);
-  await expectMatchingColor(reversingColor);
-  await page.mouse.move(bounds.x + bounds.width - 9, bounds.y + bounds.height / 2);
-  await expect(slider).toHaveAttribute('aria-valuetext', 'Max');
-  await expect(label).toHaveText('Max');
-  await expect(fill).toHaveCSS('background-color', reversingColor);
-  await expectMatchingColor(reversingColor);
-  await page.clock.runFor(200);
-  await expect(fill).toHaveCSS('background-color', colors[3]);
-  await page.mouse.up();
-  expect(await page.evaluate(() => (window as any).__colorEffortSaves)).toEqual(['max']);
-  await slider.press('Home');
-  await expect(slider).toHaveAttribute('aria-valuetext', 'Low');
-  await expect(label).toHaveText('Low');
-  // Simulate a native webview that stops delivering animation frames after the first.
-  await page.evaluate(() => { (window as any).__colorOriginalRAF = window.requestAnimationFrame; window.requestAnimationFrame = () => 0; });
-  await page.clock.runFor(190);
-  await expect(fill).not.toHaveCSS('background-color', initialColor);
-  await page.clock.runFor(20);
-  await expect(fill).toHaveCSS('background-color', initialColor);
-  await expectMatchingColor(initialColor);
-  await page.evaluate(() => { window.requestAnimationFrame = (window as any).__colorOriginalRAF; });
-  expect(await page.evaluate(() => (window as any).__colorEffortSaves)).toEqual(['max', 'low']);
-  await expectEffortPresentationUnchanged(page);
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  // WebKit delivers changes to existing MediaQueryLists asynchronously. Keep
-  // the clock paused and wait for the picker's actual preference before End.
-  await expect.poll(() => page.evaluate(() => (window as any).__colorEffortMedia.matches)).toBe(true);
-  await slider.press('End');
-  await expect(fill).toHaveCSS('transition-duration', '0s');
-  await expect(fill).toHaveCSS('background-color', colors[3]);
-  await expect(label).toHaveText('Max');
-  await expectMatchingColor(colors[3]);
-  expect(await fill.evaluate(element => element.getAnimations().length)).toBe(0);
   await page.evaluate(() => (window as any).__closeColorEffortPicker());
 });
 

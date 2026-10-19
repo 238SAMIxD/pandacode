@@ -565,11 +565,12 @@ button:not(:disabled):active{background-color:var(--accent-dim);transition:none}
 .model-menu-error{color:var(--danger);overflow-wrap:anywhere}
 .model-menu-pending{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .model-menu-catalog-error{flex-shrink:0;margin:7px 10px;font-size:.71rem;line-height:1.5;color:var(--muted);overflow-wrap:anywhere}
-.model-menu-settings{--effort-surface:#fffdf6;position:relative;isolation:isolate;flex-shrink:0;margin:7px 2px 0;font-size:.76rem}
-.model-menu-settings::before{content:"";position:absolute;z-index:-1;inset:-20px -10px -8px;background:linear-gradient(180deg,transparent,var(--effort-surface) 28px);pointer-events:none}
-.model-settings-context{display:block;text-align:center;margin:4px 10px;color:var(--muted);font-size:.72rem;font-variant-numeric:tabular-nums}
-.effort-control{display:flex;align-items:center;gap:10px;padding:6px 9px 1px}
-@media(prefers-reduced-transparency:reduce),(prefers-contrast:more){.model-menu-settings::before{display:none}}
+/* The effort slider overlaps the end of the list; the rows fade out behind it instead of stopping at an edge. */
+.model-menu-settings{--effort-surface:var(--panel);position:relative;isolation:isolate;flex-shrink:0;margin:-22px 0 0;padding-top:12px;font-size:.76rem}
+.model-menu:has(.model-menu-settings:not([hidden])) .model-menu-list{padding-bottom:22px}
+.model-menu-settings::before{content:"";position:absolute;z-index:-1;inset:0 -6px -6px;background:linear-gradient(180deg,transparent,var(--effort-surface) 22px);pointer-events:none}
+.effort-control{display:flex;align-items:center;gap:10px;padding:0 8px}
+@media(prefers-reduced-transparency:reduce),(prefers-contrast:more){.model-menu-settings::before{display:none}.model-menu-settings{margin-top:6px;padding-top:0}.model-menu:has(.model-menu-settings:not([hidden])) .model-menu-list{padding-bottom:0}}
 .effort-label{flex:0 0 6.5em;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right;color:var(--accent);font-size:.72rem;font-weight:600;line-height:1.2}
 .effort-track{position:relative;flex:1;min-width:0;height:2rem;isolation:isolate}
 .effort-track-background{position:absolute;top:calc(50% - 7px);height:14px;left:0;right:0;border-radius:999px;background:color-mix(in srgb,var(--text) 12%,transparent);overflow:hidden;pointer-events:none}
@@ -751,7 +752,6 @@ html[data-theme="dark"] .terminal-drawer{background:var(--bg)}
 html[data-theme="dark"] .drawer-heading{background:var(--panel)}
 html[data-theme="dark"] .command-search input{background:none}
 html[data-theme="dark"] ::-webkit-scrollbar-thumb{background:#55554e}
-html[data-theme="dark"] .model-menu-settings{--effort-surface:#232320}
 html[data-theme="dark"] :is(.model-menu-search,.project-menu-search,.choice-menu-search){background:transparent;border-color:var(--border);box-shadow:none}
 html[data-theme="dark"] :is(.model-menu-search,.project-menu-search,.choice-menu-search):focus-within{border-color:var(--focus);box-shadow:none}
 html[data-theme="dark"] :is(.model-menu-group+.model-menu-group,.project-menu-footer){border-color:var(--border)}

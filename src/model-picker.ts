@@ -1,15 +1,8 @@
 import type { ContextUsage, Provider, ProviderId, ProviderModel } from './types';
-import { contextSummary, fallbackModel, modelChoices, tokenCount } from './model-catalog';
+import { fallbackModel, modelChoices, tokenCount } from './model-catalog';
 import { escape, icon } from './dom';
 import { providerLogo } from './provider-logos';
 import { showPopover, hidePopover } from './popover-motion';
-
-// Keep a level's color consistent across harnesses with different supported ranges.
-const effortColors = new Map<string, readonly number[]>([
-  ['none', [148, 181, 173]], ['minimal', [146, 203, 181]], ['low', [180, 216, 122]],
-  ['medium', [255, 212, 59]], ['high', [255, 177, 92]], ['xhigh', [241, 139, 128]],
-  ['max', [205, 145, 209]], ['ultra', [169, 154, 238]],
-]);
 
 /** A named agent team from Settings, offered beside the models. */
 export type PickerTeam = { id: string; name: string; detail: string; provider: ProviderId; selected: boolean };
@@ -59,17 +52,7 @@ export function openModelPicker(options: ModelPickerOptions): () => void {
   let draggingEffort = false;
   let pendingEffort: string | null | undefined;
   let displayedEfforts: NonNullable<ProviderModel['reasoningEfforts']> = [];
-  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
-  let colorFrame = 0;
-  let colorDeadline = 0;
-  let paintedColor: readonly number[] | undefined;
-  let targetColor: readonly number[] | undefined;
 
-  function cancelColorBlend(): void {
-    cancelAnimationFrame(colorFrame);
-    clearTimeout(colorDeadline);
-    colorFrame = colorDeadline = 0;
-  }
 
   function restoreFocus(): void {
     let target: HTMLElement | null = anchor.isConnected ? anchor : null;
@@ -83,7 +66,6 @@ export function openModelPicker(options: ModelPickerOptions): () => void {
     closed = true;
     clearTimeout(pointerRelease);
     cancelAnimationFrame(positionFrame);
-    cancelColorBlend();
     document.removeEventListener('pointerdown', onOutside, true);
     document.removeEventListener('pointerup', onPointerEnd, true);
     document.removeEventListener('pointercancel', onPointerEnd, true);
@@ -147,16 +129,13 @@ export function openModelPicker(options: ModelPickerOptions): () => void {
     const provider = providers.find(provider => provider.id === current.provider);
     const model = modelChoices(current.provider, provider?.models ?? [], current.model).find(model => model.id === current.model)!;
     const efforts = model.reasoningEfforts ?? [];
-    const context = contextSummary(current.contextUsage, model.contextWindow);
     const canSetEffort = Boolean(onEffortSelect && (efforts.length || current.reasoningEffort));
-    settings.hidden = !canSetEffort && !context;
+    settings.hidden = !canSetEffort;
     const defaultEffort = efforts.find(effort => effort.id === model.defaultReasoningEffort);
     const defaultDescription = `Use the harness's saved settings.${defaultEffort ? ` Reported model default: ${defaultEffort.name}.` : ''}`;
-    const markup = `${canSetEffort ? `<div class="effort-control">${efforts.length ? `<div class="effort-track"><span class="effort-track-background" aria-hidden="true"><span class="effort-fill"><span class="effort-particles">${particles}</span></span></span><input type="range" class="effort-range" aria-label="Reasoning effort" min="0" max="${efforts.length - 1}" step="1"></div>` : ''}<span class="effort-label"></span></div>` : ''}${context ? `<span class="model-settings-context" title="${escape(context.detail)}">${escape(context.label)}</span>` : ''}`;
+    const markup = `${canSetEffort ? `<div class="effort-control">${efforts.length ? `<div class="effort-track"><span class="effort-track-background" aria-hidden="true"><span class="effort-fill"><span class="effort-particles">${particles}</span></span></span><input type="range" class="effort-range" aria-label="Reasoning effort" min="0" max="${efforts.length - 1}" step="1"></div>` : ''}<span class="effort-label"></span></div>` : ''}`;
     const key = JSON.stringify([markup, efforts]);
     if (key !== settingsKey) {
-      cancelColorBlend();
-      paintedColor = targetColor = undefined;
       const focused = settings.contains(document.activeElement) ? (document.activeElement as HTMLElement) : null;
       settings.innerHTML = markup;
       settingsKey = key;
@@ -193,37 +172,6 @@ export function openModelPicker(options: ModelPickerOptions): () => void {
     range.title = title;
     const progress = displayedEfforts.length > 1 ? index / (displayedEfforts.length - 1) : 1;
     settings.style.setProperty('--effort-progress', String(progress));
-    blendEffortColor(effortColors.get(displayedEfforts[index]?.id ?? '') ?? [255 - 14 * progress, 212 - 73 * progress, 59 + 69 * progress]);
-  }
-
-  function blendEffortColor(next: readonly number[]): void {
-    if (next.every((channel, index) => channel === targetColor?.[index])) return;
-    cancelColorBlend();
-    targetColor = next;
-    const fill = settings.querySelector<HTMLElement>('.effort-fill')!;
-    const range = settings.querySelector<HTMLInputElement>('.effort-range')!;
-    const label = settings.querySelector<HTMLElement>('.effort-label')!;
-    const paint = (color: readonly number[]) => {
-      paintedColor = color;
-      const css = `rgb(${color.map(Math.round).join(', ')})`;
-      fill.style.backgroundColor = css;
-      range.style.color = css;
-      label.style.color = css;
-    };
-    const from = paintedColor;
-    if (!from || reducedMotion.matches || document.hidden) { paint(next); return; }
-    const started = performance.now();
-    const finish = () => { cancelColorBlend(); paint(next); };
-    const frame = (now: number) => {
-      const progress = reducedMotion.matches ? 1 : Math.min(1, (now - started) / 160);
-      paint(next.map((channel, index) => from[index] + (channel - from[index]) * progress));
-      if (progress < 1) colorFrame = requestAnimationFrame(frame);
-      else finish();
-    };
-    // Native WebKit can stall CSS color transitions. Paint only during this short blend,
-    // with a deadline so a background webview never retains the previous effort's color.
-    colorFrame = requestAnimationFrame(frame);
-    colorDeadline = window.setTimeout(finish, 200);
   }
 
   async function saveEffort(effort: string | null): Promise<void> {
