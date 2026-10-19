@@ -1,7 +1,7 @@
 import './worktrees.css';
 import { escape, icon } from './dom';
 import { githubEnabled } from './github';
-import type { BranchList, GitStatus, Project, Session, WorktreeStatus, WorktreeRemoval } from './types';
+import type { BranchList, GitStatus, Project, Session, WorktreeMerge, WorktreeStatus, WorktreeRemoval } from './types';
 
 /* One branch control for every task. The chip above the prompt names the checkout
  * and opens the only worktree menu; dialogs convert an unstarted task in place,
@@ -87,6 +87,8 @@ export function createWorktrees(host: WorktreeHost) {
       items.push({ id: 'worktree-recreate', label: 'Recreate worktree', description: 'Check the branch out again at the same path.', icon: 'refresh' });
       items.push({ id: 'archive-task', label: 'Archive task', description: 'Keep the history; forget the checkout.', icon: 'archive' });
     } else if (session.worktreePath) {
+      const target = (await host.call<BranchList>('git_branches', { projectId: session.projectId, sessionId: session.id }).catch(() => null))?.defaultBranch || 'main';
+      items.push({ id: 'worktree-merge', label: `Merge into ${target}`, description: host.running() ? 'Wait for the agent to finish.' : 'Locally, in the project checkout. Commit first.', icon: 'merge', disabled: host.running() });
       items.push(...host.extraItems(session));
       items.push({ id: 'worktree-remove', label: 'Remove worktree…', description: 'Archives the task; refuses when work would be lost.', icon: 'close', disabled: host.running() });
       items.push({ id: 'copy-path', label: 'Copy worktree path', icon: 'copy' });
@@ -109,6 +111,7 @@ export function createWorktrees(host: WorktreeHost) {
         case 'worktree-attach': openDialog('attach'); break;
         case 'worktree-new': openDialog('new'); break;
         case 'worktree-remove': await removeInteractive(current); break;
+        case 'worktree-merge': await merge(current); break;
         case 'worktree-recreate': await recreate(current); break;
         case 'switch-default': await switchTo(current, ''); break;
         // The picker replaces this menu, so it opens once this one has closed.
@@ -232,6 +235,22 @@ export function createWorktrees(host: WorktreeHost) {
     if (!decision.proceed) return;
     if (decision.remove || !(await host.call<WorktreeStatus>('worktree_status', { sessionId: session.id })).exists) await remove(session);
     await host.archive(session);
+  }
+
+  /** Merge the worktree's committed branch into main locally, then offer to clean it up. */
+  async function merge(session: Session): Promise<void> {
+    let merged: WorktreeMerge;
+    try {
+      merged = await host.call<WorktreeMerge>('merge_worktree', { sessionId: session.id });
+    } catch (cause) {
+      host.notify(`Couldn’t merge: ${cause instanceof Error ? cause.message : String(cause)}`);
+      return;
+    }
+    const moved = merged.switchedFrom ? ` (the project checkout moved from ${merged.switchedFrom})` : '';
+    host.notify(merged.commits ? `Merged ${merged.commits} commit${merged.commits === 1 ? '' : 's'} from ${merged.branch} into ${merged.target}${moved}` : `${merged.target} already has everything from ${merged.branch}`);
+    window.setTimeout(() => void host.branchChanged(), 0);
+    // The merged branch can go now; the offer explains and asks first.
+    await removeInteractive(session);
   }
 
   async function recreate(session: Session): Promise<void> {

@@ -935,6 +935,78 @@ pub fn worktree_status(
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WorktreeMerge {
+    pub branch: String,
+    pub target: String,
+    /// Commits the target gained; 0 when it already had the branch's work.
+    pub commits: u32,
+    /// The branch the project checkout was on before it moved to the target.
+    pub switched_from: Option<String>,
+}
+
+fn tracked_changes(root: &Path) -> Result<bool, String> {
+    let status = checked(run_git(root, &["status", "--porcelain=v1", "--untracked-files=no"], STATUS_LIMIT, false)?)?;
+    Ok(!status.bytes.is_empty())
+}
+
+/// Merge a worktree's committed branch into the repository's main branch, in the
+/// project's own checkout. Refuses uncommitted work on either side, and a conflict
+/// aborts the merge so neither checkout is left half-merged.
+pub fn merge_worktree(main: &Path, path: &Path) -> Result<WorktreeMerge, String> {
+    require_repository(main)?;
+    if !(path.is_dir() && path.join(".git").is_file()) {
+        return Err("The worktree folder is missing; recreate it first.".into());
+    }
+    let branch = current_branch(path)?;
+    if branch.is_empty() || branch.starts_with('-') {
+        return Err("The worktree is not on a branch, so there is nothing to merge.".into());
+    }
+    let uncommitted = checked(run_git(path, &["status", "--porcelain=v1", "--untracked-files=all"], STATUS_LIMIT, false)?)?;
+    if !uncommitted.bytes.is_empty() {
+        return Err("The worktree has uncommitted changes. Commit or discard them first; only committed work is merged.".into());
+    }
+    let list = git_branches(main)?;
+    let target = list.default_branch.clone();
+    if target.is_empty() {
+        return Err("This repository has no main branch to merge into.".into());
+    }
+    if target == branch {
+        return Err(format!("The worktree is already on {target}."));
+    }
+    if tracked_changes(main)? {
+        return Err(format!("The project checkout has uncommitted changes. Commit or stash them there before merging into {target}."));
+    }
+    let count = checked(run_git(main, &["rev-list", "--count", &format!("{target}..{branch}")], 8192, false)?)?;
+    let commits = String::from_utf8_lossy(&count.bytes).trim().parse().unwrap_or(0);
+    let switched_from = (list.current != target).then(|| list.current.clone());
+    if switched_from.is_some() {
+        checked(run_git(main, &["switch", &target], 64 * 1024, false)?)?;
+    }
+    if commits > 0 {
+        let merged = run_git(main, &["merge", "--no-edit", &branch], 64 * 1024, true)?;
+        if !merged.status.success() {
+            let conflicts = run_git(main, &["diff", "--name-only", "--diff-filter=U"], 64 * 1024, false)
+                .map(|output| String::from_utf8_lossy(&output.stdout.bytes).lines().map(str::to_string).collect::<Vec<_>>())
+                .unwrap_or_default();
+            let _ = run_git(main, &["merge", "--abort"], 8192, false);
+            if let Some(previous) = switched_from.as_deref().filter(|name| !name.is_empty()) {
+                let _ = run_git(main, &["switch", previous], 64 * 1024, false);
+            }
+            return Err(if conflicts.is_empty() {
+                checked(merged).err().unwrap_or_else(|| "Git could not merge the branch.".into())
+            } else {
+                format!(
+                    "Merging {branch} into {target} conflicts in {}. Nothing was changed; merge {target} into the worktree, resolve it there, and try again.",
+                    conflicts.join(", ")
+                )
+            });
+        }
+    }
+    Ok(WorktreeMerge { branch, target, commits, switched_from })
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorktreeRemoval {
     pub removed: bool,
     pub branch: String,
@@ -1495,6 +1567,41 @@ mod tests {
         assert_eq!(git_status(&path).unwrap().branch, "pandacode/feature-one");
         assert!(create_worktree(&f.root, "feature-one".into()).is_err());
         assert!(create_worktree(&f.root, "../../escape".into()).is_err());
+    }
+
+    #[test]
+    fn merging_a_worktree_lands_committed_work_on_main_and_refuses_unsafe_states() {
+        let f = Fixture::new(true);
+        let path = create_worktree(&f.root, "fast".into()).unwrap();
+        let in_worktree = |args: &[&str]| assert!(Command::new("git").arg("-C").arg(git_path(&path)).args(args).output().unwrap().status.success());
+        // Uncommitted work in the worktree is never merged.
+        fs::write(path.join("speed.txt"), "faster").unwrap();
+        assert!(merge_worktree(&f.root, &path).unwrap_err().contains("uncommitted"));
+        in_worktree(&["add", "speed.txt"]);
+        in_worktree(&["-c", "core.hooksPath=/dev/null", "commit", "-m", "Faster"]);
+        // The project checkout moves to main for the merge and gains the commit.
+        f.git(&["switch", "-c", "elsewhere"]);
+        let merged = merge_worktree(&f.root, &path).unwrap();
+        assert_eq!((merged.branch.as_str(), merged.target.as_str(), merged.commits), ("pandacode/fast", "main", 1));
+        assert_eq!(merged.switched_from.as_deref(), Some("elsewhere"));
+        assert_eq!(fs::read_to_string(f.root.join("speed.txt")).unwrap(), "faster");
+        assert!(worktree_status(&f.root, &path, None).unwrap().merged);
+        // Merging again has nothing left to bring over.
+        assert_eq!(merge_worktree(&f.root, &path).unwrap().commits, 0);
+
+        // A conflict aborts cleanly: main keeps its own version and no merge is left open.
+        fs::write(f.root.join("speed.txt"), "main's take").unwrap();
+        f.git(&["-c", "core.hooksPath=/dev/null", "commit", "-am", "Main"]);
+        fs::write(path.join("speed.txt"), "worktree's take").unwrap();
+        in_worktree(&["-c", "core.hooksPath=/dev/null", "commit", "-am", "Worktree"]);
+        let error = merge_worktree(&f.root, &path).unwrap_err();
+        assert!(error.contains("conflicts in speed.txt"), "{error}");
+        assert_eq!(fs::read_to_string(f.root.join("speed.txt")).unwrap(), "main's take");
+        assert!(!f.root.join(".git/MERGE_HEAD").exists());
+
+        // Uncommitted tracked changes in the project checkout block the merge.
+        fs::write(f.root.join("speed.txt"), "edited").unwrap();
+        assert!(merge_worktree(&f.root, &path).unwrap_err().contains("project checkout has uncommitted"));
     }
 
     #[test]

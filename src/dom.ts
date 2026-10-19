@@ -58,6 +58,7 @@ const paths: Record<string, string> = {
   monitor: '<rect x="3" y="4" width="18" height="12.5" rx="2.2"/><path d="M8.5 20.5h7M12 16.5v4"/>',
   phone: '<rect x="6.5" y="2.5" width="11" height="19" rx="2.8"/><path d="M10.5 5.3h3"/>',
   lock: '<rect x="5" y="10.5" width="14" height="10" rx="2.2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/>',
+  merge: '<circle cx="18" cy="18" r="2.5"/><circle cx="6" cy="6" r="2.5"/><path d="M6 21V8.5M6 8.5a9.5 9.5 0 0 0 9.5 9.5"/>',
   pull: '<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="19" r="2"/><path d="M6 7v10M18 17v-6a3 3 0 0 0-3-3h-4m3-3-3 3 3 3"/>',
   upload: '<path d="M12 16V5m-5 5 5-5 5 5M4 19h16"/>',
   download: '<path d="M12 4v11m-5-5 5 5 5-5M4 19h16"/>',

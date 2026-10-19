@@ -209,3 +209,41 @@ for (const theme of ['dark', 'light'] as const) {
     await expect.poll(() => border('#composer-area .composer')).not.toBe('rgba(0, 0, 0, 0)');
   });
 }
+
+test('merges a worktree into main locally, then offers to remove it', async ({ page }) => {
+  await probe(page);
+  await page.locator('.new-task-button').click();
+  await chip(page).click();
+  await menu(page).getByRole('menuitem', { name: /Work in a new worktree/ }).click();
+  await page.locator('#dialog').getByRole('textbox', { name: 'Branch name', exact: true }).fill('ship-it');
+  await page.locator('#dialog').getByRole('button', { name: 'Use a worktree', exact: true }).click();
+  await expect(page.locator('#dialog')).toBeHidden();
+  await chip(page).click();
+  await menu(page).getByRole('menuitem', { name: /^Merge into main/ }).click();
+  await expect(page.locator('#toast')).toContainText('Merged 1 commit from pandacode/ship-it into main');
+  // The branch is merged now, so the cleanup offer removes the folder and the branch.
+  const dialog = page.getByRole('dialog', { name: 'Remove worktree', exact: true });
+  await expect(dialog).toContainText('its branch is merged');
+  await expect(dialog.getByRole('checkbox')).toBeChecked();
+  await dialog.getByRole('button', { name: 'Remove and archive', exact: true }).click();
+  await expect(page.locator('#toast')).toContainText('deleted pandacode/ship-it');
+  expect((await calls(page, 'remove_worktree')).at(-1).args).toMatchObject({ deleteBranch: true });
+});
+
+test('a merge that conflicts says so and leaves the worktree alone', async ({ page }) => {
+  await probe(page, `
+    if (command === 'merge_worktree') throw new Error('Merging pandacode/clash into main conflicts in src/app.ts. Nothing was changed; merge main into the worktree, resolve it there, and try again.');
+  `);
+  await page.locator('.new-task-button').click();
+  await chip(page).click();
+  await menu(page).getByRole('menuitem', { name: /Work in a new worktree/ }).click();
+  await page.locator('#dialog').getByRole('textbox', { name: 'Branch name', exact: true }).fill('clash');
+  await page.locator('#dialog').getByRole('button', { name: 'Use a worktree', exact: true }).click();
+  await expect(page.locator('#dialog')).toBeHidden();
+  await chip(page).click();
+  await menu(page).getByRole('menuitem', { name: /^Merge into main/ }).click();
+  await expect(page.locator('#toast')).toContainText('Couldn’t merge: Merging pandacode/clash into main conflicts in src/app.ts');
+  await expect(page.getByRole('dialog', { name: 'Remove worktree', exact: true })).toHaveCount(0);
+  expect(await calls(page, 'remove_worktree')).toHaveLength(0);
+  await expect(page.locator('.composer-local')).toHaveText('Worktree');
+});

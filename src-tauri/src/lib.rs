@@ -2135,6 +2135,19 @@ async fn worktree_status(state: State<'_, AppState>, session_id: String) -> Resu
 }
 
 #[tauri::command]
+async fn merge_worktree(state: State<'_, AppState>, session_id: String) -> Result<workspace::WorktreeMerge> {
+    if state.agents.lock().map_err(|e| e.to_string())?.contains_key(&session_id) {
+        return Err("Wait for the agent to finish before merging its worktree.".into());
+    }
+    let store = state.store.clone();
+    blocking(move || {
+        let (main, path, _) = worktree_paths(&store, &session_id)?;
+        workspace::merge_worktree(&main, &path)
+    })
+    .await
+}
+
+#[tauri::command]
 async fn remove_worktree(
     state: State<'_, AppState>,
     session_id: String,
@@ -2951,6 +2964,7 @@ pub fn run() {
                 attach_worktree,
                 worktree_status,
                 remove_worktree,
+                merge_worktree,
                 recreate_worktree,
                 github_status,
                 github_repos,

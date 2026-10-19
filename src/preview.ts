@@ -968,6 +968,15 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       result = checkout ? { exists: true, branch: checkout.branch, changes: checkout.files.length, clean: !checkout.files.length, hasUpstream: pushedBranches.has(checkout.branch), ahead: pushedBranches.has(checkout.branch) ? 0 : 1, merged: mergedBranches.has(checkout.branch) } : { exists: false, branch: s.worktreeBranch ?? '', changes: 0, clean: true, hasUpstream: false, ahead: 0, merged: false };
       break;
     }
+    case 'merge_worktree': {
+      const s = session(args.sessionId); if (!s.worktreePath) throw new Error('This task uses the main checkout.');
+      assertIdle(s);
+      const checkout = worktreeGit.get(s.worktreePath); if (!checkout) throw new Error('The worktree folder is missing; recreate it first.');
+      if (checkout.files.length) throw new Error('The worktree has uncommitted changes. Commit or discard them first; only committed work is merged.');
+      const commits = mergedBranches.has(checkout.branch) ? 0 : 1;
+      mergedBranches.add(checkout.branch);
+      result = { branch: checkout.branch, target: 'main', commits, switchedFrom: null }; break;
+    }
     case 'remove_worktree': {
       const s = session(args.sessionId); if (!s.worktreePath) throw new Error('This task uses the main checkout.');
       assertIdle(s);
