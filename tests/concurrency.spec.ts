@@ -224,14 +224,14 @@ test.describe('concurrency isolation', () => {
         fixture.tasks['session-1'].approval(); fixture.tasks['session-2'].approval();
       });
       await selectTask(page, 1, view);
-      await expect(page.locator('.approval-request')).toContainText('Approve operation for Concurrent task 1');
+      await expect(page.locator('.approval-bar')).toContainText('Approve operation for Concurrent task 1');
       await page.getByRole('button', { name: 'Approve', exact: true }).click();
       await expect(page.getByRole('button', { name: 'Approve', exact: true })).toBeDisabled();
       await selectTask(page, 2, view);
-      await expect(page.locator('.approval-request')).toContainText('Approve operation for Concurrent task 2');
+      await expect(page.locator('.approval-bar')).toContainText('Approve operation for Concurrent task 2');
       await expect(page.getByRole('button', { name: 'Approve', exact: true })).toBeEnabled();
       await page.getByRole('button', { name: 'Deny', exact: true }).click();
-      await expect(page.locator('.approval-request')).toHaveCount(0);
+      await expect(page.locator('.approval-bar')).toHaveCount(0);
       await page.evaluate(() => (window as any).__concurrent.releaseApprovals['session-1']());
       await selectTask(page, 3, view);
       await page.getByRole('button', { name: 'Stop task', exact: true }).click();
@@ -323,9 +323,9 @@ test('concurrency approval expiration removes only its owning task and a late ex
     fixture.tasks['session-1'].approval(); fixture.tasks['session-2'].approval();
     fixture.tasks['session-1'].cancelApproval();
   });
-  await expect(page.locator('.approval-request')).toContainText('Approve operation for Concurrent task 2');
+  await expect(page.locator('.approval-bar')).toContainText('Approve operation for Concurrent task 2');
   await selectTask(page, 1, 'conversation');
-  await expect(page.locator('.approval-request')).toHaveCount(0);
+  await expect(page.locator('.approval-bar')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Stop task', exact: true })).toBeVisible();
   await page.evaluate(() => {
     const fixture = (window as any).__concurrent;
@@ -338,7 +338,7 @@ test('concurrency approval expiration removes only its owning task and a late ex
   await expect(page.getByRole('button', { name: 'Stop task', exact: true })).toBeHidden();
   await expect(prompt(page)).toBeEnabled();
   await selectTask(page, 2, 'conversation');
-  await expect(page.locator('.approval-request')).toContainText('Approve operation for Concurrent task 2');
+  await expect(page.locator('.approval-bar')).toContainText('Approve operation for Concurrent task 2');
   await expect(page.getByRole('button', { name: 'Approve', exact: true })).toBeEnabled();
 });
 

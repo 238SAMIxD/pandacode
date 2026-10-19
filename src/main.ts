@@ -40,6 +40,7 @@ import { Subagents } from './subagents';
 import { JevActivity } from './jev-activity';
 import { initializeSidebarResizing } from './sidebar-resize';
 import { changeUiScale, initializeUiSizing, setUiScale } from './ui-size';
+import { approvalBarHtml } from './approval-bar';
 import { botAvatar, botsBarHtml, botsListHtml, botsPanelHeadHtml, storedSidebarView, storeSidebarView, syncSeen, type SidebarView } from './sidebar-bots';
 import { connectAgentUiActions, type AgentUiAction } from './agent-ui-actions';
 import { createAgentInput, type AgentInput } from './agent-input';
@@ -1077,7 +1078,9 @@ function renderStream(): void {
   if (region.dataset.revision !== String(current.revision)) {
     paintLiveActivity(region, current, transcript);
     region.querySelector('.live-errors')!.innerHTML = current.tools.filter(tool => tool.statusOnly).map(tool => `<div class="message-error">${icon('alert')}<span>${escape(tool.content as string)}</span></div>`).join('') + (finishing?.error ? `<div class="message-error" role="alert"><span>Couldn't load the saved response. ${escape(finishing.error)}</span><button class="secondary-button" data-action="retry-response">Retry loading response</button></div>` : '');
-    region.querySelector('.live-approvals')!.innerHTML = [...current.approvals].map(([requestId, text]) => `<div class="approval-request"><div>${icon('alert')}<strong>Approval needed</strong></div><pre>${escape(text)}</pre><div class="approval-actions"><button class="secondary-button" data-action="approval-deny" data-request="${escape(requestId)}" ${pendingApprovals.has(state.sessionId + requestId) ? 'disabled' : ''}>Deny</button><button class="primary-button" data-action="approval-allow" data-request="${escape(requestId)}" ${pendingApprovals.has(state.sessionId + requestId) ? 'disabled' : ''}>Approve</button></div></div>`).join('');
+    // Approvals live in the bar above the prompt, not in the transcript.
+    region.querySelector('.live-approvals')!.innerHTML = '';
+    renderApprovalBar();
     const inputs = region.querySelector('.live-inputs')!;
     for (const input of current.inputs.values()) if (input.element.parentElement !== inputs) inputs.append(input.element);
     region.dataset.revision = String(current.revision);
@@ -1181,6 +1184,32 @@ function renderAttachmentBar(): void {
   const s = session(), bar = document.querySelector<HTMLElement>('#attachments');
   if (s && bar) bar.innerHTML = attachmentBar(s); else renderComposer();
 }
+/** Pending approvals for the open task, in the bar directly above the prompt. */
+let approvalGroupOpen = false, approvalShownKey = '';
+const approvalDetails = new Set<string>();
+function renderApprovalBar(): void {
+  const host = document.querySelector<HTMLElement>('#approval-bar');
+  if (!host) return;
+  const sessionId = state.sessionId, approvals = [...state.streams.get(sessionId)?.approvals ?? []].map(([id, text]) => ({ id, text }));
+  const key = sessionId + approvals.map(approval => approval.id).join(',');
+  const html = approvalBarHtml(approvals, { busy: id => pendingApprovals.has(sessionId + id), expanded: approvalGroupOpen, details: new Set([...approvalDetails].filter(item => item.startsWith(sessionId)).map(item => item.slice(sessionId.length))) });
+  if (host.innerHTML === html) return;
+  host.innerHTML = html;
+  // Only a newly arrived request animates in; redraws of the composer leave the bar still.
+  host.firstElementChild?.classList.toggle('is-entering', Boolean(approvals.length) && key !== approvalShownKey);
+  approvalShownKey = approvals.length ? key : '';
+  if (!approvals.length) approvalGroupOpen = false;
+}
+async function respondApproval(sessionId: string, id: string, approved: boolean): Promise<void> {
+  const current = state.streams.get(sessionId), approvalKey = sessionId + id;
+  if (!current?.approvals.has(id) || pendingApprovals.has(approvalKey)) return;
+  pendingApprovals.add(approvalKey); renderApprovalBar();
+  try {
+    await call('respond_approval', { sessionId, requestId: id, approved });
+    current.approvals.delete(id); approvalDetails.delete(approvalKey); current.revision++;
+    if (!current.approvals.size && current.status === 'Waiting for approval') current.status = 'Continuing task';
+  } finally { pendingApprovals.delete(approvalKey); current.revision++; renderStream(); renderNavigation(); renderApprovalBar(); }
+}
 function renderComposer(): void {
   refreshTeamProgress();
   architectView?.setTask(state.sessionId, teams.get(state.sessionId) ?? null, state.providers);
@@ -1201,7 +1230,9 @@ function renderComposer(): void {
   const team = teams.get(s.id), modelLocked = running && !team;
   $('#composer-area').innerHTML = `<form id="composer" class="composer ${running ? 'composer-running' : ''}"><div id="attachments" class="attachments">${attachmentBar(s)}</div><textarea id="prompt" data-session-id="${escape(s.id)}" aria-label="Message your coding agent" placeholder="${running ? (canSteer(s.provider) ? 'Queue a follow-up · ⌘↩ steers now' : 'Queue a follow-up…') : composerPlaceholder()}" aria-description="${running ? `Enter to queue for when the agent finishes.${canSteer(s.provider) ? ' Command Enter to steer the running turn.' : ''}` : 'Enter to send. Shift Enter for a new line.'}" rows="2"></textarea><div class="composer-toolbar"><div class="composer-tools">${button('attach', 'Attach files for context', 'plus', '', 'type="button"')}<button type="button" id="model-picker-trigger" class="model-picker" data-action="model" aria-label="Choose harness and model" aria-description="${escape([modelLabel(s), teamModelLabel(s)].filter(Boolean).join(' '))}" aria-haspopup="dialog" aria-expanded="false" title="${team && !team.config.auto ? 'Choose team profile and models' : 'Choose harness and model'}" ${modelLocked ? 'disabled' : ''}><span class="provider-small ${s.provider}">${providerLogo(s.provider)}</span><span class="model-detail" data-model-label>${escape(modelLabel(s))}</span><span class="team-model-count" data-team-model-label ${teamModelLabel(s) ? '' : 'hidden'}>${teamModelLabel(s)}</span>${icon('down')}</button><span class="composer-separator"></span><button type="button" id="mode-picker-trigger" class="mode-picker" data-action="mode" data-mode="${behavior.id}" title="${escape(behavior.description)}" aria-haspopup="dialog" aria-expanded="false" ${running ? 'disabled' : ''}>${icon(behavior.icon)}<span>${escape(behavior.label)}</span>${icon('down')}</button>${teamButton(s)}${tokenSaver.button(s.id)}</div>${running ? '<button type="button" class="send-button stop-button" data-action="stop" title="Stop task (Esc)" aria-label="Stop task">' + icon('stop') + '</button>' : '<button type="submit" class="send-button" title="Send message (' + shortcut('Enter') + ')" aria-label="Send message">' + icon('arrow') + '</button>'}</div></form>${s.archived ? '<div class="composer-footnote"><span>Archived task</span></div>' : ''}`;
   $('#composer-area').insertAdjacentHTML('afterbegin', worktrees.contextBar(s, newTaskView()));
-  $('#composer').insertAdjacentHTML('beforebegin', (running ? '' : limitBanner(s)) + queuePanel({ entries: state.queues.get(s.id) ?? [], hold: state.queueHolds.get(s.id) ?? null, running, steerable: canSteer(s.provider) && !team, editingId: state.queueEditing || null, busy: state.queueBusy.has(s.id) }));
+  $('#composer').insertAdjacentHTML('beforebegin', '<div id="approval-bar"></div>');
+  $('#approval-bar').insertAdjacentHTML('beforebegin', (running ? '' : limitBanner(s)) + queuePanel({ entries: state.queues.get(s.id) ?? [], hold: state.queueHolds.get(s.id) ?? null, running, steerable: canSteer(s.provider) && !team, editingId: state.queueEditing || null, busy: state.queueBusy.has(s.id) }));
+  renderApprovalBar();
   void github.status(s.projectId);
   const prompt = document.querySelector<HTMLTextAreaElement>('#prompt');
   // The prompt stays open during a run: messages typed then are queued or steered.
@@ -3239,7 +3270,10 @@ async function action(name: string, element: HTMLElement): Promise<void> {
     case 'architect-setup': await showArchitectSetup(element); break;
     case 'team-toggle': await toggleTeam(); break;
     case 'stop': if (session()) { runEndings.set(state.sessionId, 'stopped'); await call(teams.get(state.sessionId) ? 'architect_control' : 'stop_session', { sessionId: state.sessionId, ...(teams.get(state.sessionId) ? { action: 'stop' } : {}) }); notify('Stopping task…'); } break;
-    case 'approval-allow': case 'approval-deny': { const id = element.dataset.request!, sessionId = state.sessionId; const current = state.streams.get(sessionId); const approvalKey = sessionId + id; if (!current?.approvals.has(id) || pendingApprovals.has(approvalKey)) break; pendingApprovals.add(approvalKey); element.closest('.approval-actions')?.querySelectorAll('button').forEach(button => { button.disabled = true; }); try { await call('respond_approval', { sessionId, requestId: id, approved: name === 'approval-allow' }); current.approvals.delete(id); current.revision++; if (!current.approvals.size && current.status === 'Waiting for approval') current.status = 'Continuing task'; } finally { pendingApprovals.delete(approvalKey); current.revision++; renderStream(); renderNavigation(); } break; }
+    case 'approval-allow': case 'approval-deny': await respondApproval(state.sessionId, element.dataset.request!, name === 'approval-allow'); break;
+    case 'approval-allow-all': case 'approval-deny-all': { const sessionId = state.sessionId; for (const id of [...state.streams.get(sessionId)?.approvals.keys() ?? []]) await respondApproval(sessionId, id, name === 'approval-allow-all'); break; }
+    case 'approval-group': approvalGroupOpen = !approvalGroupOpen; renderApprovalBar(); break;
+    case 'approval-details': { const key = state.sessionId + element.dataset.request; if (!approvalDetails.delete(key)) approvalDetails.add(key); renderApprovalBar(); break; }
     case 'suggest': { const prompt = document.querySelector<HTMLTextAreaElement>('#prompt'); if (prompt) { prompt.value = element.dataset.text!; prompt.focus(); } break; }
   }
 }

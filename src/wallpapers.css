@@ -77,7 +77,7 @@ html .workspace :is(.architect-panel,.subagents-panel).floating-menu{
 }
 .workspace[data-wallpaper] .conversation-pane :is(.markdown pre,.tool-activity pre,.browser-context-chip,.board-completed-note){background:var(--thread-inset);border-color:var(--thread-border)}
 .workspace[data-wallpaper] .conversation-pane :is(.markdown :not(pre)>code,.user-avatar,.tool-extra){background:var(--thread-inset)}
-.workspace[data-wallpaper] .conversation-pane :is(.attachments>span,.approval-request,.preview-notice){background:var(--thread-accent);border-color:var(--thread-border)}
+.workspace[data-wallpaper] .conversation-pane :is(.attachments>span,.preview-notice){background:var(--thread-accent);border-color:var(--thread-border)}
 .workspace[data-wallpaper] .conversation-pane .message-error{background:var(--thread-error)}
 .workspace[data-wallpaper] .conversation-pane :is(.icon-button:hover,.secondary-button:hover,.subagent-row:hover,.subagents-trigger:hover,.subagents-trigger[aria-expanded=true]){background:var(--thread-hover)}
 .workspace[data-wallpaper] .conversation-pane :is(.model-picker,.mode-picker,.composer-project):is(:active,[aria-expanded=true]),

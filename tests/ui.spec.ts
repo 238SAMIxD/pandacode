@@ -1969,7 +1969,7 @@ test('keeps live approvals and errors actionable while tool activity is collapse
   await expect(turn).toHaveAttribute('open', '');
   await turn.locator(':scope > summary').click();
   await expect(turn).not.toHaveAttribute('open', '');
-  const approval = page.locator('.approval-request');
+  const approval = page.locator('.approval-bar');
   await expect(approval).toBeVisible();
   expect(await approval.evaluate(element => element.closest('.turn-activity'))).toBeNull();
   const error = page.locator('#stream-region .message-error').filter({ hasText: 'A previous check failed.' });
@@ -2126,7 +2126,7 @@ test('updates live tool status and preserves newer response status across delaye
   await emitStatusEvents(page, sessionId, [tool('status-bash', 'Bash', 'completed')]);
   await expect(status).toHaveText('Working…');
   await emitStatusEvents(page, sessionId, [{ kind: 'approval', requestId: 'status-approval', text: 'Run the next check?' }]);
-  const approval = page.locator('.approval-request');
+  const approval = page.locator('.approval-bar');
   await expect(approval).toBeVisible();
   await expect(status).toBeHidden();
   await approval.getByRole('button', { name: 'Approve', exact: true }).click();
@@ -2159,6 +2159,43 @@ test('the turn header names what the agent is doing, with no separate status lin
   await expect(prompt(page)).toBeEnabled();
 });
 
+test('approvals wait in one slim bar above the prompt, one line each and grouped when there are several', async ({ page }) => {
+  const sessionId = await startControlledStatusStream(page);
+  const bar = page.locator('#composer-area .approval-bar');
+  // The sample harness holds each answer until the test lets it through.
+  const resolveApproval = async () => {
+    await expect.poll(() => page.evaluate(() => typeof (window as any).__pandacodeResolveStatusApproval)).toBe('function');
+    await page.evaluate(() => { const w = window as any, resolve = w.__pandacodeResolveStatusApproval; w.__pandacodeResolveStatusApproval = undefined; resolve(); });
+  };
+  const lineHeights = () => bar.locator('.approval-line').evaluateAll(lines => lines.map(line => Math.round(line.getBoundingClientRect().height)));
+  await emitStatusEvents(page, sessionId, [{ kind: 'approval', requestId: 'one', text: 'Run `npm test`\nin the project folder' }]);
+  await expect(bar).toBeVisible();
+  await expect(bar.locator('.approval-summary')).toHaveText('Run npm test');
+  expect((await lineHeights()).every(height => height <= 36)).toBe(true);
+  const [barBox, composerBox] = [(await bar.boundingBox())!, (await page.locator('#composer').boundingBox())!];
+  expect(composerBox.y - (barBox.y + barBox.height)).toBeGreaterThanOrEqual(0);
+  expect(composerBox.y - (barBox.y + barBox.height)).toBeLessThan(12);
+  await expect(page.locator('#transcript .approval-bar')).toHaveCount(0);
+  // The full request is one click away.
+  await bar.locator('.approval-summary').click();
+  await expect(bar.locator('.approval-full')).toContainText('in the project folder');
+  await emitStatusEvents(page, sessionId, [{ kind: 'approval', requestId: 'two', text: 'Write src/main.ts' }]);
+  await expect(bar.locator('.approval-group')).toContainText('2 approvals needed');
+  await expect(bar.locator('.approval-row')).toHaveCount(0);
+  await bar.getByRole('button', { name: /2 approvals needed/ }).click();
+  await expect(bar.locator('.approval-row')).toHaveCount(2);
+  expect((await lineHeights()).every(height => height <= 36)).toBe(true);
+  await bar.locator('[data-approval="two"]').getByRole('button', { name: 'Deny', exact: true }).click();
+  await resolveApproval();
+  await expect(bar.locator('.approval-group')).toHaveCount(0);
+  await expect(bar.locator('.approval-row')).toHaveCount(1);
+  await bar.getByRole('button', { name: 'Approve', exact: true }).click();
+  await resolveApproval();
+  await expect(bar).toHaveCount(0);
+  await page.getByRole('button', { name: 'Stop task', exact: true }).click();
+  await expect(prompt(page)).toBeEnabled();
+});
+
 test('keeps approval, retry, stopping, and completed summaries clear', async ({ page }) => {
   const sessionId = await startControlledStatusStream(page);
   const label = page.locator('.live-activity .turn-activity-label');
@@ -2170,7 +2207,7 @@ test('keeps approval, retry, stopping, and completed summaries clear', async ({ 
   await expect(label).toHaveText(/^Generating response · /);
   await emitStatusEvents(page, sessionId, [{ kind: 'approval', requestId: 'playful-approval', text: 'Run the project check?' }]);
   await expect(label).toHaveText(/^Waiting for approval · /);
-  const approval = page.locator('.approval-request');
+  const approval = page.locator('.approval-bar');
   await approval.getByRole('button', { name: 'Approve', exact: true }).click();
   await expect.poll(() => page.evaluate(() => typeof (window as any).__pandacodeResolveStatusApproval)).toBe('function');
   await emitStatusEvents(page, sessionId, [{ kind: 'text', text: 'The approved check is producing a response.' }]);
