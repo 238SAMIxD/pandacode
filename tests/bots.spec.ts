@@ -120,16 +120,16 @@ test.describe('bots', () => {
     await expect(crumb(page)).toContainText('Scout');
   });
 
-  test('chatting with a bot streams like any task and keeps its brief folded away', async ({ page }) => {
+  test('chatting with a bot streams like any task and keeps its brief out of the transcript', async ({ page }) => {
     await newBot(page);
     await page.locator('#transcript').getByRole('button', { name: /What can you help me with/ }).click();
     await expect(page.locator('#prompt')).toHaveValue('What can you help me with?');
     await page.locator('#prompt').press('Enter');
     const sent = page.locator('#transcript .user-message').last();
     await expect(sent).toContainText('What can you help me with?');
-    // The brief rides along for the agent but stays folded in the message.
-    await expect(sent.locator('.message-context')).toHaveCount(1);
-    await expect(sent.locator('.message-context pre')).toBeHidden();
+    // The brief rides along for the agent but is the bot's setup, not an attachment: not shown.
+    await expect(sent.locator('.message-context')).toHaveCount(0);
+    await expect(sent.locator('.message-content')).toHaveText('What can you help me with?');
     await expect(page.locator('#transcript .agent-message').last()).toContainText('browser preview', { timeout: 15_000 });
     await expect(page.locator('#prompt')).toHaveValue('');
     // It went through the bot, so the bot logged it.

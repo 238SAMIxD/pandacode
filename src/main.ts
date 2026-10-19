@@ -1062,7 +1062,10 @@ const CONTEXT_BOUNDARY = /\n\n(?=(?:File|Document|Folder|GitHub|Browser element)
 function userContent(content: string): string {
   const index = content.search(CONTEXT_BOUNDARY);
   if (index < 0) return escape(content);
-  const blocks = content.slice(index + 2).split(CONTEXT_BOUNDARY);
+  // A bot's brief rides along with every message to it; it is the bot's setup, not something
+  // you attached, so it stays out of the transcript (as in the bot's web chat).
+  const blocks = content.slice(index + 2).split(CONTEXT_BOUNDARY).filter(block => !block.startsWith('Bot brief:\n'));
+  if (!blocks.length) return escape(content.slice(0, index));
   return `${escape(content.slice(0, index))}<details class="message-context"><summary>${icon('attach')}Attached context<span>${blocks.length}</span></summary><pre>${escape(blocks.join('\n\n'))}</pre></details>`;
 }
 type ToolView = { open: boolean; controls: { selector: string; top: number; left: number; focused: boolean }[] };
