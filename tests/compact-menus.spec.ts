@@ -109,3 +109,25 @@ test('setting rows on the Settings page stay one line tall with notes and live s
   await expect(github.locator('.github-settings-status')).toHaveText('Connected as you · orbit-labs/orbit');
   await expect(github.locator('.info-mark')).toHaveCount(0);
 });
+
+test('the project menu has equal insets, a slim underlined search and no tick on the current choice', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#navigation .task-item').first().waitFor();
+  await page.locator('#project-filter').click();
+  const menu = page.locator('.floating-menu').first();
+  await expect(menu).toBeVisible();
+  const layout = await menu.evaluate(element => {
+    const box = element.getBoundingClientRect(), border = parseFloat(getComputedStyle(element).borderTopWidth);
+    const search = element.querySelector<HTMLElement>('[class*="menu-search"]')!;
+    const rows = [...element.querySelectorAll('[role="menuitemradio"],[role="option"]')].map(row => row.getBoundingClientRect());
+    const style = getComputedStyle(search);
+    return {
+      insets: [search.getBoundingClientRect().top - box.top, rows[0].left - box.left, box.right - rows[0].right, box.bottom - rows[rows.length - 1].bottom].map(value => Math.round(value - border)),
+      searchBorders: [style.borderTopWidth, style.borderLeftWidth, style.borderRightWidth, style.borderBottomWidth],
+      ticks: [...element.querySelectorAll('[aria-checked="true"]>.icon:last-child,[aria-selected="true"]>.icon:last-child')].filter(icon => (icon as HTMLElement).offsetParent).length,
+    };
+  });
+  expect(new Set(layout.insets).size).toBe(1);
+  expect(layout.searchBorders).toEqual(['0px', '0px', '0px', '1px']);
+  expect(layout.ticks).toBe(0);
+});
