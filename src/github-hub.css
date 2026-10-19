@@ -11,7 +11,7 @@
 /* Repositories */
 .gh-repos{display:flex;flex-direction:column;min-height:0;padding:0 0 10px;background:var(--sidebar);border-right:1px solid var(--border)}
 .workspace[data-wallpaper] .gh-repos{background:var(--workspace-frost-surface);backdrop-filter:var(--workspace-frost);-webkit-backdrop-filter:var(--workspace-frost);border-color:transparent}
-.gh-repos-head{display:flex;align-items:center;gap:8px;flex-shrink:0;height:55px;padding:0 12px 0 16px;font-size:.82rem;font-weight:600;letter-spacing:-.005em}
+.gh-repos-head{display:flex;align-items:center;gap:8px;flex-shrink:0;height:var(--titlebar-height);padding:0 12px 0 16px;font-size:.82rem;font-weight:600;letter-spacing:-.005em}
 .gh-repos-head>.icon{width:16px;height:16px}
 .gh-repos-head .icon-button{margin-left:auto;width:26px;height:26px;border-radius:3px;color:var(--muted)}
 .gh-repos-head .icon-button:hover{background:var(--gh-hover);color:var(--text)}

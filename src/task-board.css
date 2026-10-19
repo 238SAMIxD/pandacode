@@ -50,7 +50,7 @@
 .board-empty{padding:15px 10px;border:1px dashed var(--border);border-radius:4px;font-size:.72rem;color:var(--faint);text-align:center}
 .board-footnote{font-size:.68rem;color:var(--faint);margin:12px 4px 0}
 .board-view .workspace-header{padding-left:24px;gap:12px}
-html[data-native-platform=macos] .board-view .workspace-header{padding-left:104px}
+html[data-native-platform=macos] .board-view .workspace-header{padding-left:var(--traffic-light-gutter)}
 .board-view .conversation-pane{flex:0 0 min(49%,570px);width:min(49%,570px);margin:8px;border-radius:8px;background:var(--bg);position:relative;z-index:2;animation:task-panel-in var(--spring-duration,340ms) var(--spring,ease-out)}
 .board-view .conversation-pane.new-task-page{justify-content:initial}
 .task-details-heading{flex-shrink:0;max-height:42%;overflow:auto;padding:0 24px}

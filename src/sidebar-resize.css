@@ -12,10 +12,10 @@
 .sidebar-toggle .icon{width:17px;height:17px}
 .sidebar>.brand{justify-content:space-between;gap:8px;padding:0 14px}
 .sidebar>.brand .brand-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-html[data-native-platform=macos] .sidebar>.brand{padding-left:104px}
+html[data-native-platform=macos] .sidebar>.brand{padding-left:var(--traffic-light-gutter)}
 .workspace.sidebar-collapsed{grid-template-columns:minmax(0,1fr) var(--inspector-width,302px)}
 .workspace.sidebar-collapsed.inspector-closed{grid-template-columns:minmax(0,1fr)}
-html[data-native-platform=macos] .workspace.sidebar-collapsed .workspace-header{padding-left:104px}
+html[data-native-platform=macos] .workspace.sidebar-collapsed .workspace-header{padding-left:var(--traffic-light-gutter)}
 @media(min-width:1450px){.workspace.sidebar-collapsed{grid-template-columns:minmax(0,1fr) var(--inspector-width,330px)}}
 @media(max-width:1100px){.workspace.sidebar-collapsed{grid-template-columns:minmax(0,1fr) var(--inspector-width,270px)}}
 @media(max-width:920px){.workspace.sidebar-collapsed{grid-template-columns:minmax(0,1fr)}}

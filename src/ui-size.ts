@@ -16,6 +16,8 @@ apply();
 
 function apply(): void {
   document.documentElement.style.setProperty('--ui-scale', String(preview ? scale : 1));
+  // The title-bar row keeps its on-screen height so it stays level with the native window buttons.
+  document.documentElement.style.setProperty('--page-zoom', String(pageZoom()));
   if (preview) return;
   void import('@tauri-apps/api/webview')
     .then(({ getCurrentWebview }) => getCurrentWebview().setZoom(scale))

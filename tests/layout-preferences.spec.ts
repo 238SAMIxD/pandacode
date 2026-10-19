@@ -750,3 +750,13 @@ for (const width of [2048, 1440, 1100, 960, 760, 620]) {
     });
   }
 }
+
+test('the title bar row keeps its on-screen height under interface zoom so it stays level with the window buttons', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#navigation .task-item').first().waitFor();
+  const heights = () => page.evaluate(() => ['.workspace-header', '.sidebar>.brand'].map(selector => Math.round(document.querySelector(selector)!.getBoundingClientRect().height * 10) / 10));
+  expect(await heights()).toEqual([55, 55]);
+  // In the app, ⌘+ zooms the webview by --page-zoom; the row shrinks in CSS pixels by the same factor.
+  await page.evaluate(() => document.documentElement.style.setProperty('--page-zoom', '1.25'));
+  expect(await heights()).toEqual([44, 44]);
+});
