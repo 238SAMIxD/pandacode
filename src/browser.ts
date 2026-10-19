@@ -2,6 +2,7 @@ import './browser.css';
 import { call, preview, subscribe } from './bridge';
 import { escape, icon } from './dom';
 import { mountJevLive, type JevLiveView } from './jev-live';
+import { pageZoom } from './ui-size';
 import type { BrowserAttachment, BrowserBounds, BrowserElement, BrowserScreenshot, BrowserStatus, LocalServer } from './types';
 
 export interface BrowserPanel { close(): Promise<void>; refresh(): void; navigate(url: string): Promise<BrowserStatus>; watchJev(runId: string): Promise<void>; }
@@ -59,7 +60,8 @@ export async function mountBrowser(host: HTMLElement, options: Options): Promise
     if (status.picking) tell('Click an element to attach it. Press Esc to cancel.');
     else if (notice.textContent?.startsWith('Click an element')) tell('');
   }
-  function bounds(): BrowserBounds { const rect = viewport.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }; }
+  // The native view is placed in window points; under interface zoom one CSS pixel is `pageZoom()` points.
+  function bounds(): BrowserBounds { const rect = viewport.getBoundingClientRect(), zoom = pageZoom(); return { x: rect.x * zoom, y: rect.y * zoom, width: rect.width * zoom, height: rect.height * zoom }; }
   // The native window owns visibility. WebKit may mark the host document hidden
   // when its sibling guest gains focus, even though the window remains on screen.
   function obscured(rect: BrowserBounds): boolean {

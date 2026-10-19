@@ -199,17 +199,17 @@ test('layout preferences offer text size controls in Settings without replacing 
   await open(page);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   const settings = page.getByRole('region', { name: 'Settings', exact: true });
-  const row = settings.locator('.setting-row').filter({ hasText: 'Text size' });
+  const row = settings.locator('.setting-row').filter({ hasText: 'Interface size' });
   await expect(row).toBeVisible();
   const node = await row.elementHandle();
   await expect(row.getByText('100%', { exact: true })).toBeVisible();
-  await settings.getByRole('button', { name: 'Increase text size', exact: true }).click();
+  await settings.getByRole('button', { name: 'Increase interface size', exact: true }).click();
   await expect(row.getByText('110%', { exact: true })).toBeVisible();
   await expect.poll(() => rootSize(page)).toBeCloseTo(15.4, 2);
-  await settings.getByRole('button', { name: 'Decrease text size', exact: true }).click();
+  await settings.getByRole('button', { name: 'Decrease interface size', exact: true }).click();
   await expect(row.getByText('100%', { exact: true })).toBeVisible();
-  await settings.getByRole('button', { name: 'Increase text size', exact: true }).click();
-  await settings.getByRole('button', { name: 'Reset text size', exact: true }).click();
+  await settings.getByRole('button', { name: 'Increase interface size', exact: true }).click();
+  await settings.getByRole('button', { name: 'Reset interface size', exact: true }).click();
   await expect(row.getByText('100%', { exact: true })).toBeVisible();
   expect(await node!.evaluate(node => node.isConnected)).toBe(true);
   await page.keyboard.press('Meta+=');
@@ -349,9 +349,9 @@ test('layout preferences keep controls readable at 160 percent in wide and narro
 
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('region', { name: 'Settings', exact: true });
-    const controls = settings.getByRole('group', { name: 'Text size', exact: true });
+    const controls = settings.getByRole('group', { name: 'Interface size', exact: true });
     await controls.scrollIntoViewIfNeeded();
-    await expect(controls.getByRole('button', { name: 'Increase text size', exact: true })).toBeDisabled();
+    await expect(controls.getByRole('button', { name: 'Increase interface size', exact: true })).toBeDisabled();
     const items = await controls.locator(':scope > *').all();
     const bounds = await Promise.all(items.map(item => item.boundingBox()));
     const centers = bounds.map(rect => rect!.y + rect!.height / 2);

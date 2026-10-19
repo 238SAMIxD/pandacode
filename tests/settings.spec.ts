@@ -158,7 +158,7 @@ test('settings organization opens General immediately and supports keyboard grou
   const startupCalls = await providerCalls(page);
   await page.evaluate(() => { (window as any).__settingsProviders.hold = true; });
   await settings(page);
-  await expect(page.getByRole('group', { name: 'Text size', exact: true })).toBeVisible();
+  await expect(page.getByRole('group', { name: 'Interface size', exact: true })).toBeVisible();
   await expect(page.getByRole('checkbox', { name: 'Compact conversation', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Default agent for new tasks', exact: true })).toBeHidden();
   await expect(page.getByRole('button', { name: 'Refresh agents', exact: true })).toBeHidden();

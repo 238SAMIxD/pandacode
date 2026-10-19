@@ -3,7 +3,7 @@ import { call, subscribe } from './bridge';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { currentTheme } from './theme';
-import { uiScale } from './ui-size';
+import { textScale } from './ui-size';
 import '@xterm/xterm/css/xterm.css';
 
 export interface TerminalContext {
@@ -67,7 +67,7 @@ export async function mountTerminal(container: HTMLElement, context: TerminalCon
   const preferences = await call<TerminalPreferences>('get_terminal_preferences').catch(() => ({} as TerminalPreferences));
   if (preferences.source) container.dataset.terminalSettings = preferences.source;
   const theme = () => ({ ...terminalTheme(), ...paletteTerminal(), ...preferences.theme });
-  const terminal = new Terminal({ fontFamily: preferences.fontFamily ? `${JSON.stringify(preferences.fontFamily)}, monospace` : '"SF Mono", "Cascadia Code", Menlo, monospace', fontSize: 12 * uiScale(), lineHeight: preferences.lineHeight ?? 1.5, cursorStyle: preferences.cursorStyle ?? 'block', cursorBlink: preferences.cursorBlink ?? true, scrollback: 1500, minimumContrastRatio: 4.5, theme: theme() });
+  const terminal = new Terminal({ fontFamily: preferences.fontFamily ? `${JSON.stringify(preferences.fontFamily)}, monospace` : '"SF Mono", "Cascadia Code", Menlo, monospace', fontSize: 12 * textScale(), lineHeight: preferences.lineHeight ?? 1.5, cursorStyle: preferences.cursorStyle ?? 'block', cursorBlink: preferences.cursorBlink ?? true, scrollback: 1500, minimumContrastRatio: 4.5, theme: theme() });
   const fit = new FitAddon(); terminal.loadAddon(fit); terminal.open(surface);
   if (surface.clientWidth && surface.clientHeight) fit.fit();
   let terminalId = '', exited = false, hasOutput = false, disposed = false, inserted = false;
@@ -116,7 +116,7 @@ export async function mountTerminal(container: HTMLElement, context: TerminalCon
   const input = terminal.onData(data => { if (!exited && !disposed) void call('write_terminal', { terminalId, data }).catch(reportError); });
   let resizeFrame = 0;
   const resize = () => { cancelAnimationFrame(resizeFrame); resizeFrame = requestAnimationFrame(() => { if (disposed || !surface.clientWidth || !surface.clientHeight) return; fit.fit(); if (!exited) void call('resize_terminal', { terminalId, cols: terminal.cols, rows: terminal.rows }).catch(reportError); }); };
-  const refreshSize = () => { terminal.options.fontSize = 12 * uiScale(); resize(); };
+  const refreshSize = () => { terminal.options.fontSize = 12 * textScale(); resize(); };
   refreshSize();
   window.addEventListener('pandacode-ui-scale-change', refreshSize);
   const observer = new ResizeObserver(resize);
