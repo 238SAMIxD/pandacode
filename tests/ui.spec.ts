@@ -2181,6 +2181,27 @@ test('the turn header names what the agent is doing, with no separate status lin
   await expect(prompt(page)).toBeEnabled();
 });
 
+/** A request's line never runs past the bar: its summary truncates and the buttons stay in view. */
+async function expectApprovalInBounds(page: Page): Promise<void> {
+  const bar = (await page.locator('.approval-bar').boundingBox())!;
+  for (const box of await page.locator('.approval-bar :is(.approval-summary,.approval-allow)').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().toJSON()))) {
+    expect(box.right).toBeLessThanOrEqual(bar.x + bar.width + 1);
+  }
+  await expect(page.locator('.approval-bar .approval-allow').first()).toBeVisible();
+}
+
+test('a very long command keeps the approval bar within its width', async ({ page }) => {
+  const sessionId = await startControlledStatusStream(page);
+  const long = `codex exec --sandbox read-only "${'The user asked about this repo and wants it faster. '.repeat(12)}"`;
+  await emitStatusEvents(page, sessionId, [{ kind: 'approval', requestId: 'long', text: `${long}\nin the project folder` }]);
+  await expect(page.locator('.approval-bar')).toBeVisible();
+  await expectApprovalInBounds(page);
+  await emitStatusEvents(page, sessionId, [{ kind: 'approval', requestId: 'long-2', text: long }]);
+  await page.locator('.approval-bar').getByRole('button', { name: /2 approvals needed/ }).click();
+  await expect(page.locator('.approval-row')).toHaveCount(2);
+  await expectApprovalInBounds(page);
+});
+
 test('approvals wait in one slim bar above the prompt and its context bar, one line each and grouped when there are several', async ({ page }) => {
   const sessionId = await startControlledStatusStream(page);
   const bar = page.locator('#composer-area .approval-bar');
@@ -2201,6 +2222,7 @@ test('approvals wait in one slim bar above the prompt and its context bar, one l
     if (await below.count()) expect((await below.boundingBox())!.y).toBeGreaterThanOrEqual(barBox.y + barBox.height);
   }
   await expect(page.locator('#transcript .approval-bar')).toHaveCount(0);
+  await expectApprovalInBounds(page);
   // The full request is one click away.
   await bar.locator('.approval-summary').click();
   await expect(bar.locator('.approval-full')).toContainText('in the project folder');
