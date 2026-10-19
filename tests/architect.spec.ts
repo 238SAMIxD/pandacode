@@ -463,6 +463,9 @@ test.describe('architect teams', () => {
       // The harness is the logo; the text names role and model once each.
       await expect(builder.locator('.provider-logo[data-provider="codex"]')).toBeAttached(); await expect(builder).toContainText(/working/i);
       await expect(builder.locator('small')).toHaveText('Builder · GPT-6-Astra');
+      // A working worker shows a spinning ring in place of the separator dot.
+      await expect(builder.locator('.team-progress-spinner')).toBeVisible();
+      expect(await builder.locator('.team-progress-spinner').evaluate(el => getComputedStyle(el).animationName)).toBe('team-progress-spin');
       // The line sits in the turn that spawned it, right after what the architect said there.
       expect(await builder.evaluate(row => {
         const slot = row.closest('.team-progress-slot');
@@ -483,6 +486,7 @@ test.describe('architect teams', () => {
       await publish(page, { ...snapshot, status: 'paused', revision: 2 });
       await expect(builder.locator('.team-progress-status')).toHaveText('Paused');
       await expect(reviewer.locator('.team-progress-status')).toHaveText('Paused');
+      await expect(builder.locator('.team-progress-spinner')).toBeHidden();
       await expect(progress).not.toContainText(/working/i);
       await publish(page, { ...snapshot, revision: 3, workers: assigned.map(entry => ({ ...entry, status: 'queued' })) });
       await expect(builder.locator('.team-progress-status')).toHaveText('Queued');

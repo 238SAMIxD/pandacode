@@ -43,7 +43,7 @@ export function updateTeamProgress(host: HTMLElement, team: TeamSnapshot | null 
     if (!row) {
       row = document.createElement('button'); row.type = 'button'; row.className = 'team-progress-worker';
       row.dataset.action = 'open-team-worker'; row.dataset.workerId = worker.id;
-      row.innerHTML = `<span class="team-progress-logo"></span><span class="team-progress-description"><span class="team-progress-verb">Spawned</span> <strong></strong> <small></small></span><span class="team-progress-status"></span>${icon('chevron')}`;
+      row.innerHTML = `<span class="team-progress-logo"></span><span class="team-progress-description"><span class="team-progress-verb">Spawned</span> <strong></strong> <small></small></span><span class="team-progress-spinner" aria-hidden="true"></span><span class="team-progress-status"></span>${icon('chevron')}`;
     }
     if (row !== list!.children[index]) list!.insertBefore(row, list!.children[index] ?? null);
     const profile = team.config.workers.find(profile => profile.id === worker.profileId);
