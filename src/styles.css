@@ -864,3 +864,8 @@ html[data-native-platform=macos] .github-view .gh-repos-head{padding-left:84px}
 @media (max-width:900px){.preview-status{display:none}}
 /* The prompt box and the bar above it have no border, except under increased contrast. */
 @media (prefers-contrast:more){html[data-theme] .workspace :is(.composer,.composer-context,.composer:focus-within),html[data-theme] .workspace[data-wallpaper] .conversation-pane :is(.composer,.composer-context,.composer:focus-within){border-color:var(--text)}}
+/* Dropdowns and popovers are one solid surface with no border (dialogs and toasts keep the glass).
+   `body` lifts this above the per-menu glass rules, including lazily loaded ones. */
+html[data-theme] body :is(.floating-menu,.bp-menu){background:var(--panel);border-color:transparent;backdrop-filter:none;-webkit-backdrop-filter:none;box-shadow:0 14px 36px -10px rgb(0 0 0 / .2),0 3px 10px -4px rgb(0 0 0 / .1)}
+html[data-theme="dark"] body :is(.floating-menu,.bp-menu){box-shadow:0 16px 40px -10px rgb(0 0 0 / .6),0 3px 10px -4px rgb(0 0 0 / .35)}
+@media (prefers-contrast:more){html[data-theme] body :is(.floating-menu,.bp-menu){border-color:var(--text)}}
