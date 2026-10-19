@@ -492,7 +492,11 @@ test.describe('architect teams', () => {
       await publish(page, { ...snapshot, status: 'waiting', revision: 4, workers: updated });
       await expect(builder).toContainText(/completed/i); await expect(reviewer).toContainText(/needs attention/i);
       expect(await page.evaluate(() => { const nodes = (window as any).__progressNodes; return nodes.host === document.querySelector('.team-progress') && nodes.build === document.querySelector('.team-progress-worker[data-worker-id="build"]') && nodes.review === document.querySelector('.team-progress-worker[data-worker-id="review"]'); })).toBe(true);
-      await reviewer.click();
+      // A text line does not shrink while pressed (that read as a flicker).
+      const reviewerBox = (await reviewer.boundingBox())!;
+      await page.mouse.move(reviewerBox.x + 20, reviewerBox.y + reviewerBox.height / 2); await page.mouse.down();
+      expect(await reviewer.evaluate(el => getComputedStyle(el).scale)).toMatch(/^(1|none)$/);
+      await page.mouse.up();
       await expect(panel(page)).toBeVisible();
       await expect(panel(page).locator('.architect-worker-history')).toContainText('Accessibility review is underway.');
       expect((await calls(page, 'architect_worker_messages')).at(-1).args).toMatchObject({ sessionId: 'session-2', workerId: 'review' });

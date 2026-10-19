@@ -95,7 +95,7 @@ html[data-theme] .workspace[data-wallpaper]>.inspector .inspector-tabs>.segment-
 button:not(:disabled):active{scale:var(--press)}
 .icon-button,.sidebar-bottom>button,.view-switch button,.inspector-tabs button,.settings-tabs button,.board-column>header .icon-button{--press:.9}
 .task-item,.board-card-open,.command-results>button,.command-list button,.model-menu-option,.project-menu-option,.choice-menu-option,.project-menu-open,.prompt-suggestions button,.file-row>button:first-child,.change-file{--press:.985}
-.welcome-project,.breadcrumb>button,.history-notice,.change-group-title button,.activity-heading,.activity-toggle,.composer-footnote button,.message-actions button,.subagents-trigger{--press:1}
+.welcome-project,.breadcrumb>button,.history-notice,.change-group-title button,.activity-heading,.activity-toggle,.composer-footnote button,.message-actions button,.subagents-trigger,.team-progress-worker,.team-progress-more{--press:1}
 /* Menu anchors keep their geometry: a popover is positioned from the trigger's box on press. */
 button[aria-haspopup],.model-picker,.mode-picker,.composer-project,.project-filter,.board-project-filter,.settings-select{--press:1}
 .browser-address button:not(:disabled):active{transform:rotate(90deg) scale(.9)}
