@@ -1237,6 +1237,32 @@ pub fn list_files(root: &Path, path: Option<String>) -> Result<Vec<FileEntry>, S
         .collect())
 }
 
+/// Largest image an agent's question may show inline.
+const IMAGE_LIMIT: u64 = 8 * 1024 * 1024;
+
+/// An image in the workspace as a `data:` URL, so an agent's question can show it inline.
+/// Only image types, only inside the project, and bounded in size.
+pub fn image_data_url(root: &Path, path: &str) -> Result<String, String> {
+    use base64::Engine;
+    let target = scoped_path(root, path)?;
+    let mime = match target.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("svg") => "image/svg+xml",
+        _ => return Err("Only PNG, JPEG, GIF, WebP and SVG images can be shown".into()),
+    };
+    let file = File::open(&target).map_err(|e| e.to_string())?;
+    let metadata = file.metadata().map_err(|e| e.to_string())?;
+    if !metadata.is_file() || metadata.len() > IMAGE_LIMIT {
+        return Err("The image is missing or larger than 8 MB".into());
+    }
+    let mut bytes = Vec::new();
+    file.take(IMAGE_LIMIT + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    Ok(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+}
+
 pub fn read_file(root: &Path, path: String) -> Result<String, String> {
     let target = scoped_path(root, &path)?;
     let metadata = fs::metadata(&target).map_err(|e| e.to_string())?;
@@ -1317,6 +1343,18 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.base);
         }
+    }
+
+    #[test]
+    fn question_images_are_scoped_typed_and_encoded() {
+        let f = Fixture::new(false);
+        fs::write(f.root.join("chart.png"), [137, 80, 78, 71]).unwrap();
+        fs::write(f.root.join("notes.txt"), "hello").unwrap();
+        fs::write(f.base.join("outside.png"), [137, 80, 78, 71]).unwrap();
+        assert_eq!(image_data_url(&f.root, "chart.png").unwrap(), "data:image/png;base64,iVBORw==");
+        assert!(image_data_url(&f.root, "notes.txt").is_err(), "not an image");
+        assert!(image_data_url(&f.root, "../outside.png").is_err(), "outside the project");
+        assert!(image_data_url(&f.root, "missing.png").is_err());
     }
 
     #[test]

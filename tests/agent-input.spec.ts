@@ -135,3 +135,40 @@ test('agent input remains available in the board panel and disappears when work 
   await emit(page, 'done');
   await expect(form(page)).toBeHidden();
 });
+
+test('questions render Markdown with workspace images, charts, drawings and safe HTML views', async ({ page }) => {
+  const rich = { kind: 'questions', questions: [{
+    id: 'maps', header: 'Old maps · [#47](https://github.com/acme/maps/pull/47)',
+    question: 'Players already have maps saved under the **old naming**. What should happen to them?\n\n![Before](docs/before.png) ![Remote](https://example.com/after.png)\n\n```chart\n{"type":"bar","title":"Saved maps per world","labels":["lobby","survival","creative"],"series":[{"name":"maps","values":[12,30,7]}]}\n```\n\n```svg\n<svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="gold"/><script>window.__svgRan = true</script></svg>\n```\n\n```html\n<p class="note" onclick="window.__htmlRan = true">Old: <b>survival.map</b></p><script>window.__htmlRan = true</script><img src="x" onerror="window.__htmlRan = true">\n```',
+    options: [{ label: '**Move them** (Recommended)', description: 'The first world takes over the old map and its *waypoints*.' }, { label: 'Start fresh', description: 'Every world starts empty.' }],
+  }] };
+  await emit(page, 'input_request', rich);
+  const card = form(page);
+  await expect(card).toBeVisible();
+  // Markdown in the header, the question and the options.
+  await expect(card.locator('.agent-input-header a')).toHaveAttribute('href', 'https://github.com/acme/maps/pull/47');
+  await expect(card.locator('.agent-input-question-text strong')).toHaveText('old naming');
+  await expect(card.locator('.agent-input-option').first().locator('strong strong')).toHaveText('Move them');
+  await expect(card.locator('.agent-input-option').first().locator('small em')).toHaveText('waypoints');
+  // A workspace image arrives as a data: URL; a remote one stays a link and is never fetched.
+  await expect(card.locator('.rich-image img')).toHaveAttribute('src', /^data:image\//);
+  await expect(card.locator('a[href="https://example.com/after.png"]')).toHaveText('Remote');
+  await expect(card.locator('img[src^="https:"]')).toHaveCount(0);
+  // A chart drawn as SVG, a sanitized drawing and a static HTML view: no script ever runs.
+  await expect(card.locator('.rich-chart figcaption')).toHaveText('Saved maps per world');
+  await expect(card.locator('.rich-chart svg rect')).toHaveCount(3);
+  await expect(card.locator('.rich-svg svg circle')).toHaveCount(1);
+  await expect(card.locator('.rich-svg script')).toHaveCount(0);
+  await expect.poll(() => card.locator('.rich-html').evaluate(host => host.shadowRoot?.querySelector('.note')?.textContent ?? '')).toBe('Old: survival.map');
+  expect(await card.locator('.rich-html').evaluate(host => host.shadowRoot!.innerHTML)).not.toMatch(/script|onclick|onerror/i);
+  expect(await card.locator('.rich-html').evaluate(host => host.shadowRoot!.querySelectorAll('img').length)).toBe(0);
+  // An option's label stays on one line with its Markdown inline.
+  expect(await card.locator('.agent-input-option').first().locator('strong').first().evaluate(el => el.getClientRects().length > 0 && el.getBoundingClientRect().height < 30)).toBe(true);
+  await card.locator('.rich-html').click();
+  expect(await page.evaluate(() => Boolean((window as any).__svgRan || (window as any).__htmlRan))).toBe(false);
+  // Choosing an option sends its exact label back.
+  await card.locator('.agent-input-option').first().click();
+  await card.getByRole('button', { name: 'Submit answers' }).click();
+  await expect(card).toBeHidden();
+  expect((await answers(page)).at(-1).response).toEqual({ answers: { maps: ['**Move them** (Recommended)'] } });
+});

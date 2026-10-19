@@ -417,8 +417,11 @@ impl AppState {
 }
 /// Fixed instructions for every task turn: sidebar titles, the run script, change tracking.
 fn app_instructions() -> String {
-    [session_titles::GUIDANCE, run_script::INSTRUCTIONS, turn_changes::instruction()].concat()
+    [session_titles::GUIDANCE, run_script::INSTRUCTIONS, turn_changes::instruction(), RICH_QUESTIONS].concat()
 }
+
+/// Questions to the user render rich Markdown in PandaCode; agents only use it if told.
+const RICH_QUESTIONS: &str = "\n\nQuestions you ask the user (AskUserQuestion, request_user_input) render Markdown in PandaCode: use links, images by workspace path (![alt](relative/path.png)), ```chart blocks with JSON {\"type\":\"bar\"|\"line\"|\"pie\",\"title\",\"labels\":[…],\"series\":[{\"name\",\"values\":[…]}]}, ```svg drawings, or static ```html views when a visual helps the user decide. Remote images show as links; scripts never run.";
 
 /// Harnesses without a system prompt hear the app instructions again every few turns.
 const INSTRUCTION_REMINDER_EVERY: i64 = 8;
@@ -436,7 +439,7 @@ mod instruction_tests {
         assert_eq!(reminded, [1, 9, 17]);
         assert!(!reminder_turn(0));
         let text = app_instructions();
-        for part in ["Sidebar titles:", "Run and preview workflow:", "File change tracking:"] {
+        for part in ["Sidebar titles:", "Run and preview workflow:", "File change tracking:", "Questions you ask the user"] {
             assert!(text.contains(part), "{part}");
         }
     }
@@ -2585,6 +2588,13 @@ async fn read_file(
     blocking(move || workspace::read_file(&root, path)).await
 }
 #[tauri::command]
+async fn workspace_image(state: State<'_, AppState>, session_id: String, path: String) -> Result<String> {
+    // A question belongs to one task: its images come from that task's checkout only.
+    let project_id = state.store.lock().map_err(|e| e.to_string())?.session(&session_id)?.project_id;
+    let root = state.root(&project_id, Some(&session_id))?;
+    blocking(move || workspace::image_data_url(&root, &path)).await
+}
+#[tauri::command]
 async fn resolve_workspace_files(
     state: State<'_, AppState>,
     project_id: String,
@@ -3078,6 +3088,7 @@ pub fn run() {
                 list_files,
                 search_files,
                 read_file,
+                workspace_image,
                 resolve_workspace_files,
                 prepare_file_preview,
                 get_run_script,

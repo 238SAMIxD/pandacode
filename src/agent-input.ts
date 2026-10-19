@@ -1,5 +1,6 @@
 import './agent-input.css';
 import { call } from './bridge';
+import { richMarkdown, type RichContext } from './rich-markdown';
 import type { AgentInputResponse, AgentQuestion } from './types';
 
 export interface AgentInput { element: HTMLFormElement; dispose(): void; }
@@ -32,6 +33,8 @@ export function createAgentInput(sessionId: string, requestId: string, data: unk
   let disposed = false, pending = false;
   let response: () => AgentInputResponse;
   const fail = (message: string) => { error.textContent = message; error.hidden = false; };
+  // Questions may carry Markdown, images from this task's workspace, charts and HTML views.
+  const richContext: RichContext = { image: path => call<string>('workspace_image', { sessionId, path }) };
 
   try {
     if (request.kind === 'questions') {
@@ -40,7 +43,7 @@ export function createAgentInput(sessionId: string, requestId: string, data: unk
       const readers = request.questions.map(raw => {
         if (!object(raw) || !text(raw.id) || !text(raw.question) || ids.has(raw.id as string)) throw new Error('This question format is not supported. Cancel to let the agent continue.');
         ids.add(raw.id as string);
-        return { id: raw.id as string, read: renderQuestion(fields, raw as unknown as AgentQuestion) };
+        return { id: raw.id as string, read: renderQuestion(fields, raw as unknown as AgentQuestion, richContext) };
       });
       response = () => ({ answers: Object.fromEntries(readers.map(reader => [reader.id, reader.read()])) });
     } else if (request.kind === 'form') {
@@ -104,10 +107,17 @@ export function createAgentInput(sessionId: string, requestId: string, data: unk
   } };
 }
 
-function renderQuestion(host: HTMLElement, question: AgentQuestion): () => string[] {
+/** Renders Markdown into `target`, keeping the plain text if rendering fails. */
+function rich(target: HTMLElement, source: string, context: RichContext): void {
+  target.textContent = source;
+  void richMarkdown(target, source, context).catch(() => { target.textContent = source; });
+}
+
+function renderQuestion(host: HTMLElement, question: AgentQuestion, context: RichContext): () => string[] {
   const group = node('fieldset', 'agent-input-question');
-  const legend = node('legend', '', question.question); group.append(legend);
-  if (question.header) legend.prepend(node('span', 'agent-input-header', question.header));
+  const legend = node('legend'); group.append(legend);
+  const body = node('div', 'agent-input-question-text'); rich(body, question.question, context); legend.append(body);
+  if (question.header) { const header = node('span', 'agent-input-header'); rich(header, question.header, context); legend.prepend(header); }
   host.append(group);
   const name = `agent-question-${++nextControlId}`;
   const choices: HTMLInputElement[] = [];
@@ -118,8 +128,9 @@ function renderQuestion(host: HTMLElement, question: AgentQuestion): () => strin
     const label = node('label', 'agent-input-option');
     const input = node('input'); input.type = question.multiSelect ? 'checkbox' : 'radio'; input.name = name; input.value = option.label;
     choices.push(input);
-    const copy = node('span'); copy.append(node('strong', '', option.label));
-    if (option.description) copy.append(node('small', '', option.description));
+    const copy = node('span');
+    const title = node('strong'); rich(title, option.label, context); copy.append(title);
+    if (option.description) { const detail = node('small'); rich(detail, option.description, context); copy.append(detail); }
     label.append(input, copy); group.append(label);
   }
   let custom: HTMLInputElement | undefined, other: HTMLInputElement | undefined;
