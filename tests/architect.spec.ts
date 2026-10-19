@@ -415,6 +415,11 @@ test.describe('architect teams', () => {
         await expect(status.nth(1)).toBeVisible(); await expect(status.nth(1)).toContainText('Reviewing worker results');
         expect(await status.evaluateAll(rows => rows.every(el => !el.closest('.user-message, .agent-message')))).toBe(true);
         await expect(status.locator('.provider-logo, .message-avatar')).toHaveCount(0);
+        // The status sits in the conversation column, aligned with the replies.
+        if (view === 'conversation') {
+          const [line, reply] = [(await status.nth(0).boundingBox())!, (await transcript(page).locator('.agent-message .message-content').first().boundingBox())!];
+          expect(Math.abs(line.x - reply.x)).toBeLessThan(2);
+        }
         await expect(transcript(page).locator('.user-message')).toHaveCount(1);
         await expect(transcript(page).locator('.user-message .message-content')).toHaveText(userJson);
         const responses = transcript(page).locator('.agent-message .message-content');
