@@ -87,11 +87,23 @@ async function desktopThread(host: PreviewBotsHost, entry: Store): Promise<Threa
   return thread;
 }
 
+/** Mirrors the native one-line preview of a bot conversation's latest message. */
+async function lastMessage(host: PreviewBotsHost, sessionId: string): Promise<Bot['lastMessage']> {
+  const page = await host.invoke<{ messages: { role: string; content: string; createdAt?: number; created_at?: number }[] }>('get_messages', { sessionId }).catch(() => null);
+  const latest = [...(page?.messages ?? [])].reverse().find(message => (message.role === 'user' || message.role === 'assistant') && message.content.trim());
+  if (!latest) return null;
+  const line = latest.content.replace(/[*_`#>]/g, '').split(/\s+/).filter(Boolean).join(' ');
+  return { role: latest.role as 'user' | 'assistant', text: [...line].length > 160 ? [...line].slice(0, 160).join('') + '…' : line, at: latest.createdAt ?? latest.created_at ?? Date.now() };
+}
+
 export async function invokeBots<T>(command: string, args: Record<string, any>, host: PreviewBotsHost): Promise<T> {
   const changed = () => host.emit('bots-changed', null);
   let result: unknown = null;
   switch (command) {
-    case 'bots_list': result = [...bots.values()].map(entry => ({ ...structuredClone(entry.bot), desktopSession: entry.threads.find(thread => thread.channelId === 'desktop')?.sessionId ?? null })); break;
+    case 'bots_list': result = await Promise.all([...bots.values()].map(async entry => {
+      const desktopSession = entry.threads.find(thread => thread.channelId === 'desktop')?.sessionId ?? null;
+      return { ...structuredClone(entry.bot), desktopSession, lastMessage: desktopSession ? await lastMessage(host, desktopSession) : null };
+    })); break;
     case 'bot_desktop_thread': { const entry = store(args.botId); const known = entry.threads.length; result = (await desktopThread(host, entry)).sessionId; if (entry.threads.length !== known) { host.emit('sessions-changed', null); changed(); } break; }
     case 'bot_project_ids': result = [...bots.values()].map(entry => entry.bot.projectId); break;
     case 'bot_detail': result = detail(store(args.botId)); break;

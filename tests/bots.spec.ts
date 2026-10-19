@@ -19,8 +19,20 @@ const opened = (page: Page): Promise<string[]> => page.evaluate(() => (window as
 const copied = (page: Page): Promise<string[]> => page.evaluate(() => (window as any).__copied);
 
 const sidebar = (page: Page) => page.getByRole('region', { name: 'Bots', exact: true });
+const botsBar = (page: Page) => page.locator('.sidebar-bots-bar');
+/** The bar at the bottom of the sidebar switches it to the Bots view. */
+async function showBotsView(page: Page): Promise<void> {
+  if (await botsBar(page).getAttribute('aria-pressed') !== 'true') await botsBar(page).click();
+  await expect(sidebar(page)).toBeVisible();
+}
+/** Back to the task list from the Bots view. */
+async function showTasksView(page: Page): Promise<void> {
+  if (await botsBar(page).getAttribute('aria-pressed') === 'true') await botsBar(page).click();
+  await expect(page.locator('#navigation')).toBeVisible();
+}
 async function openBots(page: Page): Promise<void> {
   await page.goto('/');
+  await showBotsView(page);
   await sidebar(page).getByRole('button', { name: 'Add bot', exact: true }).click();
   await expect(bots(page)).toBeVisible();
 }
@@ -42,6 +54,36 @@ async function openSettings(page: Page, section?: string, name = 'Scout'): Promi
 }
 
 test.describe('bots', () => {
+  test('the Bots bar switches the sidebar to the bots, each with its latest message', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.locator('#navigation')).toBeVisible();
+    await expect(sidebar(page)).toBeHidden();
+    await newBot(page, 'Scout');
+    await expect(page.locator('#navigation')).toBeHidden();
+    await expect(botsBar(page)).toHaveAttribute('aria-pressed', 'true');
+    const row = sidebar(page).locator('.bot-card', { hasText: 'Scout' });
+    await expect(row).toHaveClass(/selected/);
+    await page.locator('#prompt').fill('What is new today?');
+    await page.locator('#prompt').press('Enter');
+    // After the reply, the row previews it with its time.
+    await expect(row.locator('.bot-card-preview')).toContainText('This is the browser preview');
+    await expect(row.locator('time')).toBeVisible();
+    const search = sidebar(page).getByRole('searchbox', { name: 'Search bots' });
+    await search.fill('nobody');
+    await expect(sidebar(page).locator('.bots-panel-empty')).toHaveText('No bots match.');
+    await search.fill('sco');
+    await expect(row).toBeVisible();
+    await expect(search).toBeFocused();
+    await expect(botsBar(page)).toContainText('1');
+    // The view is remembered (preview bots live in memory, so the list starts empty); the bar switches back to tasks.
+    await page.reload();
+    await expect(sidebar(page)).toBeVisible();
+    await botsBar(page).click();
+    await expect(page.locator('#navigation')).toBeVisible();
+    await expect(sidebar(page)).toBeHidden();
+    await expect(botsBar(page)).toHaveAttribute('aria-pressed', 'false');
+  });
+
   test('a new bot opens its conversation in the task view, with the bot in the header', async ({ page }) => {
     await openBots(page);
     await expect(bots(page).getByRole('heading', { name: 'New bot' })).toBeVisible();
@@ -66,10 +108,12 @@ test.describe('bots', () => {
     await expect(page.locator('#composer-area .composer-context')).toBeHidden();
     await expect(sidebar(page).locator('.bot-row.selected')).toContainText('Scout');
     await expect(page.locator('#navigation')).not.toContainText('Scout');
+    await showTasksView(page);
     await page.getByRole('button', { name: 'Filter projects' }).click();
     await expect(page.locator('.floating-menu')).not.toContainText('Scout');
     await page.keyboard.press('Escape');
     // Another task brings back the normal header; the sidebar row returns to the bot.
+    await showTasksView(page);
     await page.locator('#navigation .task-item', { hasText: 'Explore the project' }).click();
     await expect(crumb(page)).toHaveCount(0);
     await sidebar(page).getByRole('button', { name: 'Chat with Scout' }).click();
@@ -103,6 +147,7 @@ test.describe('bots', () => {
     await picker.getByRole('button', { name: 'Use "bot-thread-model" with Kimi Code', exact: true }).click();
     await expect(page.locator('#composer')).toContainText('bot-thread-model');
     // Saved on the conversation itself: it is still chosen after leaving and coming back.
+    await showTasksView(page);
     await page.locator('#navigation .task-item', { hasText: 'Explore the project' }).click();
     await expect(page.locator('#composer')).not.toContainText('bot-thread-model');
     await sidebar(page).getByRole('button', { name: 'Chat with Scout' }).click();
@@ -341,7 +386,9 @@ test.describe('bots', () => {
 
   test('Open chat in settings returns to the conversation', async ({ page }) => {
     await newBot(page);
+    await showTasksView(page);
     await page.locator('#navigation .task-item', { hasText: 'Explore the project' }).click();
+    await showBotsView(page);
     await sidebar(page).getByRole('button', { name: 'Scout settings' }).click();
     await panel(page).getByRole('button', { name: 'Open chat' }).click();
     await expect(panel(page)).toBeHidden();

@@ -804,7 +804,7 @@ html[data-theme="dark"]:is([data-native-material="liquidGlass"],[data-native-mat
 /* A bot's conversations are ordinary task threads. The header names the bot and its state,
    with pause and settings beside it; bots own their workspace, so the project bar is hidden. */
 .breadcrumb .bot-crumb{display:flex;align-items:center;gap:8px;min-width:0;max-width:none;overflow:hidden;color:var(--text)}
-.bot-crumb-avatar{display:grid;place-items:center;flex:none;width:22px;height:22px;border-radius:50%;background:color-mix(in srgb,var(--accent) 55%,var(--raised));color:var(--on-accent);font-size:.72rem;font-weight:650;line-height:1}
+.bot-crumb-avatar{display:grid;place-items:center;flex:none;width:22px;height:22px;border-radius:50%;background:var(--bot-color,color-mix(in srgb,var(--accent) 55%,var(--raised)));color:#fff;font-size:.72rem;font-weight:650;line-height:1}
 .bot-crumb strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.84rem;font-weight:600}
 .bot-crumb-where{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
 .bot-crumb-where::before{content:'·';margin-right:8px;opacity:.6}

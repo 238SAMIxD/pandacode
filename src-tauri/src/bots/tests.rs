@@ -1,3 +1,4 @@
+use rusqlite::params;
 use super::channels::{self, discord, http, slack, telegram, web, whatsapp};
 use super::{brief, gateway, guard, schedule, *};
 use serde_json::json;
@@ -386,6 +387,28 @@ fn summaries_name_the_desktop_conversation_once_it_exists() {
     let json = serde_json::to_value(&summaries(&f.store).unwrap()[0]).unwrap();
     assert_eq!(json["desktopSession"], session.as_str());
     assert_eq!(json["name"], "Scout", "bot fields stay at the top level");
+}
+
+#[test]
+fn summaries_carry_a_one_line_preview_of_the_latest_message() {
+    let f = fixture();
+    let bot = bot(&f);
+    assert!(summaries(&f.store).unwrap()[0].last_message.is_none());
+    let (session, _) = thread_session(&f.store, &bot, DESKTOP, DESKTOP, "Scout · You").unwrap();
+    let insert = |role: &str, content: &str, at: i64| {
+        f.store.db.execute("INSERT INTO messages(session_id,role,content,created_at) VALUES(?1,?2,?3,?4)", params![session, role, content, at]).unwrap();
+    };
+    insert("user", "What changed today?", 10);
+    insert("assistant", "## Done\n\nInbox at **zero**.   Two `replies` ready.", 20);
+    insert("system", "Run finished", 30);
+    let json = serde_json::to_value(&summaries(&f.store).unwrap()[0]).unwrap();
+    assert_eq!(json["lastMessage"]["role"], "assistant");
+    assert_eq!(json["lastMessage"]["text"], "Done Inbox at zero. Two replies ready.");
+    assert_eq!(json["lastMessage"]["at"], 20);
+    insert("user", &"x".repeat(400), 40);
+    let long = summaries(&f.store).unwrap()[0].last_message.clone().unwrap();
+    assert_eq!(long.role, "user");
+    assert!(long.text.chars().count() <= 161, "previews stay short");
 }
 
 #[test]

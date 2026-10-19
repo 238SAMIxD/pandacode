@@ -14,6 +14,8 @@ export interface Bot {
   paused: boolean; memoryVersion: number; notifyChannelId: string | null; notifyThread: string | null; createdAt: number; updatedAt: number;
   /** The bot's conversation in this app, once it exists. */
   desktopSession?: string | null;
+  /** The latest thing said in that conversation, flattened to one line. */
+  lastMessage?: { role: 'user' | 'assistant'; text: string; at: number } | null;
 }
 export interface BotInput { name: string; role: string; instructions: string; goals: string; avatar: string; provider: ProviderId; model: string; mode: string; heartbeatMinutes: number; }
 export interface Memory { id: string; content: string; source: 'user' | 'bot'; createdAt: number; }

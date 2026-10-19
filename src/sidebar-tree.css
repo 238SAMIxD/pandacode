@@ -92,20 +92,10 @@ html:not([data-theme=dark]) .sidebar .task-link.pull{color:#7c3aed}
 
 /* Bots: a compact section at the bottom of the sidebar. A row opens the bot's chat;
    its gear opens memory, schedules and channels. */
-.sidebar-bots{flex:none;padding:6px 8px 2px;border-top:1px solid var(--tree-guide)}
-.sidebar-bots:empty{display:none}
-.sidebar-bots-heading{display:flex;align-items:center;justify-content:space-between;height:24px;padding:0 3px 0 9px;font-size:.72rem;font-weight:600;letter-spacing:.02em;color:var(--muted)}
-.sidebar-bots-heading>.icon-button{width:22px;height:22px;color:var(--muted)}
-.sidebar-bots-heading>.icon-button .icon{width:13px;height:13px}
-.sidebar-bots-heading>.icon-button:hover{color:var(--text)}
-.sidebar-bots-list{display:flex;flex-direction:column;gap:1px;max-height:calc(var(--tree-row) * 5 + 4px);overflow-y:auto;scrollbar-width:none}
-.sidebar-bots-list::-webkit-scrollbar{display:none}
 .bot-row{position:relative;display:flex;align-items:center;border-radius:3px}
 .bot-row:hover,.bot-row.selected{background:var(--raised)}
 .bot-row-open{flex:1;min-width:0;display:flex;align-items:center;gap:8px;height:var(--tree-row);padding:0 30px 0 7px;border-radius:3px;justify-content:flex-start;color:var(--text);font-size:.84rem;--press:.985}
 .bot-row.selected .bot-row-open{font-weight:500}
-.bot-row-avatar{display:grid;place-items:center;flex:none;width:18px;height:18px;border-radius:50%;background:color-mix(in srgb,var(--accent) 55%,var(--raised));color:var(--on-accent);font-size:.66rem;font-weight:700;line-height:1}
-.bot-row.paused .bot-row-avatar{filter:grayscale(.8);opacity:.6}
 .bot-row-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
 .bot-row.paused .bot-row-name{color:var(--muted)}
 .bot-row-state{flex:none;font-size:.68rem;color:var(--faint)}

@@ -40,6 +40,7 @@ import { Subagents } from './subagents';
 import { JevActivity } from './jev-activity';
 import { initializeSidebarResizing } from './sidebar-resize';
 import { changeUiScale, initializeUiSizing, setUiScale } from './ui-size';
+import { botAvatar, botsBarHtml, botsListHtml, botsPanelHeadHtml, storedSidebarView, storeSidebarView, syncSeen, type SidebarView } from './sidebar-bots';
 import { connectAgentUiActions, type AgentUiAction } from './agent-ui-actions';
 import { createAgentInput, type AgentInput } from './agent-input';
 import { mountSlashCommands, type SlashCommand } from './slash-commands';
@@ -256,7 +257,8 @@ $app.innerHTML = `<div class="workspace">
     <div class="sidebar-projects"><button id="project-filter" class="project-filter" data-action="filter-projects" aria-label="Filter projects" aria-haspopup="dialog" aria-expanded="false"><span>All projects</span>${icon('down')}</button>${button('import-conversations', 'Import conversations', 'download', 'import-trigger')}${button('add-project', 'Open project', 'plus')}</div>
     <div id="navigation" class="navigation"></div>
     <div id="sidebar-note" class="sidebar-note" hidden></div>
-    <section id="sidebar-bots" class="sidebar-bots" aria-label="Bots"></section>
+    <section id="sidebar-bots-panel" class="bots-panel" aria-label="Bots"></section>
+    <div id="sidebar-bots" class="sidebar-bots"></div>
     <div class="sidebar-bottom">${button('support', 'Help & support', 'help', 'support-button', 'id="support-button"')}${button('agent-usage', 'Agent usage', 'activity', '', 'id="agent-usage-button"')}<button data-action="archive-view" id="archive-toggle" title="Archived tasks" aria-label="Archived tasks">${icon('archive')}</button><button data-action="settings" title="Settings (${shortcut(',')})" aria-label="Settings">${icon('settings')}</button><button data-action="toggle-theme" id="theme-toggle" aria-label="Dark mode" aria-pressed="false"></button></div>
   </aside>
   <main class="main-pane">
@@ -880,10 +882,9 @@ function botCrumb(bot: import('./bots').Bot): string {
   const s = session();
   const working = state.sessions.some(task => task.projectId === bot.projectId && isRunning(task.id));
   const status = bot.paused ? 'Paused' : working ? 'Working' : 'Ready';
-  const glyph = bot.avatar.trim() || bot.name.trim().slice(0, 1).toUpperCase();
   // Channel threads and scheduled work name where they come from; the bot's own chat needs no label.
   const where = s && s.id !== bot.desktopSession ? s.title.split(' · ').slice(1).join(' · ') : '';
-  return `<span class="bot-crumb"><span class="bot-crumb-avatar" aria-hidden="true">${escape(glyph)}</span><strong>${escape(bot.name)}</strong>${where ? `<span class="bot-crumb-where">${escape(where)}</span>` : ''}<span class="bot-crumb-state" data-state="${status.toLowerCase()}">${status}</span></span><button class="icon-button bot-crumb-action" data-action="bot-pause" data-bot="${escape(bot.id)}" aria-label="${bot.paused ? 'Resume' : 'Pause'} ${escape(bot.name)}" title="${bot.paused ? 'Resume: schedules, check-ins and channels continue' : 'Pause: stop work and hold schedules and messages'}" aria-pressed="${bot.paused}">${icon(bot.paused ? 'play' : 'pause')}</button><button class="bot-crumb-settings" data-action="bot-settings" data-bot="${escape(bot.id)}" aria-label="${escape(bot.name)} settings" title="Profile, memory, schedules, channels and rules">${icon('settings')}<span>Settings</span></button>`;
+  return `<span class="bot-crumb">${botAvatar(bot, 'bot-crumb-avatar')}<strong>${escape(bot.name)}</strong>${where ? `<span class="bot-crumb-where">${escape(where)}</span>` : ''}<span class="bot-crumb-state" data-state="${status.toLowerCase()}">${status}</span></span><button class="icon-button bot-crumb-action" data-action="bot-pause" data-bot="${escape(bot.id)}" aria-label="${bot.paused ? 'Resume' : 'Pause'} ${escape(bot.name)}" title="${bot.paused ? 'Resume: schedules, check-ins and channels continue' : 'Pause: stop work and hold schedules and messages'}" aria-pressed="${bot.paused}">${icon(bot.paused ? 'play' : 'pause')}</button><button class="bot-crumb-settings" data-action="bot-settings" data-bot="${escape(bot.id)}" aria-label="${escape(bot.name)} settings" title="Profile, memory, schedules, channels and rules">${icon('settings')}<span>Settings</span></button>`;
 }
 /** An empty bot conversation: who it is, a few things to ask, and the settings that make it useful. */
 function botWelcome(bot: import('./bots').Bot): string {
@@ -2093,6 +2094,7 @@ function onAgent(event: AgentEvent): void {
   if (event.kind === 'done') {
     if (s) refreshFileLinks(workspaceContext(s));
     void detectPullRequest(event.sessionId);
+    if (s && botProjects.has(s.projectId)) void refreshBotPreviews();
     const finishing = { stream: state.streams.get(event.sessionId) ?? stream(event.sessionId), finishedAt: Date.now() };
     clearAgentInputs(finishing.stream);
     finishingStreams.set(event.sessionId, finishing);
@@ -3049,19 +3051,34 @@ async function reloadBotProjects(withProjects = true): Promise<void> {
   renderNavigation(); renderHeader();
 }
 const userProjects = (): Project[] => state.projects.filter(project => !botProjects.has(project.id));
+/** The sidebar shows tasks or bots; the bar at its bottom switches between them. */
+let sidebarView: SidebarView = storedSidebarView();
+let botsQuery = '';
 function renderBots(): void {
-  const host = document.querySelector<HTMLElement>('#sidebar-bots');
-  if (!host) return;
-  const current = session();
-  const row = (bot: import('./bots').Bot): string => {
-    const working = state.sessions.some(task => task.projectId === bot.projectId && isRunning(task.id));
-    const glyph = bot.avatar.trim() || bot.name.trim().slice(0, 1).toUpperCase();
-    const selected = current?.projectId === bot.projectId;
-    const status = bot.paused ? '<span class="bot-row-state">Paused</span>' : working ? '<span class="task-indicator running" role="img" aria-label="Working"></span>' : '';
-    return `<div class="bot-row ${selected ? 'selected' : ''} ${bot.paused ? 'paused' : ''}"><button class="bot-row-open" data-action="open-bot" data-bot="${escape(bot.id)}" aria-label="Chat with ${escape(bot.name)}${bot.paused ? ' (paused)' : ''}" title="Chat with ${escape(bot.name)}" ${selected ? 'aria-current="page"' : ''}><span class="bot-row-avatar" aria-hidden="true">${escape(glyph)}</span><span class="bot-row-name">${escape(bot.name)}</span>${status}</button><button class="icon-button bot-row-settings" data-action="bot-settings" data-bot="${escape(bot.id)}" aria-label="${escape(bot.name)} settings" title="Settings, memory, schedules and channels">${icon('settings')}</button></div>`;
-  };
-  const html = `<div class="sidebar-bots-heading"><span>Bots</span><button class="icon-button" data-action="new-bot" aria-label="Add bot" title="Add bot">${icon('plus')}</button></div><div class="sidebar-bots-list">${sidebarBots.map(row).join('') || `<button class="bot-row-add" data-action="new-bot">${icon('plus')}<span>Add a bot</span></button>`}</div>`;
-  if (host.innerHTML !== html) host.innerHTML = html;
+  const bar = document.querySelector<HTMLElement>('#sidebar-bots'), panel = document.querySelector<HTMLElement>('#sidebar-bots-panel');
+  if (!bar || !panel) return;
+  const current = session(), open = state.view === 'conversation' ? current?.projectId : undefined;
+  const unread = syncSeen(sidebarBots, open);
+  document.querySelector('.sidebar')?.classList.toggle('bots-view', sidebarView === 'bots');
+  const barHtml = botsBarHtml(sidebarView, sidebarBots.length, unread.size);
+  if (bar.innerHTML !== barHtml) bar.innerHTML = barHtml;
+  // The head (and its search field) is built once, so typing never loses focus.
+  if (!panel.firstElementChild) {
+    panel.innerHTML = botsPanelHeadHtml();
+    panel.querySelector<HTMLInputElement>('[data-bots-search]')!.addEventListener('input', event => { botsQuery = (event.target as HTMLInputElement).value; renderBots(); });
+  }
+  const list = panel.querySelector<HTMLElement>('.bots-panel-list')!;
+  const html = botsListHtml({ bots: sidebarBots, selectedProject: current?.projectId, working: bot => state.sessions.some(task => task.projectId === bot.projectId && isRunning(task.id)) }, unread, botsQuery);
+  if (list.innerHTML !== html) list.innerHTML = html;
+}
+function setSidebarView(view: SidebarView): void {
+  sidebarView = view; storeSidebarView(view); renderBots();
+  if (view === 'bots') document.querySelector<HTMLInputElement>('#sidebar-bots-panel [data-bots-search]')?.focus({ preventScroll: true });
+}
+/** A bot's latest message changed; refresh the list's previews without reloading projects. */
+async function refreshBotPreviews(): Promise<void> {
+  sidebarBots = await call<import('./bots').Bot[]>('bots_list').catch(() => sidebarBots);
+  renderBots();
 }
 /** The bot whose workspace holds the open conversation: its own chat, a channel thread or scheduled work. */
 function botForThread(): import('./bots').Bot | undefined {
@@ -3162,6 +3179,7 @@ async function action(name: string, element: HTMLElement): Promise<void> {
     case 'bot-settings': if (element.dataset.bot) await showBotSettings(element.dataset.bot, element.dataset.tab as import('./bots').Section | undefined); break;
     case 'bot-pause': if (element.dataset.bot) { const bot = sidebarBots.find(item => item.id === element.dataset.bot); if (bot) { await call('bot_set_paused', { botId: bot.id, paused: !bot.paused }); notify(bot.paused ? `${bot.name} resumed` : `${bot.name} paused`); await reloadBotProjects(false); } } break;
     case 'open-bot': if (element.dataset.bot) await openBot(element.dataset.bot); break;
+    case 'toggle-bots-view': setSidebarView(sidebarView === 'bots' ? 'tasks' : 'bots'); break;
     case 'import-conversations': await showConversationImport(); break;
     case 'agent-updates': await agentUpdates.show(); break;
     case 'goal': case 'jobs': case 'usage': if (session()) await performSlashAction(name, '', session()!); break;

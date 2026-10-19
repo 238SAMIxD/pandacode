@@ -498,6 +498,42 @@ pub struct BotSummary {
     #[serde(flatten)]
     bot: Bot,
     desktop_session: Option<String>,
+    /// The latest thing said in the desktop conversation, flattened to one short line for the sidebar.
+    pub(crate) last_message: Option<LastMessage>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct LastMessage {
+    pub role: String,
+    pub text: String,
+    pub at: i64,
+}
+
+const PREVIEW_CHARS: usize = 160;
+
+/// Markdown and whitespace flattened to one line, cut to a sidebar-sized preview.
+fn preview(content: &str) -> String {
+    let plain: String = content.chars().filter(|c| !matches!(c, '*' | '_' | '`' | '#' | '>')).collect();
+    let line = plain.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.chars().count() <= PREVIEW_CHARS {
+        return line;
+    }
+    let mut cut: String = line.chars().take(PREVIEW_CHARS).collect();
+    cut.push('…');
+    cut
+}
+
+fn last_message(store: &Store, session: &str) -> Result<Option<LastMessage>> {
+    store
+        .db
+        .query_row(
+            "SELECT role, substr(content,1,4096), created_at FROM messages WHERE session_id=?1 AND role IN ('user','assistant') AND trim(content)<>'' ORDER BY id DESC LIMIT 1",
+            params![session],
+            |r| Ok(LastMessage { role: r.get(0)?, text: preview(&r.get::<_, String>(1)?), at: r.get(2)? }),
+        )
+        .optional()
+        .map_err(|e| e.to_string())
 }
 
 pub(crate) fn summaries(store: &Store) -> Result<Vec<BotSummary>> {
@@ -509,7 +545,8 @@ pub(crate) fn summaries(store: &Store) -> Result<Vec<BotSummary>> {
                 .query_row("SELECT session_id FROM bot_threads WHERE bot_id=?1 AND channel_id=?2", params![bot.id, DESKTOP], |r| r.get(0))
                 .optional()
                 .map_err(|e| e.to_string())?;
-            Ok(BotSummary { bot, desktop_session })
+            let last_message = match desktop_session.as_deref() { Some(session) => last_message(store, session)?, None => None };
+            Ok(BotSummary { bot, desktop_session, last_message })
         })
         .collect()
 }
