@@ -136,3 +136,21 @@ fn cancelled_approval_notifies_its_original_ui_request() {
     assert_eq!(cancelled.events[0].request_id, id);
     assert!(protocol.pending.is_empty());
 }
+
+#[test]
+fn app_instructions_ride_the_cached_system_prompt_not_every_message() {
+    let args_for = |provider: &str, instructions: &str| -> Vec<String> {
+        let mut config = config(provider);
+        config.instructions = instructions.into();
+        let mut command = tokio::process::Command::new(provider);
+        super::configure_command(&mut command, &config);
+        command.as_std().get_args().map(|arg| arg.to_string_lossy().to_string()).collect()
+    };
+    let args = args_for("claude", "Run and preview workflow: keep pandacode-run.sh current.");
+    assert!(args.windows(2).any(|pair| pair == ["--append-system-prompt", "Run and preview workflow: keep pandacode-run.sh current."]));
+    // Nothing to add, no flag; relays that wrap Claude Code take it the same way.
+    assert!(!args_for("claude", "").iter().any(|arg| arg == "--append-system-prompt"));
+    assert!(args_for("glm", "x").iter().any(|arg| arg == "--append-system-prompt"));
+    assert!(super::takes_system_instructions("mimo"));
+    assert!(!super::takes_system_instructions("codex"));
+}

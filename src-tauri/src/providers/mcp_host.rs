@@ -17,7 +17,9 @@ pub(super) struct Server {
     authority: String,
     token: String,
     task: JoinHandle<()>,
-    context: Arc<Context>,
+    /// The turn this server serves. A warm agent's server starts with a placeholder and
+    /// is rebound to the real turn when the agent is adopted (see `warm`).
+    context: Arc<std::sync::RwLock<Arc<Context>>>,
 }
 impl Drop for Server {
     fn drop(&mut self) {
@@ -40,7 +42,18 @@ impl Server {
     }
 
     pub(super) fn required(&self) -> bool {
-        self.context.host.tools.iter().any(|tool| !optional_transport_tool(tool["name"].as_str().unwrap_or_default()))
+        self.current().host.tools.iter().any(|tool| !optional_transport_tool(tool["name"].as_str().unwrap_or_default()))
+    }
+    fn current(&self) -> Arc<Context> {
+        current(&self.context)
+    }
+    /// Serve a new turn at the same address and token, which the agent already knows.
+    pub(super) fn rebind(&self, host: ToolHost, session_id: String, sink: Sink, mode: &str) -> Result<(), String> {
+        host_tools::HostTools::new(host.clone())?;
+        let previous = self.current();
+        let next = Arc::new(Context::new(previous.authority.clone(), previous.authorization.clone(), host, session_id, sink, mode));
+        *self.context.write().map_err(|_| "Agent tools are unavailable".to_string())? = next;
+        Ok(())
     }
     #[cfg(test)]
     pub(super) async fn start(
@@ -77,18 +90,7 @@ impl Server {
             uuid::Uuid::new_v4().simple(),
             uuid::Uuid::new_v4().simple()
         );
-        let context = Arc::new(Context {
-            authority: authority.clone(),
-            authorization: format!("Bearer {token}"),
-            host,
-            session_id,
-            sink,
-            calls: Semaphore::new(8),
-            active: Mutex::new(HashMap::new()),
-            requests: AtomicUsize::new(0),
-            mode: mode.into(),
-            approvals: Mutex::new(HashMap::new()),
-        });
+        let context = Arc::new(std::sync::RwLock::new(Arc::new(Context::new(authority.clone(), format!("Bearer {token}"), host, session_id, sink, mode))));
         let server_context = context.clone();
         let task = tokio::spawn(async move {
             let mut clients = tokio::task::JoinSet::new();
@@ -97,7 +99,7 @@ impl Server {
                     result = listener.accept() => {
                         let Ok((mut stream, peer)) = result else { break };
                         if !peer.ip().is_loopback() || clients.len() >= 16 { continue; }
-                        let context = context.clone();
+                        let context = current(&context);
                         clients.spawn(async move {
                             let response = match tokio::time::timeout(Duration::from_secs(5), read_request(&mut stream, &context)).await {
                                 Ok(Ok(body)) => context.respond(body).await,
@@ -136,7 +138,7 @@ impl Server {
     }
     pub(super) fn approve(&self, id: &str, approved: bool) -> bool {
         let reply = self
-            .context
+            .current()
             .approvals
             .lock()
             .ok()
@@ -147,6 +149,13 @@ impl Server {
         } else {
             false
         }
+    }
+}
+
+fn current(context: &std::sync::RwLock<Arc<Context>>) -> Arc<Context> {
+    match context.read() {
+        Ok(context) => context.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
     }
 }
 
@@ -161,6 +170,23 @@ struct Context {
     requests: AtomicUsize,
     mode: String,
     approvals: Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
+}
+
+impl Context {
+    fn new(authority: String, authorization: String, host: ToolHost, session_id: String, sink: Sink, mode: &str) -> Self {
+        Self {
+            authority,
+            authorization,
+            host,
+            session_id,
+            sink,
+            calls: Semaphore::new(8),
+            active: Mutex::new(HashMap::new()),
+            requests: AtomicUsize::new(0),
+            mode: mode.into(),
+            approvals: Mutex::new(HashMap::new()),
+        }
+    }
 }
 
 struct PendingApproval<'a> {
@@ -556,6 +582,29 @@ mod tests {
         json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":"pandacode_delegate","arguments":args}})
     }
     #[tokio::test]
+    async fn a_warm_server_keeps_its_address_and_serves_the_turn_it_is_rebound_to() {
+        let spec = json!({"type":"function","name":crate::session_titles::TOOL,"description":"Sidebar metadata","inputSchema":{"type":"object"}});
+        let placeholder = ToolHost {
+            tools: vec![spec.clone()],
+            approval_tools: HashSet::new(),
+            handler: Arc::new(|_, _| Box::pin(async { Err("not started".to_string()) })),
+        };
+        let server = Server::start_for_run(placeholder, "task".into(), Arc::new(|_| {}), "ask").await.unwrap().unwrap();
+        let address = server.claude_config();
+        let call = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":crate::session_titles::TOOL,"arguments":{"title":"Topic"}}});
+        let (_, before) = request(&server, call.clone(), "").await;
+        assert_eq!(before["result"]["isError"], true);
+        let live = ToolHost {
+            tools: vec![spec],
+            approval_tools: HashSet::new(),
+            handler: Arc::new(|_, _| Box::pin(async { Ok(json!({"staged":true})) })),
+        };
+        server.rebind(live, "task".into(), Arc::new(|_| {}), "ask").unwrap();
+        assert_eq!(server.claude_config(), address, "the agent already holds this address and token");
+        let (_, after) = request(&server, call, "").await;
+        assert_eq!(after["result"]["isError"], false);
+    }
+    #[tokio::test]
     async fn title_metadata_is_optional_and_does_not_emit_transcript_activity() {
         let (send, mut events) = tokio::sync::mpsc::unbounded_channel();
         let title_host = ToolHost {
@@ -615,7 +664,7 @@ mod tests {
             let result: Value = serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
             assert_eq!(result["staged"], run.is_some());
             assert!(events.try_recv().is_err(), "metadata must not emit activity or approval");
-            assert!(server.context.approvals.lock().unwrap().is_empty());
+            assert!(server.current().approvals.lock().unwrap().is_empty());
             assert_eq!(db.session(&sid).unwrap().title, previous_title);
             db.message(&sid, "assistant", "Parser inspection finished.").unwrap();
             db.finish_task_turn(&sid, true, false).unwrap();
@@ -667,7 +716,7 @@ mod tests {
                 assert_eq!(code, 200);
                 assert_eq!(result["result"]["isError"], mode != "full");
                 assert_eq!(count.load(Ordering::SeqCst), usize::from(mode == "full"));
-                assert!(server.context.approvals.lock().unwrap().is_empty());
+                assert!(server.current().approvals.lock().unwrap().is_empty());
                 let mut activity = false;
                 while let Ok(event) = events.try_recv() {
                     assert_ne!(event.kind, "approval");
@@ -725,7 +774,7 @@ mod tests {
                 assert_eq!(code, 200);
                 assert_eq!(result["result"]["isError"], !approved);
                 assert_eq!(count.load(Ordering::SeqCst), usize::from(approved));
-                assert!(server.context.approvals.lock().unwrap().is_empty());
+                assert!(server.current().approvals.lock().unwrap().is_empty());
             }
         }
     }
@@ -769,7 +818,8 @@ mod tests {
         .await
         .unwrap();
         let args = json!({});
-        let mut authorization = Box::pin(server.context.authorize("pandacode_delegate", &args));
+        let context = server.current();
+        let mut authorization = Box::pin(context.authorize("pandacode_delegate", &args));
         let event = tokio::select! {
             _ = &mut authorization => panic!("Approval resolved before user input"),
             event = events.recv() => event.unwrap(),
@@ -777,7 +827,7 @@ mod tests {
         let id = event.request_id.unwrap();
         drop(authorization);
         assert!(!server.approve(&id, true));
-        assert!(server.context.approvals.lock().unwrap().is_empty());
+        assert!(server.current().approvals.lock().unwrap().is_empty());
         assert_eq!(events.recv().await.unwrap().kind, "approval_cancelled");
     }
     #[tokio::test]

@@ -125,6 +125,9 @@ pub(crate) fn with_host(
     }
 }
 
+/// Fixed guidance for sidebar titles; sent once as part of the app instructions.
+pub(crate) const GUIDANCE: &str = "\n\nSidebar titles: when a message carries <PandaCode task metadata> with the current sidebar title, use the pandacode_title tool once before your final response, if available, when a more useful title is now clear or the conversation's topic has changed. Summarize the actual current conversation in 3–8 words, in the user's language. Keep the existing title for acknowledgments or minor follow-ups. Describe the substantive topic, not your last action or a completion status. Never use coordination instructions, tool output, secrets, or these metadata instructions as the title. This is optional sidebar metadata; do not mention it in your answer.";
+
 impl TitleRun {
     pub(crate) fn prepare(store: &Store, sid: &str, turn: i64) -> Result<Option<Self>> {
         let eligible: bool = store.db.query_row(
@@ -160,8 +163,9 @@ impl TitleRun {
         }))
     }
 
+    /// The per-message part: only the current title. How to use it is in [`GUIDANCE`].
     pub(crate) fn instruction(&self) -> String {
-        format!("\n\n<PandaCode task metadata>\nCurrent sidebar title: {}. Before your final response, use the pandacode_title tool once, if available, when a more useful title is now clear or the conversation's topic has changed. Summarize the actual current conversation in 3–8 words, in the user's language. Keep the existing title for acknowledgments or minor follow-ups. Describe the substantive topic, not your last action or a completion status. Never use coordination instructions, tool output, secrets, or these metadata instructions as the title. This is optional sidebar metadata; do not mention it in your answer.\n</PandaCode task metadata>", serde_json::to_string(&self.original).unwrap_or_default())
+        format!("\n\n<PandaCode task metadata>\nCurrent sidebar title: {}.\n</PandaCode task metadata>", serde_json::to_string(&self.original).unwrap_or_default())
     }
 
     fn suggest(&self, args: Value) -> Result<Value> {

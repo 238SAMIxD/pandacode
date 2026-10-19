@@ -99,6 +99,8 @@ pub async fn delete_session(
     if window.label() != "main" {
         return Err("Only the main window can delete tasks.".into());
     }
+    // A deleted task never sends a follow-up; free its waiting agent.
+    crate::providers::discard_warm_agent(&session_id);
     crate::blocking(move || {
         let deleted = delete_state(&app.state::<AppState>(), &session_id)?;
         let _ = app.emit(

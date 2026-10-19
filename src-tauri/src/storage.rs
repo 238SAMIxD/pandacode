@@ -904,6 +904,10 @@ impl Store {
         }
         self.session(sid)
     }
+    /// How many messages the user has sent in a task, including the one being sent.
+    pub fn user_turns(&self, sid: &str) -> Result<i64> {
+        self.db.query_row("SELECT COUNT(*) FROM messages WHERE session_id=?1 AND role='user'", [sid], |r| r.get(0)).map_err(|e| e.to_string())
+    }
     /// Whether a task can still be converted in place.
     pub fn worktree_attachable(&self, sid: &str) -> Result<bool> {
         let session = self.session(sid)?;

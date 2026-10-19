@@ -22,6 +22,8 @@ mod goals;
 mod host_inputs;
 mod host_tools;
 mod mcp_host;
+mod warm;
+pub use warm::{discard as discard_warm_agent, prewarm as prewarm_agent, supported as warms};
 use host_tools::apply_step;
 pub use host_tools::ToolHost;
 pub(crate) mod acp;
@@ -60,6 +62,11 @@ const TOOL_OUTPUT_LIMIT: usize = 8192;
 const TOOL_CACHE_LIMIT: usize = 64;
 const PREVIEW_TRUNCATED: &str = "\n[Preview truncated]";
 
+/// Harnesses that take app instructions as a system prompt (`--append-system-prompt`).
+pub fn takes_system_instructions(provider: &str) -> bool {
+    matches!(provider, "claude" | "glm" | "mimo")
+}
+
 #[derive(Clone, Debug)]
 pub struct RunConfig {
     pub session_id: String,
@@ -70,6 +77,9 @@ pub struct RunConfig {
     pub cwd: PathBuf,
     pub resume_id: Option<String>,
     pub prompt: String,
+    /// Fixed app instructions. Claude-family harnesses receive them as an appended system
+    /// prompt, which is cached with the rest of the prefix instead of re-sent in every message.
+    pub instructions: String,
     /// Exact skill reference resolved from the provider's native command catalog.
     pub skill: Option<(String, PathBuf)>,
     /// A native goal operation starts/resumes the harness goal runtime without
@@ -2627,6 +2637,9 @@ fn configure_command(command: &mut Command, config: &RunConfig) {
             if let Some(id) = &config.resume_id {
                 command.arg(format!("--resume={id}"));
             }
+            if !config.instructions.is_empty() {
+                command.args(["--append-system-prompt", &config.instructions]);
+            }
             command.env_remove("CLAUDECODE");
         }
     }
@@ -2744,7 +2757,19 @@ async fn run_process_with_tools(
             .flat_map(|name| [name.into(), format!("mcp__pandacode_architect__{name}")])
             .collect()
     };
+    // A warm agent started after the task's last turn: same launch, tools already listed.
+    let mut spare = match &host {
+        Some(tools) if warm::supported(&config) => warm::take(&config.session_id, &warm::key(&config, &tools.tools)),
+        _ => None,
+    };
     let (host, mcp) = match (config.provider.as_str(), host) {
+        ("claude", Some(host)) if spare.is_some() => {
+            let server = spare.as_mut().and_then(|spare| spare.server.take());
+            if let Some(server) = &server {
+                server.rebind(host, config.session_id.clone(), sink.clone(), &config.mode)?;
+            }
+            (None, server)
+        }
         ("codex", host) => {
             // Dynamic tools are fixed at thread creation. A per-run MCP override
             // adds optional tools and title metadata to resumed conversations
@@ -2776,23 +2801,28 @@ async fn run_process_with_tools(
         (_, None) => (None, None),
         _ => return Err("Host tools are unavailable for this provider".into()),
     };
-    if matches!(config.provider.as_str(), "claude" | "glm" | "mimo") {
-        if let Some(server) = &mcp {
-            command.args(["--mcp-config", &server.claude_config().to_string()]);
+    let (mut child, mut group) = if let Some(spare) = spare {
+        (spare.child, spare.group)
+    } else {
+        if matches!(config.provider.as_str(), "claude" | "glm" | "mimo") {
+            if let Some(server) = &mcp {
+                command.args(["--mcp-config", &server.claude_config().to_string()]);
+            }
         }
-    }
-    command
-        .current_dir(&config.cwd)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    #[cfg(unix)]
-    command.process_group(0);
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("Could not start {}: {e}", config.provider))?;
-    let mut group = ProcessGroup::register(child.id());
+        command
+            .current_dir(&config.cwd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        #[cfg(unix)]
+        command.process_group(0);
+        let child = command
+            .spawn()
+            .map_err(|e| format!("Could not start {}: {e}", config.provider))?;
+        let group = ProcessGroup::register(child.id());
+        (child, group)
+    };
     let mut stdin = child.stdin.take().ok_or("Provider stdin unavailable")?;
     let mut stdout = child.stdout.take().ok_or("Provider stdout unavailable")?;
     let stderr = child.stderr.take().ok_or("Provider stderr unavailable")?;
@@ -2966,6 +2996,7 @@ mod tests {
             cwd: PathBuf::from("/tmp"),
             resume_id: None,
             prompt: "Explain this project".into(),
+            instructions: String::new(),
             skill: None,
             goal: None,
             codex_settings: None,
@@ -4213,6 +4244,7 @@ mod tests {
                 cwd: root.clone(),
                 resume_id: resume.clone(),
                 prompt: prompt.into(),
+                instructions: String::new(),
                 skill: None,
                 goal: None,
                 codex_settings: None,

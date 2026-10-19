@@ -10,6 +10,7 @@ fn protocol() -> Protocol {
         cwd: PathBuf::from("/tmp"),
         resume_id: None,
         prompt: "Explain this project".into(),
+        instructions: String::new(),
         skill: None,
         goal: None,
         codex_settings: None,

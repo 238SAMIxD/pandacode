@@ -415,6 +415,33 @@ impl AppState {
             .workspace_root(project_id, session_id)
     }
 }
+/// Fixed instructions for every task turn: sidebar titles, the run script, change tracking.
+fn app_instructions() -> String {
+    [session_titles::GUIDANCE, run_script::INSTRUCTIONS, turn_changes::instruction()].concat()
+}
+
+/// Harnesses without a system prompt hear the app instructions again every few turns.
+const INSTRUCTION_REMINDER_EVERY: i64 = 8;
+fn reminder_turn(turns: i64) -> bool {
+    turns > 0 && turns % INSTRUCTION_REMINDER_EVERY == 1
+}
+
+#[cfg(test)]
+mod instruction_tests {
+    use super::*;
+
+    #[test]
+    fn harnesses_without_a_system_prompt_are_reminded_every_eighth_turn() {
+        let reminded: Vec<i64> = (1..=20).filter(|turn| reminder_turn(*turn)).collect();
+        assert_eq!(reminded, [1, 9, 17]);
+        assert!(!reminder_turn(0));
+        let text = app_instructions();
+        for part in ["Sidebar titles:", "Run and preview workflow:", "File change tracking:"] {
+            assert!(text.contains(part), "{part}");
+        }
+    }
+}
+
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
     tauri::async_runtime::spawn_blocking(f)
         .await
@@ -1256,6 +1283,7 @@ fn prepare_task_run_in_project(
         cwd,
         resume_id: session.resume_id,
         prompt,
+        instructions: String::new(),
         images,
         skill,
         goal: admission.goal,
@@ -1458,8 +1486,17 @@ async fn launch_operation_admitted(
         config.prompt.push_str(&title.instruction());
     }
     if restore_stage.is_none() {
-        config.prompt.push_str(run_script::INSTRUCTIONS);
-        config.prompt.push_str(turn_changes::instruction());
+        let instructions = app_instructions();
+        if providers::takes_system_instructions(&config.provider) {
+            // Cached with the system prompt: paid once, then read at a tenth of the price.
+            config.instructions = instructions;
+        } else {
+            // In the message: on a new conversation, then as a periodic reminder.
+            let turns = store.lock().ok().and_then(|db| db.user_turns(&session_id).ok()).unwrap_or(1);
+            if config.resume_id.is_none() || reminder_turn(turns) {
+                config.prompt.push_str(&instructions);
+            }
+        }
     }
     tauri::async_runtime::spawn(async move {
         let changes_root = config.cwd.clone();
@@ -1642,6 +1679,11 @@ async fn launch_operation_admitted(
         let host = Some(agent_tools::with_preview(host, app.clone(), session_id.clone(), stopped.clone()));
         let host = Some(turn_changes::with_host(host, tracker.clone(), stopped.clone()));
         let host = Some(session_titles::with_host(title_run.as_ref(), host, stopped.clone()));
+        // What the next turn's warm agent needs: this launch and the tools it listed.
+        let warm_next = providers::warms(&config).then(|| {
+            let tools = host.as_ref().map(|host| (host.tools.clone(), host.approval_tools.clone())).unwrap_or_default();
+            (config.clone(), tools)
+        });
         let result = if stopped.load(Ordering::SeqCst) {
             Ok(())
         } else if team_tools_missing {
@@ -1825,6 +1867,21 @@ async fn launch_operation_admitted(
             architect::completed(&app, &session_id, team.as_ref(), successful, was_stopped, registry);
         }
         drop(registry);
+        // Start the next turn's agent now, so a follow-up skips the CLI's own startup.
+        if let (true, Some((mut next, (tools, approvals)))) = (successful && !was_stopped, warm_next) {
+            let task = store.lock().ok().and_then(|db| db.session(&session_id).ok());
+            if let Some(task) = task {
+                next.resume_id = task.resume_id;
+                next.model = task.model;
+                next.mode = task.mode;
+                next.reasoning_effort = task.reasoning_effort;
+                next.prompt.clear();
+                next.images.clear();
+                tauri::async_runtime::spawn(async move {
+                    let _ = providers::prewarm_agent(next, tools, approvals).await;
+                });
+            }
+        }
     });
     Ok(())
 }
