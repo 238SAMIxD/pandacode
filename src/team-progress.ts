@@ -16,8 +16,9 @@ function text(root: Element, selector: string, value: string): void {
 
 /** Inline in the thread, one quiet line per spawned worker, like a tool line. Clicking a
  *  line opens that worker in the Architect & workers panel; the rest stay one click away. */
-export function updateTeamProgress(host: HTMLElement, team: TeamSnapshot | null | undefined, providers: Provider[]): boolean {
-  const visible = Boolean(team?.workers.length);
+export function updateTeamProgress(host: HTMLElement, team: TeamSnapshot | null | undefined, providers: Provider[], only?: TeamWorker[]): boolean {
+  const spawned = only ?? team?.workers ?? [];
+  const visible = spawned.length > 0;
   host.hidden = !visible;
   if (!team || !visible) { host.replaceChildren(); return false; }
   let list = host.querySelector<HTMLElement>('.team-progress');
@@ -30,11 +31,11 @@ export function updateTeamProgress(host: HTMLElement, team: TeamSnapshot | null 
   }
   list.dataset.status = team.status;
   // Active assignments first, then the latest settled ones; the rest are in the panel.
-  const active = team.workers.filter(worker => pending(worker) && worker.status !== 'queued');
-  const queued = team.workers.filter(worker => pending(worker) && worker.status === 'queued');
-  const settled = team.workers.filter(worker => !pending(worker)).slice().reverse();
+  const active = spawned.filter(worker => pending(worker) && worker.status !== 'queued');
+  const queued = spawned.filter(worker => pending(worker) && worker.status === 'queued');
+  const settled = spawned.filter(worker => !pending(worker)).slice().reverse();
   const visibleIds = new Set([...active, ...queued, ...settled].slice(0, 6).map(worker => worker.id));
-  const workers = team.workers.filter(worker => visibleIds.has(worker.id));
+  const workers = spawned.filter(worker => visibleIds.has(worker.id));
   const rows = new Map([...list.querySelectorAll<HTMLButtonElement>('.team-progress-worker')].map(row => [row.dataset.workerId!, row]));
   for (const [id, row] of rows) if (!visibleIds.has(id)) row.remove();
   workers.forEach((worker, index) => {
@@ -48,10 +49,14 @@ export function updateTeamProgress(host: HTMLElement, team: TeamSnapshot | null 
     const profile = team.config.workers.find(profile => profile.id === worker.profileId);
     const provider = providers.find(provider => provider.id === worker.provider);
     const model = provider?.models.find(model => model.id === worker.model)?.name ?? fallbackModel(worker.provider, worker.model).name;
-    const role = profile?.name !== worker.name ? profile?.name : '';
+    // Auto teams name a profile after its model and harness: show each fact once, and leave the
+    // harness to the logo.
+    const harness = provider?.name ?? worker.provider;
+    const detail = [...new Set([profile?.name !== worker.name ? profile?.name ?? '' : '', model].flatMap(part => part.split(' · ')).map(part => part.trim()))]
+      .filter(part => part && part !== harness && part !== worker.name);
     const status = worker.abandoned ? 'Skipped' : !teamActive(team) && pending(worker) ? 'Paused' : workerLabels[worker.status];
     text(row, '.team-progress-description strong', worker.name);
-    text(row, '.team-progress-description small', [role, provider?.name ?? worker.provider, model].filter(Boolean).join(' · '));
+    text(row, '.team-progress-description small', detail.join(' · '));
     text(row, '.team-progress-status', status);
     row.dataset.status = status;
     row.title = worker.assignment;
@@ -61,7 +66,7 @@ export function updateTeamProgress(host: HTMLElement, team: TeamSnapshot | null 
     }
   });
   const more = list.querySelector<HTMLButtonElement>('.team-progress-more')!;
-  const remaining = team.workers.length - workers.length;
+  const remaining = spawned.length - workers.length;
   more.hidden = remaining === 0;
   text(list, '.team-progress-more', remaining ? `${remaining} more ${remaining === 1 ? 'worker' : 'workers'}` : '');
   if (more !== list.lastElementChild) list.append(more);

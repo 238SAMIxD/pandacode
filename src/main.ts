@@ -913,9 +913,29 @@ function botWelcome(bot: import('./bots').Bot): string {
     .map(([tab, glyphName, label]) => `<button data-action="bot-settings" data-bot="${escape(bot.id)}" data-tab="${tab}">${icon(glyphName)}${label}</button>`).join('');
   return `<div class="new-task-welcome bot-welcome"><span class="bot-welcome-avatar" aria-hidden="true">${escape(glyph)}</span><h1>Chat with ${escape(bot.name)}</h1><p>${escape(bot.role || 'Your bot remembers, works on a schedule and answers you here or in your channels.')}</p><div class="prompt-suggestions">${asks.map(text => `<button data-action="suggest" data-text="${escape(text)}">${escape(text)} ${icon('chevron')}</button>`).join('')}</div><div class="bot-welcome-setup" role="group" aria-label="Set up ${escape(bot.name)}">${setup}</div></div>`;
 }
+/** Where a turn's spawned workers appear: right after what the architect said in that turn. */
+function workerSlot(turn: { user?: Message; coordination?: Message }): string {
+  const start = turn.user?.createdAt ?? turn.coordination?.createdAt;
+  return teams.has(state.sessionId) && start !== undefined ? `<div class="team-progress-slot" data-turn-start="${start}" hidden></div>` : '';
+}
+/** Each spawned worker shows in the turn it was spawned in; while that turn is still running,
+ *  it follows the live activity at the end of the thread. */
 function refreshTeamProgress(): void {
-  const host = document.querySelector<HTMLElement>('#team-progress-host');
-  if (host) updateTeamProgress(host, teams.get(state.sessionId), state.providers);
+  const live = document.querySelector<HTMLElement>('#team-progress-host');
+  if (!live) return;
+  const team = teams.get(state.sessionId), workers = team?.workers ?? [];
+  const slots = [...document.querySelectorAll<HTMLElement>('#transcript .team-progress-slot')].map(slot => ({ slot, start: Number(slot.dataset.turnStart) }));
+  const placed = new Map<HTMLElement, typeof workers>([[live, []], ...slots.map(({ slot }) => [slot, []] as [HTMLElement, typeof workers])]);
+  // Only a turn that is still streaming has no saved place yet.
+  const running = state.streams.has(state.sessionId);
+  for (const worker of workers) {
+    let index = -1;
+    slots.forEach((slot, at) => { if (slot.start <= worker.createdAt) index = at; });
+    const turn = slots[Math.max(index, 0)];
+    const host = !turn || (running && index === slots.length - 1) ? live : turn.slot;
+    placed.get(host)!.push(worker);
+  }
+  for (const [host, shown] of placed) updateTeamProgress(host, team, state.providers, shown);
 }
 /** A turn's change card, or nothing when the snapshot has nothing to report. */
 function changesRow(sessionId: string, changes: TurnChanges | undefined): string {
@@ -948,7 +968,7 @@ function renderTranscript(preservePosition = false): void {
   const turns = groupTurns(visibleMessages());
   const previousMarkdown = new Map([...transcript.querySelectorAll<HTMLElement>('[data-markdown]')]
     .map(node => [node.dataset.markdown!, node]));
-  transcript.innerHTML = `${state.messages.length ? '' : '<div class="empty-conversation"><h2>What would you like to do?</h2><div class="prompt-suggestions"><button data-action="suggest" data-text="Explore this project and explain its architecture.">Explore this project '+icon('chevron')+'</button><button data-action="suggest" data-text="Review the current changes for bugs and suggest improvements.">Review my changes '+icon('chevron')+'</button></div></div>'}${turns.map(turn => (turn.user ? messageHtml(turn.user) : '') + (turn.handoff ? messageHtml(turn.handoff) : '') + (turn.coordination ? renderCoordination(turn.coordination) : '') + (turn.activity.length ? activityHtml(turn.key, turnLabel(turn.durationMs, turn.estimated), savedActivityHtml(turn.activity)) : '') + turn.errors.map(messageHtml).join('') + (turn.final ? messageHtml(turn.final) : '') + changesRow(s.id, turn.changes)).join('')}<div id="stream-region"></div><div id="team-progress-host" class="turn-changes-row" hidden></div>`;
+  transcript.innerHTML = `${state.messages.length ? '' : '<div class="empty-conversation"><h2>What would you like to do?</h2><div class="prompt-suggestions"><button data-action="suggest" data-text="Explore this project and explain its architecture.">Explore this project '+icon('chevron')+'</button><button data-action="suggest" data-text="Review the current changes for bugs and suggest improvements.">Review my changes '+icon('chevron')+'</button></div></div>'}${turns.map(turn => (turn.user ? messageHtml(turn.user) : '') + (turn.handoff ? messageHtml(turn.handoff) : '') + (turn.coordination ? renderCoordination(turn.coordination) : '') + (turn.activity.length ? activityHtml(turn.key, turnLabel(turn.durationMs, turn.estimated), savedActivityHtml(turn.activity)) : '') + turn.errors.map(messageHtml).join('') + (turn.final ? messageHtml(turn.final) : '') + workerSlot(turn) + changesRow(s.id, turn.changes)).join('')}<div id="stream-region"></div><div id="team-progress-host" class="turn-changes-row" hidden></div>`;
   const byId = new Map(state.messages.map(message => [String(message.id), message]));
   transcript.querySelectorAll<HTMLElement>('[data-markdown]').forEach(el => {
     const message = byId.get(el.dataset.markdown!);

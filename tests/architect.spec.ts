@@ -460,9 +460,17 @@ test.describe('architect teams', () => {
       await expect(progress.locator('.team-progress-heading')).toHaveCount(0);
       expect(Math.round((await builder.boundingBox())!.height)).toBeLessThanOrEqual(32);
       await expect(builder).toContainText('Search indexing'); await expect(builder).toContainText('Builder');
-      await expect(builder).toContainText('Codex'); await expect(builder).toContainText(/working/i);
+      // The harness is the logo; the text names role and model once each.
+      await expect(builder.locator('.provider-logo[data-provider="codex"]')).toBeAttached(); await expect(builder).toContainText(/working/i);
+      await expect(builder.locator('small')).toHaveText('Builder · GPT-6-Astra');
+      // The line sits in the turn that spawned it, right after what the architect said there.
+      expect(await builder.evaluate(row => {
+        const slot = row.closest('.team-progress-slot');
+        const previous = slot?.previousElementSibling;
+        return Boolean(slot) && Boolean(previous?.textContent?.includes('Implementation and review are delegated to the workers.'));
+      })).toBe(true);
       await expect(reviewer).toContainText('Accessibility audit'); await expect(reviewer).toContainText('Reviewer');
-      await expect(reviewer).toContainText('Claude Code'); await expect(reviewer).toContainText(/working/i);
+      await expect(reviewer.locator('.provider-logo[data-provider="claude"]')).toBeAttached(); await expect(reviewer).toContainText(/working/i);
       await expect(transcript(page).getByText('No files changed', { exact: true })).toBeHidden();
       await expect(transcript(page).locator('.turn-changes:visible')).toHaveCount(1);
       await expect(transcript(page).locator('.turn-changes:visible')).toContainText('README.md');
