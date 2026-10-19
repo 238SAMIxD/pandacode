@@ -3365,3 +3365,22 @@ test('⌘F finds text in the thread, in your messages and the agent’s, and ste
   expect(await page.evaluate(() => (CSS as any).highlights.has('thread-find'))).toBe(false);
   await expect(page.locator('#prompt')).toBeFocused();
 });
+
+test('the prompt sits in the same place in every thread', async ({ page }) => {
+  await expect(page.locator('#composer')).toBeVisible();
+  const bottoms: number[] = [];
+  const measure = async () => { await expect(page.locator('#composer')).toBeVisible(); bottoms.push(Math.round((await page.locator('#composer').boundingBox())!.y + (await page.locator('#composer').boundingBox())!.height)); };
+  const ids = await page.locator('#navigation .task-item').evaluateAll(rows => rows.map(row => (row as HTMLElement).dataset.id!));
+  expect(ids.length).toBeGreaterThan(1);
+  for (const id of ids) {
+    await page.locator(`#navigation .task-item[data-id="${id}"]`).click();
+    await expect(page.locator('#navigation .task-item.selected')).toHaveAttribute('data-id', id);
+    await expect(page.locator('#transcript .history-notice')).toHaveCount(0);
+    await measure();
+  }
+  // A brand-new task, which has no context count yet, lines up too.
+  await page.keyboard.press('ControlOrMeta+n');
+  await expect(page.locator('.new-task-welcome')).toBeVisible();
+  await measure();
+  expect(new Set(bottoms).size, `prompt bottoms: ${bottoms.join(', ')}`).toBe(1);
+});

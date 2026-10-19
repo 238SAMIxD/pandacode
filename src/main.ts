@@ -682,7 +682,8 @@ function renderContextUsage(): void {
   const label = context?.label ?? '';
   if (indicator.textContent !== label) indicator.textContent = label;
   indicator.title = context?.detail ?? '';
-  indicator.parentElement!.hidden = !context && !s.archived;
+  // The line keeps its place when empty, so the prompt never moves between threads.
+  indicator.parentElement!.classList.toggle('is-empty', !context && !s.archived);
 }
 function formatTime(timestamp: number): string { return new Date(timestamp < 1e12 ? timestamp * 1000 : timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
 function notify(text: string): void { const toast = $('#toast'); toast.textContent = text; showToast(toast); window.setTimeout(() => { if (toast.textContent === text) void hideToast(toast); }, 4500); }
@@ -1254,7 +1255,7 @@ function renderComposer(): void {
   if (prompt && typing?.id === s.id && !prompt.disabled) { prompt.focus({ preventScroll: true }); prompt.setSelectionRange(typing.start, typing.end); }
   const footnote = document.querySelector('.composer-footnote');
   if (footnote) footnote.insertAdjacentHTML('beforeend', '<span class="context-indicator" hidden></span>');
-  else $('#composer-area').insertAdjacentHTML('beforeend', '<div class="composer-footnote" hidden><span class="context-indicator" hidden></span></div>');
+  else $('#composer-area').insertAdjacentHTML('beforeend', '<div class="composer-footnote is-empty"><span class="context-indicator" hidden></span></div>');
   renderContextUsage();
   $('#composer').insertAdjacentHTML('afterbegin', '<div class="browser-context-attachments" aria-label="Browser attachments"></div>');
   renderBrowserAttachments(); browserPanel?.refresh();

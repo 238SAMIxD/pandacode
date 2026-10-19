@@ -246,7 +246,11 @@ mark{background:color-mix(in srgb,var(--accent) 45%,transparent);color:inherit;b
 .send-button .icon{width:15px;height:15px;stroke-width:2}
 .send-button:hover:not(:disabled){background:var(--accent-hover);color:var(--on-accent);transform:none}
 .stop-button{background:var(--text);color:#ffffff}
-.composer-footnote{display:flex;justify-content:flex-end;gap:10px;font-size:.7rem;color:var(--muted);padding:9px 3px 0}
+/* The line under the prompt always keeps its height, so the prompt sits in the same place in
+   every thread whether or not there is a context count to show. */
+.composer-footnote{display:flex;justify-content:flex-end;gap:10px;font-size:.7rem;color:var(--muted);padding:9px 3px 0;height:1.5em;line-height:1.5em;box-sizing:content-box}
+.composer-footnote.is-empty{visibility:hidden}
+.composer-footnote>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .composer-footnote>span:first-child{display:flex;align-items:center;gap:5px}
 .composer-footnote .icon{width:11px;height:11px}
 .attachments:empty{display:none}
