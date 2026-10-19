@@ -2195,52 +2195,32 @@ test('updates live tool status and preserves newer response status across delaye
   await expect(prompt(page)).toBeEnabled();
 });
 
-test('rotates playful working phrases on the timer without flickering with every provider event', async ({ page }) => {
+test('the turn header names what the agent is doing, with no separate status line', async ({ page }) => {
   const sessionId = await startControlledStatusStream(page);
-  const phrases = await page.evaluate(async () => (await import('/src/working-phrases.ts')).WORKING_PHRASES);
   const turn = page.locator('.live-activity');
   const label = turn.locator('.turn-activity-label');
-  const phrase = async () => (await label.textContent())!.split(' · ')[0];
-  const initial = await phrase();
-  expect(phrases).toContain(initial);
-  await turn.locator('.turn-activity-summary').click();
-  await expect(turn).not.toHaveAttribute('open', '');
-  await emitStatusEvents(page, sessionId, [
-    { kind: 'text', text: 'Checking the source files.' },
-    { kind: 'tool', text: 'Read', tool: { id: 'playful-read', name: 'Read', status: 'running', input: 'src/main.ts', output: '' } },
-    { kind: 'tool', text: 'Read', tool: { id: 'playful-read', name: 'Read', status: 'completed', input: 'src/main.ts', output: 'Source contents' } },
-    { kind: 'text', text: 'The source files are loaded.' },
-  ]);
-  expect(await phrase()).toBe(initial);
-  await expect(page.locator('.live-status')).toHaveText('Generating response');
-  await page.clock.runFor(7000);
-  expect(await phrase()).toBe(initial);
-  await expect(label).toHaveText(`${initial} · 7s`);
-  await page.clock.runFor(1000);
-  const next = await phrase();
-  expect(phrases).toContain(next);
-  expect(next).not.toBe(initial);
-  await expect(label).toHaveText(`${next} · 8s`);
-  await page.clock.runFor(8000);
-  expect(phrases).toContain(await phrase());
-  expect(await phrase()).not.toBe(next);
-  await expect(turn).not.toHaveAttribute('open', '');
-  await page.screenshot({ path: '/private/tmp/pandacode-playful-working.png', animations: 'disabled' });
+  await expect(label).toHaveText(/^Working… · |^Starting agent · /);
+  await emitStatusEvents(page, sessionId, [{ kind: 'tool', text: 'Read', tool: { id: 'header-read', name: 'Read', status: 'running', input: 'src/main.ts', output: '' } }]);
+  await expect(label).toHaveText(/^Running Read · /);
+  await emitStatusEvents(page, sessionId, [{ kind: 'tool', text: 'Read', tool: { id: 'header-read', name: 'Read', status: 'completed', input: 'src/main.ts', output: 'Source contents' } }]);
+  await expect(label).toHaveText(/^Working… · /);
+  await page.clock.runFor(9000);
+  await expect(label).toHaveText(/^Working… · 9s$/);
+  // The status line is for screen readers; it takes no visible space.
+  expect(await page.locator('.live-status').evaluate(el => el.getBoundingClientRect().height)).toBeLessThanOrEqual(1);
   await page.getByRole('button', { name: 'Stop task', exact: true }).click();
   await expect(prompt(page)).toBeEnabled();
 });
 
-test('keeps approval, retry, stopping, and completed summaries clear instead of playful', async ({ page }) => {
+test('keeps approval, retry, stopping, and completed summaries clear', async ({ page }) => {
   const sessionId = await startControlledStatusStream(page);
-  const phrases = await page.evaluate(async () => (await import('/src/working-phrases.ts')).WORKING_PHRASES);
   const label = page.locator('.live-activity .turn-activity-label');
-  const phrase = async () => (await label.textContent())!.split(' · ')[0];
   await emitStatusEvents(page, sessionId, [{ kind: 'status', text: 'Retrying connection…' }]);
   await expect(label).toHaveText(/^Retrying connection… · /);
   await page.clock.runFor(9000);
   await expect(label).toHaveText(/^Retrying connection… · 9s$/);
   await emitStatusEvents(page, sessionId, [{ kind: 'text', text: 'The connection has recovered.' }]);
-  expect(phrases).toContain(await phrase());
+  await expect(label).toHaveText(/^Generating response · /);
   await emitStatusEvents(page, sessionId, [{ kind: 'approval', requestId: 'playful-approval', text: 'Run the project check?' }]);
   await expect(label).toHaveText(/^Waiting for approval · /);
   const approval = page.locator('.approval-request');
@@ -2252,7 +2232,7 @@ test('keeps approval, retry, stopping, and completed summaries clear instead of 
   await expect(approval).toBeVisible();
   await page.evaluate(() => { (window as any).__pandacodeResolveStatusApproval(); });
   await expect(approval).toHaveCount(0);
-  expect(phrases).toContain(await phrase());
+  await expect(label).toHaveText(/^Generating response · /);
   await emitStatusEvents(page, sessionId, [{ kind: 'status', text: 'Stopping agent' }, { kind: 'text', text: 'Buffered response text.' }]);
   await page.clock.runFor(9000);
   await expect(label).toHaveText(/^Stopping agent · /);

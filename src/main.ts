@@ -26,7 +26,6 @@ import { bindMessageActions, messageActionsHtml } from './message-actions';
 import { providerLogo } from './provider-logos';
 import { decodeToolActivity, groupToolRuns, renderToolActivity, renderToolGroup, renderToolStatus } from './tool-activity';
 import { groupTurns, formatDuration, turnLabel } from './turn-activity';
-import { nextWorkingPhrase } from './working-phrases';
 import { initializeNativeAppearance } from './appearance';
 import { currentTheme, setTheme } from './theme';
 import { palette } from './palette';
@@ -66,7 +65,7 @@ import { initializeAgentUpdates } from './agent-updates';
  * Interaction: quick drawer reveals, calm dialog entrances, coalesced text updates. */
 type WorkspaceView = 'conversation' | 'board' | 'github';
 type LiveTool = { key: string; content: string | ToolActivity; statusOnly?: boolean; commentary?: boolean };
-type Stream = { text: string; retainedMessageKey?: string; tools: LiveTool[]; status: string; approvals: Map<string, string>; inputs: Map<string, AgentInput>; revision: number; lastPromptAt?: number; lastResponseAt: number | null; startedAt: number; turnKey: string; omittedActivity: boolean; workPhrase: string; phraseChangedAt: number; contextUsage?: ContextUsage };
+type Stream = { text: string; retainedMessageKey?: string; tools: LiveTool[]; status: string; approvals: Map<string, string>; inputs: Map<string, AgentInput>; revision: number; lastPromptAt?: number; lastResponseAt: number | null; startedAt: number; turnKey: string; omittedActivity: boolean; contextUsage?: ContextUsage };
 const state = {
   projects: [] as Project[], sessions: [] as Session[], providers: [] as Provider[],
   projectId: '', sessionId: '', messages: [] as Message[], messagesLoading: false, messagesError: '', streams: new Map<string, Stream>(),
@@ -598,7 +597,7 @@ function stream(id: string): Stream {
   if (!s) {
     finishingStreams.delete(id);
     const now = Date.now();
-    s = { text: '', tools: [], status: '', approvals: new Map(), inputs: new Map(), revision: 0, lastResponseAt: null, startedAt: now, turnKey: 'turn:live:' + id, omittedActivity: false, workPhrase: nextWorkingPhrase(), phraseChangedAt: now };
+    s = { text: '', tools: [], status: '', approvals: new Map(), inputs: new Map(), revision: 0, lastResponseAt: null, startedAt: now, turnKey: 'turn:live:' + id, omittedActivity: false };
     state.streams.set(id, s);
   }
   return s;
@@ -1152,20 +1151,12 @@ function paintLiveActivity(region: HTMLElement, current: Stream, transcript: HTM
   next.forEach((node, index) => { if (host.children[index] !== node) host.insertBefore(node, host.children[index] ?? null); });
   for (const entry of commentary) { bindFileLinkContext(entry.node, workspaceContext()); streamMarkdown(entry.node, entry.content, transcript); }
 }
+/** The turn's header says what the agent is doing right now, with the elapsed time. */
 function workingLabel(current: Stream): string {
-  const now = Date.now();
   let label = current.inputs.size ? 'Waiting for your answer' : current.approvals.size ? 'Waiting for approval' : current.status;
   if (current.status === 'Stopping agent') label = current.status;
-  const ordinaryWork = ['', 'running', 'Starting agent', 'Generating response', 'Working…', 'Continuing task', 'Previewing response'].includes(label) || label.startsWith('Running ');
-  if (ordinaryWork) {
-    // Reuse the elapsed-time timer; streaming tokens do not reroll the phrase.
-    if (now - current.phraseChangedAt >= 8000) {
-      current.workPhrase = nextWorkingPhrase(current.workPhrase);
-      current.phraseChangedAt = now;
-    }
-    label = current.workPhrase;
-  }
-  return `${label} · ${formatDuration(now - current.startedAt)}`;
+  if (!label || label === 'running') label = 'Working…';
+  return `${label} · ${formatDuration(Date.now() - current.startedAt)}`;
 }
 function updateWorkTimer(): void {
   if (!transcriptVisible() || !state.streams.has(state.sessionId)) { clearTimeout(workTimer); workTimer = 0; return; }

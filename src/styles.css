@@ -210,7 +210,8 @@ mark{background:color-mix(in srgb,var(--accent) 45%,transparent);color:inherit;b
 .live-activity .live-message{margin-top:8px}
 @media(prefers-reduced-motion:reduce){.tool-group-summary>.icon{transition:none}}
 .activity-commentary{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.85rem;line-height:1.6;color:var(--text);margin:0 0 10px}
-.live-status{font-size:.77rem;line-height:1.6;color:var(--muted);margin-top:4px}
+/* The turn header already shows this status; the line stays for screen readers only. */
+.live-status{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .activity-limit{font-size:.75rem;line-height:1.5;color:var(--muted);margin:0 0 6px}
 @media(prefers-reduced-motion:no-preference){.turn-activity[open]>.turn-activity-body{animation:activity-reveal var(--spring-fast-duration,240ms) var(--spring-fast,ease-out)} @keyframes activity-reveal{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}}
 @media(prefers-reduced-motion:reduce){.turn-activity-summary>.icon{transition:none}}
