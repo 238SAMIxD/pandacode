@@ -72,23 +72,8 @@
 .architect-trigger small { color: var(--text); font-size: .65rem; font-variant-numeric: tabular-nums; }
 .architect-trigger[data-status=running] > .icon:first-child, .architect-trigger[data-status=waiting] > .icon:first-child { color: var(--accent-ink); }
 .architect-panel { pointer-events: auto; position: absolute; z-index: 8; top: calc(100% + 8px); right: 16px; width: min(460px, calc(100% - 32px)); max-height: min(660px, calc(100dvh - 235px)); display: flex; flex-direction: column; border-radius: 8px; background: var(--panel); box-shadow: 0 14px 45px #00000024; overflow: hidden; }
-.architect-panel-heading { display: flex; align-items: center; gap: 7px; padding: 12px 14px 5px; flex-shrink: 0; }
-.architect-panel-heading strong { flex: 1; font-size: .86rem; font-weight: 600; }
-.architect-panel-heading .icon-button { width: 27px; height: 27px; }
-.architect-panel-summary { font-size: .69rem; color: var(--muted); padding: 0 16px 12px; font-variant-numeric: tabular-nums; }
-.architect-panel-controls { display: flex; align-items: center; gap: 7px; padding: 0 14px 12px; }
-.architect-panel-controls .secondary-button { font-size: .69rem; padding: 6px 9px; border-radius: 3px; min-height: 29px; }
-.architect-panel-controls .architect-configure { margin-left: auto; width: 27px; height: 27px; }
-.architect-panel-error { padding: 0 16px 10px; margin: 0; color: var(--danger); font-size: .73rem; line-height: 1.5; }
-.architect-panel-scroll { overflow: auto; min-height: 0; overscroll-behavior: contain; padding: 0 9px 12px; scrollbar-gutter: stable; }
 .architect-worker-list { color: var(--muted); font-size: .77rem; line-height: 1.6; padding: 0 5px; }
-.architect-worker-row { display: flex; width: 100%; align-items: center; text-align: left; gap: 10px; padding: 12px 8px; border-radius: 4px; }
 .architect-worker-row:hover { background: color-mix(in srgb, var(--raised) 70%, transparent); }
-.architect-worker-logo > svg, .architect-worker-logo > img { width: 22px; height: 22px; }
-.architect-worker-copy { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
-.architect-worker-copy strong { font-size: .8rem; font-weight: 550; color: var(--text); overflow: hidden; text-overflow: ellipsis; }
-.architect-worker-copy small { color: var(--muted); font-size: .67rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.architect-worker-state { color: var(--muted); font-size: .66rem; flex-shrink: 0; }
 .architect-worker-row[data-status=running] .architect-worker-state, .architect-worker-row[data-status=waiting] .architect-worker-state { color: var(--accent-ink); }
 .architect-worker-row[data-status=completed] .architect-worker-state { color: var(--success); }
 .architect-worker-row[data-status=failed] .architect-worker-state { color: var(--danger); }
@@ -137,3 +122,25 @@
 .architect-worker-checkpoint dd { margin: 0; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
 .architect-worker-checkpoint .architect-checkpoint-blocker dt { color: var(--accent-ink); }
 @media(prefers-reduced-motion:reduce) { .architect-worker-checkpoint summary::before { transition: none; } }
+
+/* The workers panel: one header line (title, status, icon controls, close), then a line per worker. */
+.architect-panel { width: min(380px, calc(100% - 32px)); border-radius: 7px; }
+.architect-panel-heading { display: flex; align-items: center; gap: 6px; padding: 8px 8px 6px 14px; flex-shrink: 0; }
+.architect-panel-heading strong { flex: none; font-size: .82rem; font-weight: 600; }
+.architect-panel-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: .72rem; font-variant-numeric: tabular-nums; }
+.architect-panel-controls { display: flex; align-items: center; gap: 1px; flex: none; }
+.architect-panel-heading .icon-button { width: 24px; height: 24px; color: var(--muted); }
+.architect-panel-heading .icon-button:hover:not(:disabled) { color: var(--text); background: var(--raised); }
+.architect-panel-heading .icon-button .icon { width: 13px; height: 13px; }
+.architect-assist { height: 24px; padding: 0 7px; border-radius: 4px; color: var(--accent-ink); font-size: .72rem; font-weight: 550; }
+html[data-theme="dark"] .architect-assist { color: var(--accent); }
+.architect-assist:hover { background: var(--raised); }
+.architect-panel-error { padding: 0 14px 8px; margin: 0; color: var(--danger); font-size: .72rem; line-height: 1.45; }
+.architect-panel-scroll { overflow: auto; min-height: 0; overscroll-behavior: contain; padding: 0 6px 8px; scrollbar-gutter: stable; }
+.architect-worker-row { display: flex; width: 100%; height: 34px; align-items: center; justify-content: flex-start; text-align: left; gap: 9px; padding: 0 8px; border-radius: 4px; }
+.architect-worker-logo { display: flex; flex: none; }
+.architect-worker-logo > svg, .architect-worker-logo > img { width: 16px; height: 16px; }
+.architect-worker-copy { display: flex; align-items: baseline; gap: 7px; min-width: 0; flex: 1; }
+.architect-worker-copy strong { flex: 0 1 auto; min-width: 0; font-size: .8rem; font-weight: 550; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.architect-worker-copy small { flex: 0 10 auto; min-width: 0; color: var(--muted); font-size: .7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.architect-worker-state { color: var(--muted); font-size: .7rem; flex-shrink: 0; }

@@ -68,12 +68,12 @@ html[data-theme="dark"] .workspace[data-wallpaper] .conversation-pane{
 /* The prompt box and the bar above it are borderless; increased contrast restores the edge. */
 .workspace[data-wallpaper] .conversation-pane :is(.composer,.composer-context),.workspace[data-wallpaper] .conversation-pane .composer:focus-within{border-color:transparent}
 .workspace[data-wallpaper] .conversation-pane .composer{backdrop-filter:var(--thread-frost);-webkit-backdrop-filter:var(--thread-frost)}
-/* Clear the menu gradient so both agent panels share the sidebar's glass. */
+/* Both agent panels are one solid surface with no border or blur, like the dropdowns. */
 html .workspace :is(.architect-panel,.subagents-panel).floating-menu{
-  background:var(--workspace-frost-surface,color-mix(in srgb,var(--panel) 60%,transparent));
-  border-color:var(--thread-border,var(--border));
-  backdrop-filter:var(--workspace-frost,blur(24px) saturate(1.1));
-  -webkit-backdrop-filter:var(--workspace-frost,blur(24px) saturate(1.1));
+  background:var(--panel);
+  border-color:transparent;
+  backdrop-filter:none;
+  -webkit-backdrop-filter:none;
 }
 .workspace[data-wallpaper] .conversation-pane :is(.markdown pre,.tool-activity pre,.browser-context-chip,.board-completed-note){background:var(--thread-inset);border-color:var(--thread-border)}
 .workspace[data-wallpaper] .conversation-pane :is(.markdown :not(pre)>code,.user-avatar,.tool-extra){background:var(--thread-inset)}

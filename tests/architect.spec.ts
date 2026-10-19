@@ -147,7 +147,7 @@ async function workerSurface(element: Locator) {
 
 test.describe('architect teams', () => {
   for (const theme of ['light', 'dark'] as const) for (const view of ['conversation', 'board'] as const) {
-    test(`workers share sidebar frost and keep detail sharp in ${theme} ${view}`, async ({ page, browserName }) => {
+    test(`workers are one solid surface and keep detail sharp in ${theme} ${view}`, async ({ page, browserName }) => {
       await page.setViewportSize({ width: 1280, height: 820 });
       await page.addInitScript(theme => {
         localStorage.setItem('pandacode.theme', theme);
@@ -160,12 +160,11 @@ test.describe('architect teams', () => {
       await openWorkers(page).click();
       await expect(panel(page)).toBeVisible();
       await expect(panel(page)).toHaveCSS('opacity', '1'); await expect(panel(page)).toHaveCSS('filter', 'none');
-      const sidebar = await workerSurface(page.locator('.sidebar'));
       const material = await workerSurface(panel(page));
-      expect(material.alpha).toBeGreaterThan(.15); expect(material.alpha).toBeLessThan(.35);
-      expect(material.alpha).toBeCloseTo(theme === 'light' ? .22 : .28, 2);
-      expect(material.color).toBe(sidebar.color); expect(material.blur).toBe(sidebar.blur);
-      expect(material.blur).toMatch(/blur\([1-9][\d.]*px\)/); expect(material.image).toBe('none');
+      // Solid like the dropdowns: no translucency, blur, gradient or border.
+      expect(material.alpha).toBe(1); expect(material.image).toBe('none');
+      expect(material.blur === 'none' || material.blur === '').toBe(true);
+      await expect(panel(page)).toHaveCSS('border-top-color', 'rgba(0, 0, 0, 0)');
       const normalRow = await row(page, 'build').evaluate(node => getComputedStyle(node).backgroundColor);
       await row(page, 'build').hover();
       await expect(row(page, 'build')).not.toHaveCSS('background-color', normalRow);

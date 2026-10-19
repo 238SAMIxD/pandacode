@@ -107,7 +107,7 @@ async function subagentSurface(element: Locator) {
 
 test.describe('subagents', () => {
   for (const theme of ['light', 'dark'] as const) for (const view of ['conversation', 'board'] as const) {
-    test(`subagents share sidebar frost and keep detail sharp in ${theme} ${view}`, async ({ page, browserName }) => {
+    test(`subagents are one solid surface and keep detail sharp in ${theme} ${view}`, async ({ page, browserName }) => {
       await page.setViewportSize({ width: 1280, height: 820 });
       await page.addInitScript(theme => {
         localStorage.setItem('pandacode.theme', theme);
@@ -120,12 +120,11 @@ test.describe('subagents', () => {
       await expect(page.locator('.workspace')).toHaveAttribute('data-wallpaper', 'mon-morning');
       await trigger(page).click(); await expect(panel(page)).toBeVisible();
       await expect(panel(page)).toHaveCSS('opacity', '1'); await expect(panel(page)).toHaveCSS('filter', 'none');
-      const sidebar = await subagentSurface(page.locator('.sidebar'));
       const material = await subagentSurface(panel(page));
-      expect(material.alpha).toBeGreaterThan(.15); expect(material.alpha).toBeLessThan(.35);
-      expect(material.alpha).toBeCloseTo(theme === 'light' ? .22 : .28, 2);
-      expect(material.color).toBe(sidebar.color); expect(material.blur).toBe(sidebar.blur);
-      expect(material.blur).toMatch(/blur\([1-9][\d.]*px\)/); expect(material.image).toBe('none');
+      // Solid like the dropdowns: no translucency, blur, gradient or border.
+      expect(material.alpha).toBe(1); expect(material.image).toBe('none');
+      expect(material.blur === 'none' || material.blur === '').toBe(true);
+      await expect(panel(page)).toHaveCSS('border-top-color', 'rgba(0, 0, 0, 0)');
       const normalRow = await row(page, 'reader').evaluate(node => getComputedStyle(node).backgroundColor);
       await row(page, 'reader').hover();
       await expect(row(page, 'reader')).not.toHaveCSS('background-color', normalRow);
