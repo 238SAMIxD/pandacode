@@ -455,7 +455,10 @@ test.describe('architect teams', () => {
       const builder = progress.locator('.team-progress-worker[data-worker-id="build"]');
       const reviewer = progress.locator('.team-progress-worker[data-worker-id="review"]');
       await expect(progress).toBeVisible();
-      await expect(progress).toContainText('2 workers working');
+      // One inline line per spawned worker, no card or team heading.
+      await expect(builder).toContainText('Spawned Search indexing'); await expect(reviewer).toContainText('Spawned Accessibility audit');
+      await expect(progress.locator('.team-progress-heading')).toHaveCount(0);
+      expect(Math.round((await builder.boundingBox())!.height)).toBeLessThanOrEqual(32);
       await expect(builder).toContainText('Search indexing'); await expect(builder).toContainText('Builder');
       await expect(builder).toContainText('Codex'); await expect(builder).toContainText(/working/i);
       await expect(reviewer).toContainText('Accessibility audit'); await expect(reviewer).toContainText('Reviewer');
@@ -470,12 +473,10 @@ test.describe('architect teams', () => {
       await nextPaint(page);
       await expect(progress).not.toContainText('Unrelated');
       await publish(page, { ...snapshot, status: 'paused', revision: 2 });
-      await expect(progress).toContainText('Team paused');
       await expect(builder.locator('.team-progress-status')).toHaveText('Paused');
       await expect(reviewer.locator('.team-progress-status')).toHaveText('Paused');
       await expect(progress).not.toContainText(/working/i);
       await publish(page, { ...snapshot, revision: 3, workers: assigned.map(entry => ({ ...entry, status: 'queued' })) });
-      await expect(progress).toContainText('Workers queued');
       await expect(builder.locator('.team-progress-status')).toHaveText('Queued');
       await expect(reviewer.locator('.team-progress-status')).toHaveText('Queued');
       await expect(progress).not.toContainText(/working/i);
@@ -489,7 +490,6 @@ test.describe('architect teams', () => {
       expect((await calls(page, 'architect_worker_messages')).at(-1).args).toMatchObject({ sessionId: 'session-2', workerId: 'review' });
       await panel(page).getByRole('button', { name: 'Close workers', exact: true }).click();
       await publish(page, { ...snapshot, status: 'completed', revision: 5, workers: assigned.map(entry => ({ ...entry, status: 'completed' })) });
-      await expect(progress).toContainText('Team complete');
       await expect(builder).toContainText(/completed/i); await expect(reviewer).toContainText(/completed/i);
       await expect(transcript(page).locator('.turn-changes:visible')).toHaveCount(1);
       await expect(transcript(page).getByText('No files changed', { exact: true })).toBeHidden();
@@ -505,7 +505,6 @@ test.describe('architect teams', () => {
       await expect(transcript(page).locator('.turn-changes:visible')).toHaveCount(2);
       await expect(transcript(page).locator('.turn-changes:visible').last()).toContainText('1 changed file');
       await expect(transcript(page).locator('.turn-changes:visible').last()).toContainText('+12');
-      await expect(progress).toContainText('Team complete');
       await expect(transcript(page).getByText('No files changed', { exact: true })).toBeHidden();
       const queued = Array.from({ length: 6 }, (_, index) => worker('build', { id: `queued-${index}`, sessionId: `worker-queued-${index}`, name: `Queued assignment ${index + 1}`, status: 'queued' }));
       await publish(page, { ...snapshot, revision: 6, workers: [...queued,
@@ -515,7 +514,10 @@ test.describe('architect teams', () => {
       await expect(progress.locator('.team-progress-worker')).toHaveCount(6);
       await expect(progress.locator('[data-worker-id="late-working"]')).toBeVisible();
       await expect(progress.locator('[data-worker-id="late-waiting"]')).toBeVisible();
-      await expect(progress).toContainText('2 more in View workers');
+      await expect(progress.locator('.team-progress-more')).toHaveText('2 more workers');
+      await progress.locator('.team-progress-more').click();
+      await expect(panel(page)).toBeVisible();
+      await panel(page).getByRole('button', { name: 'Close workers', exact: true }).click();
       expect(await progress.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
       expect(await transcript(page).evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
     });

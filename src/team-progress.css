@@ -1,25 +1,18 @@
-.team-progress{margin:12px 0 25px;padding:10px 12px;border-radius:6px;background:color-mix(in srgb,var(--panel) 56%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--border) 38%,transparent);font-size:.8rem;min-width:0}
-.team-progress-heading{display:flex;align-items:center;gap:8px;min-height:30px;margin-bottom:5px}
-.team-progress-heading strong{font-size:.8rem;font-weight:550;flex:1;min-width:0}
-.team-progress-heading button{font-size:.72rem;color:var(--muted);gap:4px;padding:5px 6px;border-radius:3px;white-space:nowrap}
-.team-progress-heading button>.icon,.team-progress-worker>.icon{width:12px;height:12px;color:var(--muted);flex-shrink:0}
-.team-progress-indicator{width:6px;height:6px;border-radius:50%;background:var(--muted);flex-shrink:0}
-.team-progress[data-status=running] .team-progress-indicator,.team-progress[data-status=waiting] .team-progress-indicator{background:var(--accent-ink)}
-.team-progress[data-status=completed] .team-progress-indicator{background:var(--success)}
-.team-progress[data-status=failed] .team-progress-indicator{background:var(--danger)}
-.team-progress-worker{display:flex;align-items:center;gap:9px;width:100%;min-width:0;text-align:left;padding:8px 6px;border-radius:4px;transition:background-color 120ms ease}
-.team-progress-worker:hover,.team-progress-heading button:hover{background:color-mix(in srgb,var(--raised) 55%,transparent)}
-.team-progress-worker:active{background:color-mix(in srgb,var(--raised) 75%,transparent)}
-.team-progress-logo{flex-shrink:0;display:flex;align-items:center}.team-progress-logo .provider-logo{width:20px;height:20px}
-.team-progress-description{display:flex;flex-direction:column;gap:3px;flex:1;min-width:0}
-.team-progress-description strong,.team-progress-description small{white-space:nowrap;text-overflow:ellipsis;overflow:hidden}
-.team-progress-description strong{font-size:.79rem;font-weight:500}.team-progress-description small{font-size:.71rem;color:var(--muted)}
-.team-progress-status{font-size:.71rem;white-space:nowrap;color:var(--muted);flex-shrink:0}
+/* Spawned workers: quiet inline lines in the thread, like tool lines. A line opens its worker
+   in the Architect & workers panel; any beyond the first six are one more line away. */
+.team-progress{display:grid;gap:1px;margin:6px 0 14px}
+.team-progress-worker,.team-progress-more{display:flex;align-items:center;justify-content:flex-start;gap:8px;width:100%;min-width:0;margin-left:-6px;padding:0 6px;border-radius:4px;text-align:left;color:var(--muted)}
+.team-progress-worker{height:30px;font-size:.8rem}
+.team-progress-worker:hover,.team-progress-more:hover{background:color-mix(in srgb,var(--raised) 55%,transparent);color:var(--text)}
+.team-progress-logo{display:flex;flex:none}
+.team-progress-logo .provider-logo{width:15px;height:15px}
+.team-progress-description{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.team-progress-description strong{font-weight:550;color:var(--text)}
+.team-progress-description small{margin-left:2px;font-size:.74rem;color:var(--muted)}
+.team-progress-status{flex:none;font-size:.72rem;white-space:nowrap;color:var(--muted)}
 .team-progress-worker[data-status=Working] .team-progress-status{color:var(--accent-ink)}
+html[data-theme="dark"] .team-progress-worker[data-status=Working] .team-progress-status{color:var(--accent)}
 .team-progress-worker[data-status=Completed] .team-progress-status{color:var(--success)}
 .team-progress-worker[data-status=Failed] .team-progress-status,.team-progress-worker[data-status="Needs attention"] .team-progress-status{color:var(--danger)}
-.team-progress-more{font-size:.7rem;color:var(--muted);margin:5px 6px 2px}
-.workspace[data-wallpaper] .team-progress{background:var(--thread-surface);backdrop-filter:var(--thread-frost);-webkit-backdrop-filter:var(--thread-frost)}
-.workspace.side-thread[data-wallpaper] .team-progress{backdrop-filter:none;-webkit-backdrop-filter:none}
-@media(prefers-reduced-motion:reduce){.team-progress-worker{transition:none}}
-@media(prefers-reduced-transparency:reduce),(prefers-contrast:more){html .workspace .team-progress{background:var(--panel);backdrop-filter:none;-webkit-backdrop-filter:none}}
+.team-progress-worker>.icon{width:11px;height:11px;flex:none;color:var(--muted)}
+.team-progress-more{height:26px;font-size:.74rem}
