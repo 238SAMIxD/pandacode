@@ -566,7 +566,7 @@ button:not(:disabled):active{background-color:var(--accent-dim);transition:none}
 .model-menu-pending{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .model-menu-catalog-error{flex-shrink:0;margin:7px 10px;font-size:.71rem;line-height:1.5;color:var(--muted);overflow-wrap:anywhere}
 /* The effort slider overlaps the end of the list; the rows fade out behind it instead of stopping at an edge. */
-.model-menu-settings{--effort-surface:var(--panel);position:relative;isolation:isolate;flex-shrink:0;margin:-22px 0 0;padding-top:12px;font-size:.76rem}
+.model-menu-settings{--effort-surface:var(--panel);position:relative;isolation:isolate;flex-shrink:0;margin:-22px 0 0;padding-top:18px;font-size:.76rem}
 .model-menu:has(.model-menu-settings:not([hidden])) .model-menu-list{padding-bottom:22px}
 .model-menu-settings::before{content:"";position:absolute;z-index:-1;inset:0 -6px -6px;background:linear-gradient(180deg,transparent,var(--effort-surface) 22px);pointer-events:none}
 .effort-control{display:flex;align-items:center;gap:10px;padding:0 8px}
