@@ -35,19 +35,27 @@ embedded editor engine.
   progress → Review → Completed [board](docs/task-board.md), message queueing
   and steering while an agent runs.
 - **Agent teams.** An [architect and up to three workers](docs/architect-workers.md),
-  mixing harnesses and models, or named team profiles.
+  mixing harnesses and models, or named team profiles. Each spawned worker is one
+  line in the turn that started it; click it to open the worker.
 - **Bots.** Put an agent behind Telegram, Slack, Discord, WhatsApp or a local web
-  chat; each conversation is an ordinary task. See [bots](docs/bots.md).
+  chat; each conversation is an ordinary task. The sidebar's **Bots** view lists
+  every bot with its latest message. See [bots](docs/bots.md).
 - **Local VMs and cloud sandboxes.** Headless macOS/Linux VMs on Apple silicon
   (Tart), and Daytona, Cloudflare and AWS sandboxes that agents can drive.
 - **Simulators.** iOS Simulator and Android emulator tools for agents.
 - **Deploys.** Start a deploy task for Vercel, Cloudflare or AWS from the header,
   with approval-gated CLI runs.
 - **GitHub view.** Your repositories with their threads, pull requests and issues;
-  review, fix checks, merge or solve an issue in one click, each as a linked thread.
-  See [GitHub](docs/github.md).
-- **Git and worktrees.** Diffs, staging, commits, per-task [worktrees](docs/worktrees.md),
-  and optional [GitHub](docs/github.md) issues and pull requests through `gh`.
+  review, fix checks, merge or solve an issue in one click. Each opens as a linked
+  thread beside the GitHub view, where you can keep chatting. See [GitHub](docs/github.md).
+- **Git and worktrees.** Diffs, staging, commits, per-task [worktrees](docs/worktrees.md)
+  with a one-click local **Merge into main**, branch switching from the branch chip,
+  and optional [GitHub](docs/github.md) issues and pull requests through `gh`,
+  including merging a task's linked pull request.
+- **Approvals at hand.** Requests wait in a slim bar above the prompt, one line
+  each, grouped with **Approve all** when there are several.
+- **Find in thread.** `⌘/Ctrl F` searches your messages and the agent's, with
+  every match highlighted.
 - **Review every turn.** Saved [turn changes](docs/turn-changes.md) with
   unified/split diffs, an embedded [browser](docs/browser.md), and file previews.
 - **Token saver.** Per-task response-style packs that cut output tokens.
@@ -189,8 +197,13 @@ clean worktree task offers to remove its checkout and merged branch.
 
 Choose **Board** in the header to manage tasks by status. Choose **Team** in the
 composer for an automatic team, or set up an architect and workers. Each turn's
-tool calls sit inside a compact **Worked for …** row; final answers, errors and
-approval requests stay visible.
+tool calls sit inside a compact **Worked for …** row; final answers and errors
+stay visible, and approval requests wait in the bar above the prompt.
+
+The branch chip also switches the project checkout to `main` or another local
+branch, and in a worktree task offers **Merge into main**: it merges the
+worktree's committed work locally, refuses uncommitted changes or conflicts
+without touching anything, then offers to remove the worktree.
 
 **Standard** permissions keep each provider's native checks. Claude's **Accept
 edits** allows its editing tools; Codex uses its workspace sandbox with
@@ -201,9 +214,10 @@ Type `/` at the start of a message for the harness's commands and skills
 ([slash commands](docs/slash-commands.md)).
 
 Keyboard shortcuts: `⌘/Ctrl N` new task, `⌘/Ctrl K` command palette,
-`⌘/Ctrl J` terminal, `⌘/Ctrl B` sidebar, `⌘/Ctrl ,` settings, `Enter` send
-(queues while an agent runs), `⌘/Ctrl Enter` steer, `Shift Enter` newline,
-`⌘/Ctrl +/−/0` text size.
+`⌘/Ctrl J` terminal, `⌘/Ctrl B` sidebar, `⌘/Ctrl ,` settings, `⌘/Ctrl F` find
+in thread (`⌘/Ctrl G` next match), `Enter` send (queues while an agent runs),
+`⌘/Ctrl Enter` steer, `Shift Enter` newline, `⌘/Ctrl +/−/0` interface size (the
+whole interface scales, not just text).
 
 On macOS, if folder access is denied, use **Browse** to select the folder, or
 allow PandaCode under **System Settings → Privacy & Security → Files & Folders**.
@@ -219,7 +233,12 @@ fully without it.
 ## Resource limits
 
 No background directory polling or recursive file watchers. Agents exit after
-each turn and resume by provider session ID. Terminal and Markdown code load only
+each turn and resume by provider session ID. After a Claude Code turn, the next
+turn's process starts in the background so a follow-up skips the CLI's startup;
+at most two wait at a time, each for up to 10 minutes. PandaCode's fixed
+instructions go to Claude-family harnesses once as a cached system prompt rather
+than in every message. The interface has no transitions: everything appears at
+once, and a thread you return to is drawn in a single frame. Terminal and Markdown code load only
 when needed. Terminal history, provider frames, files, diffs and streamed text
 all have explicit limits; only the current 100-message page of a conversation is
 loaded. **Resource usage** reports native core RSS, active agents, terminals and
