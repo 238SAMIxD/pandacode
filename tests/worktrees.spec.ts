@@ -163,3 +163,16 @@ test('a missing worktree folder is named in the chip and can be recreated', asyn
   await expect(chip(page)).toContainText('pandacode/vanish');
   await expect(page.locator('#inspector-content')).toContainText('pandacode/vanish');
 });
+
+test('the context bar stays on one line in a narrow conversation', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#navigation .task-item', { hasText: 'Add keyboard shortcuts' }).click();
+  const bar = page.locator('#composer-area .composer-context');
+  await expect(bar.locator('.link-chip')).toBeVisible();
+  const measure = () => page.evaluate(() => document.querySelector('#composer-area .composer-context')!.getBoundingClientRect().height);
+  const height = await measure();
+  await page.locator('#composer-area').evaluate(el => { el.style.maxWidth = '420px'; });
+  await expect(bar.locator('.composer-local')).toBeHidden();
+  await expect(bar.locator('.link-chip')).toBeVisible();
+  expect(Math.abs(await measure() - height)).toBeLessThan(1);
+});

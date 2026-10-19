@@ -1,5 +1,10 @@
 /* The context bar names the checkout on every task; the branch chip is its one menu. */
-.composer-context{flex-wrap:wrap;row-gap:4px}
+/* One line at any width: names shorten with an ellipsis and the PR/issue chip keeps its size. */
+.composer-context{flex-wrap:nowrap}
+.composer-context>.link-chip{flex-shrink:0}
+.composer-context .composer-project>span{min-width:3ch}
+.composer-area{container:composer/inline-size}
+@container composer (max-width:560px){.composer-context .composer-local{display:none}.composer-context.composer-context-compact{gap:10px}.composer-context .branch-chip{max-width:none}}
 .composer-context-compact{min-height:36px;padding:4px 12px;gap:14px;font-size:.78rem;background:transparent;border-color:transparent}
 .composer-project-fixed{display:inline-flex;align-items:center;gap:7px;min-width:0;max-width:40%;color:var(--text);font-weight:500;cursor:default}
 .composer-project-fixed>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
