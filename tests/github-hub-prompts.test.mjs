@@ -37,3 +37,12 @@ test('the connect screen says what to do for the error gh gave', async () => {
   assert.match(connectAdvice('To get started with GitHub CLI, please run:  gh auth login'), /gh auth login/);
   assert.match(connectAdvice('error connecting to api.github.com'), /Check your connection/);
 });
+
+test('repositories pushed in the last 30 days are recent; older or undated ones go under Other', async () => {
+  const { isRecent } = await import('../src/github-hub-prompts.ts');
+  const now = Date.parse('2026-10-18T12:00:00Z');
+  assert.equal(isRecent('2026-10-18T11:00:00Z', now), true);
+  assert.equal(isRecent('2026-09-19T12:00:01Z', now), true);
+  assert.equal(isRecent('2026-09-18T11:59:59Z', now), false);
+  assert.equal(isRecent('', now), false);
+});

@@ -13,7 +13,7 @@ async function openHub(page: Page): Promise<void> {
   await page.locator('#navigation .task-item').first().waitFor();
   await page.getByRole('button', { name: 'GitHub view' }).click();
   await expect(hub(page)).toBeVisible();
-  await expect(repoList(page).getByRole('option')).toHaveCount(5);
+  await expect(repoList(page).getByRole('option')).toHaveCount(4);
 }
 
 test('lists repositories and shows the chosen one’s threads, pull requests and issues', async ({ page }) => {
@@ -143,4 +143,26 @@ test('when gh fails, the view says why and how to fix it', async ({ page }) => {
   await expect(empty).toContainText('brew install gh');
   await expect(empty.locator('.gh-error-detail')).toHaveText('Failed to start GitHub CLI: No such file or directory (os error 2)');
   await expect(empty.getByRole('button', { name: 'Try again' })).toBeVisible();
+});
+
+test('repositories not pushed to in 30 days wait under a collapsed Other', async ({ page }) => {
+  await openHub(page);
+  await expect(repoList(page).getByRole('option', { name: /tauri/ })).toHaveCount(0);
+  const toggle = hub(page).getByRole('button', { name: /Other/ });
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(toggle).toContainText('1');
+  const other = hub(page).getByRole('listbox', { name: 'Other repositories', includeHidden: true });
+  await expect(other).toBeHidden();
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await other.getByRole('option', { name: /tauri/ }).click();
+  await expect(hub(page).getByRole('heading', { name: 'you/tauri' })).toBeVisible();
+  // The choice is remembered, and a search looks through both lists.
+  await page.reload();
+  // The app reopens in the GitHub view.
+  await expect(hub(page)).toBeVisible();
+  await expect(hub(page).getByRole('button', { name: /Other/ })).toHaveAttribute('aria-expanded', 'true');
+  await hub(page).getByRole('button', { name: /Other/ }).click();
+  await hub(page).getByRole('searchbox', { name: 'Filter repositories' }).fill('tau');
+  await expect(hub(page).getByRole('listbox', { name: 'Other repositories' }).getByRole('option', { name: /tauri/ })).toBeVisible();
 });

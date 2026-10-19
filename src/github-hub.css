@@ -22,7 +22,14 @@
 .gh-filter input{flex:1;min-width:0;min-height:0;height:100%;padding:0;border:0;background:none;box-shadow:none;font-size:.8rem;color:var(--text)}
 .gh-filter input::placeholder{color:var(--muted)}
 .gh-filter input::-webkit-search-cancel-button{display:none}
-.gh-repo-list{display:flex;flex-direction:column;min-height:0;margin-top:10px;overflow-y:auto;scrollbar-width:thin}
+.gh-repo-scroll{min-height:0;margin-top:10px;overflow-y:auto;scrollbar-width:thin}
+.gh-repo-list{display:flex;flex-direction:column}
+.gh-repo-list[hidden]{display:none}
+.gh-other-toggle{display:flex;align-items:center;gap:6px;width:100%;min-height:30px;margin-top:6px;padding:0 16px;color:var(--muted);font-size:.74rem;font-weight:600;text-align:left}
+.gh-other-toggle:hover{color:var(--text);background:var(--gh-hover)}
+.gh-other-toggle .icon{width:12px;height:12px}
+.gh-other-toggle[aria-expanded=true] .icon{transform:rotate(90deg)}
+.gh-other-toggle small{margin-left:auto;font-size:.7rem;font-weight:500;font-variant-numeric:tabular-nums}
 .gh-repo{display:grid;grid-template-columns:15px minmax(0,1fr) auto auto;align-items:center;gap:8px;min-height:34px;padding:0 16px;border-radius:0;text-align:left;color:var(--text);transition:background 90ms}
 .gh-repo:hover{background:var(--gh-hover)}
 .gh-repo:active{background:color-mix(in srgb,var(--text) 8%,transparent)}

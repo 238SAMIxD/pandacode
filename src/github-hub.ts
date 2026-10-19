@@ -7,7 +7,7 @@ import { escape, icon } from './dom';
 import { cascade, trackSegment } from './motion';
 import { providerLogo } from './provider-logos';
 import { taskStage } from './task-board';
-import { age, connectAdvice, issuePrompt, PULL_ACTIONS, pullPrompt, threadTitle, type IssueAction, type PullAction } from './github-hub-prompts';
+import { age, connectAdvice, isRecent, issuePrompt, PULL_ACTIONS, pullPrompt, threadTitle, type IssueAction, type PullAction } from './github-hub-prompts';
 import type { Project, Session, TaskLink } from './types';
 
 export interface HubRepo { nameWithOwner: string; description: string; private: boolean; fork: boolean; archived: boolean; pushedAt: string; url: string; defaultBranch: string; openIssues: number; language: string }
@@ -50,6 +50,7 @@ export function mountGithubHub(root: HTMLElement, host: HubHost): HubView {
   let repos: HubRepo[] | null = null, reposError = '';
   let selected = stored('pandacode.githubRepo');
   let tab = (stored('pandacode.githubTab') as Tab) || 'threads';
+  let otherOpen = stored('pandacode.githubOther') === 'open';
   if (!TABS.some(item => item.id === tab)) tab = 'threads';
   let repoFilter = '', query = '', cloning = '', disposed = false;
   let mapping = new Map<string, string>();
@@ -59,7 +60,7 @@ export function mountGithubHub(root: HTMLElement, host: HubHost): HubView {
   root.innerHTML = `<aside class="gh-repos" aria-label="GitHub repositories">
       <div class="gh-repos-head" data-tauri-drag-region>${icon('github')}<span data-tauri-drag-region>GitHub</span><button type="button" class="icon-button" data-gh="refresh" aria-label="Refresh" title="Refresh">${icon('refresh')}</button></div>
       <label class="gh-filter">${icon('search')}<input type="search" data-gh-filter="repos" placeholder="Filter repositories" aria-label="Filter repositories" autocomplete="off" spellcheck="false"></label>
-      <div class="gh-repo-list" role="listbox" aria-label="Repositories"></div>
+      <div class="gh-repo-scroll"><div class="gh-repo-list" role="listbox" aria-label="Repositories"></div><div class="gh-repo-other"></div></div>
     </aside>
     <section class="gh-main" aria-live="polite"><header class="gh-head"></header>
       <div class="gh-bar"><div class="gh-tabs" role="tablist" aria-label="Repository"></div>
@@ -99,8 +100,8 @@ export function mountGithubHub(root: HTMLElement, host: HubHost): HubView {
   }
 
   function renderRepos(): void {
-    const list = $('.gh-repo-list');
-    if (!repos) { list.innerHTML = skeleton(7, 'gh-repo'); return; }
+    const list = $('.gh-repo-list'), other = $('.gh-repo-other');
+    if (!repos) { list.innerHTML = skeleton(7, 'gh-repo'); other.replaceChildren(); return; }
     const visible = repos.filter(item => !repoFilter || item.nameWithOwner.toLowerCase().includes(repoFilter.toLowerCase()));
     const row = (item: HubRepo) => {
       const [owner, name] = item.nameWithOwner.split('/');
@@ -109,7 +110,12 @@ export function mountGithubHub(root: HTMLElement, host: HubHost): HubView {
         ${glyph(item.private ? 'lock' : 'repo')}<span class="gh-repo-name"><b>${escape(name)}</b><small>${escape(owner)}</small></span>
         ${local ? '<span class="gh-local-dot" title="On this computer" aria-label="On this computer"></span>' : ''}<time>${escape(age(item.pushedAt))}</time></button>`;
     };
-    list.innerHTML = visible.map(row).join('') || `<p class="gh-note">${repos.length ? 'No matches.' : reposError ? '' : 'No repositories yet.'}</p>`;
+    // Repositories pushed to in the last 30 days lead; the rest wait under Other. A search covers both.
+    const recent = visible.filter(item => isRecent(item.pushedAt)), older = visible.filter(item => !isRecent(item.pushedAt));
+    const open = otherOpen || Boolean(repoFilter);
+    list.innerHTML = recent.map(row).join('') || (older.length ? '' : `<p class="gh-note">${repos.length ? 'No matches.' : reposError ? '' : 'No repositories yet.'}</p>`);
+    other.innerHTML = older.length ? `<button type="button" class="gh-other-toggle" data-gh="other" aria-expanded="${open}" aria-controls="gh-other-list">${icon('chevron')}<span>Other</span><small>${older.length}</small></button>
+      <div id="gh-other-list" class="gh-repo-list" role="listbox" aria-label="Other repositories" ${open ? '' : 'hidden'}>${older.map(row).join('')}</div>` : '';
   }
 
   function renderHead(): void {
@@ -241,6 +247,7 @@ export function mountGithubHub(root: HTMLElement, host: HubHost): HubView {
     if (data.ghTab) { tab = data.ghTab as Tab; store('pandacode.githubTab', tab); renderTabs(); renderBody(); cascade(root.querySelectorAll<HTMLElement>('.gh-body .gh-row'), 14, 120); return; }
     if (data.ghTask) { host.openTask(data.ghTask); return; }
     if (data.gh === 'refresh') { void loadRepos(true); return; }
+    if (data.gh === 'other') { otherOpen = target.getAttribute('aria-expanded') !== 'true'; store('pandacode.githubOther', otherOpen ? 'open' : 'closed'); renderRepos(); root.querySelector<HTMLElement>('[data-gh="other"]')?.focus(); return; }
     if (data.gh === 'clone') { void ensureLocal(); return; }
     const pull = pulls.get(selected)?.items?.find(item => item.number === number);
     const issue = issues.get(selected)?.items?.find(item => item.number === number);

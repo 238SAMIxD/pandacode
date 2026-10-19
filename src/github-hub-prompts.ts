@@ -53,6 +53,13 @@ export function age(iso: string | number, now = Date.now()): string {
   return `${Math.round(minutes / 43_200)}mo`;
 }
 
+/** How far back a push keeps a repository in the main list; older ones fold under Other. */
+export const RECENT_DAYS = 30;
+export function isRecent(pushedAt: string, now = Date.now()): boolean {
+  const at = Date.parse(pushedAt);
+  return Number.isFinite(at) && now - at <= RECENT_DAYS * 86_400_000;
+}
+
 /** What to do when GitHub can't be reached; the view shows gh's own message underneath. */
 export function connectAdvice(error: string): string {
   if (/not found|no such file|cannot find|failed to start|program not found/i.test(error)) return 'PandaCode uses the GitHub CLI. Install it (for example <code>brew install gh</code>), then try again.';
