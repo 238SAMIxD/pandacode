@@ -214,7 +214,6 @@ mark{background:color-mix(in srgb,var(--accent) 45%,transparent);color:inherit;b
 /* The turn header already shows this status; the line stays for screen readers only. */
 .live-status{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .activity-limit{font-size:.75rem;line-height:1.5;color:var(--muted);margin:0 0 6px}
-@media(prefers-reduced-motion:no-preference){.turn-activity[open]>.turn-activity-body{animation:activity-reveal var(--spring-fast-duration,240ms) var(--spring-fast,ease-out)} @keyframes activity-reveal{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}}
 @media(prefers-reduced-motion:reduce){.turn-activity-summary>.icon{transition:none}}
 @media(prefers-contrast:more){.tool-activity pre{border-color:var(--text);background:var(--bg)}.tool-activity-note,.tool-activity-section h4,.tool-activity-hint,.tool-activity-status{color:var(--text)}}
 .tool-extra{font-size:0.642857rem;background:var(--raised);padding:0 4px;border-radius:1px}
@@ -524,7 +523,7 @@ button:not(:disabled):active{transform:none!important}}
 .file-preview-actions .icon-button .icon{width:12px;height:12px}
 button:not(:disabled):active{background-color:var(--accent-dim);transition:none}
 .preview-status{font-size:.7rem;line-height:1.4;color:var(--muted);margin-left:auto;white-space:nowrap}
-.send-button:not(:disabled):active,.primary-button:not(:disabled):active,.new-task-button:not(:disabled):active{background:#e8bd23;transform:scale(.97);transition:none}
+.send-button:not(:disabled):active,.primary-button:not(:disabled):active,.new-task-button:not(:disabled):active{background:#e8bd23;scale:.97;transition:none}
 #resource-status{width:26px;height:26px;border-radius:2px}
 .file-preview-header,.file-preview-title{color:var(--text);font-size:.8rem}
 .change-row:focus-within .stage-button,.file-row:focus-within .file-attach,.change-group:focus-within .change-group-title button{opacity:1}
@@ -846,11 +845,9 @@ html[data-native-platform=macos] .github-view .gh-repos-head{padding-left:calc(8
 /* An update is downloaded: one quiet, clickable line in the status bar. */
 .update-status{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;background:var(--accent-dim);color:var(--accent-ink);font-size:.72rem;font-weight:600}
 .update-status:hover{background:color-mix(in srgb,var(--accent) 30%,transparent)}
-.update-status:active{transform:scale(.97)}
+.update-status:active{scale:.97}
 .update-status .icon{width:12px;height:12px}
 .update-status[hidden]{display:none}
-@media (prefers-reduced-motion:no-preference){.update-status:not([hidden]){animation:update-in 320ms var(--spring-fast,cubic-bezier(.2,.9,.3,1))}}
-@keyframes update-in{from{opacity:0;transform:translateY(4px)}}
 
 /* Settings is a full page over the workspace (src/settings.ts). Laid out here so it never flashes in. */
 #settings-page{position:absolute;inset:0;z-index:40}
@@ -871,3 +868,6 @@ html[data-theme="dark"] body :is(.floating-menu,.bp-menu){box-shadow:0 16px 40px
 html[data-theme] body .dialog-plate{background:var(--panel);border-color:transparent;backdrop-filter:none;-webkit-backdrop-filter:none;box-shadow:0 40px 100px -30px rgb(0 0 0 / .32),0 16px 36px -20px rgb(0 0 0 / .2)}
 html[data-theme="dark"] body .dialog-plate{box-shadow:0 40px 100px -30px rgb(0 0 0 / .7),0 16px 36px -20px rgb(0 0 0 / .45)}
 @media (prefers-contrast:more){html[data-theme] body .dialog-plate{border-color:var(--text)}}
+/* PandaCode is instant: no transitions anywhere. Looping status indicators (spinners,
+   working pulses) are animations, not transitions, so they keep running. */
+*,*::before,*::after{transition:none!important}

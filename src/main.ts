@@ -1199,19 +1199,15 @@ function renderAttachmentBar(): void {
   if (s && bar) bar.innerHTML = attachmentBar(s); else renderComposer();
 }
 /** Pending approvals for the open task, in the bar directly above the prompt. */
-let approvalGroupOpen = false, approvalShownKey = '';
+let approvalGroupOpen = false;
 const approvalDetails = new Set<string>();
 function renderApprovalBar(): void {
   const host = document.querySelector<HTMLElement>('#approval-bar');
   if (!host) return;
   const sessionId = state.sessionId, approvals = [...state.streams.get(sessionId)?.approvals ?? []].map(([id, text]) => ({ id, text }));
-  const key = sessionId + approvals.map(approval => approval.id).join(',');
   const html = approvalBarHtml(approvals, { busy: id => pendingApprovals.has(sessionId + id), expanded: approvalGroupOpen, details: new Set([...approvalDetails].filter(item => item.startsWith(sessionId)).map(item => item.slice(sessionId.length))) });
   if (host.innerHTML === html) return;
   host.innerHTML = html;
-  // Only a newly arrived request animates in; redraws of the composer leave the bar still.
-  host.firstElementChild?.classList.toggle('is-entering', Boolean(approvals.length) && key !== approvalShownKey);
-  approvalShownKey = approvals.length ? key : '';
   if (!approvals.length) approvalGroupOpen = false;
 }
 async function respondApproval(sessionId: string, id: string, approved: boolean): Promise<void> {

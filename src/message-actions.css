@@ -6,7 +6,7 @@
 .activity-commentary-message{margin-bottom:10px}
 .activity-commentary-message>.activity-commentary{margin-bottom:0}
 .message-actions button:hover{color:var(--text);background:color-mix(in srgb,currentColor 9%,transparent)}
-.message-actions button:active{transform:scale(.92)}
+.message-actions button:active{scale:.92}
 .message-actions button:focus-visible{outline:2px solid var(--focus,var(--accent));outline-offset:2px}
 .message-actions button:disabled,.message-actions button[aria-disabled="true"]{cursor:wait;opacity:.5}
 .message-actions button[data-copied]{color:var(--accent-ink,var(--text))}

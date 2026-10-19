@@ -60,7 +60,7 @@
 .gh-where .icon{width:12px;height:12px}
 .gh-clone{display:inline-flex;align-items:center;gap:6px;min-height:28px;padding:0 11px;border-radius:3px;background:var(--accent-dim);color:var(--accent-ink);font-size:.78rem;font-weight:550;transition:background 120ms,transform 100ms}
 .gh-clone:hover{background:color-mix(in srgb,var(--accent) 30%,transparent)}
-.gh-clone:active{transform:scale(.97)}
+.gh-clone:active{scale:.97}
 .gh-clone .icon{width:13px;height:13px}
 .gh-bar{display:flex;align-items:center;gap:12px;padding:0 28px 10px;border-bottom:1px solid var(--gh-line)}
 .gh-tabs{position:relative;display:inline-flex;gap:2px;padding:2px;border-radius:4px;background:var(--gh-inset)}
@@ -108,7 +108,7 @@ button.gh-row:active{background:color-mix(in srgb,var(--text) 8%,transparent)}
 .gh-row:is(:hover,:focus-within) .gh-actions{opacity:1;pointer-events:auto;transform:translate(0,-50%)}
 .gh-act{display:inline-flex;align-items:center;gap:5px;min-height:26px;padding:0 10px;border-radius:3px;background:var(--gh-card);box-shadow:inset 0 0 0 1px var(--gh-line),0 1px 2px rgb(0 0 0 / .05);font-size:.76rem;font-weight:550;color:var(--text);white-space:nowrap;transition:background 100ms,transform 100ms}
 .gh-act:hover{background:color-mix(in srgb,var(--gh-card) 80%,var(--text) 6%)}
-.gh-act:active{transform:scale(.96)}
+.gh-act:active{scale:.96}
 .gh-act .icon{width:13px;height:13px}
 .gh-act.gh-primary{background:var(--accent);color:var(--on-accent);box-shadow:0 1px 2px rgb(0 0 0 / .12)}
 .gh-act.gh-primary:hover{background:var(--accent-hover,var(--accent))}
@@ -133,7 +133,7 @@ button.gh-row:active{background:color-mix(in srgb,var(--text) 8%,transparent)}
 .gh-compose input::placeholder{color:var(--muted)}
 .gh-compose-send{display:grid;place-items:center;width:28px;height:28px;border-radius:3px;background:var(--accent);color:var(--on-accent);transition:transform 100ms,opacity 120ms}
 .gh-compose:has(input:placeholder-shown) .gh-compose-send{opacity:.45}
-.gh-compose-send:active{transform:scale(.94)}
+.gh-compose-send:active{scale:.94}
 .gh-compose-send .icon{width:14px;height:14px}
 
 /* Empty, loading */

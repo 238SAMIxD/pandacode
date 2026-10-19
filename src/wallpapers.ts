@@ -69,7 +69,7 @@ export function nextWallpaperChange(date = new Date()): Date {
   return next;
 }
 
-/** One shared scene for the thread and board, with at most two images during a fade. */
+/** One shared scene for the thread and board; a new scene replaces the old one at once. */
 export function mountWallpapers(host: HTMLElement): WallpaperController {
   const layer = document.createElement('div');
   layer.className = 'workspace-wallpaper';
@@ -77,12 +77,10 @@ export function mountWallpapers(host: HTMLElement): WallpaperController {
   host.prepend(layer);
   const contrast = matchMedia('(prefers-contrast: more)');
   const transparency = matchMedia('(prefers-reduced-transparency: reduce)');
-  const motion = matchMedia('(prefers-reduced-motion: reduce)');
   let preferences = Object.freeze(readPreferences());
   const listeners = new Set<() => void>();
   let disposed = false, generation = 0, timer = 0, pendingId = '';
   let current: HTMLImageElement | undefined, pending: HTMLImageElement | undefined;
-  let fade: Animation | undefined;
 
   function emit(): void { listeners.forEach(listener => listener()); }
   function applyAppearance(): void {
@@ -107,14 +105,12 @@ export function mountWallpapers(host: HTMLElement): WallpaperController {
     ++generation;
     pendingId = '';
     if (pending) { remove(pending); pending = undefined; }
-    fade?.cancel(); fade = undefined;
     layer.querySelectorAll('img').forEach(remove);
     current = undefined;
     delete host.dataset.wallpaper;
   }
   async function load(id: string): Promise<void> {
     const requested = ++generation;
-    fade?.cancel(); fade = undefined;
     layer.querySelectorAll('img').forEach(child => { if (child !== current) remove(child); });
     pendingId = id;
     if (pending) remove(pending);
@@ -132,11 +128,7 @@ export function mountWallpapers(host: HTMLElement): WallpaperController {
       current = image;
       host.dataset.wallpaper = id;
       emit();
-      if (previous && !motion.matches) {
-        const animation = image.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 700, easing: 'ease-out' });
-        fade = animation;
-        void animation.finished.catch(() => {}).finally(() => { remove(previous); if (fade === animation) fade = undefined; });
-      } else if (previous) remove(previous);
+      if (previous) remove(previous);
     } catch {
       // Keep the last decoded scene (or the normal solid surface) if a file fails.
       remove(image);

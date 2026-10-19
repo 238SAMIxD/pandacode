@@ -6,7 +6,10 @@
 export type Spring = { damping?: number; response?: number; velocity?: number };
 
 export const reducedMotion = (): boolean => matchMedia('(prefers-reduced-motion: reduce)').matches;
-const canAnimate = (element: Element): boolean => !document.hidden && typeof element.animate === 'function';
+/** PandaCode is instant: surfaces appear and leave without motion. Every caller has an
+ *  instant path for this, so flipping it back restores the springs. */
+const MOTION = false;
+const canAnimate = (element: Element): boolean => MOTION && !document.hidden && typeof element.animate === 'function';
 const FRAME = 1000 / 60;
 
 /** Samples progress (0 → 1) one frame apart until the spring settles. */
@@ -110,6 +113,7 @@ const inFlight = new Set<Animation>();
 // deadline, and hiding the document settles them all onto their underlying styles.
 document.addEventListener('visibilitychange', () => { if (document.hidden) for (const animation of [...inFlight]) animation.cancel(); });
 function play(element: HTMLElement, keyframes: Keyframe[], duration: number, easing = 'linear', delay = 0): Animation | undefined {
+  if (!MOTION) return undefined;
   running.get(element)?.cancel();
   let animation: Animation;
   try { animation = element.animate(keyframes, { duration, easing, delay, fill: delay ? 'backwards' : 'none' }); }

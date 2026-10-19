@@ -91,7 +91,8 @@ html[data-theme] .workspace[data-wallpaper]>.inspector .inspector-tabs>.segment-
 .view-switch button,.inspector-tabs button,.settings-tabs button{transition:color 160ms,transform var(--spring-fast-duration) var(--spring-fast)}
 
 /* Respond on press: instant down, spring back on release. */
-button:not(:disabled):active{transform:scale(var(--press))}
+/* `scale`, not `transform`: a pressed button keeps any transform that positions it. */
+button:not(:disabled):active{scale:var(--press)}
 .icon-button,.sidebar-bottom>button,.view-switch button,.inspector-tabs button,.settings-tabs button,.board-column>header .icon-button{--press:.9}
 .task-item,.board-card-open,.command-results>button,.command-list button,.model-menu-option,.project-menu-option,.choice-menu-option,.project-menu-open,.prompt-suggestions button,.file-row>button:first-child,.change-file{--press:.985}
 .welcome-project,.breadcrumb>button,.history-notice,.change-group-title button,.activity-heading,.activity-toggle,.composer-footnote button,.message-actions button,.subagents-trigger{--press:1}

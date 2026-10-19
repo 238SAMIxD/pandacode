@@ -7,7 +7,7 @@
 html[data-theme] .sidebar .sidebar-actions>.new-task-button{height:var(--tree-row);width:100%;padding:0 9px;gap:10px;justify-content:flex-start;border:0;border-radius:3px;background:transparent;box-shadow:none;color:var(--text);font-size:.86rem;font-weight:500}
 .sidebar .sidebar-actions>button:hover,
 html[data-theme] .sidebar .sidebar-actions>.new-task-button:hover{background:var(--raised);box-shadow:none;color:var(--text)}
-html[data-theme] .sidebar .sidebar-actions>.new-task-button:not(:disabled):active{background:var(--raised);transform:scale(.98)}
+html[data-theme] .sidebar .sidebar-actions>.new-task-button:not(:disabled):active{background:var(--raised);scale:.98}
 .sidebar .sidebar-actions>button>.icon{width:16px;height:16px;flex:none;color:var(--muted)}
 html[data-theme] .sidebar .new-task-button>.icon{color:var(--focus)}
 .sidebar .sidebar-actions kbd,html[data-theme] .sidebar .new-task-button kbd{margin-left:auto;color:var(--faint);font-size:.72rem;background:none;border:0;padding:0}
@@ -112,7 +112,8 @@ html:not([data-theme=dark]) .sidebar .task-link.pull{color:#7c3aed}
 .bot-row.paused .bot-row-name{color:var(--muted)}
 .bot-row-state{flex:none;font-size:.68rem;color:var(--faint)}
 .bot-row .task-indicator{width:6px;height:6px;flex:none}
-.bot-row-settings{position:absolute;right:3px;width:24px;height:24px;color:var(--muted);opacity:0;transition:opacity 120ms}
+/* Above the row's own button, which spans the whole row underneath it. */
+.bot-row-settings{position:absolute;z-index:1;right:3px;width:24px;height:24px;color:var(--muted);opacity:0}
 .bot-row-settings .icon{width:13px;height:13px}
 .bot-row:hover .bot-row-settings,.bot-row:focus-within .bot-row-settings{opacity:1}
 .bot-row-settings:hover{color:var(--text)}

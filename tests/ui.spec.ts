@@ -3282,3 +3282,23 @@ test('keeps the worktree terminal open when the previous checkout terminal fails
   await page.getByRole('button', { name: 'Close terminal', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__pandacodeWorktreeCalls.filter((call: any) => call.command === 'close_terminal').length)).toBe(1);
 });
+
+test('the interface is instant: no transitions, no entrance motion, and presses keep a button in place', async ({ page }) => {
+  await page.locator('.sidebar-projects').getByRole('button', { name: 'Open project', exact: true }).click();
+  await expect(page.locator('#dialog')).toBeVisible();
+  // The modal is fully there at once: nothing is animating it in.
+  expect(await page.evaluate(() => document.getAnimations().filter(animation => animation.playState === 'running').length)).toBe(0);
+  await expect(page.locator('.dialog-plate')).toHaveCSS('opacity', '1');
+  await expect(page.locator('#dialog .primary-button')).toHaveCSS('transition-duration', '0s');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#dialog')).toBeHidden();
+  await expect(page.locator('.dialog-plate')).toBeHidden();
+  // Press feedback uses `scale`, so a button positioned by `transform` stays put while pressed.
+  const send = page.locator('#composer .send-button');
+  const before = await send.evaluate(el => getComputedStyle(el).transform);
+  const box = (await send.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  expect(await send.evaluate(el => getComputedStyle(el).transform)).toBe(before);
+  await page.mouse.up();
+});
