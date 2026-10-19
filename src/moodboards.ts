@@ -61,7 +61,7 @@ export function mountMoodboards(host: HTMLElement, options: MoodboardOptions): (
     }
   }
   function renderList(): void {
-    list.innerHTML = boards.map(board => `<button type="button" class="moodboard-list-item" data-mood-board="${escape(board.id)}" aria-pressed="${board.id === selected?.id}">${icon('board')}<span>${escape(board.name)}<small>${board.imageCount} ${board.imageCount === 1 ? 'image' : 'images'}</small></span></button>`).join('');
+    list.innerHTML = boards.map(board => `<button type="button" class="moodboard-list-item" data-mood-board="${escape(board.id)}" aria-pressed="${board.id === selected?.id}">${icon('board')}<span class="moodboard-list-name">${escape(board.name)}</span> <small>${board.imageCount} ${board.imageCount === 1 ? 'image' : 'images'}</small></button>`).join('');
   }
   function updateBoard(board: Moodboard): void {
     boards = [board, ...boards.filter(item => item.id !== board.id)]; renderList();

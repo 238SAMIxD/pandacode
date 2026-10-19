@@ -4,12 +4,14 @@ dialog.moodboards-dialog[open]{display:flex;flex-direction:column}
 .moodboards{position:relative;flex:1;min-height:0;display:flex;flex-direction:column}
 .moodboard-workspace{display:grid;grid-template-columns:12rem minmax(0,1fr);gap:1.15rem;flex:1;min-height:0}
 .moodboard-library{min-height:0;display:flex;flex-direction:column;gap:.5rem}
-.moodboard-library-heading{display:flex;align-items:center;justify-content:space-between;padding:.25rem .35rem;color:var(--muted);font-size:.76rem;font-weight:550}
+.moodboard-library-heading{display:flex;align-items:center;justify-content:space-between;padding:0 .1rem 0 .6rem;color:var(--muted);font-size:.76rem;font-weight:550}
 .moodboard-list{overflow:auto;min-height:0;scrollbar-width:thin}
-.moodboard-list-item{display:flex;align-items:flex-start;text-align:left;width:100%;padding:.65rem .6rem;border-radius:.26rem;gap:.65rem;margin-bottom:.25rem;color:var(--muted)}
-.moodboard-list-item>span{min-width:0;overflow-wrap:anywhere;font-size:.84rem;font-weight:500}
-.moodboard-list-item small{display:block;font-size:.7rem;font-weight:400;margin-top:.12rem;color:var(--muted)}
-.moodboard-list-item>.icon{flex-shrink:0;width:1rem;height:1rem;margin-top:.1rem}
+/* One line per board: icon, name, and its image count at the end. */
+.moodboard-list{display:flex;flex-direction:column;gap:2px}
+.moodboard-list-item{display:flex;align-items:center;justify-content:flex-start;text-align:left;width:100%;height:2rem;padding:0 .6rem;border-radius:.26rem;gap:.55rem;color:var(--muted)}
+.moodboard-list-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.84rem;font-weight:500}
+.moodboard-list-item small{flex:none;font-size:.72rem;font-weight:400;color:var(--muted);font-variant-numeric:tabular-nums}
+.moodboard-list-item>.icon{flex-shrink:0;width:.95rem;height:.95rem}
 .moodboard-list-item:hover{background:color-mix(in srgb,var(--raised) 55%,transparent)}
 .moodboard-list-item[aria-pressed=true]{background:color-mix(in srgb,var(--accent-dim) 72%,transparent);color:var(--text)}
 .moodboard-create{display:flex;gap:.3rem}
@@ -50,6 +52,6 @@ html[data-theme] .moodboard-title{min-width:0;width:auto;flex:1;font-size:1.12re
 .moodboard-lightbox img{flex:1;width:100%;min-height:0;object-fit:contain}
 .moodboard-lightbox p{flex-shrink:0;text-align:center;color:var(--muted);font-size:.8rem;margin:0;max-height:5rem;overflow:auto;white-space:pre-wrap}
 @keyframes moodboard-appear{from{opacity:0;transform:scale(.99)}to{opacity:1;transform:none}}
-@media(max-width:700px){dialog.moodboards-dialog{padding:.85rem;width:calc(100vw - 1rem);height:calc(100vh - 1rem);max-height:calc(100vh - 1rem)}.moodboard-workspace{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);gap:.6rem}.moodboard-library{flex-direction:row;gap:.5rem;max-height:5rem}.moodboard-library-heading>span{display:none}.moodboard-list{display:flex;gap:.3rem}.moodboard-list-item{min-width:8rem;width:auto}.moodboard-create{max-width:12rem}.moodboard-toolbar{gap:.2rem}.moodboard-title{font-size:1rem}.moodboard-footer>span{max-width:10rem}.moodboard-image-grid{grid-template-columns:repeat(auto-fill,minmax(9rem,1fr));gap:.65rem}}
+@media(max-width:700px){dialog.moodboards-dialog{padding:.85rem;width:calc(100vw - 1rem);height:calc(100vh - 1rem);max-height:calc(100vh - 1rem)}.moodboard-workspace{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);gap:.6rem}.moodboard-library{flex-direction:row;gap:.5rem;max-height:5rem}.moodboard-library-heading>span{display:none}.moodboard-list{display:flex;flex-direction:row;gap:.3rem}.moodboard-list-item{min-width:8rem;width:auto}.moodboard-create{max-width:12rem}.moodboard-toolbar{gap:.2rem}.moodboard-title{font-size:1rem}.moodboard-footer>span{max-width:10rem}.moodboard-image-grid{grid-template-columns:repeat(auto-fill,minmax(9rem,1fr));gap:.65rem}}
 @media(prefers-reduced-motion:reduce){.moodboard-lightbox{animation:none}.moodboard-canvas{transition:none}}
 @media(prefers-reduced-transparency:reduce),(prefers-contrast:more){html[data-theme] dialog.moodboards-dialog,.moodboard-lightbox{background:var(--panel);backdrop-filter:none;-webkit-backdrop-filter:none}.moodboard-image-card{background:var(--raised)}}
