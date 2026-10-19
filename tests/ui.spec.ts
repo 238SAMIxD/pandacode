@@ -3330,3 +3330,38 @@ test('switching back to a thread draws it at once: formatted, at the bottom, wit
   expect(frames.every(frame => !frame.loading && frame.bottom && !frame.raw && frame.messages > 0)).toBe(true);
   await expect(page.locator('.task-item.selected')).toHaveAttribute('data-id', 'session-1');
 });
+
+test('⌘F finds text in the thread, in your messages and the agent’s, and steps through matches', async ({ page }) => {
+  await expect(page.locator('.task-item.selected')).toHaveAttribute('data-id', 'session-1');
+  await expect(page.locator('#transcript .user-message').first()).toBeVisible();
+  await page.keyboard.press('ControlOrMeta+f');
+  const find = page.getByRole('search');
+  const input = find.getByRole('searchbox', { name: 'Find in thread', exact: true });
+  await expect(input).toBeFocused();
+  await input.fill('search');
+  const count = find.locator('.thread-find-count');
+  await expect(count).toHaveText(/^1 of \d+$/);
+  const total = Number((await count.textContent())!.split(' of ')[1]);
+  expect(total).toBeGreaterThan(1);
+  // Matches come from both sides of the conversation, highlighted without touching the DOM.
+  const owners = await page.evaluate(() => {
+    const all = (CSS as any).highlights.get('thread-find');
+    return [...all].map((range: Range) => range.startContainer.parentElement!.closest('.message')!.classList.contains('user-message') ? 'user' : 'agent');
+  });
+  expect(owners).toContain('user'); expect(owners).toContain('agent');
+  expect(await page.evaluate(() => (CSS as any).highlights.get('thread-find-current').size)).toBe(1);
+  await input.press('Enter');
+  await expect(count).toHaveText(`2 of ${total}`);
+  await input.press('Shift+Enter');
+  await expect(count).toHaveText(`1 of ${total}`);
+  await input.press('Shift+Enter');
+  await expect(count).toHaveText(`${total} of ${total}`);
+  await page.keyboard.press('ControlOrMeta+g');
+  await expect(count).toHaveText(`1 of ${total}`);
+  await input.fill('zzqqxx-not-here');
+  await expect(count).toHaveText('No results');
+  await input.press('Escape');
+  await expect(find).toHaveCount(0);
+  expect(await page.evaluate(() => (CSS as any).highlights.has('thread-find'))).toBe(false);
+  await expect(page.locator('#prompt')).toBeFocused();
+});

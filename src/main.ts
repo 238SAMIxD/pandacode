@@ -41,6 +41,7 @@ import { JevActivity } from './jev-activity';
 import { initializeSidebarResizing } from './sidebar-resize';
 import { changeUiScale, initializeUiSizing, setUiScale } from './ui-size';
 import { approvalBarHtml } from './approval-bar';
+import { createThreadFind } from './thread-find';
 import { botAvatar, botsBarHtml, botsListHtml, botsPanelHeadHtml, storedSidebarView, storeSidebarView, syncSeen, type SidebarView } from './sidebar-bots';
 import { connectAgentUiActions, type AgentUiAction } from './agent-ui-actions';
 import { createAgentInput, type AgentInput } from './agent-input';
@@ -3346,6 +3347,11 @@ document.addEventListener('keydown', event => {
   if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey || event.isComposing || event.defaultPrevented || event.key.toLowerCase() !== 'b' || state.view !== 'conversation' || document.querySelector<HTMLDialogElement>('#dialog')!.open) return;
   event.preventDefault(); event.stopPropagation(); toggleSidebar();
 }, true);
+const threadFind = createThreadFind({
+  pane: () => document.querySelector<HTMLElement>('.conversation-pane'),
+  transcript: () => document.querySelector<HTMLElement>('#transcript'),
+  restoreFocus: () => document.querySelector<HTMLTextAreaElement>('#prompt')?.focus(),
+});
 document.addEventListener('keydown', event => {
   if (event.defaultPrevented) return;
   const command = event.metaKey || event.ctrlKey;
@@ -3358,6 +3364,9 @@ document.addEventListener('keydown', event => {
     }
     return;
   }
+  // ⌘F finds in the open thread; ⌘G and ⇧⌘G step through its matches.
+  if (command && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'f') { if (session() && transcriptVisible()) { event.preventDefault(); threadFind.open(); } return; }
+  if (command && !event.altKey && event.key.toLowerCase() === 'g' && threadFind.isOpen()) { event.preventDefault(); threadFind.step(event.shiftKey ? -1 : 1); return; }
   if (command && event.key.toLowerCase() === 'n') { event.preventDefault(); if (state.view === 'board') showBoardTaskForm(); else run(createTask()); }
   else if (command && event.key.toLowerCase() === 'j') { event.preventDefault(); run(toggleTerminal()); }
   else if (command && event.key === ',') { event.preventDefault(); run(showSettings()); }
