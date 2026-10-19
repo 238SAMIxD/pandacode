@@ -150,6 +150,8 @@ fn app_instructions_ride_the_cached_system_prompt_not_every_message() {
     assert!(args.windows(2).any(|pair| pair == ["--append-system-prompt", "Run and preview workflow: keep pandacode-run.sh current."]));
     // Nothing to add, no flag; relays that wrap Claude Code take it the same way.
     assert!(!args_for("claude", "").iter().any(|arg| arg == "--append-system-prompt"));
+    // Background waits need a session that outlives the turn; PandaCode's does not.
+    assert!(args.iter().any(|arg| arg == "--disallowedTools=ScheduleWakeup,Monitor,CronCreate"));
     assert!(args_for("glm", "x").iter().any(|arg| arg == "--append-system-prompt"));
     assert!(super::takes_system_instructions("mimo"));
     assert!(!super::takes_system_instructions("codex"));

@@ -6,12 +6,15 @@ use super::*;
 pub enum CoordinationKind {
     WorkerUpdate,
     WorkerReview,
+    /// The architect stopped without dispatching or finishing; PandaCode asks it once to continue.
+    Continue,
 }
 impl CoordinationKind {
     pub fn label(self) -> &'static str {
         match self {
             Self::WorkerUpdate => "Checking worker updates",
             Self::WorkerReview => "Reviewing worker results",
+            Self::Continue => "Continuing the plan",
         }
     }
 }

@@ -417,8 +417,11 @@ impl AppState {
 }
 /// Fixed instructions for every task turn: sidebar titles, the run script, change tracking.
 fn app_instructions() -> String {
-    [session_titles::GUIDANCE, run_script::INSTRUCTIONS, turn_changes::instruction(), RICH_QUESTIONS].concat()
+    [session_titles::GUIDANCE, run_script::INSTRUCTIONS, turn_changes::instruction(), TURN_ENDS, RICH_QUESTIONS].concat()
 }
+
+/// PandaCode closes the harness when a turn ends, so background waits never come back.
+const TURN_ENDS: &str = "\n\nYour turn ends when you reply, and PandaCode then closes this session's process: background commands, monitors and scheduled wakeups started in this turn never report back. Wait for long-running commands in the foreground (or poll them) before you reply.";
 
 /// Questions to the user render rich Markdown in PandaCode; agents only use it if told.
 const RICH_QUESTIONS: &str = "\n\nQuestions you ask the user (AskUserQuestion, request_user_input) render Markdown in PandaCode: use links, images by workspace path (![alt](relative/path.png)), ```chart blocks with JSON {\"type\":\"bar\"|\"line\"|\"pie\",\"title\",\"labels\":[…],\"series\":[{\"name\",\"values\":[…]}]}, ```svg drawings, or static ```html views when a visual helps the user decide. Remote images show as links; scripts never run.";

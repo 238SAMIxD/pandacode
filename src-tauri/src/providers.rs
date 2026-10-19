@@ -62,6 +62,9 @@ const TOOL_OUTPUT_LIMIT: usize = 8192;
 const TOOL_CACHE_LIMIT: usize = 64;
 const PREVIEW_TRUNCATED: &str = "\n[Preview truncated]";
 
+/// Claude Code tools that only report back to a session that stays open after its turn.
+pub(crate) const CLAUDE_SESSION_BOUND_TOOLS: &str = "ScheduleWakeup,Monitor,CronCreate";
+
 /// Harnesses that take app instructions as a system prompt (`--append-system-prompt`).
 pub fn takes_system_instructions(provider: &str) -> bool {
     matches!(provider, "claude" | "glm" | "mimo")
@@ -2624,6 +2627,8 @@ fn configure_command(command: &mut Command, config: &RunConfig) {
             if config.mode == "full" {
                 command.arg("--allow-dangerously-skip-permissions");
             }
+            // These wait on a live session; PandaCode's process ends with the turn.
+            command.arg(format!("--disallowedTools={}", CLAUDE_SESSION_BOUND_TOOLS));
             if use_model {
                 command.args(["--model", &config.model]);
             } else if config.provider == "glm" {

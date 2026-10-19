@@ -923,6 +923,7 @@ fn fixture() -> (Store, TeamSnapshot) {
         coordination_revision: 0,
         reviewed_coordination_revision: 0,
         legacy_prompt_through_id: Some(0),
+        continued_revision: None,
     };
     (store, team)
 }
@@ -1383,8 +1384,10 @@ fn simultaneous_review_claim_and_team_switch_choose_one_safe_boundary() {
         let team = load(&state.store.lock().unwrap(), &sid).unwrap().unwrap();
         assert!(team.pending_setup.is_none());
         assert_eq!(state.store.lock().unwrap().session(&sid).unwrap().provider, "codex");
-        assert!(next_action_state(&state, &mut |_| {}).unwrap().is_none());
-        assert_eq!(load(&state.store.lock().unwrap(), &sid).unwrap().unwrap().round, before.round);
+        // A review that neither dispatches nor finishes gets one continue turn, never a second review.
+        let next = next_action_state(&state, &mut |_| {}).unwrap().unwrap();
+        assert!(next.prompt.starts_with("You ended your turn without dispatching workers"));
+        assert_eq!(load(&state.store.lock().unwrap(), &sid).unwrap().unwrap().round, before.round + 1);
         assert_eq!(state.store.lock().unwrap().messages(&sid, None).unwrap().len(), 2);
     }
 }
@@ -2039,4 +2042,31 @@ fn roster_only_prompt_lists_only_the_team() {
     assert!(text.contains("the Reviewers team"));
     assert!(text.contains("Use only these models"));
     assert!(!text.contains("if the user's request names models"));
+}
+#[test]
+fn architect_that_stops_waiting_on_a_background_job_is_asked_once_to_continue() {
+    let (state, parent) = state_fixture();
+    let (run, _) = running_worker(&state, &parent, "parser", "src");
+    finish(&state, &run, "Parser checked successfully", true);
+    let review = next_action_state(&state, &mut |_| {}).unwrap().unwrap();
+    let (review, _) = claim(&state, review);
+    // The architect starts a background job and ends its turn expecting a wakeup.
+    finish(&state, &review, "Started the driver in the background. Waiting on the monitor.", true);
+    let nudge = next_action_state(&state, &mut |_| {}).unwrap().unwrap();
+    assert!(nudge.prompt.starts_with("You ended your turn without dispatching workers"));
+    assert!(nudge.prompt.contains("do not report back after your turn ends"));
+    let team = load(&state.store.lock().unwrap(), &parent).unwrap().unwrap();
+    assert_eq!(team.status, "running");
+    assert_eq!(team.error, None);
+    assert_eq!(
+        team.pending_turn.as_ref().and_then(|turn| turn.kind),
+        Some(internal_turns::CoordinationKind::Continue)
+    );
+    let (nudge, _) = claim(&state, nudge);
+    // A second stall with nothing new dispatched pauses instead of looping.
+    finish(&state, &nudge, "Still waiting.", true);
+    assert!(next_action_state(&state, &mut |_| {}).unwrap().is_none());
+    let team = load(&state.store.lock().unwrap(), &parent).unwrap().unwrap();
+    assert_eq!(team.status, "paused");
+    assert!(team.error.unwrap().contains("ended without dispatching"));
 }
