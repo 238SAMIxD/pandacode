@@ -155,6 +155,9 @@ test('repositories not pushed to in 30 days wait under a collapsed Other', async
   await expect(other).toBeHidden();
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  // Ages and the Other count share one right edge, with or without the on-this-computer dot.
+  const edges = await hub(page).locator('.gh-repo time, .gh-other-toggle small').evaluateAll(els => els.map(el => Math.round(el.getBoundingClientRect().right)));
+  expect(new Set(edges).size).toBe(1);
   await other.getByRole('option', { name: /tauri/ }).click();
   await expect(hub(page).getByRole('heading', { name: 'you/tauri' })).toBeVisible();
   // The choice is remembered, and a search looks through both lists.

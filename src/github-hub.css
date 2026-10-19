@@ -38,7 +38,9 @@
 .gh-repo-name{display:flex;align-items:baseline;gap:6px;min-width:0;overflow:hidden;white-space:nowrap}
 .gh-repo-name b{min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:.8rem;font-weight:550}
 .gh-repo-name small{min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:.71rem;color:var(--muted)}
-.gh-repo time{font-size:.7rem;color:var(--muted);font-variant-numeric:tabular-nums}
+/* The dot and the age keep their own columns, so ages line up whether or not a row has a dot. */
+.gh-repo .gh-local-dot{grid-column:3}
+.gh-repo time{grid-column:4;min-width:2.6em;text-align:right;font-size:.7rem;color:var(--muted);font-variant-numeric:tabular-nums}
 .gh-local-dot{width:6px;height:6px;border-radius:50%;background:var(--success);box-shadow:0 0 0 2px color-mix(in srgb,var(--success) 18%,transparent)}
 
 /* Repository */
