@@ -924,6 +924,8 @@ fn fixture() -> (Store, TeamSnapshot) {
         reviewed_coordination_revision: 0,
         legacy_prompt_through_id: Some(0),
         continued_revision: None,
+        last_turn_kind: None,
+        objective_start: 0,
     };
     (store, team)
 }
@@ -1820,7 +1822,19 @@ fn round_and_attempt_limits_stop_automatic_spending_until_explicit_action() {
             .status,
         "paused"
     );
-    assert!(control_state(&state, &sid, "resume").is_err());
+    // An explicit Resume at the limit grants a few more rounds, never past the maximum.
+    let round = load(&state.store.lock().unwrap(), &sid).unwrap().unwrap().round;
+    let resumed = control_state(&state, &sid, "resume").unwrap();
+    assert_eq!(resumed.config.max_rounds, (round + EXTRA_ROUNDS).min(MAX_ROUNDS));
+    control_state(&state, &sid, "pause").unwrap();
+    {
+        let store = state.store.lock().unwrap();
+        let mut team = load(&store, &sid).unwrap().unwrap();
+        team.round = MAX_ROUNDS;
+        team.config.max_rounds = MAX_ROUNDS;
+        save(&store, &mut team).unwrap();
+    }
+    assert!(control_state(&state, &sid, "resume").unwrap_err().contains("Send a message"));
 }
 #[test]
 fn dependency_failure_is_reported_instead_of_leaving_a_permanent_queue() {
@@ -2069,4 +2083,155 @@ fn architect_that_stops_waiting_on_a_background_job_is_asked_once_to_continue() 
     let team = load(&state.store.lock().unwrap(), &parent).unwrap().unwrap();
     assert_eq!(team.status, "paused");
     assert!(team.error.unwrap().contains("ended without dispatching"));
+}
+#[test]
+fn every_registered_team_tool_runs_without_an_approval_prompt() {
+    let names = catalog().into_iter().chain(coordination::tools(true)).chain(coordination::tools(false))
+        .map(|tool| tool["name"].as_str().unwrap().to_owned()).collect::<HashSet<_>>();
+    for name in &names {
+        assert!(team_tool(name), "{name} is not auto-allowed");
+    }
+    assert!(!team_tool("pandacode_run_project"));
+}
+#[test]
+fn a_question_answered_without_delegating_leaves_the_team_ready() {
+    let (state, sid) = state_fixture();
+    let action = Launch { sid: sid.clone(), prompt: "What do you think the issue is?".into(), images: None, admission: Admission { parent: sid.clone(), generation: 1 } };
+    let (turn, _rx) = claim(&state, action);
+    finish(&state, &turn, "The parser drops the last token.", true);
+    assert!(next_action_state(&state, &mut |_| {}).unwrap().is_none());
+    let team = load(&state.store.lock().unwrap(), &sid).unwrap().unwrap();
+    assert_eq!(team.status, "ready");
+    assert_eq!(team.error, None);
+}
+#[test]
+fn a_failed_follow_up_never_reports_the_previous_attempts_success() {
+    let (state, sid) = state_fixture();
+    let action = Launch { sid: sid.clone(), prompt: "Objective".into(), images: None, admission: Admission { parent: sid.clone(), generation: 1 } };
+    let (parent, _rx) = claim(&state, action);
+    let dispatched = call(&state, &sid, "pandacode_dispatch_workers", json!({"assignments":[assignment("engine","fast","src")]})).unwrap();
+    let id = dispatched["workerIds"][0].as_str().unwrap().to_owned();
+    let (worker, _w) = claim(&state, next_action_state(&state, &mut |_| {}).unwrap().unwrap());
+    finish(&state, &worker, "Attempt one: all engine checks passed.", true);
+    finish(&state, &parent, "waiting", true);
+    let (review, _r) = claim(&state, next_action_state(&state, &mut |_| {}).unwrap().unwrap());
+    call(&state, &sid, "pandacode_followup_worker", json!({"workerId":id,"key":"fix","prompt":"Fix the edge case."})).unwrap();
+    finish(&state, &review, "follow", true);
+    let (retried, _x) = claim(&state, next_action_state(&state, &mut |_| {}).unwrap().unwrap());
+    {
+        let mut agents = state.agents.lock().unwrap();
+        let store = state.store.lock().unwrap();
+        store.finish_task_turn(&retried.config.session_id, false, false).unwrap();
+        agents.remove(&retried.config.session_id);
+        drop(store);
+        completed_with_agents(&state, &agents, &retried.config.session_id, retried.team.as_ref(), false, false, &mut |_| {});
+    }
+    let review = next_action_state(&state, &mut |_| {}).unwrap().unwrap();
+    assert!(!review.prompt.contains("Attempt one"));
+}
+#[test]
+fn a_new_objective_runs_a_reused_key_again_and_counts_its_own_assignments() {
+    let (state, sid) = state_fixture();
+    let first = Launch { sid: sid.clone(), prompt: "Objective one".into(), images: None, admission: Admission { parent: sid.clone(), generation: 1 } };
+    let (parent, _rx) = claim(&state, first);
+    call(&state, &sid, "pandacode_dispatch_workers", json!({"assignments":[assignment("tests","fast","tests")]})).unwrap();
+    let (worker, _w) = claim(&state, next_action_state(&state, &mut |_| {}).unwrap().unwrap());
+    finish(&state, &worker, "Tests pass.", true);
+    // Within the objective, repeating the key says the work will not run again.
+    let again = call(&state, &sid, "pandacode_dispatch_workers", json!({"assignments":[assignment("tests","fast","tests")]})).unwrap();
+    assert_eq!(again["queued"], false);
+    assert_eq!(again["duplicates"][0]["status"], "completed");
+    {
+        let store = state.store.lock().unwrap();
+        let mut team = load(&store, &sid).unwrap().unwrap();
+        team.status = "completed".into();
+        team.config.max_assignments = 1;
+        save(&store, &mut team).unwrap();
+        store.finish_task_turn(&sid, true, false).unwrap();
+    }
+    state.agents.lock().unwrap().remove(&sid);
+    drop(parent);
+    let generation = load(&state.store.lock().unwrap(), &sid).unwrap().unwrap().generation;
+    start_state(&state, &sid, "Objective two", None, None).unwrap();
+    let generation = generation + 1;
+    let second = Launch { sid: sid.clone(), prompt: "Objective two".into(), images: None, admission: Admission { parent: sid.clone(), generation } };
+    let (_turn, _rx) = claim(&state, second);
+    let fresh = call(&state, &sid, "pandacode_dispatch_workers", json!({"assignments":[assignment("tests","fast","tests")]})).unwrap();
+    assert_eq!(fresh["queued"], true);
+    assert_eq!(load(&state.store.lock().unwrap(), &sid).unwrap().unwrap().workers.len(), 2);
+}
+#[test]
+fn pausing_and_resuming_does_not_use_up_worker_attempts() {
+    let (state, sid) = state_fixture();
+    let action = Launch { sid: sid.clone(), prompt: "Objective".into(), images: None, admission: Admission { parent: sid.clone(), generation: 1 } };
+    let (parent, _rx) = claim(&state, action);
+    call(&state, &sid, "pandacode_dispatch_workers", json!({"assignments":[assignment("engine","fast","src")]})).unwrap();
+    finish(&state, &parent, "waiting", true);
+    for _ in 0..4 {
+        control_state(&state, &sid, "pause").unwrap();
+        control_state(&state, &sid, "resume").unwrap();
+    }
+    let team = load(&state.store.lock().unwrap(), &sid).unwrap().unwrap();
+    assert_eq!(team.workers[0].status, "queued");
+    assert_eq!(team.workers[0].attempt, 1);
+}
+#[test]
+fn one_team_with_a_missing_folder_does_not_stop_the_others() {
+    let (state, healthy) = state_fixture();
+    let gone = std::env::temp_dir().join(format!("pandacode-gone-{}", storage::id()));
+    std::fs::create_dir_all(&gone).unwrap();
+    let broken = {
+        let store = state.store.lock().unwrap();
+        let project = store.add_project(&gone).unwrap();
+        let parent = store.create_session(&project.id, "claude", "default", "ask").unwrap();
+        let mut team = new_team(parent.id.clone(), config());
+        team.status = "waiting".into();
+        team.generation = 1;
+        team.updated_at = 0;
+        let content = serde_json::to_string(&team).unwrap();
+        store.db.execute("INSERT INTO architect_teams(session_id,content) VALUES(?1,?2)", params![parent.id, content]).unwrap();
+        parent.id
+    };
+    std::fs::remove_dir_all(&gone).unwrap();
+    let action = Launch { sid: healthy.clone(), prompt: "Objective".into(), images: None, admission: Admission { parent: healthy.clone(), generation: 1 } };
+    let (_parent, _rx) = claim(&state, action);
+    call(&state, &healthy, "pandacode_dispatch_workers", json!({"assignments":[assignment("engine","fast","src")]})).unwrap();
+    let next = next_action_state(&state, &mut |_| {}).unwrap().unwrap();
+    assert_ne!(next.sid, broken);
+    let team = load(&state.store.lock().unwrap(), &broken).unwrap().unwrap();
+    assert_eq!(team.status, "failed");
+    assert!(team.error.is_some());
+}
+#[test]
+fn new_results_keep_their_place_ahead_of_old_checkpoints() {
+    let (_store, mut team) = fixture();
+    for i in 0..20 {
+        let mut w = worker(&format!("old{i}"), "completed", &["a"], &[]);
+        w.result_revision = 1;
+        w.checkpoint = Some(coordination::WorkerCheckpoint { summary: "s".repeat(2000), next_steps: "n".repeat(2000), blocker: None, updated_at: 1 });
+        team.workers.push(w);
+    }
+    let mut fresh = worker("fresh", "completed", &["b"], &[]);
+    fresh.summary = format!("NEW RESULT: {} END", "x".repeat(1500));
+    fresh.result_revision = 10;
+    team.workers.push(fresh);
+    team.reviewed_revision = 5;
+    let review = bounded(&serde_json::to_string(&review_summaries(&team)).unwrap(), 40 * 1024);
+    assert!(review.contains(" END"));
+    assert!(!review.contains(&"s".repeat(100)));
+}
+#[test]
+fn a_worker_that_cannot_start_fails_alone() {
+    let (state, sid) = state_fixture();
+    let action = Launch { sid: sid.clone(), prompt: "Objective".into(), images: None, admission: Admission { parent: sid.clone(), generation: 1 } };
+    let (parent, _rx) = claim(&state, action);
+    call(&state, &sid, "pandacode_dispatch_workers", json!({"assignments":[assignment("one","fast","src/a"),assignment("two","fast","src/b")]})).unwrap();
+    let first = next_action_state(&state, &mut |_| {}).unwrap().unwrap();
+    fail_launch_state(&state, &first.admission, &first.sid, "An agent update is being installed", &mut |_| {});
+    let team = load(&state.store.lock().unwrap(), &sid).unwrap().unwrap();
+    assert!(active(&team.status));
+    let failed = team.workers.iter().find(|w| w.session_id == first.sid).unwrap();
+    assert_eq!(failed.status, "failed");
+    assert!(team.workers.iter().any(|w| w.session_id != first.sid && w.status != "failed"));
+    drop(parent);
 }

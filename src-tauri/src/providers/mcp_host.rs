@@ -9,7 +9,8 @@ use tokio::{
 };
 
 const HEADER_LIMIT: usize = 8192;
-const BODY_LIMIT: usize = 32 * 1024;
+// Room for a full batch of team assignments (12 × 8 KiB prompts) plus JSON-RPC framing.
+const BODY_LIMIT: usize = 160 * 1024;
 const RESULT_LIMIT: usize = 128 * 1024;
 const SERVER_NAME: &str = "pandacode_architect";
 
@@ -412,8 +413,9 @@ impl Context {
                 if !args.is_object() {
                     return HttpResponse::error(id, -32602, "Tool arguments must be an object");
                 }
-                let Ok(_permit) = self.calls.try_acquire() else {
-                    return HttpResponse::error(id, -32000, "Too many active architect tools");
+                // Models often read several workers at once: wait briefly for a slot.
+                let Ok(Ok(_permit)) = tokio::time::timeout(Duration::from_secs(30), self.calls.acquire()).await else {
+                    return HttpResponse::error(id, -32000, "Too many active architect tools; retry this call alone.");
                 };
                 let key = id.to_string();
                 let cancel = Arc::new(tokio::sync::Notify::new());

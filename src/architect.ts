@@ -20,6 +20,8 @@ import { TeamMessages } from './team-messages';
 import { renderCoordination } from './coordination-message';
 import { bindMessageActions, messageActionsHtml } from './message-actions';
 import type { AgentEvent, Message, MessagePage, Provider, ProviderId, ProviderModel, Session, ToolActivity } from './types';
+/** The highest round limit a team can have (`MAX_ROUNDS` in architect.rs). */
+const MAX_ROUNDS = 20;
 
 type SetupOptions = {
   task: Session; team: TeamSnapshot | null; library: TeamLibrary; providers: Provider[];
@@ -313,8 +315,10 @@ export class ArchitectView {
     // Stale unknown terminal events must not accumulate stream objects forever.
     while (this.live.size > 8) { const entry = [...this.live].find(([, value]) => value.ended && !value.inputs.size && !value.approvals.size); if (!entry) break; this.live.delete(entry[0]); }
     if (['approval', 'approval_cancelled', 'input_request', 'input_cancelled', 'done'].includes(event.kind)) this.paint();
-    this.schedule();
+    if (event.sessionId === this.worker()?.sessionId) this.schedule();
   }
+  /** A worker is asking for an approval or an answer the user has not given yet. */
+  needsInput(sessionId: string): boolean { const live = this.live.get(sessionId); return Boolean(live?.approvals.size || live?.inputs.size); }
   private worker(): TeamWorker | undefined { return this.team?.workers.find(w => w.id === this.selected); }
   private schedule(): void { if (this.frame || !this.panel) return; this.frame = requestAnimationFrame(() => { this.frame = 0; this.paintLive(); }); }
   open(): void {
@@ -372,8 +376,11 @@ export class ArchitectView {
   private paint(): void {
     const team = this.team; this.host.hidden = !team; if (!team) { this.close(); return; }
     const done = team.workers.filter(w => w.status === 'completed' || w.abandoned).length;
-    this.trigger.innerHTML = `${icon('worktree')}<span>Architect & workers</span><small>${team.workers.length ? `${done}/${team.workers.length}` : 'Ready'}</small>${icon('chevron')}`;
-    this.trigger.dataset.status = team.status;
+    const asking = team.workers.some(w => this.needsInput(w.sessionId));
+    const progress = asking ? 'Needs input' : team.workers.length ? `${done}/${team.workers.length}` : 'Ready';
+    const trigger = `${icon('worktree')}<span>Architect & workers</span><small>${progress}</small>${icon('chevron')}`;
+    if (this.trigger.dataset.painted !== trigger) { this.trigger.innerHTML = trigger; this.trigger.dataset.painted = trigger; }
+    this.trigger.dataset.status = asking ? 'waiting' : team.status;
     if (!this.panel) return;
     const panel = this.panel, worker = this.worker();
     this.paintAssist();
@@ -382,9 +389,12 @@ export class ArchitectView {
     panel.querySelector<HTMLElement>('.architect-panel-summary')!.textContent = `${statusNames[team.status]} · Round ${team.round}/${team.config.maxRounds}`;
     panel.querySelector<HTMLButtonElement>('[data-team-control=pause]')!.hidden = !teamActive(team);
     panel.querySelector<HTMLButtonElement>('[data-team-control=stop]')!.hidden = !teamActive(team) && team.status !== 'paused';
-    panel.querySelector<HTMLButtonElement>('[data-team-control=resume]')!.hidden = !['paused', 'failed', 'interrupted'].includes(team.status);
+    // Resume at the round limit grants more rounds natively, up to the maximum of 20.
+    panel.querySelector<HTMLButtonElement>('[data-team-control=resume]')!.hidden = !['paused', 'failed', 'interrupted'].includes(team.status) || team.round >= MAX_ROUNDS;
     panel.querySelectorAll<HTMLButtonElement>('[data-team-control]').forEach(button => { button.disabled = this.busy; });
     const error = panel.querySelector<HTMLElement>('.architect-panel-error')!; error.textContent = team.error ?? ''; error.hidden = !team.error;
+    // Pausing or stopping is the user's own choice, not a failure.
+    error.classList.toggle('is-notice', team.status === 'paused' && /^Team (paused|stopped)\./.test(team.error ?? ''));
     panel.querySelector<HTMLElement>('.architect-back')!.hidden = !worker;
     panel.querySelector<HTMLElement>('.architect-worker-list')!.hidden = Boolean(worker);
     panel.querySelector<HTMLElement>('.architect-worker-detail')!.hidden = !worker;
@@ -392,7 +402,7 @@ export class ArchitectView {
     if (worker) {
       const meta = panel.querySelector<HTMLElement>('.architect-worker-meta')!;
       const queueReason = workerQueueReason(worker, team.workers, team.config.maxParallel);
-      meta.innerHTML = `${providerLogo(worker.provider)}<div class="architect-worker-copy"><strong>${escape(worker.name)}</strong><small>${escape(modelName(worker, this.providers))} · ${escape(statusNames[worker.status])}${worker.readOnly ? ' · Read only' : ''}</small>${queueReason ? `<small class="architect-worker-queue" role="status" data-tip="${escape(queueReason)}">${escape(queueReason)}</small>` : ''}</div>`;
+      meta.innerHTML = `${providerLogo(worker.provider)}<div class="architect-worker-copy"><strong>${escape(worker.name)}</strong><small>${escape(modelName(worker, this.providers))} · ${escape(statusNames[worker.status])}${worker.readOnly ? ' · Read only' : ''}</small>${queueReason ? `<small class="architect-worker-queue" role="status" data-tip="${escape(queueReason)}">${escape(queueReason)}</small>` : ''}${worker.error ? `<small class="architect-worker-error" role="status">${escape(worker.error)}</small>` : ''}</div>`;
       panel.querySelector<HTMLElement>('.architect-assignment p')!.textContent = worker.assignment;
       panel.querySelector<HTMLElement>('.architect-assignment small')!.textContent = worker.readOnly ? 'Read only · no writes' : worker.files.length ? `Write scope: ${worker.files.join(', ')}` : 'Write scope: shared checkout';
       const checkpoint = panel.querySelector<HTMLDetailsElement>('.architect-worker-checkpoint')!;
@@ -421,7 +431,8 @@ export class ArchitectView {
       const needsInput = Boolean(live?.approvals.size || live?.inputs.size);
       row.dataset.status = needsInput ? 'waiting' : worker.status;
       const queueReason = workerQueueReason(worker, team.workers, team.config.maxParallel);
-      row.innerHTML = `<span class="architect-worker-logo">${providerLogo(worker.provider)}</span><span class="architect-worker-copy"><strong>${escape(worker.name)}</strong><small${queueReason ? ` data-tip="${escape(queueReason)}"` : ''}>${escape(queueReason ?? modelName(worker, this.providers))}</small></span><span class="architect-worker-state">${escape(worker.abandoned ? 'Resolved' : needsInput ? 'Needs input' : statusNames[worker.status])}</span>${icon('chevron')}`;
+      const markup = `<span class="architect-worker-logo">${providerLogo(worker.provider)}</span><span class="architect-worker-copy"><strong>${escape(worker.name)}</strong><small${queueReason ? ` data-tip="${escape(queueReason)}"` : ''}>${escape(queueReason ?? modelName(worker, this.providers))}</small></span><span class="architect-worker-state">${escape(worker.abandoned ? 'Resolved' : needsInput ? 'Needs input' : statusNames[worker.status])}</span>${icon('chevron')}`;
+      if (row.dataset.painted !== markup) { row.innerHTML = markup; row.dataset.painted = markup; }
     }
   }
   private async loadMessages(older = false): Promise<void> {

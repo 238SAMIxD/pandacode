@@ -144,3 +144,6 @@ html[data-theme="dark"] .architect-assist { color: var(--accent); }
 .architect-worker-copy strong { flex: 0 1 auto; min-width: 0; font-size: .8rem; font-weight: 550; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .architect-worker-copy small { flex: 0 10 auto; min-width: 0; color: var(--muted); font-size: .7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .architect-worker-state { color: var(--muted); font-size: .7rem; flex-shrink: 0; }
+/* Pausing or stopping is the user's choice: say so quietly, not in red. */
+.architect-panel-error.is-notice { color: var(--muted); }
+.architect-worker-error { display: block; color: var(--danger); white-space: normal; }

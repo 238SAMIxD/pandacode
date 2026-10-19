@@ -154,6 +154,8 @@ function onArchitect(team: TeamEvent): void {
   if ('removed' in team) { teams.set(team.sessionId, null); if (team.sessionId === state.sessionId) { architectView?.setTask(team.sessionId, null, state.providers); renderComposer(); } return; }
   const current = teams.get(team.sessionId);
   if (current && current.revision > team.revision) return;
+  // Pauses and failures the user did not ask for would otherwise only show inside the panel.
+  if (team.sessionId === state.sessionId && team.error && team.error !== current?.error && !/^Team (paused|stopped)\./.test(team.error)) notify(team.error);
   const wasActive = teamActive(current);
   teams.set(team.sessionId, team);
   const task = state.sessions.find(s => s.id === team.sessionId);
@@ -167,10 +169,11 @@ function onArchitect(team: TeamEvent): void {
   scheduleNavigation();
 }
 async function loadTeam(id: string): Promise<TeamSnapshot | null> {
-  const revision = teams.get(id)?.revision;
+  const known = teams.has(id), before = teams.get(id);
   const loaded = await call<TeamSnapshot | null>('architect_get', { sessionId: id });
   if (deletedSessions.has(id)) return null;
-  if (teams.get(id)?.revision !== revision) return teams.get(id) ?? null;
+  // An update or a removal that arrived during the fetch is newer than this snapshot.
+  if (teams.has(id) !== known || teams.get(id) !== before) return teams.get(id) ?? null;
   teams.set(id, loaded);
   if (teams.size > 64) { const old = [...teams].find(([key, value]) => key !== state.sessionId && !teamActive(value)); if (old) teams.delete(old[0]); }
   if (loaded) await ensureArchitectView();
@@ -935,7 +938,8 @@ function refreshTeamProgress(): void {
     const host = !turn || (running && index === slots.length - 1) ? live : turn.slot;
     placed.get(host)!.push(worker);
   }
-  for (const [host, shown] of placed) updateTeamProgress(host, team, state.providers, shown);
+  const asking = (sessionId: string) => architectView?.needsInput(sessionId) ?? false;
+  for (const [host, shown] of placed) updateTeamProgress(host, team, state.providers, shown, asking);
 }
 /** A turn's change card, or nothing when the snapshot has nothing to report. */
 function changesRow(sessionId: string, changes: TurnChanges | undefined): string {
@@ -2158,7 +2162,16 @@ function onAgent(event: AgentEvent): void {
   if (deletedSessions.has(event.sessionId)) return;
   // Managed workers are deliberately absent from sidebar/board task summaries.
   // Route their live output and approval forms to the team's worker inspector.
-  if (!state.sessions.some(s => s.id === event.sessionId)) { void ensureArchitectView().then(view => { if (!deletedSessions.has(event.sessionId)) view.receive(event); }); return; }
+  if (!state.sessions.some(s => s.id === event.sessionId)) {
+    void ensureArchitectView().then(view => {
+      if (deletedSessions.has(event.sessionId)) return;
+      view.receive(event);
+      // A worker's approval or question must reach the user even with the panel closed.
+      if (event.kind === 'approval' || event.kind === 'input_request') notify('A worker needs your input. Open Architect & workers.');
+      if (['approval', 'approval_cancelled', 'input_request', 'input_cancelled', 'done'].includes(event.kind)) refreshTeamProgress();
+    });
+    return;
+  }
   if (event.kind === 'task_settings') { const task = state.sessions.find(s => s.id === event.sessionId); if (task) task.codexSettings = event.data as Session['codexSettings']; return; }
   if (event.kind === 'goal_ready') return;
   if (event.kind === 'goal_input') { const current = state.streams.get(event.sessionId); if (current) { finishLiveMessage(current, event.sessionId); current.tools.push({ key: 'goal:' + transientId--, content: 'Goal updated: ' + event.text, commentary: true }); current.revision++; if (event.sessionId === state.sessionId) renderStream(); } return; }

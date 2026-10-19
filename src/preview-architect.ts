@@ -303,8 +303,14 @@ export function createPreviewArchitect(host: PreviewHost) {
       if (!['paused', 'interrupted', 'failed'].includes(team.snapshot.status)) throw new Error('Only an interrupted team can resume.');
       const restart = team.snapshot.status !== 'paused' || Boolean(team.snapshot.error);
       if (parent.archived || parent.taskStage === 'completed') throw new Error('Reopen this task before resuming its team.');
-      host.assertIdle(parent); parent.status = 'running'; team.snapshot.status = 'running'; team.snapshot.error = null;
+      host.assertIdle(parent);
       applyPending(team);
+      // Like the native team: Resume at the round limit grants a few more rounds, up to 20.
+      if (team.snapshot.round >= team.snapshot.config.maxRounds) {
+        if (team.snapshot.round >= 20) throw new Error('This team used all 20 architect rounds. Send a message to continue.');
+        team.snapshot.config = { ...team.snapshot.config, maxRounds: Math.min(20, team.snapshot.round + 4) };
+      }
+      parent.status = 'running'; team.snapshot.status = 'running'; team.snapshot.error = null;
       for (const run of team.runs.slice(team.batchStart)) if (run.worker.status === 'stopped' || run.worker.status === 'failed') {
         if (restart) { run.cursor = 0; run.worker.attempt++; }
         run.worker.status = 'queued';

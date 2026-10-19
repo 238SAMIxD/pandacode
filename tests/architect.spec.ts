@@ -820,4 +820,13 @@ test.describe('architect teams', () => {
     ]);
     expect(await calls(page, 'architect_control')).toHaveLength(0);
   });
+  test('tells the user when a worker needs input while the panel is closed', async ({ page }) => {
+    await installArchitect(page, { 'session-2': team('session-2', { status: 'running', workers: [worker('build', { status: 'running' })] }) });
+    await expect(openWorkers(page)).toBeVisible();
+    await page.evaluate(() => (window as any).__architectTest.event({ sessionId: 'worker-build', kind: 'approval', requestId: 'ask-build', text: 'Run the worker verification command?' }));
+    await expect(page.locator('#toast')).toContainText('A worker needs your input');
+    await expect(openWorkers(page)).toContainText('Needs input');
+    await page.evaluate(() => (window as any).__architectTest.event({ sessionId: 'worker-build', kind: 'approval_cancelled', requestId: 'ask-build' }));
+    await expect(openWorkers(page)).not.toContainText('Needs input');
+  });
 });

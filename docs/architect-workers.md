@@ -77,11 +77,24 @@ latest 200 messages and 64 KiB); the full visible transcript remains unchanged.
   boundaries, not an operating-system filesystem sandbox. Normal harness approval
   and sandbox behavior applies. Other apps and terminals can still edit files.
 - Dependencies refer to already-created assignments. The scheduler launches work
-  only when its dependencies have completed. Stable assignment keys prevent a
-  retried tool call from creating the same worker twice.
+  only when its dependencies have completed. Assignment keys prevent a retried
+  tool call from creating the same worker twice within one objective; a new
+  request may reuse a key and gets a new worker. Repeating a key whose worker
+  already finished returns that worker with `duplicates`, so the architect knows
+  nothing new will run. The assignment limit counts only the current objective's
+  workers.
 - An architect may end its turn while workers run. Native completion events wake
   it for a compact review after work settles. There is no background model polling
-  loop and no repeated prompt when worker state is unchanged.
+  loop and no repeated prompt when worker state is unchanged. Each turn ends the
+  harness process, so background commands, monitors and scheduled wakeups never
+  report back; Claude runs disable ScheduleWakeup, Monitor and CronCreate, and
+  the instructions say so.
+- If a review or update turn ends without dispatching work or finishing, the
+  architect gets one **Continuing the plan** turn; a second stall pauses the team
+  with a notice. A turn that answers the user's own message without delegating
+  (a question about the work) leaves the team ready, not paused.
+- A worker that cannot start (for example while an agent update installs) fails
+  alone; the rest of the team keeps working and the architect reviews it.
 - Explicit completion moves the parent task to Review. Marking the task complete
   and its seven-day archive policy work as before.
 
@@ -123,7 +136,11 @@ Setup offers parallelism, architect-round, assignment-count, and worker-summary
 limits. A worker gets at most three attempts, including follow-ups. These limits
 bound orchestration, not a provider's bill. Pause and Stop cancel active team
 processes and prevent queued work from starting; Resume explicitly retries
-unfinished work. An app restart recovers the team as interrupted instead of
+unfinished work. Pausing, stopping and restarting do not use up worker attempts;
+only failures do. Resume waits briefly for stopping agents to exit. Resuming a
+team paused at its round limit grants four more rounds, up to the maximum of 20.
+Team errors and pauses you did not ask for appear as a notice, and a worker that
+needs an approval or answer is announced even with the panel closed. An app restart recovers the team as interrupted instead of
 silently starting more inference. Team profiles and limits can be changed during
 work or while paused using the same setup picker.
 
@@ -159,9 +176,12 @@ rejects browser origins, bounds requests and results, and closes with its provid
 run. It adds no Node/Python server, permanent configuration file, or resident
 service. ACP harnesses must advertise HTTP MCP support. Existing user integrations remain
 configured; this bridge does not grant access to PandaCode's broader app tools.
-Harnesses can still ask for permission to invoke MCP tools under their
-normal approval modes; those requests appear in the conversation. The bridge
-does not bypass the harness's permission checks.
+Team tools (dispatch, list, read, follow up, cancel, finish, directory,
+messages and checkpoints) run without a Claude permission prompt: they only
+change this team's state and every call is checked against the caller's team,
+generation and role. Other tools keep the harness's normal approval modes.
+Team workers do not keep a pre-started process, so the architect's stays
+available for its review turn.
 
 Team snapshots also track the architect tool-catalog version. An older Codex
 architect gets a fresh native context on its next turn when its saved catalog

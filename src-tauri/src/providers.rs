@@ -23,7 +23,7 @@ mod host_inputs;
 mod host_tools;
 mod mcp_host;
 mod warm;
-pub use warm::{discard as discard_warm_agent, prewarm as prewarm_agent, supported as warms};
+pub use warm::{discard as discard_warm_agent, epoch as warm_epoch, prewarm as prewarm_agent, supported as warms};
 use host_tools::apply_step;
 pub use host_tools::ToolHost;
 pub(crate) mod acp;
@@ -2349,13 +2349,14 @@ impl Protocol {
                     // Questions need structured answers; a boolean allow must not silently submit one.
                     if name == "AskUserQuestion" {
                         step.write.push(json!({"type":"control_response","response":{"subtype":"success","request_id":value["request_id"],"response":{"behavior":"deny","message":"Ask the user in your response; this UI supports free-text replies."}}}));
-                    } else if name.strip_prefix("mcp__pandacode_architect__").is_some_and(|tool| optional_metadata_tool(tool) || crate::bots::tools::self_scoped(tool))
+                    } else if name.strip_prefix("mcp__pandacode_architect__").is_some_and(|tool| optional_metadata_tool(tool) || crate::bots::tools::self_scoped(tool) || crate::architect::team_tool(tool))
                         && self.mcp_tool_names.contains(&name)
                     {
                         // Registered metadata callbacks only stage this run's
                         // title or snapshot named paths. They cannot edit the checkout.
                         // Bot tools are registered only in a bot's own tasks and only
                         // touch that bot's memory, schedules and messages to its owner.
+                        // Team tools only exist in team turns and only change team state.
                         step.write.push(json!({"type":"control_response","response":{"subtype":"success","request_id":value["request_id"],"response":{"behavior":"allow","updatedInput":value["request"]["input"]}}}));
                     } else {
                         self.approval(
@@ -2765,7 +2766,10 @@ async fn run_process_with_tools(
     // A warm agent started after the task's last turn: same launch, tools already listed.
     let mut spare = match &host {
         Some(tools) if warm::supported(&config) => warm::take(&config.session_id, &warm::key(&config, &tools.tools)),
-        _ => None,
+        _ => {
+            warm::launched(&config.session_id);
+            None
+        }
     };
     let (host, mcp) = match (config.provider.as_str(), host) {
         ("claude", Some(host)) if spare.is_some() => {

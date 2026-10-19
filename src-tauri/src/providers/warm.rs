@@ -19,6 +19,14 @@ pub(super) struct Spare {
 }
 
 static SPARES: LazyLock<Mutex<HashMap<String, Spare>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Counts each task's Claude launches. A spare started for launch N is useless once launch N+1
+/// has begun: it would resume the conversation without that turn.
+static LAUNCHES: LazyLock<Mutex<HashMap<String, u64>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// The task's current launch count, read when a turn ends and before the next can begin.
+pub fn epoch(session_id: &str) -> u64 {
+    LAUNCHES.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(session_id).copied().unwrap_or(0)
+}
 
 fn spares() -> std::sync::MutexGuard<'static, HashMap<String, Spare>> {
     SPARES.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -35,13 +43,21 @@ pub(super) fn key(config: &RunConfig, tools: &[Value]) -> String {
         "provider": config.provider, "model": config.model, "effort": config.reasoning_effort,
         "mode": config.mode, "cwd": config.cwd, "resume": config.resume_id,
         "instructions": config.instructions, "tools": tools,
+        // The login a process starts with (API key or subscription) is fixed at spawn.
+        "connection": format!("{:?}", crate::provider_settings::claude_connection_mode()),
     })
     .to_string()
 }
 
 /// The warm agent for this turn, if one exists, is still running and was started for
 /// exactly this launch. Any other warm agent for the task is discarded.
+/// Every launch of the task counts, with or without a spare to adopt.
+pub(super) fn launched(session_id: &str) {
+    *LAUNCHES.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).entry(session_id.to_owned()).or_default() += 1;
+}
+
 pub(super) fn take(session_id: &str, key: &str) -> Option<Spare> {
+    launched(session_id);
     let mut spare = spares().remove(session_id)?;
     let alive = matches!(spare.child.try_wait(), Ok(None));
     (alive && spare.key == key && spare.born.elapsed() < IDLE).then_some(spare)
@@ -54,7 +70,7 @@ pub fn discard(session_id: &str) {
 
 /// Start the next turn's agent for a task. `tools` is the catalog its last turn used; the
 /// placeholder server answers the agent's startup listing and is rebound on adoption.
-pub async fn prewarm(mut config: RunConfig, tools: Vec<Value>, approval_tools: HashSet<String>) -> Result<(), String> {
+pub async fn prewarm(mut config: RunConfig, tools: Vec<Value>, approval_tools: HashSet<String>, launch: u64) -> Result<(), String> {
     if !supported(&config) {
         return Ok(());
     }
@@ -90,6 +106,11 @@ pub async fn prewarm(mut config: RunConfig, tools: Vec<Value>, approval_tools: H
     let session_id = config.session_id.clone();
     {
         let mut spares = spares();
+        // The next turn already started (a team review, a queued message): this spare would
+        // carry an outdated conversation. Dropping it kills its process.
+        if epoch(&session_id) != launch {
+            return Ok(());
+        }
         spares.insert(session_id.clone(), Spare { key, child, group, server, born });
         // Keep only the newest few; dropping a spare kills its process.
         while spares.len() > LIMIT {

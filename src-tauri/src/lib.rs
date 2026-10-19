@@ -424,7 +424,7 @@ fn app_instructions() -> String {
 const TURN_ENDS: &str = "\n\nYour turn ends when you reply, and PandaCode then closes this session's process: background commands, monitors and scheduled wakeups started in this turn never report back. Wait for long-running commands in the foreground (or poll them) before you reply.";
 
 /// Questions to the user render rich Markdown in PandaCode; agents only use it if told.
-const RICH_QUESTIONS: &str = "\n\nQuestions you ask the user (AskUserQuestion, request_user_input) render Markdown in PandaCode: use links, images by workspace path (![alt](relative/path.png)), ```chart blocks with JSON {\"type\":\"bar\"|\"line\"|\"pie\",\"title\",\"labels\":[…],\"series\":[{\"name\",\"values\":[…]}]}, ```svg drawings, or static ```html views when a visual helps the user decide. Remote images show as links; scripts never run.";
+const RICH_QUESTIONS: &str = "\n\nQuestions you ask through the request_user_input tool, where available, render Markdown in PandaCode: use links, images by workspace path (![alt](relative/path.png)), ```chart blocks with JSON {\"type\":\"bar\"|\"line\"|\"pie\",\"title\",\"labels\":[…],\"series\":[{\"name\",\"values\":[…]}]}, ```svg drawings, or static ```html views when a visual helps the user decide. Remote images show as links; scripts never run.";
 
 /// Harnesses without a system prompt hear the app instructions again every few turns.
 const INSTRUCTION_REMINDER_EVERY: i64 = 8;
@@ -442,7 +442,7 @@ mod instruction_tests {
         assert_eq!(reminded, [1, 9, 17]);
         assert!(!reminder_turn(0));
         let text = app_instructions();
-        for part in ["Sidebar titles:", "Run and preview workflow:", "File change tracking:", "Questions you ask the user"] {
+        for part in ["Sidebar titles:", "Run and preview workflow:", "File change tracking:", "Questions you ask through the request_user_input tool", "Your turn ends when you reply"] {
             assert!(text.contains(part), "{part}");
         }
     }
@@ -1686,7 +1686,10 @@ async fn launch_operation_admitted(
         let host = Some(turn_changes::with_host(host, tracker.clone(), stopped.clone()));
         let host = Some(session_titles::with_host(title_run.as_ref(), host, stopped.clone()));
         // What the next turn's warm agent needs: this launch and the tools it listed.
-        let warm_next = providers::warms(&config).then(|| {
+        // Team workers rarely get a follow-up, and their warm agents would push out the
+        // architect's, whose review turn starts as soon as they settle.
+        let managed_worker = team.as_ref().is_some_and(|admission| admission.parent != session_id);
+        let warm_next = (providers::warms(&config) && !managed_worker).then(|| {
             let tools = host.as_ref().map(|host| (host.tools.clone(), host.approval_tools.clone())).unwrap_or_default();
             (config.clone(), tools)
         });
@@ -1869,13 +1872,22 @@ async fn launch_operation_admitted(
         // Keep Start blocked until the old run's final event has been queued.
         // Otherwise its delayed `done` can finish a newly started UI stream.
         drop(children);
+        // Read before the team scheduler can start this task's next turn.
+        let launch = providers::warm_epoch(&session_id);
         if let Some(registry) = registry.as_ref() {
             architect::completed(&app, &session_id, team.as_ref(), successful, was_stopped, registry);
         }
         drop(registry);
         // Start the next turn's agent now, so a follow-up skips the CLI's own startup.
         if let (true, Some((mut next, (tools, approvals)))) = (successful && !was_stopped, warm_next) {
-            let task = store.lock().ok().and_then(|db| db.session(&session_id).ok());
+            // A turn that ended without any reply (seen after background commands) may have
+            // left the session in a state a spare would inherit: start the next one fresh.
+            let replied = store.lock().ok().and_then(|db| db.db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM messages WHERE session_id=?1 AND role='assistant' AND id>(SELECT COALESCE(MAX(id),0) FROM messages WHERE session_id=?1 AND role IN ('user','coordination')))",
+                [&session_id],
+                |row| row.get::<_, bool>(0),
+            ).ok()).unwrap_or(false);
+            let task = store.lock().ok().filter(|_| replied).and_then(|db| db.session(&session_id).ok());
             if let Some(task) = task {
                 next.resume_id = task.resume_id;
                 next.model = task.model;
@@ -1884,7 +1896,7 @@ async fn launch_operation_admitted(
                 next.prompt.clear();
                 next.images.clear();
                 tauri::async_runtime::spawn(async move {
-                    let _ = providers::prewarm_agent(next, tools, approvals).await;
+                    let _ = providers::prewarm_agent(next, tools, approvals, launch).await;
                 });
             }
         }

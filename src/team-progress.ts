@@ -16,7 +16,7 @@ function text(root: Element, selector: string, value: string): void {
 
 /** Inline in the thread, one quiet line per spawned worker, like a tool line. Clicking a
  *  line opens that worker in the Architect & workers panel; the rest stay one click away. */
-export function updateTeamProgress(host: HTMLElement, team: TeamSnapshot | null | undefined, providers: Provider[], only?: TeamWorker[]): boolean {
+export function updateTeamProgress(host: HTMLElement, team: TeamSnapshot | null | undefined, providers: Provider[], only?: TeamWorker[], needsInput: (sessionId: string) => boolean = () => false): boolean {
   const spawned = only ?? team?.workers ?? [];
   const visible = spawned.length > 0;
   host.hidden = !visible;
@@ -54,7 +54,8 @@ export function updateTeamProgress(host: HTMLElement, team: TeamSnapshot | null 
     const harness = provider?.name ?? worker.provider;
     const detail = [...new Set([profile?.name !== worker.name ? profile?.name ?? '' : '', model].flatMap(part => part.split(' · ')).map(part => part.trim()))]
       .filter(part => part && part !== harness && part !== worker.name);
-    const status = worker.abandoned ? 'Skipped' : !teamActive(team) && pending(worker) ? 'Paused' : workerLabels[worker.status];
+    // An approval or question waits only in the worker's live stream, not in its saved status.
+    const status = worker.abandoned ? 'Skipped' : !teamActive(team) && pending(worker) ? 'Paused' : worker.status === 'running' && needsInput(worker.sessionId) ? 'Needs attention' : workerLabels[worker.status];
     text(row, '.team-progress-description strong', worker.name);
     text(row, '.team-progress-description small', detail.join(' · '));
     text(row, '.team-progress-status', status);
