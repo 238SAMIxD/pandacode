@@ -218,8 +218,8 @@ mark{background:color-mix(in srgb,var(--accent) 45%,transparent);color:inherit;b
 .tool-extra{font-size:0.642857rem;background:var(--raised);padding:0 4px;border-radius:1px}
 .message-error{display:flex;gap:9px;padding:12px;margin-bottom:20px;color:var(--danger);background:#fff0ef;border-radius:2px;font-size:0.857143rem}
 .composer-area{padding:0 30px 17px;margin:0 auto;width:100%;max-width:950px;flex-shrink:0}
-.composer{border:1px solid #dcdcd6;border-radius:6px;background:#ffffff;box-shadow:0 2px 5px rgb(0 0 0 / .025), 0 8px 24px rgb(0 0 0 / .035);transition:border-color 120ms, box-shadow 120ms}
-.composer:focus-within{border-color:#c1a434;box-shadow:0 0 0 3px rgb(var(--accent-rgb) / .12), 0 8px 24px rgb(0 0 0 / .035)}
+.composer{border:1px solid transparent;border-radius:6px;background:#ffffff;box-shadow:0 2px 5px rgb(0 0 0 / .025), 0 8px 24px rgb(0 0 0 / .035);transition:border-color 120ms, box-shadow 120ms}
+.composer:focus-within{border-color:transparent;box-shadow:0 0 0 3px rgb(var(--accent-rgb) / .12), 0 8px 24px rgb(0 0 0 / .035)}
 .composer textarea{width:100%;min-height:76px;max-height:180px;padding:16px 17px 10px;display:block;border:0;background:none;font-size:.94rem;line-height:1.7;color:var(--text);border-radius:6px;box-shadow:none}
 .composer textarea::placeholder{color:var(--muted)}
 .composer-toolbar{display:flex;align-items:center;justify-content:space-between;padding:0 10px 10px;gap:8px}
@@ -352,7 +352,7 @@ mark{background:color-mix(in srgb,var(--accent) 45%,transparent);color:inherit;b
 .welcome-project:hover{color:var(--text);background:var(--accent-dim)}
 .welcome-project:active{background:var(--accent-dim);transform:none}
 .new-task-page .composer-area{max-width:950px}
-.composer-context{display:flex;align-items:center;gap:20px;min-height:42px;margin:0 12px;padding:6px 14px;background:#faf9f4;border:1px solid #f0eee4;border-bottom:0;border-radius:5px 5px 0 0;color:var(--muted);font-size:.82rem;min-width:0}
+.composer-context{display:flex;align-items:center;gap:20px;min-height:42px;margin:0 12px;padding:6px 14px;background:#faf9f4;border:1px solid transparent;border-bottom:0;border-radius:5px 5px 0 0;color:var(--muted);font-size:.82rem;min-width:0}
 .composer-context .icon{width:16px;height:16px;flex-shrink:0}
 .composer-project{gap:7px;min-width:0;max-width:50%;padding:3px 0;color:var(--text);font-weight:500}
 .composer-project span,.composer-context-branch{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -723,9 +723,9 @@ html[data-theme="dark"] .user-avatar{background:var(--raised)}
 html[data-theme="dark"] :is(.markdown pre,.tool-activity pre){background:#252522;border-color:var(--border);color:var(--text)}
 html[data-theme="dark"] .markdown :not(pre)>code{background:var(--raised);color:#dfdccb}
 html[data-theme="dark"] .message-error{background:#402b29}
-html[data-theme="dark"] .composer{background:#262624;border-color:#45453e;box-shadow:0 2px 5px rgb(0 0 0 / .1),0 8px 24px rgb(0 0 0 / .15)}
-html[data-theme="dark"] .composer:focus-within{border-color:#ab9133;box-shadow:0 0 0 3px rgb(var(--accent-rgb) / .1),0 8px 24px rgb(0 0 0 / .15)}
-html[data-theme="dark"] .composer-context{background:#24241f;border-color:var(--border)}
+html[data-theme="dark"] .composer{background:#262624;border-color:transparent;box-shadow:0 2px 5px rgb(0 0 0 / .1),0 8px 24px rgb(0 0 0 / .15)}
+html[data-theme="dark"] .composer:focus-within{border-color:transparent;box-shadow:0 0 0 3px rgb(var(--accent-rgb) / .1),0 8px 24px rgb(0 0 0 / .15)}
+html[data-theme="dark"] .composer-context{background:#24241f;border-color:transparent}
 html[data-theme="dark"] .attachments>span{border-color:#6a5a24}
 html[data-theme="dark"] .inspector-tabs{background:#191918}
 html[data-theme="dark"] .inspector-tabs button.selected{background:#3a3a35;box-shadow:0 1px 3px rgb(0 0 0 / .25)}
@@ -858,3 +858,5 @@ html[data-native-platform=macos] .github-view .gh-repos-head{padding-left:84px}
 .settings-metric{font-family:var(--mono);font-size:.82rem;color:var(--text)}
 .preview-status{color:var(--muted);font-size:.72rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
 @media (max-width:900px){.preview-status{display:none}}
+/* The prompt box and the bar above it have no border, except under increased contrast. */
+@media (prefers-contrast:more){html[data-theme] .workspace :is(.composer,.composer-context,.composer:focus-within),html[data-theme] .workspace[data-wallpaper] .conversation-pane :is(.composer,.composer-context,.composer:focus-within){border-color:var(--text)}}
