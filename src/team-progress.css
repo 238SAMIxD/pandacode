@@ -20,6 +20,6 @@
 .team-progress-worker[data-status=Failed] .team-progress-status,.team-progress-worker[data-status="Needs attention"] .team-progress-status{color:var(--danger)}
 .team-progress-more{font-size:.7rem;color:var(--muted);margin:5px 6px 2px}
 .workspace[data-wallpaper] .team-progress{background:var(--thread-surface);backdrop-filter:var(--thread-frost);-webkit-backdrop-filter:var(--thread-frost)}
-.workspace.board-view[data-wallpaper] .team-progress{backdrop-filter:none;-webkit-backdrop-filter:none}
+.workspace.side-thread[data-wallpaper] .team-progress{backdrop-filter:none;-webkit-backdrop-filter:none}
 @media(prefers-reduced-motion:reduce){.team-progress-worker{transition:none}}
 @media(prefers-reduced-transparency:reduce),(prefers-contrast:more){html .workspace .team-progress{background:var(--panel);backdrop-filter:none;-webkit-backdrop-filter:none}}

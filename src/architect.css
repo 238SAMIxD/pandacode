@@ -105,8 +105,8 @@
 .architect-worker-detail .approval-card p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .architect-history-retry, .architect-history-older { font-size: .72rem; margin-top: 10px; }
 .workspace[data-wallpaper] .architect-trigger { background: var(--workspace-frost-surface); -webkit-backdrop-filter: var(--workspace-frost); backdrop-filter: var(--workspace-frost); }
-.board-view .architect-host { padding-top: 0; padding-bottom: 8px; }
-.board-view .architect-panel { max-height: min(620px, calc(100dvh - 300px)); }
+.side-thread .architect-host { padding-top: 0; padding-bottom: 8px; }
+.side-thread .architect-panel { max-height: min(620px, calc(100dvh - 300px)); }
 @media(max-width:700px) { .architect-host { padding-right: 16px; } }
 @media(prefers-reduced-transparency:reduce), (prefers-contrast:more) { .workspace[data-wallpaper] .architect-trigger { background: var(--panel); -webkit-backdrop-filter: none; backdrop-filter: none; } }
 

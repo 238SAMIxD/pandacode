@@ -20,5 +20,5 @@
 .workspace[data-wallpaper] .conversation-pane .agent-input{background:var(--thread-surface);border-color:var(--thread-border)}
 .workspace[data-wallpaper] .conversation-pane .agent-input :is(input:not([type=radio],[type=checkbox]),select){background:var(--thread-inset);border-color:var(--thread-border)}
 .workspace[data-wallpaper] .conversation-pane .agent-input-option:has(input:checked){background:var(--thread-accent)}
-.board-view .agent-input{margin-left:28px;padding:12px;font-size:.8rem}
+.side-thread .agent-input{margin-left:28px;padding:12px;font-size:.8rem}
 @media(max-width:650px){.agent-input{margin-left:0}}

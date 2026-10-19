@@ -44,8 +44,8 @@
 .subagent-tools .tool-activity{padding-left:0}
 .subagent-tools .tool-activity pre{font-size:.7rem;padding:9px}
 .subagent-tools .tool-activity summary{min-height:25px}
-.board-view .subagents-host{padding:0 24px 8px}
-.board-view .subagents-panel{max-height:min(480px,55vh)}
-@media(max-width:700px){.subagents-host,.board-view .subagents-host{padding-right:16px}.subagents-panel{right:16px}}
+.side-thread .subagents-host{padding:0 24px 8px}
+.side-thread .subagents-panel{max-height:min(480px,55vh)}
+@media(max-width:700px){.subagents-host,.side-thread .subagents-host{padding-right:16px}.subagents-panel{right:16px}}
 @media(prefers-contrast:more){.subagents-panel,.subagents-trigger{border-color:var(--text);box-shadow:none}}
 @media(prefers-reduced-motion:reduce){.subagents-trigger:active{transform:none}}

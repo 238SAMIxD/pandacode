@@ -873,7 +873,8 @@ function scheduleNavigation(): void {
   if (navigationFrame || document.hidden) return;
   navigationFrame = requestAnimationFrame(() => { navigationFrame = 0; if (!document.hidden) renderNavigation(); });
 }
-function transcriptVisible(): boolean { return !document.hidden && (state.view === 'conversation' || (state.view === 'board' && state.boardPanel)); }
+/** The thread shows full width in the conversation view, and as a side panel beside the board or GitHub. */
+function transcriptVisible(): boolean { return !document.hidden && (state.view === 'conversation' || state.boardPanel); }
 function responseAge(timestamp: number, now: number): string {
   const minutes = Math.max(0, Math.floor((now - timestamp) / 60000));
   return minutes < 1 ? 'now' : minutes < 60 ? `${minutes}m` : minutes < 1440 ? `${Math.floor(minutes / 60)}h` : `${Math.floor(minutes / 1440)}d`;
@@ -1310,6 +1311,8 @@ function renderBoardView(): void {
   const board = state.view === 'board', hub = state.view === 'github';
   $('.workspace').classList.toggle('board-view', board);
   $('.workspace').classList.toggle('github-view', hub);
+  // A thread opened from GitHub sits beside it, laid out like the board's side panel.
+  $('.workspace').classList.toggle('side-thread', board || (hub && state.boardPanel));
   renderSidebarVisibility();
   const switcher = document.querySelector<HTMLElement>('[data-action="github-view"]')!;
   switcher.hidden = !githubEnabled();
@@ -1318,14 +1321,15 @@ function renderBoardView(): void {
   syncGithubHub(hub);
   const pane = $('.conversation-pane');
   const paneWasHidden = pane.hidden;
-  pane.hidden = hub || (board && !state.boardPanel);
+  pane.hidden = (hub || board) && !state.boardPanel;
   if (paneWasHidden !== pane.hidden) { inspectorSuppressed = board && pane.hidden; renderInspector(); }
   subagents.setTask(state.sessionId, !pane.hidden);
   jevActivity.setTask(pane.hidden ? '' : state.sessionId);
-  if (board) { pane.setAttribute('role', 'region'); pane.setAttribute('aria-label', 'Task details'); }
+  if (board || hub) { pane.setAttribute('role', 'region'); pane.setAttribute('aria-label', 'Task details'); }
   else { pane.removeAttribute('role'); pane.removeAttribute('aria-label'); }
   $('#project-board').hidden = !board;
-  $('#task-details-heading').hidden = !board;
+  $('#task-details-heading').hidden = !board && !(hub && state.boardPanel);
+  if (hub && state.boardPanel) renderTaskDetails($('#task-details-heading'), session(), project(), isRunning(), state.messagesLoading || Boolean(state.messagesError));
   if (!board) return;
   const boardProject = state.projectFilter || project()?.id || state.projects[0]?.id || '';
   if (boardProject) void github.status(boardProject);
@@ -1353,15 +1357,16 @@ function syncGithubHub(shown: boolean): void {
     });
   }).finally(() => { githubHubLoading = false; }));
 }
+/** A thread opened from GitHub opens beside it; GitHub stays where it was. */
 async function openHubTask(id: string): Promise<void> {
-  setWorkspaceView('conversation');
+  state.boardPanel = true;
   await selectSession(id, true);
+  renderBoardView();
 }
 /** Starts a thread from the GitHub view: a task in the repository's project, linked to its pull
  * request or issue, titled, with the prompt filled in and sent when asked. Mentions like `#128`
  * attach the item's content as GitHub context once the project's GitHub status is known. */
 async function startHubTask({ projectId, prompt, title, link, send: start }: { projectId: string; prompt: string; title?: string; link?: TaskLink; send: boolean }): Promise<void> {
-  setWorkspaceView('conversation');
   await github.status(projectId);
   await createTask(projectId);
   const task = session();
@@ -1625,7 +1630,7 @@ async function selectSession(id: string, focusComposer = false): Promise<void> {
     if (previousTask.taskDescription) previousTask.taskDescription = [...previousTask.taskDescription].slice(0, 512).join('');
     fullTaskDescription = undefined;
   }
-  if (state.view === 'board') state.boardPanel = true;
+  if (state.view !== 'conversation') state.boardPanel = true;
   // A bot's conversation lives in the Bots section; it never re-points the project filter.
   if (state.projectFilter && state.projectFilter !== s.projectId && !botProjects.has(s.projectId)) setProjectFilter(s.projectId);
   if (state.collapsedFolders.delete(s.projectId)) saveCollapsedFolders();
@@ -3380,7 +3385,7 @@ document.addEventListener('keydown', event => {
   }
   else if (event.key === 'Enter' && (event.target as HTMLElement).classList.contains('queue-edit') && (event.metaKey || event.ctrlKey)) { event.preventDefault(); run(saveQueueEdit()); }
   else if (event.key === 'Escape' && settingsView && !event.defaultPrevented && !document.querySelector<HTMLDialogElement>('#dialog')?.open && !document.querySelector('.floating-menu')) { event.preventDefault(); closeSettings(); }
-  else if (event.key === 'Escape' && state.view === 'board' && state.boardPanel && !event.defaultPrevented) { event.preventDefault(); closeMenus(); state.boardPanel = false; renderBoardView(); }
+  else if (event.key === 'Escape' && state.view !== 'conversation' && state.boardPanel && !event.defaultPrevented) { event.preventDefault(); closeMenus(); state.boardPanel = false; renderBoardView(); }
   else if (event.key === 'Escape' && isRunning() && !terminalPanel.open && !event.defaultPrevented) { event.preventDefault(); runEndings.set(state.sessionId, 'stopped'); run(call(teams.get(state.sessionId) ? 'architect_control' : 'stop_session', { sessionId: state.sessionId, ...(teams.get(state.sessionId) ? { action: 'stop' } : {}) })); }
 });
 let dialogBackdropPressed = false;
@@ -3428,7 +3433,7 @@ async function boot(): Promise<void> {
     const request = ++overlayOpenRequest, initialGeneration = state.generation;
     await reloadSessions();
     if (request !== overlayOpenRequest || initialGeneration !== state.generation) return;
-    if (state.view === 'board') state.boardPanel = true;
+    if (state.view !== 'conversation') state.boardPanel = true;
     await selectSession(event.sessionId, true);
     if (request !== overlayOpenRequest || state.sessionId !== event.sessionId) return;
     const generation = state.generation;
@@ -3454,7 +3459,7 @@ async function boot(): Promise<void> {
   const recent = state.sessions.find(s => !s.archived);
   activateProject(state.projects.find(p => p.id === savedProject)?.id ?? recent?.projectId ?? state.projects[0]?.id ?? '');
   const first = state.sessions.find(s => !s.archived && s.projectId === state.projectId); if (first) await selectSession(first.id); else { render(); await refreshInspector(); }
-  if (state.view === 'board') { state.boardPanel = false; renderInspector(); renderBoardView(); }
+  if (state.view !== 'conversation') { state.boardPanel = false; renderInspector(); renderBoardView(); }
   if (!preview && !state.providers.some(p => p.installed)) notify('Open Settings to check your installed agent CLIs.');
 }
 // PandaCode's own updates: checked on GitHub Releases, installed when no agent is working.

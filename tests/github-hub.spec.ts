@@ -7,6 +7,14 @@ const hub = (page: Page) => page.getByRole('region', { name: 'GitHub', exact: tr
 const repoList = (page: Page) => hub(page).getByRole('listbox', { name: 'Repositories' });
 const tab = (page: Page, name: RegExp) => hub(page).getByRole('tab', { name });
 const row = (page: Page, number: number) => hub(page).locator(`.gh-item[data-gh-number="${number}"]`);
+/** A thread opened from GitHub: a side panel next to it, like the board's. */
+const side = (page: Page) => page.getByRole('region', { name: 'Task details', exact: true });
+async function expectSideThread(page: Page): Promise<void> {
+  await expect(hub(page)).toBeVisible();
+  await expect(side(page)).toBeVisible();
+  const [hubBox, sideBox] = [(await hub(page).boundingBox())!, (await side(page).boundingBox())!];
+  expect(sideBox.x).toBeGreaterThanOrEqual(hubBox.x + hubBox.width - 1);
+}
 
 async function openHub(page: Page): Promise<void> {
   await page.goto('/');
@@ -55,18 +63,25 @@ test('Solve starts a linked thread that works on the issue', async ({ page }) =>
   await tab(page, /Issues/).click();
   await row(page, 128).hover();
   await row(page, 128).getByRole('button', { name: 'Solve' }).click();
-  await expect(hub(page)).toBeHidden();
-  await expect(page.locator('.conversation-pane')).toBeVisible();
+  await expectSideThread(page);
   const sent = page.locator('#transcript .user-message').last();
   await expect(sent).toContainText('Fix issue #128: Search index rebuilds on every keystroke');
   await expect(page.locator('#navigation .task-item.selected')).toContainText('Fix #128: Search index rebuilds on every keystroke');
-  // Back in the GitHub view, the issue links to its thread instead of offering a new one.
-  await page.getByRole('button', { name: 'GitHub view' }).click();
+  // Closing the side thread leaves GitHub as it was; the issue now links to its thread.
+  await side(page).getByRole('button', { name: 'Close task details', exact: true }).click();
+  await expect(side(page)).toBeHidden();
+  await expect(hub(page)).toBeVisible();
   await expect(row(page, 128).getByRole('button', { name: 'Thread' })).toBeAttached();
   await expect(row(page, 128).getByRole('button', { name: 'Open in thread' })).toHaveCount(0);
   await row(page, 128).hover();
   await row(page, 128).getByRole('button', { name: 'Thread' }).click();
+  await expectSideThread(page);
   await expect(page.locator('#navigation .task-item.selected')).toContainText('Fix #128');
+  // Chatting continues right there, and Escape closes the panel.
+  await page.locator('#prompt').fill('Also add a regression test');
+  await page.locator('#prompt').press('Enter');
+  await expect(page.locator('#transcript .user-message').last()).toContainText('Also add a regression test');
+  await expect(hub(page)).toBeVisible();
 });
 
 test('pull requests open for review, or in a thread with the prompt ready', async ({ page }) => {
@@ -76,8 +91,8 @@ test('pull requests open for review, or in a thread with the prompt ready', asyn
   await row(page, 130).getByRole('button', { name: 'Review' }).click();
   await expect(page.locator('#transcript .user-message').last()).toContainText('Review pull request #130 (feat/instant-search → main)');
   await expect(page.locator('#navigation .task-item.selected')).toContainText('Review #130');
+  await expectSideThread(page);
 
-  await page.getByRole('button', { name: 'GitHub view' }).click();
   await row(page, 127).hover();
   await row(page, 127).getByRole('button', { name: 'More actions for #127' }).click();
   const menu = page.locator('.choice-menu');
@@ -94,6 +109,7 @@ test('a thread starts from the Threads tab', async ({ page }) => {
   await compose.fill('Add a reading-time estimate to each article');
   await compose.press('Enter');
   await expect(page.locator('#transcript .user-message').last()).toContainText('Add a reading-time estimate to each article');
+  await expectSideThread(page);
   await expect(page.locator('#breadcrumb')).toContainText('orbit');
 });
 
@@ -109,7 +125,9 @@ test('a repository that is only on GitHub can be cloned, then worked on', async 
   await row(page, 3).hover();
   await row(page, 3).getByRole('button', { name: 'Open in thread' }).click();
   await expect(page.locator('#prompt')).toHaveValue("Let's work on issue #3: ");
-  await expect(page.locator('#welcome-project')).toHaveText('meadow');
+  await expectSideThread(page);
+  // The side thread already knows its project: no welcome heading or mark.
+  await expect(side(page).locator('.new-task-welcome')).toBeHidden();
 });
 
 test('the GitHub view stays out of the way when GitHub is turned off', async ({ page }) => {

@@ -28,7 +28,7 @@
 .command-text-button { color:var(--muted); border-radius:.22rem; padding:.5rem .6rem; margin-right:auto; }
 .goal-banner { display:flex; align-items:center; gap:.7rem; width:100%; min-width:0; padding:.65rem .8rem; border:1px solid color-mix(in srgb,var(--accent) 19%,transparent); border-radius:.36rem; background:color-mix(in srgb,var(--panel) 56%,transparent); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); }
 .conversation-pane > .goal-banner { width:min(calc(100% - 60px),890px); margin:.45rem auto .7rem; flex:none; }
-.board-view .conversation-pane > .goal-banner { width:calc(100% - 32px); }
+.side-thread .conversation-pane > .goal-banner { width:calc(100% - 32px); }
 .goal-banner[hidden] { display:none; }
 .goal-banner-open { display:flex; align-items:center; gap:.65rem; min-width:0; text-align:left; flex:1; padding:0; color:var(--text); }
 .goal-banner-symbol { color:var(--accent); flex:none; display:grid; place-items:center; }
