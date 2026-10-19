@@ -14,7 +14,7 @@ html[data-theme] .sidebar .new-task-button>.icon{color:var(--focus)}
 
 /* "All projects" doubles as the section label and the project filter. */
 .sidebar .sidebar-projects{padding:2px 8px 4px 17px;gap:2px}
-.sidebar .project-filter{flex:0 1 auto;gap:4px;padding:3px 6px 3px 0;color:var(--muted);font-size:.76rem;font-weight:550}
+.sidebar .project-filter{flex:0 1 auto;gap:4px;padding:3px 6px;color:var(--muted);font-size:.76rem;font-weight:550}
 .sidebar .project-filter:hover{color:var(--text)}
 .sidebar .project-filter>.icon:last-child{position:static;width:10px;height:10px;opacity:.7}
 .sidebar .sidebar-projects>.icon-button{width:24px;height:24px;margin-left:0;color:var(--muted)}

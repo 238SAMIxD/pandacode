@@ -782,7 +782,6 @@ function renderNavigation(): void {
   renderBots();
   $('#archive-toggle').classList.toggle('active', state.archived);
   $('#archive-toggle').setAttribute('aria-pressed', String(state.archived));
-  const appIcon = (projectId: string, name: string): string => projectIconHtml(projectId, name, id => call<string | null>('project_icon', { projectId: id }), () => renderNavigation());
   // Inside a project's folder the heading already names the project, so the row drops its
   // where-line and keeps its status and age beside the title.
   const row = (s: Session, inFolder = false): string => {
@@ -803,7 +802,7 @@ function renderNavigation(): void {
     const signals = `${status ? `<span class="task-indicator ${status}" role="img" aria-label="${statusLabel}" title="${statusLabel}"></span>` : ''}${age ? `<span class="task-age" title="Last message: ${escape(new Date(activityAt!).toLocaleString())}">${age}</span>` : ''}`;
     const head = inFolder
       ? `<span class="task-line task-top"><span class="task-title">${escape(s.title)}</span>${signals}</span>`
-      : `<span class="task-line task-head">${appIcon(s.projectId, p?.name ?? '')}<span class="task-checkout">${escape(checkout)}</span>${signals}</span><span class="task-title">${escape(s.title)}</span>`;
+      : `<span class="task-line task-head">${projectAppIcon(s.projectId, p?.name ?? '')}<span class="task-checkout">${escape(checkout)}</span>${signals}</span><span class="task-title">${escape(s.title)}</span>`;
     return `<button class="task-item ${s.id === state.sessionId ? 'selected' : ''}" data-action="select-task" data-id="${escape(s.id)}" data-activity="${activeTask(s, now) ? 'active' : 'inactive'}" draggable="true" data-pinned="${Boolean(s.pinned)}" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" ${s.id === state.sessionId ? 'aria-current="page"' : ''} aria-description="${shortProvider(s.provider)}" title="${escape(s.title)}">`
       + head
       + `<span class="task-line task-meta">${branch}${linkMark}${s.pinned ? `<span class="task-pin" role="img" aria-label="Pinned">${icon('pin')}</span>` : ''}<span class="task-project">${escape(p?.name ?? 'Project')}</span>${providerLogo(s.provider, 'task-provider')}</span></button>`;
@@ -821,7 +820,7 @@ function renderNavigation(): void {
     const more = tasks.length > rows.length || expanded && tasks.length > limit
       ? `<button class="folder-more" data-action="toggle-folder-more" data-project="${escape(project.id)}">${expanded ? 'Show less' : `Show ${tasks.length - rows.length} more`}</button>` : '';
     if (single) return `<section class="task-group folder-group single-project" data-thread-group="project:${escape(project.id)}" data-project="${escape(project.id)}" aria-label="${escape(project.name)} tasks"><div class="task-list">${rows.map(s => row(s)).join('') || '<div class="no-tasks">No tasks yet</div>'}${more}</div></section>`;
-    return `<section class="task-group folder-group" data-thread-group="project:${escape(project.id)}" data-project="${escape(project.id)}" aria-label="${escape(project.name)} tasks"><button class="folder-heading ${tasks.length ? '' : 'empty'}" data-action="toggle-folder" data-project="${escape(project.id)}" aria-expanded="${open}" aria-controls="folder-tasks-${index}" title="${escape(project.path)}">${appIcon(project.id, project.name)}<span>${escape(project.name)}</span></button><div id="folder-tasks-${index}" class="task-list folder-tasks" ${open ? '' : 'hidden'}>${rows.map(s => row(s, true)).join('') || '<div class="no-tasks">No tasks yet</div>'}${more}</div></section>`;
+    return `<section class="task-group folder-group" data-thread-group="project:${escape(project.id)}" data-project="${escape(project.id)}" aria-label="${escape(project.name)} tasks"><button class="folder-heading ${tasks.length ? '' : 'empty'}" data-action="toggle-folder" data-project="${escape(project.id)}" aria-expanded="${open}" aria-controls="folder-tasks-${index}" title="${escape(project.path)}">${projectAppIcon(project.id, project.name)}<span>${escape(project.name)}</span></button><div id="folder-tasks-${index}" class="task-list folder-tasks" ${open ? '' : 'hidden'}>${rows.map(s => row(s, true)).join('') || '<div class="no-tasks">No tasks yet</div>'}${more}</div></section>`;
   };
   const nav = $('#navigation');
   nav.setAttribute('aria-busy', String(orderingBusy));
@@ -2772,10 +2771,14 @@ async function showSidebarTaskMenu(anchor: HTMLElement): Promise<void> {
     }
   } });
 }
+/** A project's favicon or app icon; the sidebar redraws once a new one has loaded. */
+function projectAppIcon(projectId: string, name: string): string {
+  return projectIconHtml(projectId, name, id => call<string | null>('project_icon', { projectId: id }), () => renderNavigation());
+}
 async function showProjectFilter(anchor: HTMLElement): Promise<void> {
   await showChoices(anchor, { title: 'Filter projects', searchPlaceholder: 'Search projects…', items: [
     { id: '', label: 'All projects', icon: 'folder', selected: !state.projectFilter },
-    ...userProjects().map(p => ({ id: p.id, label: p.name, description: p.path, icon: 'folder', selected: p.id === state.projectFilter })),
+    ...userProjects().map(p => ({ id: p.id, label: p.name, description: p.path, leading: projectAppIcon(p.id, p.name), selected: p.id === state.projectFilter })),
   ], onSelect: async id => {
     setProjectFilter(id);
     if (id) await selectProject(id); else renderNavigation();

@@ -12,6 +12,8 @@ type ChoiceItem = {
   label: string;
   description?: string;
   icon?: string;
+  /** Ready-made leading markup (a project's app icon), used in place of `icon`. */
+  leading?: string;
   provider?: ProviderId;
   selected?: boolean;
   disabled?: boolean;
@@ -131,7 +133,7 @@ export function openChoiceMenu(options: ChoiceMenuOptions): () => void {
       const detail = item.description ? brief
         ? `<span id="${descriptionId}" class="choice-menu-description">${escape(item.description)}</span>`
         : `<span id="${descriptionId}" class="sr-only">${escape(item.description)}</span>` : '';
-      return `<button type="button" class="choice-menu-option${item.danger ? ' is-danger' : ''}" role="${actions ? 'menuitem' : 'menuitemradio'}" ${actions ? '' : `aria-checked="${Boolean(item.selected)}"`} aria-label="${escape(item.label)}" ${item.description ? `aria-describedby="${descriptionId}"` : ''} data-choice-index="${index}" tabindex="-1" ${item.disabled ? 'disabled aria-disabled="true"' : ''}>${item.provider ? providerLogo(item.provider) : item.icon ? icon(item.icon) : ''}<span class="choice-menu-copy"><span class="choice-menu-label">${escape(item.label)}</span>${detail}</span>${item.description && !brief ? infoMark(item.description) : ''}${!actions && item.selected ? icon('check') : ''}</button>`;
+      return `<button type="button" class="choice-menu-option${item.danger ? ' is-danger' : ''}" role="${actions ? 'menuitem' : 'menuitemradio'}" ${actions ? '' : `aria-checked="${Boolean(item.selected)}"`} aria-label="${escape(item.label)}" ${item.description ? `aria-describedby="${descriptionId}"` : ''} data-choice-index="${index}" tabindex="-1" ${item.disabled ? 'disabled aria-disabled="true"' : ''}>${item.provider ? providerLogo(item.provider) : item.leading ? item.leading : item.icon ? icon(item.icon) : ''}<span class="choice-menu-copy"><span class="choice-menu-label">${escape(item.label)}</span>${detail}</span>${item.description && !brief ? infoMark(item.description) : ''}${!actions && item.selected ? icon('check') : ''}</button>`;
     }).join('');
     buttons = [...list.querySelectorAll<HTMLButtonElement>('.choice-menu-option')];
     const current = items.findIndex(item => item.selected && !item.disabled);
