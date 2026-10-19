@@ -2172,6 +2172,24 @@ async fn git_branches(
     blocking(move || workspace::git_branches(&root)).await
 }
 
+/// Check out another local branch in the task's own checkout; worktree tasks keep their branch.
+#[tauri::command]
+async fn git_switch_branch(
+    state: State<'_, AppState>,
+    project_id: String,
+    session_id: Option<String>,
+    branch: String,
+) -> Result<workspace::BranchList> {
+    if let Some(id) = session_id.as_deref() {
+        let store = state.store.lock().map_err(|e| e.to_string())?;
+        if store.session(id)?.worktree_path.is_some() {
+            return Err("This task works in its own worktree; its branch stays as it is.".into());
+        }
+    }
+    let root = state.root(&project_id, session_id.as_deref())?;
+    blocking(move || workspace::git_switch(&root, &branch)).await
+}
+
 #[tauri::command]
 async fn git_push(
     state: State<'_, AppState>,
@@ -2927,6 +2945,7 @@ pub fn run() {
                 git_stage,
                 git_commit,
                 git_branches,
+                git_switch_branch,
                 git_push,
                 create_worktree,
                 attach_worktree,

@@ -169,10 +169,29 @@ test('the context bar stays on one line in a narrow conversation', async ({ page
   await page.locator('#navigation .task-item', { hasText: 'Add keyboard shortcuts' }).click();
   const bar = page.locator('#composer-area .composer-context');
   await expect(bar.locator('.link-chip')).toBeVisible();
+  await expect(bar.locator('#branch-chip')).toBeVisible();
   const measure = () => page.evaluate(() => document.querySelector('#composer-area .composer-context')!.getBoundingClientRect().height);
   const height = await measure();
   await page.locator('#composer-area').evaluate(el => { el.style.maxWidth = '420px'; });
   await expect(bar.locator('.composer-local')).toBeHidden();
   await expect(bar.locator('.link-chip')).toBeVisible();
   expect(Math.abs(await measure() - height)).toBeLessThan(1);
+});
+
+test('the branch menu switches the checkout to main or another local branch', async ({ page }) => {
+  await probe(page);
+  await expect(chip(page)).toContainText('feat/instant-search');
+  await chip(page).click();
+  await menu(page).getByRole('menuitem', { name: /Switch to main/ }).click();
+  await expect(page.locator('#toast')).toContainText('Switched to main');
+  await expect(chip(page)).toContainText('main');
+  await chip(page).click();
+  await expect(menu(page).getByRole('menuitem', { name: /Switch to main/ })).toHaveCount(0);
+  await menu(page).getByRole('menuitem', { name: /Other branch/ }).click();
+  const picker = page.locator('.choice-menu[aria-label="Switch branch"]');
+  await expect(picker.getByRole('menuitemradio', { name: /^main/ })).toHaveCount(0);
+  await picker.getByRole('menuitemradio', { name: /release\/1\.4/ }).click();
+  await expect(page.locator('#toast')).toContainText('Switched to release/1.4');
+  await expect(chip(page)).toContainText('release/1.4');
+  expect((await calls(page, 'git_switch_branch')).map(call => call.args.branch)).toEqual(['main', 'release/1.4']);
 });

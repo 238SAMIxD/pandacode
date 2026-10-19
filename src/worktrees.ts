@@ -26,6 +26,8 @@ export type WorktreeHost = {
    *  `current` says whether the source task is still the selected one. */
   afterAttach(session: Session, live: boolean): Promise<void>;
   afterCreate(session: Session, live: boolean, current: boolean): Promise<void>;
+  /** The checkout moved to another branch; reload its status. */
+  branchChanged(): Promise<void>;
   archive(session: Session): Promise<void>;
   /** Extra menu rows from integrations, with their own handler. */
   extraItems(session: Session): ChoiceItem[];
@@ -89,6 +91,13 @@ export function createWorktrees(host: WorktreeHost) {
       items.push({ id: 'worktree-remove', label: 'Remove worktree…', description: 'Archives the task; refuses when work would be lost.', icon: 'close', disabled: host.running() });
       items.push({ id: 'copy-path', label: 'Copy worktree path', icon: 'copy' });
     } else {
+      // The project's own checkout can move between branches; worktree tasks keep theirs.
+      const list = await host.call<BranchList>('git_branches', { projectId: session.projectId, sessionId: session.id }).catch(() => null);
+      if (list) {
+        const busy = host.running(), others = list.branches.filter(name => name !== list.current);
+        if (list.defaultBranch && list.defaultBranch !== list.current) items.push({ id: 'switch-default', label: `Switch to ${list.defaultBranch}`, description: busy ? 'Wait for the agent to finish.' : 'Uncommitted changes come along when they don’t conflict.', icon: 'branch', disabled: busy });
+        if (others.length) items.push({ id: 'switch-other', label: 'Other branch…', description: busy ? 'Wait for the agent to finish.' : `${others.length} local ${others.length === 1 ? 'branch' : 'branches'}`, icon: 'branch', disabled: busy });
+      }
       if (host.attachable()) items.push({ id: 'worktree-attach', label: 'Work in a new worktree…', description: 'Keeps this draft and task; isolates its changes.', icon: 'worktree' });
       else items.push({ id: 'worktree-new', label: 'New task in a worktree…', description: 'Same harness and model, in an isolated checkout.', icon: 'worktree' });
       items.push(...host.extraItems(session));
@@ -101,10 +110,39 @@ export function createWorktrees(host: WorktreeHost) {
         case 'worktree-new': openDialog('new'); break;
         case 'worktree-remove': await removeInteractive(current); break;
         case 'worktree-recreate': await recreate(current); break;
+        case 'switch-default': await switchTo(current, ''); break;
+        // The picker replaces this menu, so it opens once this one has closed.
+        case 'switch-other': window.setTimeout(() => void pickBranch(current, anchor), 0); break;
         case 'archive-task': await host.archive(current); break;
         case 'copy-path': await navigator.clipboard.writeText(path); host.notify(current.worktreePath ? 'Worktree path copied' : 'Project path copied'); break;
         default: await host.onExtra(id, current, anchor);
       }
+    } });
+  }
+
+  /** Check out `branch` (or the default branch when empty) in the task's own checkout. */
+  async function switchTo(session: Session, branch: string): Promise<void> {
+    try {
+      const target = branch || (await host.call<BranchList>('git_branches', { projectId: session.projectId, sessionId: session.id })).defaultBranch;
+      if (!target) { host.notify('This repository has no main branch.'); return; }
+      const list = await host.call<BranchList>('git_switch_branch', { projectId: session.projectId, sessionId: session.id, branch: target });
+      host.notify(`Switched to ${list.current}`);
+      // Refresh once the menu has closed: an open menu keeps the context bar from redrawing its chip.
+      window.setTimeout(() => void host.branchChanged(), 0);
+    } catch (cause) {
+      host.notify(`Couldn’t switch branches: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+  }
+
+  async function pickBranch(session: Session, anchor: HTMLElement): Promise<void> {
+    const list = await host.call<BranchList>('git_branches', { projectId: session.projectId, sessionId: session.id }).catch(() => null);
+    const others = list?.branches.filter(name => name !== list.current) ?? [];
+    if (!others.length) { host.notify('There are no other local branches.'); return; }
+    // The context bar may have redrawn its chip meanwhile; anchor to the one on screen.
+    const target = anchor.isConnected ? anchor : document.querySelector<HTMLElement>('#branch-chip');
+    if (!target) return;
+    await host.showChoices(target, { title: 'Switch branch', width: 320, ...(others.length > 8 ? { searchPlaceholder: 'Search branches…' } : {}), items: others.map(name => ({ id: name, label: name, icon: 'branch', ...(name === list?.defaultBranch ? { description: 'main branch' } : {}) })), onSelect: async name => {
+      const current = host.session(); if (current?.id === session.id) await switchTo(current, name);
     } });
   }
 

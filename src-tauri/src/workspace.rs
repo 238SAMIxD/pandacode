@@ -730,6 +730,35 @@ pub fn create_worktree_with(
 pub struct BranchList {
     pub current: String,
     pub branches: Vec<String>,
+    /// The repository's main branch: origin's HEAD when known, else `main` or `master`; empty when neither exists.
+    pub default_branch: String,
+}
+
+fn default_branch(root: &Path, branches: &[String]) -> String {
+    let remote = run_git(root, &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], 8192, false)
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout.bytes).trim().trim_start_matches("origin/").to_string())
+        .unwrap_or_default();
+    let found = [remote.as_str(), "main", "master"]
+        .into_iter()
+        .find(|name| !name.is_empty() && branches.iter().any(|branch| branch == name))
+        .map(str::to_string);
+    found.unwrap_or_default()
+}
+
+/// Check out another local branch in this checkout. Only branches that exist locally are
+/// accepted, so the name can never be read as an option; Git itself refuses a switch that
+/// would overwrite uncommitted changes, and that message is returned as it is.
+pub fn git_switch(root: &Path, branch: &str) -> Result<BranchList, String> {
+    let list = git_branches(root)?;
+    if !list.branches.iter().any(|name| name == branch) {
+        return Err(format!("There is no local branch named {branch}."));
+    }
+    if list.current != branch {
+        checked(run_git(root, &["switch", branch], 64 * 1024, false)?)?;
+    }
+    git_branches(root)
 }
 
 fn current_branch(root: &Path) -> Result<String, String> {
@@ -756,7 +785,7 @@ pub fn git_branches(root: &Path) -> Result<BranchList, String> {
         256 * 1024,
         false,
     )?)?;
-    let branches = String::from_utf8_lossy(&output.bytes)
+    let branches: Vec<String> = String::from_utf8_lossy(&output.bytes)
         .lines()
         .filter(|line| !line.is_empty())
         .take(200)
@@ -764,6 +793,7 @@ pub fn git_branches(root: &Path) -> Result<BranchList, String> {
         .collect();
     Ok(BranchList {
         current: current_branch(root)?,
+        default_branch: default_branch(root, &branches),
         branches,
     })
 }
@@ -1468,6 +1498,26 @@ mod tests {
     }
 
     #[test]
+    fn switching_branches_accepts_only_local_branches_and_keeps_uncommitted_work_safe() {
+        let f = Fixture::new(true);
+        f.git(&["branch", "feature"]);
+        assert_eq!(git_switch(&f.root, "feature").unwrap().current, "feature");
+        assert_eq!(git_switch(&f.root, "main").unwrap().current, "main");
+        assert!(git_switch(&f.root, "--orphan").unwrap_err().contains("no local branch"));
+        assert!(git_switch(&f.root, "missing").unwrap_err().contains("no local branch"));
+
+        // A change that the other branch would overwrite stops the switch; nothing is lost.
+        fs::write(f.root.join("note.txt"), "on main").unwrap();
+        f.git(&["add", "note.txt"]);
+        f.git(&["-c", "core.hooksPath=/dev/null", "commit", "-m", "Note"]);
+        f.git(&["switch", "feature"]);
+        fs::write(f.root.join("note.txt"), "draft").unwrap();
+        assert!(git_switch(&f.root, "main").is_err());
+        assert_eq!(git_branches(&f.root).unwrap().current, "feature");
+        assert_eq!(fs::read_to_string(f.root.join("note.txt")).unwrap(), "draft");
+    }
+
+    #[test]
     fn worktree_lifecycle_reports_state_and_removes_only_clean_checkouts() {
         let f = Fixture::new(true);
         fs::write(f.root.join("base.txt"), "base").unwrap();
@@ -1476,6 +1526,7 @@ mod tests {
         let branches = git_branches(&f.root).unwrap();
         assert!(!branches.current.is_empty());
         assert!(branches.branches.contains(&branches.current));
+        assert_eq!(branches.default_branch, "main");
 
         // A start point is honored, an existing branch can be reused, and a duplicate is explained.
         let created = create_worktree_with(&f.root, "lifecycle", Some(&branches.current), false).unwrap();

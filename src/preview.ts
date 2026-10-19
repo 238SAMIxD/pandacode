@@ -954,7 +954,14 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       const worktree = previewWorktree(s, args);
       Object.assign(s, { worktreePath: worktree.path, worktreeBranch: worktree.branch, updatedAt: Date.now() }); result = s; break;
     }
-    case 'git_branches': { const checkout = checkoutGit(args.sessionId); result = { current: checkout.branch, branches: [...new Set([checkout.branch, 'main', 'release/1.4', ...previewBranches])].filter(Boolean) }; break; }
+    case 'git_branches': { const checkout = checkoutGit(args.sessionId); result = { current: checkout.branch, defaultBranch: 'main', branches: [...new Set([checkout.branch, 'main', 'release/1.4', ...previewBranches])].filter(Boolean) }; break; }
+    case 'git_switch_branch': {
+      if (args.sessionId && session(args.sessionId).worktreePath) throw new Error('This task works in its own worktree; its branch stays as it is.');
+      const checkout = checkoutGit(args.sessionId), branches = [...new Set([checkout.branch, 'main', 'release/1.4', ...previewBranches])].filter(Boolean);
+      if (!branches.includes(String(args.branch))) throw new Error(`There is no local branch named ${args.branch}.`);
+      checkout.branch = String(args.branch);
+      result = { current: checkout.branch, defaultBranch: 'main', branches }; break;
+    }
     case 'worktree_status': {
       const s = session(args.sessionId); if (!s.worktreePath) throw new Error('This task uses the main checkout.');
       const checkout = worktreeGit.get(s.worktreePath);

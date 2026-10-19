@@ -353,6 +353,7 @@ const worktrees = createWorktrees({
     if (saved.id === state.sessionId) { clearWorkspaceInspector(); render(); terminalPanel.minimize(); await refreshInspector(); renderHeader(); if (live) document.querySelector<HTMLTextAreaElement>('#prompt')?.focus(); }
     else renderNavigation();
   },
+  branchChanged: async () => { await refreshInspector(); renderHeader(); },
   afterCreate: async (created, live, current) => {
     state.sessions.unshift(created); renderNavigation();
     // Only a dialog that is still open may close and navigate; a canceled one leaves the user where they are.
