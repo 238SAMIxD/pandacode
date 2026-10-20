@@ -177,6 +177,8 @@ mark{background:color-mix(in srgb,var(--accent) 45%,transparent);color:inherit;b
 .tool-activity-status-row{display:flex;gap:8px;align-items:baseline;margin:0 auto 4px;padding-left:31px;font-size:.77rem;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere}
 .tool-activity-status-row .icon{width:13px;height:13px;align-self:flex-start;margin-top:2px}
 .turn-activity{margin-bottom:16px;padding-left:31px;min-width:0;color:var(--muted)}
+/* Live worker lines sit inside the turn after the call that spawned them, aligned with its tools. */
+.live-tools>#team-progress-host{padding-left:0}
 .turn-activity-summary{display:flex;align-items:center;gap:6px;width:fit-content;max-width:100%;min-height:30px;padding:2px 0;list-style:none;cursor:pointer;border-radius:2px;font-size:.8rem;line-height:1.5;user-select:none}
 .turn-activity-summary::-webkit-details-marker{display:none}
 .turn-activity-summary:hover,.turn-activity-summary:active{color:var(--text)}

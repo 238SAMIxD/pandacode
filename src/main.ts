@@ -929,13 +929,14 @@ function refreshTeamProgress(): void {
   const team = teams.get(state.sessionId), workers = team?.workers ?? [];
   const slots = [...document.querySelectorAll<HTMLElement>('#transcript .team-progress-slot')].map(slot => ({ slot, start: Number(slot.dataset.turnStart) }));
   const placed = new Map<HTMLElement, typeof workers>([[live, []], ...slots.map(({ slot }) => [slot, []] as [HTMLElement, typeof workers])]);
-  // Only a turn that is still streaming has no saved place yet.
-  const running = state.streams.has(state.sessionId);
+  // Only a turn that is still streaming has no saved place yet. Workers spawned before it
+  // started (a coordination turn whose message hasn't loaded yet) keep their saved place.
+  const startedAt = state.streams.get(state.sessionId)?.startedAt;
   for (const worker of workers) {
     let index = -1;
     slots.forEach((slot, at) => { if (slot.start <= worker.createdAt) index = at; });
     const turn = slots[Math.max(index, 0)];
-    const host = !turn || (running && index === slots.length - 1) ? live : turn.slot;
+    const host = !turn || (startedAt !== undefined && worker.createdAt >= startedAt && index === slots.length - 1) ? live : turn.slot;
     placed.get(host)!.push(worker);
   }
   const asking = (sessionId: string) => architectView?.needsInput(sessionId) ?? false;
@@ -1150,7 +1151,12 @@ function paintLiveActivity(region: HTMLElement, current: Stream, transcript: HTM
   const previous = new Map([...host.children].map(node => [(node as HTMLElement).dataset.streamKey, node as HTMLElement]));
   const next: HTMLElement[] = [];
   const commentary: { node: HTMLElement; content: string }[] = [];
-  const runs = groupToolRuns(current.tools.filter(tool => !tool.statusOnly), tool => tool.commentary ? undefined : tool.key);
+  // Live worker lines follow the call that spawned them, so later activity stays below them.
+  // ponytail: anchors every live worker after the turn's first dispatch; a second dispatch's workers join them.
+  const tools = current.tools.filter(tool => !tool.statusOnly), workers = document.getElementById('team-progress-host');
+  const dispatch = workers ? tools.findIndex(tool => typeof tool.content !== 'string' && /dispatch_workers/.test(tool.content.name)) : -1;
+  const toolRuns = (entries: LiveTool[]) => groupToolRuns(entries, tool => tool.commentary ? undefined : tool.key);
+  const runs = dispatch < 0 ? toolRuns(tools) : [...toolRuns(tools.slice(0, dispatch + 1)), null, ...toolRuns(tools.slice(dispatch + 1))];
   if (current.omittedActivity) {
     const note = previous.get('omitted') ?? document.createElement('p');
     note.className = 'activity-limit'; note.dataset.streamKey = 'omitted';
@@ -1158,6 +1164,7 @@ function paintLiveActivity(region: HTMLElement, current: Stream, transcript: HTM
     next.push(note);
   }
   for (const run of runs) {
+    if (!run) { next.push(workers!); continue; }
     if (run.kind === 'message') {
       if (run.item.key === current.retainedMessageKey) { next.push(liveMessage); continue; }
       const key = run.item.key;
@@ -1196,6 +1203,7 @@ function paintLiveActivity(region: HTMLElement, current: Stream, transcript: HTM
     if (activity.nextElementSibling !== liveMessage) activity.after(liveMessage);
   }
   const retained = new Set(next);
+  if (workers?.parentElement === host && !retained.has(workers)) region.after(workers);
   for (const child of [...host.children]) if (!retained.has(child as HTMLElement)) child.remove();
   next.forEach((node, index) => { if (host.children[index] !== node) host.insertBefore(node, host.children[index] ?? null); });
   for (const entry of commentary) { bindFileLinkContext(entry.node, workspaceContext()); streamMarkdown(entry.node, entry.content, transcript); }

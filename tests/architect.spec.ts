@@ -404,6 +404,41 @@ test.describe('architect teams', () => {
     expect(await calls(page, 'send_message')).toHaveLength(0);
   });
 
+  test('keeps a live architect turn in order around the worker lines it spawned', async ({ page }) => {
+    const done = [worker('build', { status: 'completed' }), worker('review', { status: 'completed' })];
+    await installArchitect(page, { 'session-2': team('session-2', { workers: [] }) }, { 'session-2': [
+      { id: 301, sessionId: 'session-2', role: 'user', content: 'Build search and review it.', createdAt: 2000 },
+    ] as Message[] });
+    const tool = (id: string, name: string) => page.evaluate(tool => (window as any).__architectTest.event({ sessionId: 'session-2', kind: 'tool', text: '', tool }),
+      { id, name, status: 'completed', input: '', output: 'Done.' });
+    await tool('read-plan', 'Read');
+    await tool('dispatch', 'mcp__pandacode_architect__pandacode_dispatch_workers');
+    await publish(page, team('session-2', { status: 'completed', workers: done }));
+    await tool('verify', 'Bash');
+    const order = () => transcript(page).evaluate(root => {
+      const all = [...root.querySelectorAll('[data-tool-key], .team-progress-worker')];
+      const index = (selector: string) => all.indexOf(root.querySelector(selector)!);
+      return ['[data-tool-key="tool:read-plan"]', '[data-tool-key="tool:dispatch"]', '.team-progress-worker[data-worker-id="build"]', '.team-progress-worker[data-worker-id="review"]', '[data-tool-key="tool:verify"]'].map(index);
+    });
+    await expect(transcript(page).locator('.team-progress-worker[data-worker-id="review"]')).toBeVisible();
+    await expect(transcript(page).locator('[data-tool-key="tool:verify"]')).toBeAttached();
+    expect(await order()).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  test('keeps earlier workers above a resumed coordination turn', async ({ page }) => {
+    const earlier = [worker('build', { status: 'completed', createdAt: 2500 }), worker('review', { status: 'completed', createdAt: 2500 })];
+    await installArchitect(page, { 'session-2': team('session-2', { status: 'completed', workers: earlier }) }, { 'session-2': [
+      { id: 301, sessionId: 'session-2', role: 'user', content: 'Build search and review it.', createdAt: 2000 },
+      { id: 302, sessionId: 'session-2', role: 'assistant', content: 'Delegated to the workers.', createdAt: 3000 },
+    ] as Message[] });
+    await expect(transcript(page).locator('.team-progress-worker[data-worker-id="build"]')).toBeVisible();
+    // Workers settled; PandaCode resumes the architect before the coordination message loads.
+    await page.evaluate(() => (window as any).__architectTest.event({ sessionId: 'session-2', kind: 'tool', text: '', tool: { id: 'review-diff', name: 'Bash', status: 'running', input: 'git diff', output: '' } }));
+    const later = transcript(page).locator('[data-tool-key="tool:review-diff"]');
+    await expect(later).toBeAttached();
+    expect(await transcript(page).locator('.team-progress-worker[data-worker-id="review"]').evaluate((row, tool) => Boolean(row.compareDocumentPosition(tool!) & Node.DOCUMENT_POSITION_FOLLOWING), await later.elementHandle())).toBe(true);
+  });
+
   for (const view of ['conversation', 'board'] as const) {
     test(`renders internal coordination as neutral Team status and preserves real user JSON in ${view}`, async ({ page }) => {
       await installArchitect(page, { 'session-2': team('session-2') }, { 'session-2': coordinationHistory('session-2') });
