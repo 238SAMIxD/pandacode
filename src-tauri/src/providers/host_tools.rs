@@ -250,7 +250,10 @@ impl Protocol {
                 call.id,
                 Err("This host action is unavailable in Plan mode".into()),
             ));
-        } else if protected && self.config.mode != "full" {
+        } else if protected
+            && (self.config.mode != "full"
+                || crate::cloud::deploy::ALWAYS_ASK.contains(&call.tool.as_str()))
+        {
             let label = format!(
                 "Allow {}?\n{}",
                 call.tool,
@@ -624,6 +627,20 @@ mod protocol_tests {
         assert_eq!(p.receive(request()).unwrap().calls.len(), 1);
         let mut p = protocol("plan", false);
         assert_eq!(p.receive(request()).unwrap().calls.len(), 1);
+    }
+    #[test]
+    fn cloud_cli_asks_even_in_full_mode() {
+        let mut p = protocol("full", false);
+        let mut cloud = host(false);
+        cloud.tools[0]["name"] = json!("pandacode_cloud_cli");
+        cloud.approval_tools.insert("pandacode_cloud_cli".into());
+        p.host = Some(HostTools::new(cloud).unwrap());
+        let mut req = request();
+        req["params"]["tool"] = json!("pandacode_cloud_cli");
+        let step = p.receive(req).unwrap();
+        assert!(step.calls.is_empty());
+        let event = step.events.iter().find(|event| event.kind == "approval").unwrap();
+        assert_eq!(p.approval_step(event.request_id.as_ref().unwrap(), true).calls.len(), 1);
     }
     #[test]
     fn foreign_and_missing_scope_never_dispatch() {

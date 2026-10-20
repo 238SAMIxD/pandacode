@@ -274,8 +274,9 @@ impl Vms {
     }
 
     /// Suspend or stop VMs nobody has used for `idle`. Returns the names it released.
+    /// A VM installing its desktop is busy even though `used` is stale; only quit (zero idle) stops it.
     pub fn release_idle(&self, idle: Duration) -> Vec<String> {
-        let stale: Vec<(String, bool)> = self.lock().map(|sessions| sessions.iter().filter(|(_, s)| s.used.elapsed() >= idle).map(|(name, s)| (name.clone(), s.macos)).collect()).unwrap_or_default();
+        let stale: Vec<(String, bool)> = self.lock().map(|sessions| sessions.iter().filter(|(name, s)| s.used.elapsed() >= idle && (idle.is_zero() || self.desktop_state(name) != Some(desktop::State::Installing))).map(|(name, s)| (name.clone(), s.macos)).collect()).unwrap_or_default();
         stale.into_iter().filter_map(|(name, macos)| {
             let released = if macos { self.suspend(&name) } else { self.stop(&name) };
             released.ok().map(|_| name)

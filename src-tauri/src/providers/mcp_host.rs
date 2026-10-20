@@ -488,7 +488,7 @@ impl Context {
         if self.mode == "plan" {
             return Err("This host action is unavailable in Plan mode".into());
         }
-        if self.mode == "full" {
+        if self.mode == "full" && !crate::cloud::deploy::ALWAYS_ASK.contains(&name) {
             return Ok(());
         }
         let id = format!("mcp-approval:{}", uuid::Uuid::new_v4());
@@ -803,6 +803,34 @@ mod tests {
             assert_eq!(result["result"]["isError"], mode == "plan");
             assert_eq!(count.load(Ordering::SeqCst), usize::from(mode == "full"));
         }
+    }
+    #[tokio::test]
+    async fn cloud_cli_asks_even_in_full_mode() {
+        let name = "pandacode_cloud_cli";
+        let count = Arc::new(AtomicUsize::new(0));
+        let called = count.clone();
+        let protected = ToolHost {
+            tools: vec![json!({"type":"function","name":name,"description":"Deploy","inputSchema":{"type":"object"}})],
+            approval_tools: [name.into()].into(),
+            handler: Arc::new(move |_, _| {
+                called.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async { Ok(json!({})) })
+            }),
+        };
+        let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+        let server = Server::start_with_approvals(protected, "task".into(), Arc::new(move |event| { let _ = sender.send(event); }), "full").await.unwrap();
+        let request = request(&server, json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":{}}}), "");
+        let answer = async {
+            let pending = loop {
+                let event = tokio::time::timeout(Duration::from_secs(2), events.recv()).await.unwrap().unwrap();
+                if event.kind == "approval" { break event.request_id.unwrap(); }
+            };
+            assert_eq!(count.load(Ordering::SeqCst), 0);
+            assert!(server.approve(&pending, false));
+        };
+        let ((_, result), ()) = tokio::join!(request, answer);
+        assert_eq!(result["result"]["isError"], true);
+        assert_eq!(count.load(Ordering::SeqCst), 0);
     }
     #[tokio::test]
     async fn cancelling_pending_mcp_approval_revokes_it_without_calling_handler() {

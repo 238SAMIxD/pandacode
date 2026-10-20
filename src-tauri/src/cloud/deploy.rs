@@ -21,6 +21,16 @@ const VERCEL: &str = "vercel@64.3.1";
 const WRANGLER: &str = "wrangler@4.151.0";
 const OUTPUT: usize = 128 * 1024;
 
+/// Approval tools that ask on every call, even in full-access mode.
+pub const ALWAYS_ASK: &[&str] = &["pandacode_cloud_cli"];
+
+/// AWS global options that take a value, so the value is not mistaken for the service.
+const AWS_VALUE_FLAGS: &[&str] = &["--region", "--profile", "--output", "--endpoint-url", "--query", "--color", "--ca-bundle", "--cli-read-timeout", "--cli-connect-timeout", "--cli-binary-format"];
+/// sts operations that hand back credentials.
+const STS_CREDENTIALS: &[&str] = &["get-session-token", "get-federation-token", "assume-role", "assume-role-with-saml", "assume-role-with-web-identity", "assume-root"];
+/// Keys whose values are AWS secrets in CLI output (matched case-insensitively).
+const AWS_SECRET_KEYS: &[&str] = &["aws_secret_access_key", "aws_session_token", "aws_security_token", "secretaccesskey", "sessiontoken"];
+
 pub fn catalog() -> Vec<Value> {
     vec![spec("cloud_cli", "Run the Vercel CLI (tool vercel), Cloudflare's Wrangler (tool wrangler) or the AWS CLI (tool aws) in this task's checkout, already signed in to the user's connected account: never ask for or print tokens. Use it to deploy end to end, e.g. vercel `deploy --yes` then `deploy --prod --yes`; wrangler `deploy` or `pages deploy dist --project-name app`; aws `s3 sync ./dist s3://bucket`. args is the argument list as you would type it after the tool name (quotes allowed, no pipes or redirects). directory is relative to the checkout. Returns the exit code and output. Creating paid cloud resources costs the user money: confirm first.", json!({
         "tool":{"type":"string","enum":["vercel","wrangler","aws"]},
@@ -60,6 +70,55 @@ pub fn scrub(text: &str, secrets: &[String]) -> String {
         clean.push(ch);
     }
     secrets.iter().filter(|s| s.len() >= 8).fold(clean, |text, secret| text.replace(secret.as_str(), "[redacted]"))
+}
+
+/// Refuse AWS commands that print the signed-in credentials.
+fn aws_refusal(words: &[String]) -> Result<(), String> {
+    if words.iter().any(|w| w == "--debug") {
+        return Err("--debug prints request credentials; leave it out.".into());
+    }
+    let mut positional = Vec::new();
+    let mut iter = words.iter();
+    while let Some(word) = iter.next() {
+        if AWS_VALUE_FLAGS.contains(&word.as_str()) {
+            iter.next();
+        } else if !word.starts_with('-') {
+            positional.push(word.as_str());
+        }
+    }
+    match positional.as_slice() {
+        ["configure", ..] => Err("aws configure is not available: PandaCode manages the AWS login.".into()),
+        ["sts", op, ..] if STS_CREDENTIALS.contains(op) => Err(format!("aws sts {op} returns credentials, which never reach the agent.")),
+        _ => Ok(()),
+    }
+}
+
+/// Redact AWS access key IDs and secret key/token values from AWS CLI output.
+pub fn scrub_aws(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let lower = text.to_ascii_lowercase();
+    let mut hidden = vec![false; bytes.len()];
+    for at in 0..bytes.len().saturating_sub(19) {
+        if (bytes[at..].starts_with(b"AKIA") || bytes[at..].starts_with(b"ASIA")) && bytes[at + 4..at + 20].iter().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit()) {
+            hidden[at..at + 20].fill(true);
+        }
+    }
+    for key in AWS_SECRET_KEYS {
+        for (at, _) in lower.match_indices(key) {
+            let start = at + key.len() + bytes[at + key.len()..].iter().take_while(|b| b" \t\"':=".contains(b)).count();
+            let end = start + bytes[start..].iter().take_while(|b| !b" \t\r\n\"',}".contains(b)).count();
+            hidden[start..end].fill(true);
+        }
+    }
+    let mut clean = String::with_capacity(text.len());
+    for (at, ch) in text.char_indices() {
+        if !hidden[at] {
+            clean.push(ch);
+        } else if at == 0 || !hidden[at - 1] {
+            clean.push_str("[redacted]");
+        }
+    }
+    clean
 }
 
 /// The command for a tool with its credentials, or why it cannot run.
@@ -108,13 +167,19 @@ fn run(checkout: &Path, args: &Value) -> Result<Value, String> {
     if words.iter().any(|w| w == "--token" || w.starts_with("--token=")) {
         return Err("PandaCode adds the credentials itself; leave out --token.".into());
     }
+    if tool == "aws" {
+        aws_refusal(&words)?;
+    }
     let directory = inside(checkout, args["directory"].as_str().unwrap_or("."))?;
     let timeout = Duration::from_secs(args["timeoutSeconds"].as_u64().unwrap_or(600).clamp(1, 1800));
     let (mut command, secrets) = prepare(tool, &words)?;
     command.current_dir(&directory);
     let out = run_process(command, tool, OUTPUT, timeout)?;
-    let stdout = scrub(&String::from_utf8_lossy(&out.stdout.bytes), &secrets);
-    let stderr = scrub(&String::from_utf8_lossy(&out.stderr.bytes), &secrets);
+    let clean = |bytes: &[u8]| {
+        let text = scrub(&String::from_utf8_lossy(bytes), &secrets);
+        if tool == "aws" { scrub_aws(&text) } else { text }
+    };
+    let (stdout, stderr) = (clean(&out.stdout.bytes), clean(&out.stderr.bytes));
     Ok(json!({"exitCode": out.status.code(), "stdout": stdout, "stderr": stderr, "truncated": out.stdout.truncated || out.stderr.truncated}))
 }
 
@@ -190,6 +255,26 @@ mod tests {
         assert!(run(&root, &json!({"tool":"vercel","args":"deploy --token=abc"})).unwrap_err().contains("leave out --token"));
         assert!(run(&root, &json!({"tool":"aws","args":"s3 ls 'unclosed"})).unwrap_err().contains("unclosed quote"));
         assert!(validate_spec(&catalog(), "pandacode_cloud_cli", &json!({"tool":"gcloud","args":"deploy"})).is_err());
+    }
+
+    #[test]
+    fn refuses_aws_commands_that_print_credentials() {
+        let root = std::env::temp_dir();
+        for args in ["configure export-credentials", "--region us-east-1 --profile dev configure get aws_secret_access_key", "--output json sts get-session-token", "sts assume-role --role-arn x --role-session-name y", "--debug s3 ls"] {
+            assert!(run(&root, &json!({"tool":"aws","args":args})).is_err_and(|e| !e.contains("Connect AWS")), "{args}");
+        }
+        let words = |s: &str| shell_words::split(s).unwrap();
+        assert!(aws_refusal(&words("--region us-east-1 sts get-caller-identity")).is_ok());
+        assert!(aws_refusal(&words("s3 cp configure s3://bucket/configure")).is_ok());
+    }
+
+    #[test]
+    fn scrubs_aws_keys_and_secret_values() {
+        let json = r#"{"AccessKeyId": "ASIAABCDEFGHIJKLMNOP", "SecretAccessKey": "wJalr/XUtnFEMI+K7MDENG", "SessionToken": "IQoJb3JpZ2lu=="}"#;
+        assert_eq!(scrub_aws(json), r#"{"AccessKeyId": "[redacted]", "SecretAccessKey": "[redacted]", "SessionToken": "[redacted]"}"#);
+        let env = "export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\nexport AWS_SECRET_ACCESS_KEY=wJalr/XUtn\naws_session_token = tok\nok";
+        assert_eq!(scrub_aws(env), "export AWS_ACCESS_KEY_ID=[redacted]\nexport AWS_SECRET_ACCESS_KEY=[redacted]\naws_session_token = [redacted]\nok");
+        assert_eq!(scrub_aws("upload: ./a.txt to s3://AKIA-bucket/é"), "upload: ./a.txt to s3://AKIA-bucket/é");
     }
 
     #[test]

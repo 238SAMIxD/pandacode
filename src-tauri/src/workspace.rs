@@ -8,7 +8,7 @@ pub(crate) fn excluded_entry(name: &str, directory: bool) -> bool {
 use std::{
     collections::BinaryHeap,
     fs::{self, File},
-    io::Read,
+    io::{Read, Write},
     path::{Component, Path, PathBuf},
     process::{Command, ExitStatus, Stdio},
     sync::mpsc,
@@ -188,17 +188,40 @@ fn run_git_bounded(
 /// Run a prepared external command with a null stdin, byte-bounded pipes, and a
 /// deadline that also stops the process group, so no tool can hold the app.
 pub(crate) fn run_process(
-    mut command: Command,
+    command: Command,
     tool: &str,
     limit: usize,
     timeout: Duration,
+) -> Result<GitOutput, String> {
+    run_bounded(command, tool, limit, 16 * 1024, timeout, None)
+}
+
+/// Like `run_process`, but feeds `input` to stdin (from a thread, then closes it) and keeps
+/// up to `limit` bytes of stderr too, for tools that report their errors there.
+pub(crate) fn run_process_with_input(
+    command: Command,
+    tool: &str,
+    limit: usize,
+    timeout: Duration,
+    input: Option<&[u8]>,
+) -> Result<GitOutput, String> {
+    run_bounded(command, tool, limit, limit, timeout, input)
+}
+
+fn run_bounded(
+    mut command: Command,
+    tool: &str,
+    limit: usize,
+    stderr_limit: usize,
+    timeout: Duration,
+    input: Option<&[u8]>,
 ) -> Result<GitOutput, String> {
     #[cfg(unix)]
     command.process_group(0);
     #[cfg(windows)]
     command.creation_flags(0x08000000);
     command
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = command
@@ -207,6 +230,13 @@ pub(crate) fn run_process(
     let process_id = child.id();
     #[cfg(windows)]
     let _job = crate::providers::windows_job::Job::attach(process_id);
+    if let (Some(mut stdin), Some(input)) = (child.stdin.take(), input) {
+        let input = input.to_vec();
+        // A process that exits without reading gives a broken pipe; its status tells the story.
+        thread::spawn(move || {
+            let _ = stdin.write_all(&input);
+        });
+    }
     let stdout = capture(
         child
             .stdout
@@ -219,7 +249,7 @@ pub(crate) fn run_process(
             .stderr
             .take()
             .ok_or(format!("Missing {tool} stderr"))?,
-        16 * 1024,
+        stderr_limit,
     );
     let deadline = Instant::now() + timeout;
     let status = loop {
@@ -1294,6 +1324,24 @@ pub fn read_file(root: &Path, path: String) -> Result<String, String> {
 mod tests {
     use super::*;
     use std::{fs, process::Command};
+
+    #[cfg(unix)]
+    #[test]
+    fn run_process_drains_large_output_and_feeds_stdin() {
+        let started = Instant::now();
+        let mut flood = Command::new("sh");
+        flood.args(["-c", "head -c 300000 /dev/zero; head -c 100000 /dev/zero >&2"]);
+        let output = run_process(flood, "sh", 1 << 20, Duration::from_secs(20)).unwrap();
+        assert!(output.status.success() && output.stdout.bytes.len() == 300_000);
+        assert!(output.stderr.truncated && started.elapsed() < Duration::from_secs(10));
+        let input = vec![b'x'; 200_000];
+        let output = run_process_with_input(Command::new("cat"), "cat", 1 << 20, Duration::from_secs(20), Some(&input)).unwrap();
+        assert!(output.status.success() && output.stdout.bytes == input);
+        let mut sleeper = Command::new("sh");
+        sleeper.args(["-c", "sleep 30"]);
+        let err = run_process_with_input(sleeper, "sh", 1024, Duration::from_millis(200), None).err().unwrap();
+        assert!(err.contains("timed out"));
+    }
 
     struct Fixture {
         base: PathBuf,

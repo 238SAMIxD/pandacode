@@ -2959,6 +2959,7 @@ pub fn run() {
                 message_queue::queue_remove,
                 message_queue::queue_reorder,
                 message_queue::queue_take,
+                message_queue::queue_restore,
                 message_queue::steer_task,
                 bots::bots_list,
                 bots::bot_desktop_thread,

@@ -5,14 +5,14 @@
 
 use crate::{providers::RunInput, storage::Store, AppState, Result};
 use rusqlite::{params, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 const MAX_PER_TASK: i64 = 50;
 const MAX_TEXT: usize = 128 * 1024;
 const MAX_ATTACHMENTS: usize = 1024 * 1024;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueuedMessage {
     pub id: String,
@@ -131,6 +131,22 @@ pub(crate) fn take(store: &Store, id: &str) -> Result<QueuedMessage> {
     Ok(entry)
 }
 
+/// Puts a taken entry back at the front of its queue after a failed delivery, keeping
+/// its id, text, attachments and creation time. The queue limit does not apply: the
+/// entry already held its place.
+pub(crate) fn restore(store: &Store, entry: &QueuedMessage) -> Result<QueuedMessage> {
+    store.session(&entry.session_id)?;
+    let encoded = validate(&entry.text, &entry.attachments)?;
+    store
+        .db
+        .execute(
+            "INSERT INTO queued_messages(id,session_id,position,text,attachments,created_at,updated_at) VALUES(?1,?2,(SELECT COALESCE(MIN(position),1)-1 FROM queued_messages WHERE session_id=?2),?3,?4,?5,?6)",
+            params![entry.id, entry.session_id, entry.text, encoded, entry.created_at, crate::storage::now()],
+        )
+        .map_err(|e| e.to_string())?;
+    get(store, &entry.id)
+}
+
 #[tauri::command]
 pub async fn queue_list(state: State<'_, AppState>, session_id: Option<String>) -> Result<Vec<QueuedMessage>> {
     let store = state.store.lock().map_err(|e| e.to_string())?;
@@ -165,6 +181,12 @@ pub async fn queue_reorder(state: State<'_, AppState>, session_id: String, ids: 
 pub async fn queue_take(state: State<'_, AppState>, id: String) -> Result<QueuedMessage> {
     let store = state.store.lock().map_err(|e| e.to_string())?;
     take(&store, &id)
+}
+
+#[tauri::command]
+pub async fn queue_restore(state: State<'_, AppState>, entry: QueuedMessage) -> Result<QueuedMessage> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    restore(&store, &entry)
 }
 
 /// Sends a message into the running turn. On success it is saved to the transcript;
@@ -220,6 +242,26 @@ mod tests {
         assert_eq!(list(&store, None).unwrap().len(), 2);
         // A new message goes to the end even after reordering.
         assert_eq!(add(&store, &task, "fourth", &json!([])).unwrap().position, 3);
+    }
+
+    #[test]
+    fn a_failed_delivery_restores_the_entry_to_the_front() {
+        let (store, task) = store();
+        let first = add(&store, &task, "first", &json!([{"kind":"image","id":"abc"}])).unwrap();
+        add(&store, &task, "second", &json!([])).unwrap();
+        let taken = take(&store, &first.id).unwrap();
+        add(&store, &task, "third", &json!([])).unwrap();
+        let restored = restore(&store, &taken).unwrap();
+        assert_eq!((restored.id.as_str(), restored.attachments.clone(), restored.created_at), (first.id.as_str(), json!([{"kind":"image","id":"abc"}]), first.created_at));
+        assert_eq!(list(&store, Some(&task)).unwrap().iter().map(|e| e.text.as_str()).collect::<Vec<_>>(), ["first", "second", "third"]);
+        assert!(restore(&store, &restored).is_err(), "an entry still queued is not duplicated");
+        // After a reorder it still lands first, and new messages still go last.
+        let taken = take(&store, &first.id).unwrap();
+        let ids: Vec<String> = list(&store, Some(&task)).unwrap().into_iter().rev().map(|e| e.id).collect();
+        reorder(&store, &task, &ids).unwrap();
+        restore(&store, &taken).unwrap();
+        assert_eq!(list(&store, Some(&task)).unwrap().iter().map(|e| e.text.as_str()).collect::<Vec<_>>(), ["first", "third", "second"]);
+        assert_eq!(add(&store, &task, "fourth", &json!([])).unwrap().position, 2);
     }
 
     #[test]
