@@ -19,7 +19,7 @@ test.beforeEach(async ({ page }) => {
       if (command === 'send_message' && window.__holdAgent) { session(args.sessionId).status = 'running'; return; }
       if (command === 'queue_add' && window.__slowQueue) await new Promise(resolve => setTimeout(resolve, 300));
       switch (command) {`);
-    await route.fulfill({ response, body: body + '\nwindow.__queueEmit = emit; window.__queueSession = session;\n' });
+    await route.fulfill({ response, body: body + '\nwindow.__queueEmit = emit; window.__queueSession = session; window.__queueInvoke = invoke;\n' });
   });
   await page.addInitScript(() => { (window as any).__holdAgent = true; });
   await page.goto('/');
@@ -102,8 +102,8 @@ test('keeps every message when typing quickly while the queue is being saved', a
 
 test('a follow-up queued by an agent for an idle task is sent right away', async ({ page }) => {
   await page.evaluate(async () => {
-    const { invoke } = await import('/src/preview.ts');
-    await invoke('queue_add', { sessionId: 'session-2', text: 'Queued by the architect', attachments: [] });
+    // The app's own preview instance: a fresh import can load a second copy (Vite adds ?t= after an edit).
+    await (window as any).__queueInvoke('queue_add', { sessionId: 'session-2', text: 'Queued by the architect', attachments: [] });
     (window as any).__queueEmit('queue-changed', { sessionId: 'session-2' });
   });
   await expect.poll(async () => (await calls(page, 'send_message')).map(c => [c.args.sessionId, c.args.text])).toEqual([['session-2', 'Queued by the architect']]);
