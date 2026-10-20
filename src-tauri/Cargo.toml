@@ -7,7 +7,8 @@ edition = "2021"
 
 [lib]
 name = "pandacode_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# Desktop only links the rlib; add "staticlib", "cdylib" back for mobile targets.
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -67,3 +68,10 @@ codegen-units = 1
 opt-level = "s"
 strip = true
 panic = "abort"
+
+# Local/test builds (`--profile fast-release`); shipped builds use release.
+[profile.fast-release]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true

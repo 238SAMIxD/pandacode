@@ -9,7 +9,7 @@
 - `npx tsc --noEmit` — typecheck (also runs inside `npm run build`).
 - `npm test` — Node unit tests (`tests/*.test.mjs`).
 - `npm run test:release` — release script tests (`scripts/release/*.test.mjs`).
-- `npx playwright test` — browser suite against the Vite preview (`npm run dev` on 127.0.0.1:1420 is started/reused automatically; needs Google Chrome at `/Applications/Google Chrome.app`). Full run ≈ 8 min; pass file paths or `-g "title"` for a subset.
+- `npx playwright test` — browser suite against the Vite preview (`npm run dev` on 127.0.0.1:1420 is started/reused automatically; needs Google Chrome at `/Applications/Google Chrome.app`). Full run ≈ 3.5 min at the default 4 workers (`PW_WORKERS=N` overrides); pass file paths or `-g "title"` for a subset.
 - `npx playwright test -c playwright.webkit.config.ts` — the same suite in WebKit (the real target is WKWebView).
 
 ## UI conventions

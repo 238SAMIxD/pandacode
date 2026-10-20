@@ -59,7 +59,7 @@ npm run build                                        # typecheck + bundle; tests
 npm test                                             # Node unit tests (tests/*.test.mjs)
 npm run test:release                                 # release script tests
 cargo test --manifest-path src-tauri/Cargo.toml      # Rust tests
-cargo clippy --manifest-path src-tauri/Cargo.toml --tests -- -D warnings
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
 For UI changes, also run the relevant Playwright tests in Chrome and WebKit
@@ -81,7 +81,7 @@ browser preview with the sample data in `scripts/screenshots/showcase.js` and
 writes framed WebP images to `docs/screenshots/`.
 
 CI (`.github/workflows/ci.yml`) runs the typecheck, unit tests, website build,
-and `cargo check`/`cargo test --lib`/Clippy on Linux for every pull request.
+and `cargo test --lib`/Clippy on Linux for every pull request.
 
 ## Pull requests
 
