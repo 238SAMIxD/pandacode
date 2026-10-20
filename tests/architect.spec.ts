@@ -321,6 +321,7 @@ test.describe('architect teams', () => {
     await openWorkers(page).click();
     await page.clock.runFor(250);
     await expect(panel(page).locator('.architect-worker-row')).toHaveCount(2);
+    await expect(panel(page).locator('.architect-panel-count')).toHaveText('2 tasks');
     await expect(page.locator('.task-item')).toHaveCount(visibleTasks);
     await expect(panel(page).getByRole('button', { name: 'Pause team', exact: true })).toBeVisible();
     await panel(page).getByRole('button', { name: 'Pause team', exact: true }).click();
@@ -329,7 +330,7 @@ test.describe('architect teams', () => {
     await page.clock.runFor(5000);
     await expect(panel(page).locator('.architect-panel-summary')).toContainText('Paused');
     await panel(page).getByRole('button', { name: 'Resume team', exact: true }).click();
-    await expect(panel(page).locator('.architect-panel-summary')).toContainText('Working');
+    await expect(panel(page).locator('.architect-panel-summary')).toHaveText('Architect is working…');
     await page.clock.runFor(250);
     await panel(page).getByRole('button', { name: 'Stop team', exact: true }).click();
     await expect(panel(page).getByRole('button', { name: 'Pause team', exact: true })).toBeHidden();

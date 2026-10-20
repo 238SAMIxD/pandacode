@@ -84,7 +84,7 @@ test('pasting an image into the prompt attaches it, and images share the four-im
   await pasteImage(page, 'clipboard.png');
   await expect(chips(page)).toHaveCount(1);
   await expect(chips(page).first()).toContainText('clipboard.png');
-  await expect(page.locator('#toast')).toContainText('Image attached from the clipboard');
+  await expect(page.locator('#toast')).not.toContainText('Image attached');
   const imported = await calls(page, 'import_prompt_image');
   expect(imported[0].args.dataUrl).toMatch(/^data:image\/png;base64,/);
   expect(imported[0].args.name).toBe('clipboard.png');

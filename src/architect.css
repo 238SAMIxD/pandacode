@@ -74,9 +74,10 @@
 .architect-panel { pointer-events: auto; position: absolute; z-index: 8; top: calc(100% + 8px); right: 16px; width: min(460px, calc(100% - 32px)); max-height: min(660px, calc(100dvh - 235px)); display: flex; flex-direction: column; border-radius: 8px; background: var(--panel); box-shadow: 0 14px 45px #00000024; overflow: hidden; }
 .architect-worker-list { color: var(--muted); font-size: .77rem; line-height: 1.6; padding: 0 5px; }
 .architect-worker-row:hover { background: color-mix(in srgb, var(--raised) 70%, transparent); }
-.architect-worker-row[data-status=running] .architect-worker-state, .architect-worker-row[data-status=waiting] .architect-worker-state { color: var(--accent-ink); }
-.architect-worker-row[data-status=completed] .architect-worker-state { color: var(--success); }
-.architect-worker-row[data-status=failed] .architect-worker-state { color: var(--danger); }
+.architect-worker-state[data-tone=accent] { color: var(--accent-ink); }
+html[data-theme="dark"] .architect-worker-state[data-tone=accent] { color: var(--accent); }
+.architect-worker-state[data-tone=success] { color: var(--success); }
+.architect-worker-state[data-tone=danger] { color: var(--danger); }
 .architect-worker-row > .icon { width: 11px; height: 11px; color: var(--muted); }
 .architect-worker-detail { padding: 6px 8px 10px; }
 .architect-worker-meta { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
@@ -123,11 +124,11 @@
 .architect-worker-checkpoint .architect-checkpoint-blocker dt { color: var(--accent-ink); }
 @media(prefers-reduced-motion:reduce) { .architect-worker-checkpoint summary::before { transition: none; } }
 
-/* The workers panel: one header line (title, status, icon controls, close), then a line per worker. */
+/* The workers panel: one header line (title, task count, icon controls, close), then a tall row per worker. */
 .architect-panel { width: min(380px, calc(100% - 32px)); border-radius: 7px; }
 .architect-panel-heading { display: flex; align-items: center; gap: 6px; padding: 8px 8px 6px 14px; flex-shrink: 0; }
-.architect-panel-heading strong { flex: none; font-size: .82rem; font-weight: 600; }
-.architect-panel-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: .72rem; font-variant-numeric: tabular-nums; }
+.architect-panel-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: .9rem; font-weight: 650; }
+.architect-panel-count { flex: none; color: var(--muted); font-size: .76rem; font-variant-numeric: tabular-nums; margin-right: 2px; }
 .architect-panel-controls { display: flex; align-items: center; gap: 1px; flex: none; }
 .architect-panel-heading .icon-button { width: 24px; height: 24px; color: var(--muted); }
 .architect-panel-heading .icon-button:hover:not(:disabled) { color: var(--text); background: var(--raised); }
@@ -137,13 +138,26 @@ html[data-theme="dark"] .architect-assist { color: var(--accent); }
 .architect-assist:hover { background: var(--raised); }
 .architect-panel-error { padding: 0 14px 8px; margin: 0; color: var(--danger); font-size: .72rem; line-height: 1.45; }
 .architect-panel-scroll { overflow: auto; min-height: 0; overscroll-behavior: contain; padding: 0 6px 8px; scrollbar-gutter: stable; }
-.architect-worker-row { display: flex; width: 100%; height: 34px; align-items: center; justify-content: flex-start; text-align: left; gap: 9px; padding: 0 8px; border-radius: 4px; }
-.architect-worker-logo { display: flex; flex: none; }
-.architect-worker-logo > svg, .architect-worker-logo > img { width: 16px; height: 16px; }
+.architect-panel-scroll.is-overflowing { mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent); }
+.architect-worker-row { display: flex; width: 100%; height: 64px; align-items: center; justify-content: flex-start; text-align: left; gap: 12px; padding: 0 8px; border-radius: 0; }
+.architect-worker-row + .architect-worker-row { border-top: 1px solid var(--border); }
+.architect-worker-glyph { position: relative; display: flex; flex: none; width: 28px; height: 28px; color: var(--muted); }
+.architect-worker-glyph > svg { width: 28px; height: 28px; }
+.architect-worker-glyph[data-glyph=running] { color: var(--accent-ink); }
+html[data-theme="dark"] .architect-worker-glyph[data-glyph=running] { color: var(--accent); }
+.architect-worker-glyph[data-glyph=completed] { color: var(--success); }
+.architect-worker-glyph[data-glyph=failed] { color: var(--danger); }
+.architect-glyph-spin { transform-origin: 14px 14px; }
+@media (prefers-reduced-motion: no-preference) { .architect-glyph-spin { animation: architect-glyph-spin 2.4s linear infinite; } @keyframes architect-glyph-spin { to { transform: rotate(360deg); } } }
+.architect-worker-logo { position: absolute; right: -3px; bottom: -3px; display: flex; padding: 1px; border-radius: 50%; background: var(--panel); }
+.architect-worker-logo > svg, .architect-worker-logo > img { width: 14px; height: 14px; }
+.architect-worker-row .architect-worker-copy { flex-direction: column; align-items: stretch; gap: 3px; }
+.architect-worker-row .architect-worker-copy strong { font-size: .9rem; font-weight: 500; }
+.architect-worker-row .architect-worker-copy small { font-size: .76rem; }
 .architect-worker-copy { display: flex; align-items: baseline; gap: 7px; min-width: 0; flex: 1; }
 .architect-worker-copy strong { flex: 0 1 auto; min-width: 0; font-size: .8rem; font-weight: 550; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .architect-worker-copy small { flex: 0 10 auto; min-width: 0; color: var(--muted); font-size: .7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.architect-worker-state { color: var(--muted); font-size: .7rem; flex-shrink: 0; }
+.architect-worker-state { color: var(--muted); font-weight: 500; }
 /* Pausing or stopping is the user's choice: say so quietly, not in red. */
 .architect-panel-error.is-notice { color: var(--muted); }
 .architect-worker-error { display: block; color: var(--danger); white-space: normal; }

@@ -29,6 +29,16 @@ type SetupOptions = {
   save: (config: TeamConfig | null, architect: ModelSelection, profileId: string | null) => Promise<void>;
 };
 const statusNames: Record<string, string> = { ready: 'Ready', running: 'Working', waiting: 'Waiting', paused: 'Paused', completed: 'Ready for review', failed: 'Needs attention', interrupted: 'Interrupted', queued: 'Queued', stopped: 'Stopped' };
+// Worker rows: a status verb (with its colour tone) and a 28px glyph per state.
+const workerVerbs: Record<string, [string, string]> = { running: ['Working..', 'accent'], waiting: ['Waiting', 'accent'], queued: ['Queued', ''], completed: ['Done', 'success'], failed: ['Failed', 'danger'] };
+const ring = (dash: string) => `<circle cx="14" cy="14" r="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="${dash}"/>`;
+const workerGlyphs: Record<string, string> = {
+  running: `<svg viewBox="0 0 28 28" aria-hidden="true"><g class="architect-glyph-spin">${ring('2.5 4')}</g><circle cx="14" cy="14" r="3.5" fill="currentColor"/></svg>`,
+  pending: `<svg viewBox="0 0 28 28" aria-hidden="true">${ring('2.5 4')}<g fill="currentColor"><circle cx="9.5" cy="14" r="1.6"/><circle cx="14" cy="14" r="1.6"/><circle cx="18.5" cy="14" r="1.6"/></g></svg>`,
+  completed: `<svg viewBox="0 0 28 28" aria-hidden="true"><circle cx="14" cy="14" r="13" fill="currentColor"/><path d="m8.5 14.5 3.6 3.5 7.4-8" fill="none" stroke="var(--panel)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  failed: `<svg viewBox="0 0 28 28" aria-hidden="true"><circle cx="14" cy="14" r="13" fill="currentColor"/><path d="M14 7.5v8" stroke="var(--panel)" stroke-width="2.6" stroke-linecap="round"/><circle cx="14" cy="20" r="1.6" fill="var(--panel)"/></svg>`,
+  idle: `<svg viewBox="0 0 28 28" aria-hidden="true">${ring('2.5 4')}</svg>`,
+};
 const modelName = (selection: ModelSelection, providers: Provider[]) => providers.find(p => p.id === selection.provider)?.models.find(m => m.id === selection.model)?.name ?? fallbackModel(selection.provider, selection.model || 'default').name;
 const modelMarkup = (selection: ModelSelection, providers: Provider[]) => `<span class="provider-small ${escape(selection.provider)}">${providerLogo(selection.provider)}</span><span>${escape(modelName(selection, providers))}${selection.reasoningEffort ? `<small> · ${escape(selection.reasoningEffort)}</small>` : ''}</span>${icon('down')}`;
 
@@ -325,7 +335,7 @@ export class ArchitectView {
     if (!this.team || this.panel) return;
     this.childAgents?.setTask('', false);
     const panel = document.createElement('section'); panel.className = 'architect-panel'; panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', 'Workers');
-    panel.innerHTML = `<div class="architect-panel-heading"><button class="icon-button architect-back" aria-label="Back to workers" hidden>${icon('back')}</button><strong>Workers</strong><span class="architect-panel-summary"></span><span class="architect-panel-controls"><button class="icon-button" data-team-control="pause" aria-label="Pause team" title="Pause team">${icon('pause')}</button><button class="icon-button" data-team-control="resume" aria-label="Resume team" title="Resume team">${icon('play')}</button><button class="icon-button" data-team-control="stop" aria-label="Stop team" title="Stop team">${icon('stop')}</button><button class="icon-button architect-configure" aria-label="View team setup" title="Team setup">${icon('settings')}</button></span><button class="icon-button architect-close" aria-label="Close workers" title="Close">${icon('close')}</button></div><p class="architect-panel-error" role="status" hidden></p><div class="architect-panel-scroll"><div class="architect-worker-list"></div><div class="architect-worker-detail" hidden><div class="architect-worker-meta"></div><details class="architect-assignment"><summary>Assignment & file scope</summary><p></p><small></small></details><details class="architect-worker-checkpoint" hidden><summary>Latest checkpoint <time></time></summary><dl><div><dt>Progress</dt><dd data-checkpoint="summary"></dd></div><div><dt>Next</dt><dd data-checkpoint="nextSteps"></dd></div><div class="architect-checkpoint-blocker"><dt>Blocked</dt><dd data-checkpoint="blocker"></dd></div></dl></details><div class="architect-worker-history"></div><div class="architect-worker-live"></div><div class="architect-worker-tools"></div><div class="architect-worker-approvals"></div><div class="architect-worker-inputs"></div><p class="architect-worker-empty" role="status"></p><button class="secondary-button architect-history-retry" hidden>Retry loading worker</button></div></div>`;
+    panel.innerHTML = `<div class="architect-panel-heading"><button class="icon-button architect-back" aria-label="Back to workers" hidden>${icon('back')}</button><strong class="architect-panel-summary"></strong><small class="architect-panel-count"></small><span class="architect-panel-controls"><button class="icon-button" data-team-control="pause" aria-label="Pause team" title="Pause team">${icon('pause')}</button><button class="icon-button" data-team-control="resume" aria-label="Resume team" title="Resume team">${icon('play')}</button><button class="icon-button" data-team-control="stop" aria-label="Stop team" title="Stop team">${icon('stop')}</button><button class="icon-button architect-configure" aria-label="View team setup" title="Team setup">${icon('settings')}</button></span><button class="icon-button architect-close" aria-label="Close workers" title="Close">${icon('close')}</button></div><p class="architect-panel-error" role="status" hidden></p><div class="architect-panel-scroll"><div class="architect-worker-list"></div><div class="architect-worker-detail" hidden><div class="architect-worker-meta"></div><details class="architect-assignment"><summary>Assignment & file scope</summary><p></p><small></small></details><details class="architect-worker-checkpoint" hidden><summary>Latest checkpoint <time></time></summary><dl><div><dt>Progress</dt><dd data-checkpoint="summary"></dd></div><div><dt>Next</dt><dd data-checkpoint="nextSteps"></dd></div><div class="architect-checkpoint-blocker"><dt>Blocked</dt><dd data-checkpoint="blocker"></dd></div></dl></details><div class="architect-worker-history"></div><div class="architect-worker-live"></div><div class="architect-worker-tools"></div><div class="architect-worker-approvals"></div><div class="architect-worker-inputs"></div><p class="architect-worker-empty" role="status"></p><button class="secondary-button architect-history-retry" hidden>Retry loading worker</button></div></div>`;
     this.panel = panel; this.host.append(panel);
     const assist = document.createElement('button'); assist.type = 'button'; assist.className = 'architect-assist';
     assist.addEventListener('click', () => {
@@ -386,7 +396,9 @@ export class ArchitectView {
     this.paintAssist();
     // Auto teams have nothing to set up: the lead picks worker models.
     panel.querySelector<HTMLElement>('.architect-configure')!.hidden = Boolean(team.config.auto);
-    panel.querySelector<HTMLElement>('.architect-panel-summary')!.textContent = `${statusNames[team.status]} · Round ${team.round}/${team.config.maxRounds}`;
+    panel.querySelector<HTMLElement>('.architect-panel-summary')!.textContent = teamActive(team) ? 'Architect is working…' : statusNames[team.status];
+    const count = panel.querySelector<HTMLElement>('.architect-panel-count')!;
+    count.textContent = `${team.workers.length} ${team.workers.length === 1 ? 'task' : 'tasks'}`; count.title = `Round ${team.round}/${team.config.maxRounds}`;
     panel.querySelector<HTMLButtonElement>('[data-team-control=pause]')!.hidden = !teamActive(team);
     panel.querySelector<HTMLButtonElement>('[data-team-control=stop]')!.hidden = !teamActive(team) && team.status !== 'paused';
     // Resume at the round limit grants more rounds natively, up to the maximum of 20.
@@ -419,6 +431,7 @@ export class ArchitectView {
         const updated = new Date(worker.checkpoint.updatedAt);
         time.dateTime = updated.toISOString(); time.textContent = updated.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
       }
+      panel.querySelector('.architect-panel-scroll')!.classList.remove('is-overflowing');
       this.paintLive(); return;
     }
     const list = panel.querySelector<HTMLElement>('.architect-worker-list')!;
@@ -431,9 +444,13 @@ export class ArchitectView {
       const needsInput = Boolean(live?.approvals.size || live?.inputs.size);
       row.dataset.status = needsInput ? 'waiting' : worker.status;
       const queueReason = workerQueueReason(worker, team.workers, team.config.maxParallel);
-      const markup = `<span class="architect-worker-logo">${providerLogo(worker.provider)}</span><span class="architect-worker-copy"><strong>${escape(worker.name)}</strong><small${queueReason ? ` data-tip="${escape(queueReason)}"` : ''}>${escape(queueReason ?? modelName(worker, this.providers))}</small></span><span class="architect-worker-state">${escape(worker.abandoned ? 'Resolved' : needsInput ? 'Needs input' : statusNames[worker.status])}</span>${icon('chevron')}`;
+      const [verb, tone] = worker.abandoned ? ['Resolved', ''] : needsInput ? ['Needs input', 'accent'] : workerVerbs[worker.status] ?? [statusNames[worker.status] ?? worker.status, ''];
+      const glyph = worker.abandoned ? 'idle' : needsInput || worker.status === 'queued' || worker.status === 'waiting' ? 'pending' : workerGlyphs[worker.status] ? worker.status : 'idle';
+      const markup = `<span class="architect-worker-glyph" data-glyph="${glyph}">${workerGlyphs[glyph]}<span class="architect-worker-logo">${providerLogo(worker.provider)}</span></span><span class="architect-worker-copy"><strong>${escape(worker.name)}</strong><small${queueReason ? ` data-tip="${escape(queueReason)}"` : ''}><span class="architect-worker-state"${tone ? ` data-tone="${tone}"` : ''}>${escape(verb)}</span> ${escape(queueReason ?? modelName(worker, this.providers))}</small></span>${icon('chevron')}`;
       if (row.dataset.painted !== markup) { row.innerHTML = markup; row.dataset.painted = markup; }
     }
+    const scroll = panel.querySelector<HTMLElement>('.architect-panel-scroll')!;
+    scroll.classList.toggle('is-overflowing', scroll.scrollHeight > scroll.clientHeight + 1);
   }
   private async loadMessages(older = false): Promise<void> {
     const worker = this.worker(), panel = this.panel; if (!worker || !panel) return;

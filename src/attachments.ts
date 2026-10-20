@@ -136,7 +136,8 @@ export function mountPromptAttachments(host: AttachmentsHost) {
         attached++;
       } catch (error) { host.report(error); }
     }
-    if (attached) host.notify(attached === 1 ? (origin === 'paste' ? 'Image attached from the clipboard' : `Attached ${files[0].name}`) : `Attached ${attached} items`);
+    // A paste shows up in the composer right away; no toast needed.
+    if (attached && origin !== 'paste') host.notify(attached === 1 ? `Attached ${files[0].name}` : `Attached ${attached} items`);
   }
 
   async function openMenu(anchor: HTMLElement): Promise<void> {
