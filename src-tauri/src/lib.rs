@@ -73,6 +73,8 @@ struct RunningAgent {
     approvals: Arc<Mutex<HashSet<String>>>,
     subagents: Arc<Mutex<subagent_state::SubagentState>>,
     assistant: Arc<Mutex<String>>,
+    /// When the harness last sent anything; team watchdogs stop a turn that went silent.
+    last_event: Arc<std::sync::atomic::AtomicI64>,
 }
 impl RunningAgent {
     fn new(input: UnboundedSender<RunInput>, stopped: Arc<AtomicBool>) -> Self {
@@ -83,7 +85,16 @@ impl RunningAgent {
             approvals: Arc::new(Mutex::new(HashSet::new())),
             subagents: Arc::new(Mutex::new(subagent_state::SubagentState::default())),
             assistant: Arc::new(Mutex::new(String::new())),
+            last_event: Arc::new(std::sync::atomic::AtomicI64::new(storage::now())),
         }
+    }
+
+    pub(crate) fn silent_for(&self, now: i64) -> i64 {
+        now.saturating_sub(self.last_event.load(Ordering::SeqCst))
+    }
+
+    pub(crate) fn has_pending_approvals(&self) -> bool {
+        self.approvals.lock().map_or(true, |approvals| !approvals.is_empty())
     }
 
     fn respond_approval(
@@ -126,6 +137,9 @@ impl RunningAgent {
     ) -> std::result::Result<(), tokio::sync::mpsc::error::SendError<RunInput>> {
         if matches!(input, RunInput::Stop) {
             self.stopped.store(true, Ordering::SeqCst);
+        } else {
+            // An answered approval or question restarts the silence clock.
+            self.last_event.store(storage::now(), Ordering::SeqCst);
         }
         self.input.send(input)
     }
@@ -1126,6 +1140,7 @@ struct PreparedRun {
     pending_approvals: Arc<Mutex<HashSet<String>>>,
     subagents: Arc<Mutex<subagent_state::SubagentState>>,
     assistant: Arc<Mutex<String>>,
+    last_event: Arc<std::sync::atomic::AtomicI64>,
     team: Option<architect::Admission>,
 }
 
@@ -1301,6 +1316,7 @@ fn prepare_task_run_in_project(
     let pending_approvals = agent.approvals.clone();
     let subagents = agent.subagents.clone();
     let assistant = agent.assistant.clone();
+    let last_event = agent.last_event.clone();
     agents.insert(session_id.clone(), agent);
     Ok(PreparedRun {
         config,
@@ -1312,6 +1328,7 @@ fn prepare_task_run_in_project(
         pending_approvals,
         subagents,
         assistant,
+        last_event,
         team: admission.team,
     })
 }
@@ -1459,6 +1476,7 @@ async fn launch_operation_admitted(
         pending_approvals,
         subagents,
         assistant,
+        last_event,
         team,
     } = prepare_task_run_in_project(
         &state,
@@ -1541,6 +1559,7 @@ async fn launch_operation_admitted(
         let native_turn_sink = Mutex::new(String::new());
         let team_sink = team.clone();
         let sink: providers::Sink = Arc::new(move |mut e: AgentEvent| {
+            last_event.store(storage::now(), Ordering::SeqCst);
             if e.kind == "done" {
                 return;
             }
@@ -2847,6 +2866,7 @@ pub fn run() {
             app.manage(file_preview::FilePreviews::default());
             app.manage(agent_tools::UiRequests::default());
             app.manage(architect::Runtime::default());
+            architect::watchdog::watch(app.handle().clone());
             bots::start(app.handle());
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {

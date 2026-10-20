@@ -696,10 +696,10 @@ fn persisted_messages_and_checkpoint_survive_restart_without_auto_resuming() {
         team.workers[0].checkpoint.as_ref().unwrap().next_steps,
         "Wire renderer"
     );
-    let context = coordination::context(&store, &team, &coordination::Actor::Architect).unwrap();
+    let context = coordination::context(&store, &team, &coordination::Actor::Architect, 0, true).unwrap().0;
     assert!(context.contains("Parser interface is ready"));
     let actor = coordination::Actor::resolve(&team, &worker_session).unwrap();
-    let context = coordination::context(&store, &team, &actor).unwrap();
+    let context = coordination::context(&store, &team, &actor, 0, true).unwrap().0;
     assert!(context.contains("Parser checks passed"));
     assert!(!context.contains("Parser interface is ready"));
     drop(store);
@@ -926,6 +926,8 @@ fn fixture() -> (Store, TeamSnapshot) {
         continued_revision: None,
         last_turn_kind: None,
         objective_start: 0,
+        timed_out: false,
+        briefings: Default::default(),
     };
     (store, team)
 }
@@ -952,6 +954,7 @@ fn worker(id: &str, status: &str, files: &[&str], depends: &[&str]) -> Worker {
         abandoned: false,
         result_revision: 0,
         checkpoint: None,
+        timed_out: false,
     }
 }
 #[test]
@@ -2234,4 +2237,119 @@ fn a_worker_that_cannot_start_fails_alone() {
     assert_eq!(failed.status, "failed");
     assert!(team.workers.iter().any(|w| w.session_id != first.sid && w.status != "failed"));
     drop(parent);
+}
+fn objective_turn(state: &AppState, sid: &str) -> crate::PreparedRun {
+    let action = Launch { sid: sid.into(), prompt: "Objective".into(), images: None, admission: Admission { parent: sid.into(), generation: 1 } };
+    claim(state, action).0
+}
+fn settle(state: &AppState, run: &crate::PreparedRun, successful: bool, stopped: bool) {
+    let sid = &run.config.session_id;
+    let mut agents = state.agents.lock().unwrap();
+    state.store.lock().unwrap().finish_task_turn(sid, successful, stopped).unwrap();
+    agents.remove(sid);
+    completed_with_agents(state, &agents, sid, run.team.as_ref(), successful, stopped, &mut |_| {});
+}
+const SILENT: i64 = (watchdog::SILENCE_MINUTES + 1) * 60 * 1000;
+#[test]
+fn a_failed_worker_is_handed_to_the_architect_while_others_still_run() {
+    let (state, sid) = state_fixture();
+    let parent = objective_turn(&state, &sid);
+    call(&state, &sid, "pandacode_dispatch_workers", json!({"assignments":[assignment("one","fast","src/a"),assignment("two","fast","src/b")]})).unwrap();
+    let (one, _a) = claim(&state, next_action_state(&state, &mut |_| {}).unwrap().unwrap());
+    let (two, _b) = claim(&state, next_action_state(&state, &mut |_| {}).unwrap().unwrap());
+    finish(&state, &parent, "waiting", true);
+    settle(&state, &one, false, false);
+    let handle = next_action_state(&state, &mut |_| {}).unwrap().unwrap();
+    assert!(handle.prompt.starts_with(FAILED_PREFIX));
+    let team = load(&state.store.lock().unwrap(), &sid).unwrap().unwrap();
+    assert_eq!(team.pending_turn.as_ref().and_then(|t| t.kind), Some(internal_turns::CoordinationKind::WorkerFailed));
+    assert!(team.workers.iter().any(|w| w.session_id == two.config.session_id && active(&w.status)));
+    let (handle, _h) = claim(&state, handle);
+    finish(&state, &handle, "Left it for the final review.", true);
+    // Nothing more until the remaining worker settles, then the normal review runs.
+    assert!(next_action_state(&state, &mut |_| {}).unwrap().is_none());
+    finish(&state, &two, "Two is done.", true);
+    let review = next_action_state(&state, &mut |_| {}).unwrap().unwrap();
+    assert!(review.prompt.starts_with("Review the settled workers"));
+}
+#[test]
+fn a_silent_worker_is_stopped_and_settles_as_failed() {
+    let (state, sid) = state_fixture();
+    let (run, mut rx) = {
+        call(&state, &sid, "pandacode_dispatch_workers", json!({"assignments":[assignment("slow","fast","src")]})).unwrap();
+        claim(&state, next_action_state(&state, &mut |_| {}).unwrap().unwrap())
+    };
+    let now = storage::now();
+    assert_eq!(watchdog::stop_silent(&state, now, &mut |_| {}).unwrap(), 0);
+    // A worker waiting on the user's approval is not stuck.
+    state.agents.lock().unwrap()[&run.config.session_id].approvals.lock().unwrap().insert("ask".into());
+    assert_eq!(watchdog::stop_silent(&state, now + SILENT, &mut |_| {}).unwrap(), 0);
+    state.agents.lock().unwrap()[&run.config.session_id].approvals.lock().unwrap().clear();
+    assert_eq!(watchdog::stop_silent(&state, now + SILENT, &mut |_| {}).unwrap(), 1);
+    assert!(matches!(rx.try_recv(), Ok(RunInput::Stop)));
+    settle(&state, &run, false, true);
+    let team = load(&state.store.lock().unwrap(), &sid).unwrap().unwrap();
+    assert_eq!(team.workers[0].status, "failed");
+    assert!(team.workers[0].error.as_deref().unwrap().starts_with("No output for"));
+    assert!(!team.workers[0].timed_out);
+}
+#[test]
+fn a_silent_architect_turn_is_stopped_without_stopping_its_workers() {
+    let (state, sid) = state_fixture();
+    let parent = objective_turn(&state, &sid);
+    call(&state, &sid, "pandacode_dispatch_workers", json!({"assignments":[assignment("engine","fast","src")]})).unwrap();
+    let (worker, _w) = claim(&state, next_action_state(&state, &mut |_| {}).unwrap().unwrap());
+    let now = storage::now();
+    state.agents.lock().unwrap()[&worker.config.session_id].last_event.store(now + SILENT, Ordering::SeqCst);
+    assert_eq!(watchdog::stop_silent(&state, now + SILENT, &mut |_| {}).unwrap(), 1);
+    settle(&state, &parent, false, true);
+    let team = load(&state.store.lock().unwrap(), &sid).unwrap().unwrap();
+    assert_eq!(team.status, "waiting");
+    assert_eq!(team.error, Some(watchdog::architect_note()));
+    assert_eq!(team.workers[0].status, "running");
+    finish(&state, &worker, "Engine done.", true);
+    let (review, _r) = claim(&state, next_action_state(&state, &mut |_| {}).unwrap().unwrap());
+    let team = load(&state.store.lock().unwrap(), &sid).unwrap().unwrap();
+    assert_eq!(team.error, None);
+    assert!(!team.timed_out);
+    drop(review);
+}
+#[test]
+fn a_silent_review_is_asked_once_to_continue_with_the_reason() {
+    let (state, sid) = state_fixture();
+    let (run, _) = running_worker(&state, &sid, "parser", "src");
+    finish(&state, &run, "Parser checked", true);
+    let (review, _r) = claim(&state, next_action_state(&state, &mut |_| {}).unwrap().unwrap());
+    assert_eq!(watchdog::stop_silent(&state, storage::now() + SILENT, &mut |_| {}).unwrap(), 1);
+    settle(&state, &review, false, true);
+    let nudge = next_action_state(&state, &mut |_| {}).unwrap().unwrap();
+    assert!(nudge.prompt.starts_with("PandaCode stopped your last turn after"));
+}
+#[test]
+fn a_resumed_conversation_gets_the_team_rules_once_and_only_new_messages() {
+    let (state, sid) = state_fixture();
+    let store = state.store.lock().unwrap();
+    store.db.execute("UPDATE sessions SET resume_id='native-1' WHERE id=?1", [&sid]).unwrap();
+    let admission = Admission { parent: sid.clone(), generation: 1 };
+    let first = prompt(&store, &sid, "Build the parser", Some(&admission)).unwrap();
+    assert!(first.contains("PandaCode architect mode. Coordinate"));
+    assert!(first.ends_with("Build the parser"));
+    let second = prompt(&store, &sid, "Now the renderer", Some(&admission)).unwrap();
+    assert!(!second.contains("PandaCode architect mode. Coordinate"));
+    assert!(!second.contains("Team coordination"));
+    assert!(second.starts_with("PandaCode architect mode continues"));
+    assert!(second.ends_with("Now the renderer"));
+    store.db.execute("INSERT INTO architect_messages(parent_session_id,sender,recipient,request_key,content,created_at) VALUES(?1,'w1','architect','k','Renderer API is ready',1)", [&sid]).unwrap();
+    let third = prompt(&store, &sid, "Review", Some(&admission)).unwrap();
+    assert!(third.contains("Renderer API is ready"));
+    let fourth = prompt(&store, &sid, "Review again", Some(&admission)).unwrap();
+    assert!(!fourth.contains("Renderer API is ready"));
+    // Changed limits are new rules, so they go out in full.
+    let mut team = load(&store, &sid).unwrap().unwrap();
+    team.config.max_rounds += 4;
+    save(&store, &mut team).unwrap();
+    assert!(prompt(&store, &sid, "Go on", Some(&admission)).unwrap().contains("PandaCode architect mode. Coordinate"));
+    // A conversation the harness starts afresh has never seen them.
+    store.db.execute("UPDATE sessions SET resume_id=NULL WHERE id=?1", [&sid]).unwrap();
+    assert!(prompt(&store, &sid, "Go on", Some(&admission)).unwrap().contains("PandaCode architect mode. Coordinate"));
 }

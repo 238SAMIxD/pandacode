@@ -95,6 +95,14 @@ latest 200 messages and 64 KiB); the full visible transcript remains unchanged.
   (a question about the work) leaves the team ready, not paused.
 - A worker that cannot start (for example while an agent update installs) fails
   alone; the rest of the team keeps working and the architect reviews it.
+- A worker that fails while others still run goes to the architect right away in
+  a **Handling a failed worker** turn, so it can retry or replace that worker
+  without waiting for the slowest one. It uses a round, and never the last one.
+- A team turn with no harness output for 20 minutes is stopped. Claude's longest
+  tool timeout is 10 minutes, and a turn waiting on your approval or answer never
+  counts as silent. A silent worker settles as failed and the architect handles it.
+  A silent architect turn shows a notice; its workers keep running, and if
+  nothing was dispatched the architect gets one **Continuing the plan** turn.
 - Explicit completion moves the parent task to Review. Marking the task complete
   and its seven-day archive policy work as before.
 
@@ -116,6 +124,12 @@ Select a worker to see its latest progress checkpoint alongside its transcript.
   steps, and optional blocker. It returns the worker's recent incoming messages.
   Checkpoints survive app restarts and are included in resumed worker prompts and
   compact architect reviews. They report progress; they do not mark work complete.
+
+Each team conversation gets the full team rules and coordination guide once. While
+the harness resumes the same conversation, later turns get a one-line reminder and
+only the messages they have not seen. The full rules go out again when they change
+(for example new limits), when the harness starts a new conversation, and on every
+eighth turn so a compacted conversation never loses them for long.
 
 A new message to an idle architect, or a new blocker, can wake it while workers
 continue. Notification turns use the same round budget, reserving the final round

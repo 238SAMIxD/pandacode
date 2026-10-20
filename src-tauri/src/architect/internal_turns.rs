@@ -8,6 +8,8 @@ pub enum CoordinationKind {
     WorkerReview,
     /// The architect stopped without dispatching or finishing; PandaCode asks it once to continue.
     Continue,
+    /// A worker failed while others still run; the architect handles it right away.
+    WorkerFailed,
 }
 impl CoordinationKind {
     pub fn label(self) -> &'static str {
@@ -15,6 +17,7 @@ impl CoordinationKind {
             Self::WorkerUpdate => "Checking worker updates",
             Self::WorkerReview => "Reviewing worker results",
             Self::Continue => "Continuing the plan",
+            Self::WorkerFailed => "Handling a failed worker",
         }
     }
 }
