@@ -33,6 +33,12 @@ export function issuePrompt(action: IssueAction, issue: IssueRef): string {
     : `Let's work on issue ${ref}: `;
 }
 
+/** A failed workflow run: the agent reads the failing logs, reproduces and fixes it. */
+export function runPrompt(run: { id: number; workflow: string; branch: string }): string {
+  return `The "${run.workflow}" workflow run ${run.id} on ${run.branch} failed. See what failed with \`gh run view ${run.id} --log-failed\`, check out ${run.branch}, reproduce the failure locally, fix it and run the tests. Summarize what was wrong and what you changed; don't push unless I ask.`;
+}
+export const runTitle = (run: { workflow: string; branch: string }) => `Fix ${run.workflow} on ${run.branch}`.slice(0, 120);
+
 /** Thread titles say what the thread is for, short enough for the sidebar. */
 export function threadTitle(kind: 'pull' | 'issue', action: PullAction | IssueAction, item: { number: number; title: string }): string {
   const verb = kind === 'issue'

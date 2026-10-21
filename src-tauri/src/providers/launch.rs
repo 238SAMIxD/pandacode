@@ -102,37 +102,13 @@ fn resolve(path: &Path, windows: bool) -> Result<Launch, String> {
     } else {
         directory.join("node_modules")
     };
-    let package = modules.join(package).canonicalize().map_err(|_| "The npm harness package could not be found. Reinstall the harness or select its native executable.")?;
-    let file = std::fs::File::open(package.join("package.json"))
-        .map_err(|_| "Could not read the npm harness package metadata.")?;
-    let mut bytes = Vec::new();
-    file.take(64 * 1024 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| "Could not read the npm harness package metadata.")?;
-    if bytes.len() > 64 * 1024 {
-        return Err("The npm harness metadata is too large.".into());
-    }
-    let metadata: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|_| "The npm harness package metadata is invalid.")?;
-    let bin = metadata["bin"]
-        .as_str()
-        .or_else(|| metadata["bin"][&name].as_str())
-        .ok_or("The npm harness package has no matching executable entry.")?
-        .replace('\\', "/");
-    if bin.is_empty()
-        || bin.chars().any(char::is_control)
-        || Path::new(&bin)
-            .components()
-            .any(|part| !matches!(part, Component::Normal(_) | Component::CurDir))
-    {
-        return Err("The npm harness executable must stay inside its package.".into());
-    }
-    let script = package
-        .join(bin)
-        .canonicalize()
-        .map_err(|_| "The npm harness executable could not be found.")?;
-    if !script.starts_with(&package) || !script.is_file() {
-        return Err("The npm harness executable must stay inside its package.".into());
+    let script = match modules.join(package).canonicalize() {
+        Ok(package) => declared_entry(&package, &name)?,
+        Err(_) => shim_entry(path, directory, &name).ok_or("The npm harness package could not be found. Reinstall the harness or select its native executable.")?,
+    };
+    let host = script.file_name().and_then(|name| name.to_str()).unwrap_or("").to_ascii_lowercase();
+    if ["cmd.exe", "powershell.exe", "pwsh.exe", "wscript.exe", "cscript.exe", "mshta.exe"].contains(&host.as_str()) {
+        return Err("The npm harness executable must not be a shell.".into());
     }
     if script
         .extension()
@@ -150,6 +126,71 @@ fn resolve(path: &Path, windows: bool) -> Result<Launch, String> {
     Ok(Launch {
         program: external_path_for(&node, windows),
         args: vec![external_path_for(&script, windows).into_os_string()],
+    })
+}
+
+/// The executable a package declares in `package.json` `bin`, kept inside the package.
+fn declared_entry(package: &Path, name: &str) -> Result<PathBuf, String> {
+    let file = std::fs::File::open(package.join("package.json"))
+        .map_err(|_| "Could not read the npm harness package metadata.")?;
+    let mut bytes = Vec::new();
+    file.take(64 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "Could not read the npm harness package metadata.")?;
+    if bytes.len() > 64 * 1024 {
+        return Err("The npm harness metadata is too large.".into());
+    }
+    let metadata: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|_| "The npm harness package metadata is invalid.")?;
+    let bin = metadata["bin"]
+        .as_str()
+        .or_else(|| metadata["bin"][name].as_str())
+        .ok_or("The npm harness package has no matching executable entry.")?
+        .replace('\\', "/");
+    if bin.is_empty()
+        || bin.chars().any(char::is_control)
+        || Path::new(&bin)
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_) | Component::CurDir))
+    {
+        return Err("The npm harness executable must stay inside its package.".into());
+    }
+    let script = package
+        .join(bin)
+        .canonicalize()
+        .map_err(|_| "The npm harness executable could not be found.")?;
+    if !script.starts_with(package) || !script.is_file() {
+        return Err("The npm harness executable must stay inside its package.".into());
+    }
+    Ok(script)
+}
+
+/// pnpm global shims point into a hashed store instead of a `node_modules` beside
+/// them. Accept a `%~dp0`-relative target the shim names only when it is exactly the
+/// entry its own package declares, so the shim never chooses what runs.
+fn shim_entry(shim: &Path, directory: &Path, name: &str) -> Option<PathBuf> {
+    let mut text = String::new();
+    std::fs::File::open(shim)
+        .ok()?
+        .take(64 * 1024)
+        .read_to_string(&mut text)
+        .ok()?;
+    text.split('"').skip(1).step_by(2).find_map(|token| {
+        let prefix = token.get(..5)?;
+        if !prefix.eq_ignore_ascii_case("%~dp0") && !prefix.eq_ignore_ascii_case("%dp0%") {
+            return None;
+        }
+        let relative = token[5..].trim_start_matches(['\\', '/']).replace('\\', "/");
+        if relative.contains(['%', '!']) {
+            return None;
+        }
+        let target = directory.join(relative).canonicalize().ok()?;
+        target
+            .ancestors()
+            .skip(1)
+            .take(8)
+            .any(|package| declared_entry(package, name).ok().as_ref() == Some(&target))
+            .then_some(target)
     })
 }
 
@@ -448,6 +489,52 @@ mod tests {
         let launch = resolve(&shim, true).unwrap();
         assert_eq!(launch.program, external_path_for(&node, true));
         assert_eq!(launch.args, [external_path_for(&script, true).into_os_string()]);
+    }
+
+    #[test]
+    fn windows_pnpm_shims_run_only_the_entry_their_package_declares() {
+        let f = Fixture::new();
+        let package = "pnpm/global/v11/hash/node_modules/opencode-ai";
+        f.file(&format!("{package}/package.json"), r#"{"bin":{"opencode":"./bin/opencode.exe"}}"#);
+        let binary = f.file(&format!("{package}/bin/opencode.exe"), "");
+        f.file(&format!("{package}/bin/other.exe"), "");
+        let shim = f.file(
+            "pnpm/bin/opencode.cmd",
+            "@SETLOCAL\r\n@\"%~dp0\\..\\global\\v11\\hash\\node_modules\\opencode-ai\\bin\\opencode.exe\"  %*\r\n",
+        );
+        let launch = resolve(&shim, true).unwrap();
+        assert_eq!(launch.program, external_path_for(&binary, true));
+        assert!(launch.args.is_empty());
+        f.file(
+            "pnpm/bin/opencode.cmd",
+            "@\"%~dp0\\..\\global\\v11\\hash\\node_modules\\opencode-ai\\bin\\other.exe\" %*\r\n",
+        );
+        assert!(resolve(&shim, true).is_err());
+    }
+
+    #[test]
+    fn windows_pnpm_node_shims_run_the_declared_script_with_the_adjacent_node() {
+        let f = Fixture::new();
+        let node = f.file("pnpm/bin/node.exe", "");
+        let package = "pnpm/global/v11/hash/node_modules/@earendil-works/pi-coding-agent";
+        f.file(&format!("{package}/package.json"), r#"{"bin":{"pi":"dist/bundle/cli.js"}}"#);
+        let script = f.file(&format!("{package}/dist/bundle/cli.js"), "");
+        let shim = f.file(
+            "pnpm/bin/pi.cmd",
+            "@SETLOCAL\r\n@IF EXIST \"%~dp0\\node.exe\" (\r\n  \"%~dp0\\node.exe\"  \"%~dp0\\..\\global\\v11\\hash\\node_modules\\@earendil-works\\pi-coding-agent\\dist\\bundle\\cli.js\" %*\r\n)\r\n",
+        );
+        let launch = resolve(&shim, true).unwrap();
+        assert_eq!(launch.program, external_path_for(&node, true));
+        assert_eq!(launch.args, [external_path_for(&script, true).into_os_string()]);
+    }
+
+    #[test]
+    fn windows_shims_never_launch_a_shell_host() {
+        let f = Fixture::new();
+        f.file("npm/node_modules/opencode-ai/package.json", r#"{"bin":{"opencode":"CMD.exe"}}"#);
+        f.file("npm/node_modules/opencode-ai/CMD.exe", "");
+        let shim = f.file("npm/opencode.cmd", "");
+        assert!(resolve(&shim, true).is_err());
     }
 
     #[test]

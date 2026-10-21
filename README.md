@@ -43,8 +43,9 @@ embedded editor engine.
 - **Local VMs and cloud sandboxes.** Headless macOS/Linux VMs on Apple silicon
   (Tart), and Daytona, Cloudflare and AWS sandboxes that agents can drive.
 - **Simulators.** iOS Simulator and Android emulator tools for agents.
-- **Deploys.** Start a deploy task for Vercel, Cloudflare or AWS from the header,
-  with approval-gated CLI runs.
+- **Deploys.** Start a deploy task for Vercel, Cloudflare, Railway, AWS or Google
+  Cloud from the header, with approval-gated CLI runs (AWS and Google Cloud use
+  your installed CLI and its login).
 - **GitHub view.** Your repositories with their threads, pull requests and issues;
   review, fix checks, merge or solve an issue in one click. Each opens as a linked
   thread beside the GitHub view, where you can keep chatting. See [GitHub](docs/github.md).

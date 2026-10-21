@@ -611,14 +611,15 @@ pub fn discover() -> Vec<ProviderInfo> {
 /// create an empty session to advertise their scoped model options.
 pub async fn list_models(provider: &str) -> Result<Vec<ModelInfo>, String> {
     if provider == "opencode" {
+        // A saved Settings selection narrows the picker; without one, list the
+        // whole catalog like every other harness.
         let selected = crate::provider_settings::opencode_model_ids()?;
-        if selected.is_empty() {
-            return Ok(vec![ModelInfo::default_choice()]);
+        if !selected.is_empty() {
+            // Keep saved choices usable during temporary discovery failures. The
+            // Settings catalog reports the error and allows an explicit refresh.
+            let catalog = list_model_catalog(provider).await.unwrap_or_default();
+            return Ok(selected_opencode_models(catalog, &selected));
         }
-        // Keep saved choices usable during temporary discovery failures. The
-        // Settings catalog reports the error and allows an explicit refresh.
-        let catalog = list_model_catalog(provider).await.unwrap_or_default();
-        return Ok(selected_opencode_models(catalog, &selected));
     }
     list_model_catalog(provider).await
 }

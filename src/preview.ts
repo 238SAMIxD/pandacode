@@ -218,7 +218,7 @@ const previewGithub = (() => {
 const previewVm = createPreviewVm();
 const previewCloud = createPreviewCloud();
 const previewSimulator = (() => {
-  const devices = [
+  const devices: { udid: string; name: string; runtime: string; state: string; family: string; deviceType: string; platform?: string; duo?: boolean }[] = [
     { udid: '3720D4A0-B8C5-4DAC-9425-6A4685BC533E', name: 'iPhone 17 Pro', runtime: 'iOS 26.2', state: 'Booted', family: 'phone', deviceType: 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro' },
     { udid: '5B7E2C1A-0D3F-4E8B-9A61-2F4C8D7E9B10', name: 'iPad Air 11-inch (M3)', runtime: 'iOS 26.2', state: 'Shutdown', family: 'pad', deviceType: 'com.apple.CoreSimulator.SimDeviceType.iPad-Air-11-inch-M3' },
     { udid: '6C1D3E2F-1A2B-4C3D-8E9F-0A1B2C3D4E5F', name: 'iPhone Air', runtime: 'iOS 26.2', state: 'Shutdown', family: 'phone', deviceType: 'com.apple.CoreSimulator.SimDeviceType.iPhone-Air' },
@@ -230,13 +230,18 @@ const previewSimulator = (() => {
   let selected: string | null = null, seq = 1, dark = false;
   const inputs: unknown[] = [];
   let lastTap: { x: number; y: number } | null = null;
-  const screens: Record<string, { width: number; height: number; scale: number; homeButton: boolean }> = { '5B7E': { width: 820, height: 1180, scale: 2, homeButton: false }, '6C1D': { width: 420, height: 912, scale: 3, homeButton: false }, '7D2E': { width: 402, height: 874, scale: 3, homeButton: false }, '8E3F': { width: 1032, height: 1376, scale: 2, homeButton: false }, '9F40': { width: 390, height: 844, scale: 3, homeButton: false }, andr: { width: 412, height: 915, scale: 2.625, homeButton: false } };
-  const screenOf = (udid: string | null) => screens[udid?.slice(0, 4) ?? ''] ?? { width: 402, height: 874, scale: 3, homeButton: false };
-  const status = () => ({ available: true, axe: true, axeInstall: 'brew install cameroncooke/axe/axe', android: true, devices: devices.map(d => ({ platform: 'ios', ...d })), selected, screen: selected ? screenOf(selected) : null, error: null });
+  const poses = new Map<string, 'closed' | 'book' | 'open'>();
+  const inners: Record<string, { width: number; height: number }> = { A1B2: { width: 951, height: 669 } };
+  const screens: Record<string, { width: number; height: number; scale: number; homeButton: boolean }> = { '5B7E': { width: 820, height: 1180, scale: 2, homeButton: false }, '6C1D': { width: 420, height: 912, scale: 3, homeButton: false }, '7D2E': { width: 402, height: 874, scale: 3, homeButton: false }, 'A1B2': { width: 466, height: 678, scale: 3, homeButton: false }, '8E3F': { width: 1032, height: 1376, scale: 2, homeButton: false }, '9F40': { width: 390, height: 844, scale: 3, homeButton: false }, andr: { width: 412, height: 915, scale: 2.625, homeButton: false } };
+  (window as any).__simSetPose = (udid: string, pose: 'closed' | 'book' | 'open') => { poses.set(udid, pose); seq++; }; // tests: the hinge moved outside PandaCode
+  const screenOf = (udid: string | null) => ({ ...(screens[udid?.slice(0, 4) ?? ''] ?? { width: 402, height: 874, scale: 3, homeButton: false }), inner: inners[udid?.slice(0, 4) ?? ''] ?? null });
+  /** The display frames and taps use: the Duo's inner display when it is not closed. */
+  const activeOf = (udid: string) => { const screen = screenOf(udid); return screen.inner && (poses.get(udid) ?? 'closed') !== 'closed' ? screen.inner : screen; };
+  const status = () => ({ available: true, axe: true, axeInstall: 'brew install cameroncooke/axe/axe', android: true, devices: devices.map(d => ({ platform: 'ios', ...d })), selected, screen: selected ? screenOf(selected) : null, duoAvailable: true, pose: selected && devices.find(d => d.udid === selected)?.duo ? poses.get(selected) ?? 'closed' : null, error: null });
   const apps = ['Messages', 'Safari', 'Photos', 'Camera', 'Maps', 'Weather', 'Notes', 'Settings', 'Orbit', 'Music', 'Clock', 'Files'];
   const colors = ['#34c759', '#0a84ff', '#ff9f0a', '#636366', '#30b0c7', '#5ac8fa', '#ffd60a', '#8e8e93', '#ffd43b', '#ff375f', '#1c1c1e', '#007aff'];
   async function frame(udid: string): Promise<ArrayBuffer> {
-    const { width, height } = screenOf(udid), scale = 1.5;
+    const { width, height } = activeOf(udid), scale = 1.5;
     const canvas = new OffscreenCanvas(width * scale, height * scale), g = canvas.getContext('2d')!;
     g.scale(scale, scale);
     const sky = g.createLinearGradient(0, 0, 0, height);
@@ -258,6 +263,12 @@ const previewSimulator = (() => {
   const device = (udid: unknown) => { const found = devices.find(d => d.udid === udid); if (!found) throw new Error('That simulator is not available.'); return found; };
   return {
     inputs, status,
+    createDuo() {
+      let duo = devices.find(d => d.duo);
+      if (!duo) { duo = { udid: 'A1B2C3D4-0000-4000-8000-00000000D0D0', name: 'iPhone Duo', runtime: 'iOS 27.1', state: 'Shutdown', family: 'phone', deviceType: 'com.apple.CoreSimulator.SimDeviceType.iPhone-Duo', duo: true }; devices.push(duo); }
+      selected = duo.udid; return status();
+    },
+    pose(udid: unknown, pose: 'closed' | 'book' | 'open') { poses.set(device(udid).udid, pose); lastTap = null; seq++; return status(); },
     select(udid: unknown) { if (udid != null) device(udid); selected = udid == null ? null : String(udid); return status(); },
     power(udid: unknown, on: boolean) { device(udid).state = on ? 'Booted' : 'Shutdown'; seq++; return status(); },
     async frame(udid: unknown, after: number) {
@@ -1017,6 +1028,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'project_icon': result = args.projectId === 'project-1' ? 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAzMiAzMic+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSdnJyB4MT0nMCcgeTE9JzAnIHgyPScxJyB5Mj0nMSc+PHN0b3Agb2Zmc2V0PScwJyBzdG9wLWNvbG9yPScjN2M5Y2ZmJy8+PHN0b3Agb2Zmc2V0PScxJyBzdG9wLWNvbG9yPScjNWI1YmQ2Jy8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PHJlY3Qgd2lkdGg9JzMyJyBoZWlnaHQ9JzMyJyByeD0nOCcgZmlsbD0ndXJsKCNnKScvPjxjaXJjbGUgY3g9JzE2JyBjeT0nMTYnIHI9JzcnIGZpbGw9J25vbmUnIHN0cm9rZT0nd2hpdGUnIHN0cm9rZS13aWR0aD0nMycvPjxjaXJjbGUgY3g9JzIzJyBjeT0nOScgcj0nMi41JyBmaWxsPSd3aGl0ZScvPjwvc3ZnPg==' : null; break;
     case 'github_repo_pulls': result = previewHub.pulls(String(args.repo)); break;
     case 'github_repo_issues': result = previewHub.issues(String(args.repo)); break;
+    case 'github_repo_runs': result = previewHub.runs(String(args.repo)); break;
     case 'github_project_repos': result = projects.filter(p => p.id === 'project-1' || previewClones.has(p.id)).map(p => ({ projectId: p.id, repo: previewClones.get(p.id) ?? 'orbit-labs/orbit' })); break;
     case 'github_clone_repo': {
       const repo = String(args.repo), name = repo.split('/')[1] ?? repo, path = `${String(args.parent).replace(/\/$/, '')}/${name}`;
@@ -1114,6 +1126,8 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'vm_input': result = previewVm.input(args.name, args.input); break;
     case 'vm_desktop': result = previewVm.desktop(args.name); break;
     case 'simulator_status': result = previewSimulator.status(); break;
+    case 'simulator_pose': result = previewSimulator.pose(args.udid, args.pose); break;
+    case 'simulator_create_duo': result = previewSimulator.createDuo(); break;
     case 'simulator_select': result = previewSimulator.select(args.udid); break;
     case 'simulator_power': result = previewSimulator.power(args.udid, Boolean(args.on)); break;
     case 'simulator_frame': result = await previewSimulator.frame(args.udid, Number(args.after ?? 0)); break;

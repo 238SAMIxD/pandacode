@@ -62,6 +62,19 @@ pub struct HubIssue {
 }
 #[derive(Debug, Serialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct HubRun {
+    pub id: i64,
+    pub workflow: String,
+    pub title: String,
+    pub branch: String,
+    pub event: String,
+    /// queued, in_progress, passed, failed or cancelled (`run_state`).
+    pub state: String,
+    pub created_at: String,
+    pub url: String,
+}
+#[derive(Debug, Serialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectRepo {
     pub project_id: String,
     pub repo: String,
@@ -186,6 +199,40 @@ pub fn issues(repo: &str) -> Result<Vec<HubIssue>, String> {
         .collect())
 }
 
+/// One word for a workflow run from `gh run list`'s status and conclusion.
+pub fn run_state(status: &str, conclusion: &str) -> String {
+    match (status.to_ascii_lowercase().as_str(), conclusion.to_ascii_lowercase().as_str()) {
+        ("completed", "success" | "neutral" | "skipped") => "passed",
+        ("completed", "cancelled") => "cancelled",
+        ("completed", _) => "failed",
+        ("in_progress", _) => "in_progress",
+        _ => "queued",
+    }
+    .into()
+}
+
+/// The repository's most recent workflow runs, newest first.
+pub fn runs(repo: &str) -> Result<Vec<HubRun>, String> {
+    let repo = valid_repo(repo)?;
+    let fields = "databaseId,workflowName,displayTitle,headBranch,event,status,conclusion,createdAt,url";
+    let capture = run_gh(&account_root(), &["run", "list", &format!("--repo={repo}"), &format!("--limit={LIST_LIMIT}"), &format!("--json={fields}")], TIMEOUT)?;
+    let value = json(&capture)?;
+    let items = value.as_array().ok_or("GitHub returned an unexpected response.")?;
+    Ok(items
+        .iter()
+        .map(|item| HubRun {
+            id: item.get("databaseId").and_then(|v| v.as_i64()).unwrap_or_default(),
+            workflow: text(item, "workflowName"),
+            title: text(item, "displayTitle"),
+            branch: text(item, "headBranch"),
+            event: text(item, "event"),
+            state: run_state(&text(item, "status"), &text(item, "conclusion")),
+            created_at: text(item, "createdAt"),
+            url: text(item, "url"),
+        })
+        .collect())
+}
+
 /// The GitHub repository behind a local project, from its `origin` remote.
 pub fn project_repo(root: &Path) -> Option<String> {
     let mut command = Command::new("git");
@@ -259,6 +306,18 @@ mod tests {
         assert_eq!(checks_summary(Some(&json!([{ "conclusion": "SUCCESS" }, { "state": "SUCCESS" }]))), "passing");
         assert_eq!(checks_summary(Some(&json!([{ "conclusion": "SUCCESS" }, { "status": "IN_PROGRESS", "conclusion": "" }]))), "pending");
         assert_eq!(checks_summary(Some(&json!([{ "conclusion": "FAILURE" }, { "state": "PENDING" }]))), "failing");
+    }
+
+    #[test]
+    fn runs_fold_into_one_state() {
+        assert_eq!(run_state("completed", "success"), "passed");
+        assert_eq!(run_state("completed", "skipped"), "passed");
+        assert_eq!(run_state("completed", "failure"), "failed");
+        assert_eq!(run_state("completed", "startup_failure"), "failed");
+        assert_eq!(run_state("completed", "cancelled"), "cancelled");
+        assert_eq!(run_state("in_progress", ""), "in_progress");
+        assert_eq!(run_state("queued", ""), "queued");
+        assert_eq!(run_state("waiting", ""), "queued");
     }
 
     #[test]

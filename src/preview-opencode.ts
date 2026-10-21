@@ -15,5 +15,7 @@ export function previewOpenCodeSelection(): string[] {
   } catch { return []; }
 }
 export function previewOpenCodeChoices(): ProviderModel[] {
-  return [fallbackModel('opencode'), ...previewOpenCodeSelection().map(id => openCodePreviewModels.find(model => model.id === id) ?? fallbackModel('opencode', id))];
+  const selection = previewOpenCodeSelection();
+  if (!selection.length) return [fallbackModel('opencode'), ...openCodePreviewModels];
+  return [fallbackModel('opencode'), ...selection.map(id => openCodePreviewModels.find(model => model.id === id) ?? fallbackModel('opencode', id))];
 }

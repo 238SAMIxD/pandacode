@@ -1,7 +1,7 @@
 /* Browser-preview data for the GitHub view: a few repositories, their open pull requests
  * and issues. `orbit-labs/orbit` is checked out as the sample `orbit` project; the others
  * are only on GitHub until cloned. */
-import type { HubIssue, HubPull, HubRepo } from './github-hub';
+import type { HubIssue, HubPull, HubRepo, HubRun } from './github-hub';
 
 const day = 86_400_000;
 const at = (ago: number) => new Date(Date.now() - ago).toISOString();
@@ -42,7 +42,20 @@ const issues: Record<string, HubIssue[]> = {
   ],
 };
 
+const run = (id: number, workflow: string, title: string, branch: string, state: string, ago: number): HubRun =>
+  ({ id, workflow, title, branch, event: 'pull_request', state, createdAt: at(ago), url: `https://github.com/orbit-labs/orbit/actions/runs/${id}` });
+const runs: Record<string, HubRun[]> = {
+  'orbit-labs/orbit': [
+    run(9120, 'CI', 'Offline sync for the reading list', 'mara/offline-sync', 'in_progress', 4 * 60_000),
+    run(9118, 'Deploy preview', 'Offline sync for the reading list', 'mara/offline-sync', 'queued', 5 * 60_000),
+    run(9105, 'CI', 'Debounce library search and cache the index', 'feat/instant-search', 'passed', 30 * 60_000),
+    run(9087, 'CI', 'Fix dark mode contrast for muted text', 'devon/contrast', 'failed', day),
+    run(9050, 'Release', 'chore: release 1.4.0', 'main', 'cancelled', 2 * day),
+  ],
+};
+
 export const previewHub = {
+  runs: (repo: string): HubRun[] => structuredClone(runs[repo] ?? []),
   pulls: (repo: string): HubPull[] => structuredClone(pulls[repo] ?? []),
   issues: (repo: string): HubIssue[] => structuredClone(issues[repo] ?? []),
 };

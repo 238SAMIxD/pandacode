@@ -190,3 +190,120 @@ test('Android can be set up in one click when the SDK is missing', async ({ page
   await expect(page.locator('#toast')).toContainText('Android emulator ready');
   await expect(panel.locator('.sim-device-name')).toHaveText('Pixel 9 API 35');
 });
+
+test('iPhone Duo is added from the device menu and takes three poses', async ({ page }) => {
+  await open(page);
+  await showSimulator(page);
+  const panel = page.locator('#simulator-panel');
+  const pose = panel.locator('[data-sim="pose"]');
+  await expect(pose).toBeHidden();
+  await panel.getByRole('button', { name: 'Choose simulator' }).click();
+  await page.getByRole('menuitemradio', { name: /Add iPhone Duo/ }).click();
+  await expect(panel.locator('.sim-device-name')).toHaveText('iPhone Duo');
+  expect((await calls(page, 'simulator_create_duo')).length).toBe(1);
+  await panel.getByRole('button', { name: 'Boot simulator' }).click();
+  await expect(panel.locator('.sim-device-runtime')).toHaveText('iOS 27.1 · Running');
+  await expect(pose).toBeVisible();
+  await expect(pose).toHaveAccessibleName('iPhone Duo pose: Closed');
+  await pose.click();
+  await page.getByRole('menuitemradio', { name: /Open/ }).click();
+  await expect(pose).toHaveAccessibleName('iPhone Duo pose: Open');
+  expect((await calls(page, 'simulator_pose')).at(-1).args).toEqual({ udid: 'A1B2C3D4-0000-4000-8000-00000000D0D0', pose: 'open' });
+  await page.getByRole('button', { name: /Device finish/ }).click();
+  await expect(page.getByRole('menuitemradio', { name: 'Night Sky' })).toBeVisible();
+  await expect(page.getByRole('menuitemradio', { name: 'Star White' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(1200);
+  await faceForward(page);
+  const { center } = await stage(page);
+  await page.mouse.click(center.x, center.y);
+  await expect.poll(async () => (await inputs(page)).length).toBe(1);
+  const inner = (await inputs(page))[0];
+  expect(inner.x).toBeGreaterThan(0); expect(inner.x).toBeLessThan(951);
+  expect(inner.y).toBeGreaterThan(0); expect(inner.y).toBeLessThan(669);
+  await pose.click();
+  await page.getByRole('menuitemradio', { name: /Closed/ }).click();
+  await expect(pose).toHaveAccessibleName('iPhone Duo pose: Closed');
+  await page.waitForTimeout(1200);
+  await faceForward(page);
+  await page.mouse.click(center.x, center.y);
+  await expect.poll(async () => (await inputs(page)).length).toBe(2);
+  const cover = (await inputs(page))[1];
+  expect(cover.x).toBeGreaterThan(0); expect(cover.x).toBeLessThan(466);
+  expect(cover.y).toBeGreaterThan(0); expect(cover.y).toBeLessThan(678);
+});
+
+test('iPhone Duo follows a pose changed outside PandaCode', async ({ page }) => {
+  await open(page);
+  await showSimulator(page);
+  const panel = page.locator('#simulator-panel');
+  const pose = panel.locator('[data-sim="pose"]');
+  await panel.getByRole('button', { name: 'Choose simulator' }).click();
+  await page.getByRole('menuitemradio', { name: /Add iPhone Duo/ }).click();
+  await panel.getByRole('button', { name: 'Boot simulator' }).click();
+  await expect(pose).toHaveAccessibleName('iPhone Duo pose: Closed');
+  await page.evaluate(() => (window as any).__simSetPose('A1B2C3D4-0000-4000-8000-00000000D0D0', 'open'));
+  await expect(pose).toHaveAccessibleName('iPhone Duo pose: Open', { timeout: 5000 });
+  expect((await calls(page, 'simulator_pose')).length).toBe(0);
+  await page.waitForTimeout(1200);
+  await faceForward(page);
+  const { center } = await stage(page);
+  await page.mouse.click(center.x, center.y);
+  await expect.poll(async () => (await inputs(page)).length).toBe(1);
+  const inner = (await inputs(page))[0];
+  expect(inner.x).toBeGreaterThan(0); expect(inner.x).toBeLessThan(951);
+  expect(inner.y).toBeGreaterThan(0); expect(inner.y).toBeLessThan(669);
+});
+
+test('Add iPhone Duo is disabled without Xcode 27.1', async ({ page }) => {
+  await page.route('**/src/preview.ts*', async route => {
+    const response = await route.fetch();
+    const source = await response.text();
+    await route.fulfill({ response, body: source.replace(/switch\s*\(command\)\s*\{/, `
+      if (command === 'simulator_status') return { ...previewSimulator.status(), duoAvailable: false };
+      if (command === 'simulator_select') return { ...previewSimulator.select(args.udid), duoAvailable: false };
+      switch (command) {
+    `) });
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  await showSimulator(page);
+  await page.locator('#simulator-panel').getByRole('button', { name: 'Choose simulator' }).click();
+  const add = page.getByRole('menuitemradio', { name: /Add iPhone Duo/ });
+  await expect(add).toBeDisabled();
+  await expect(page.locator('.floating-menu')).toContainText('Needs Xcode 27.1 or later');
+});
+
+test.describe('on Windows', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => Object.defineProperty(Navigator.prototype, 'platform', { get: () => 'Win32' }));
+  });
+
+  test('the Simulators tab lists Android emulators only, with no Xcode or AXe notes', async ({ page }) => {
+    await open(page);
+    await showSimulator(page);
+    const panel = page.locator('#simulator-panel');
+    await expect(panel.locator('.sim-device-name')).toHaveText('Pixel 9 API 35');
+    await expect(panel.locator('.sim-axe')).toBeHidden();
+    await panel.getByRole('button', { name: 'Choose simulator' }).click();
+    await expect(page.getByRole('menuitemradio')).toHaveText([/Pixel 9/]);
+    await expect(page.getByRole('menuitemradio', { name: /iPhone Duo|Set up Android/ })).toHaveCount(0);
+  });
+
+  test('without the Android SDK the panel says to install it', async ({ page }) => {
+    await page.route('**/src/preview.ts*', async route => {
+      const response = await route.fetch();
+      const source = await response.text();
+      await route.fulfill({ response, body: source.replace(/switch\s*\(command\)\s*\{/, `
+        if (command === 'simulator_status') return { available: false, axe: false, axeInstall: 'brew install cameroncooke/axe/axe', android: false, devices: [], selected: null, screen: null, error: 'xcrun was not found.' };
+        switch (command) {
+      `) });
+    });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/');
+    await showSimulator(page);
+    const panel = page.locator('#simulator-panel');
+    await expect(panel.locator('.sim-status')).toHaveText('Install the Android SDK (Android Studio) to use Android emulators.');
+    await expect(panel.locator('.sim-axe')).toBeHidden();
+  });
+});

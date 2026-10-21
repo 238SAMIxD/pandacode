@@ -187,3 +187,24 @@ test('repositories not pushed to in 30 days wait under a collapsed Other', async
   await hub(page).getByRole('searchbox', { name: 'Filter repositories' }).fill('tau');
   await expect(hub(page).getByRole('listbox', { name: 'Other repositories' }).getByRole('option', { name: /tauri/ })).toBeVisible();
 });
+
+test('pull requests show their CI status, and Actions lists runs with a fix for failures', async ({ page }) => {
+  await openHub(page);
+  await tab(page, /Pull requests/).click();
+  await expect(row(page, 130).locator('.gh-status')).toHaveText('Passed');
+  await expect(row(page, 127).locator('.gh-status')).toHaveText('Pending');
+  await expect(row(page, 124).locator('.gh-status')).toHaveAttribute('data-status', 'failed');
+
+  await tab(page, /Actions/).click();
+  await expect(tab(page, /Actions/)).toHaveText('Actions5');
+  const run = (id: number) => hub(page).locator(`.gh-run[data-gh-run="${id}"]`);
+  await expect(run(9120).locator('.gh-status')).toHaveText('In progress');
+  await expect(run(9118).locator('.gh-status')).toHaveText('Queued');
+  await expect(run(9105)).toContainText('feat/instant-search');
+  await expect(run(9105).getByRole('button', { name: 'Fix' })).toHaveCount(0);
+  await run(9087).hover();
+  await run(9087).getByRole('button', { name: 'Fix' }).click();
+  await expectSideThread(page);
+  await expect(page.locator('#transcript .user-message').last()).toContainText('gh run view 9087 --log-failed');
+  await expect(page.locator('#navigation .task-item.selected')).toContainText('Fix CI on devon/contrast');
+});

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelSpec } from '../src/simulator-models.ts';
+import { isDuo, modelSpec } from '../src/simulator-models.ts';
 
 const id = name => `com.apple.CoreSimulator.SimDeviceType.${name}`;
 
@@ -45,4 +45,18 @@ test('Android emulator profiles get Pixel and generic Android hardware', () => {
   assert.equal(modelSpec('android:pixel_tablet', 'pad').front, 'pad');
   assert.equal(modelSpec('android:generic_tablet_10', 'pad').front, 'pad');
   assert.equal(modelSpec('com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro', 'phone').android, undefined);
+});
+
+test('iPhone Duo is the foldable with its own finishes and camera', () => {
+  for (const type of [id('iPhone-Duo'), id('V68'), 'iPhone-Duo']) {
+    const duo = modelSpec(type, 'phone');
+    assert.equal(duo.key, 'iPhone-Duo', type);
+    assert.equal(duo.camera, 'duo-dual');
+    assert.equal(duo.cameraControl, true);
+    assert.deepEqual(duo.finishes.map(f => [f.name, f.color]), [['Night Sky', '#1f2430'], ['Star White', '#ecebe6']]);
+  }
+  assert.equal(isDuo(id('iPhone-Duo')), true);
+  assert.equal(isDuo(id('V68')), true);
+  for (const type of [id('iPhone-17-Pro'), id('iPad-A16'), 'android:pixel_9', '']) assert.equal(isDuo(type), false, type);
+  assert.equal(modelSpec(id('iPhone-17-Pro'), 'phone').key, 'iPhone-17-Pro');
 });

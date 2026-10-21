@@ -58,7 +58,8 @@ async function failuresAndDelay(page: Page): Promise<void> {
 test('selected OpenCode models survive reload and appear in the composer without unselected models', async ({ page }) => {
   await boot(page);
   await openPicker(page);
-  await expect(picker(page).getByRole('button', { name: /^OpenCode ·/ })).toHaveCount(1);
+  // Nothing selected yet: the whole catalog is listed, as OpenCode itself does.
+  await expect(picker(page).getByRole('button', { name: /^OpenCode ·/ })).toHaveCount(4);
   await page.keyboard.press('Escape');
   await openModels(page);
   await modelCheckbox(page, 'Big Pickle').check();
@@ -110,7 +111,8 @@ test('deselecting a model does not change an existing task using it', async ({ p
   await picker(page).getByRole('button', { name: 'OpenCode · Default', exact: true }).click();
   await page.keyboard.press('Escape');
   await openPicker(page);
-  await expect(picker(page).getByRole('button', { name: /^OpenCode ·/ })).toHaveCount(1);
+  // Clearing the selection lists the whole catalog again.
+  await expect(picker(page).getByRole('button', { name: /^OpenCode ·/ })).toHaveCount(4);
 });
 
 test('refresh and save failures keep draft choices available for retry', async ({ page }) => {
@@ -205,7 +207,7 @@ test('saving in the workspace invalidates the already-open launcher model cache 
   try {
     await launcher.goto('/?view=launcher');
     await openPicker(launcher);
-    await expect(picker(launcher).getByRole('button', { name: /^OpenCode ·/ })).toHaveCount(1);
+    await expect(picker(launcher).getByRole('button', { name: /^OpenCode ·/ })).toHaveCount(4);
     // Wait for its initial catalog request to finish so this really warms the cache.
     await expect(picker(launcher).locator('[data-catalog-loading="opencode"]')).toBeHidden();
     await launcher.keyboard.press('Escape');

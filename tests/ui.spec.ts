@@ -2587,7 +2587,7 @@ test('changes the empty task project while keeping its draft, harness, model, an
   await expect(page.locator('.diff-viewer')).toBeVisible();
   await page.getByRole('button', { name: 'Change task project', exact: true }).first().click();
   const picker = taskProjectPicker(page);
-  await picker.getByRole('searchbox', { name: 'Search projects', exact: true }).fill('bamb');
+  await picker.getByRole('searchbox', { name: 'Search projects', exact: true }).fill('panda');
   await picker.getByRole('option', { name: /^pandacode — / }).click();
   await expect(picker).toHaveCount(0);
   await expect(newTaskHeading(page)).toHaveAccessibleName('What should we build in pandacode?');
@@ -2618,7 +2618,7 @@ test('searches task projects by keyboard and cancels or reselects without changi
   await expect(search).toBeFocused();
   await expect(picker.getByRole('option', { name: /^orbit — / })).toHaveAttribute('aria-selected', 'true');
   await page.screenshot({ path: '/private/tmp/pandacode-project-picker.png' });
-  await search.fill('bamb');
+  await search.fill('panda');
   await expect(picker.getByRole('option')).toHaveCount(1);
   await search.press('Escape');
   await expect(picker).toHaveCount(0);
@@ -2634,7 +2634,7 @@ test('searches task projects by keyboard and cancels or reselects without changi
   await expect(newTaskHeading(page)).toHaveAccessibleName('What should we build in orbit?');
   await expect(prompt(page)).toHaveValue('A draft that stays with this empty task');
   await trigger.click();
-  await search.fill('bamb');
+  await search.fill('panda');
   await search.press('Enter');
   await expect(picker).toHaveCount(0);
   await expect(newTaskHeading(page)).toHaveAccessibleName('What should we build in pandacode?');

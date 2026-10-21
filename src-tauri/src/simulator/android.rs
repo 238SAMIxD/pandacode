@@ -68,12 +68,17 @@ pub fn android_version(api: u32) -> String {
 pub fn parse_config(config: &str) -> (String, Option<u32>, bool) {
     let value = |key: &str| config.lines().find_map(|line| line.split_once('=').filter(|(k, _)| k.trim() == key).map(|(_, v)| v.trim().to_string()));
     let device = value("hw.device.name").unwrap_or_default();
-    let api = value("image.sysdir.1").and_then(|dir| dir.split(['/', '\\']).find_map(|part| part.strip_prefix("android-")?.parse().ok()));
+    let api = value("image.sysdir.1").and_then(|dir| dir.split(['/', '\\']).find_map(api_level));
     let tablet = device.contains("tablet") || value("hw.lcd.width").zip(value("hw.lcd.height")).and_then(|(w, h)| Some(w.parse::<u32>().ok()?.min(h.parse::<u32>().ok()?) >= 1500)).unwrap_or(false);
     (device, api, tablet)
 }
-fn avd_home() -> Option<PathBuf> {
-    std::env::var_os("ANDROID_AVD_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".android/avd")))
+/// `android-35` and newer `android-37.0` system image folders.
+fn api_level(part: &str) -> Option<u32> { part.strip_prefix("android-")?.split('.').next()?.parse().ok() }
+/// Apps started from Explorer usually have no `HOME`, so Windows falls back to `USERPROFILE`.
+fn avd_home() -> Option<PathBuf> { avd_home_in(|name| std::env::var_os(name)) }
+fn avd_home_in(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf> {
+    let var = |name| var(name).filter(|value| !value.is_empty());
+    var("ANDROID_AVD_HOME").map(PathBuf::from).or_else(|| var("HOME").or_else(|| var("USERPROFILE")).map(|home| Path::new(&home).join(".android").join("avd")))
 }
 
 /// Running emulator serials and the AVD each one runs.
@@ -115,6 +120,7 @@ pub fn devices() -> Vec<Device> {
                 family: if tablet { "pad" } else { "phone" }.into(),
                 device_type: format!("{PREFIX}{}", if profile.is_empty() { name.to_ascii_lowercase() } else { profile }),
                 platform: "android".into(),
+                duo: false,
             }
         })
         .collect()
@@ -126,7 +132,7 @@ pub fn parse_screen(size: &str, density: &str) -> Option<Screen> {
     let (w, h) = last(size)?.split_once('x').and_then(|(w, h)| Some((w.parse::<f64>().ok()?, h.parse::<f64>().ok()?)))?;
     let dpi = last(density)?.parse::<f64>().ok().filter(|d| *d > 0.0)?;
     let scale = dpi / 160.0;
-    Some(Screen { width: (w / scale).round(), height: (h / scale).round(), scale, home_button: false })
+    Some(Screen { width: (w / scale).round(), height: (h / scale).round(), scale, home_button: false, inner: None })
 }
 pub fn screen(name: &str) -> Result<Screen, String> {
     let serial = serial(name)?;
@@ -142,9 +148,14 @@ pub fn boot(name: &str) -> Result<(), String> {
     }
     let emulator = emulator_path().ok_or("Install the Android emulator to boot this device.")?;
     // The emulator keeps running after this returns; it is not a child we wait on.
-    Command::new(emulator)
-        .args(["-avd", name, "-no-window", "-no-audio", "-no-boot-anim", "-gpu", "auto"])
-        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
+    let mut command = Command::new(emulator);
+    command.args(["-avd", name, "-no-window", "-no-audio", "-no-boot-anim", "-gpu", "auto"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    command
         .spawn()
         .map_err(|error| format!("Could not start the Android emulator: {error}"))?;
     let started = Instant::now();
@@ -327,8 +338,21 @@ mod tests {
         let phone = "hw.device.name=pixel_9\nimage.sysdir.1=system-images/android-35/google_apis_playstore/arm64-v8a/\nhw.lcd.width=1080\nhw.lcd.height=2424\n";
         assert_eq!(parse_config(phone), ("pixel_9".into(), Some(35), false));
         assert_eq!(parse_config("hw.device.name=pixel_tablet\nimage.sysdir.1=system-images\\android-34\\google_apis\\x86_64\\"), ("pixel_tablet".into(), Some(34), true));
+        assert_eq!(parse_config("image.sysdir.1=system-images\\android-37.0\\google_apis\\x86_64\\").1, Some(37));
+        assert_eq!(parse_config("image.sysdir.1=system-images/android-Baklava/google_apis/x86_64/").1, None);
         assert_eq!(android_version(35), "15");
         assert_eq!(android_version(40), "API 40");
+    }
+
+    #[test]
+    fn avd_home_falls_back_to_userprofile() {
+        let env = |vars: &'static [(&str, &str)]| move |name: &str| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| v.into());
+        let avd = |home: &str| Some(Path::new(home).join(".android").join("avd"));
+        assert_eq!(avd_home_in(env(&[("USERPROFILE", "C:\\Users\\ada")])), avd("C:\\Users\\ada"));
+        assert_eq!(avd_home_in(env(&[("HOME", ""), ("USERPROFILE", "C:\\Users\\ada")])), avd("C:\\Users\\ada"));
+        assert_eq!(avd_home_in(env(&[("HOME", "/home/ada"), ("USERPROFILE", "C:\\Users\\ada")])), avd("/home/ada"));
+        assert_eq!(avd_home_in(env(&[("ANDROID_AVD_HOME", "/avds"), ("HOME", "/home/ada")])), Some(PathBuf::from("/avds")));
+        assert_eq!(avd_home_in(env(&[])), None);
     }
 
     #[test]

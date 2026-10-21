@@ -26,6 +26,8 @@ pub fn connections() -> Vec<Connection> {
         Connection { provider: "cloudflare", connected: super::secret("cloudflare_token").is_some() && settings.cloudflare_account.is_some(), sandboxes: Some(super::secret("cloudflare_worker_token").is_some() && settings.cloudflare_worker_url.is_some()), detail: settings.cloudflare_account.clone() },
         Connection { provider: "aws", connected: settings.aws_region.is_some(), sandboxes: None, detail: settings.aws_region.map(|region| format!("{} · {region}", settings.aws_profile.unwrap_or_else(|| "default profile".into()))) },
         Connection { provider: "vercel", connected: super::secret("vercel_token").is_some(), sandboxes: None, detail: settings.vercel_team },
+        Connection { provider: "railway", connected: super::secret("railway_token").is_some(), sandboxes: None, detail: settings.railway_workspace },
+        Connection { provider: "gcloud", connected: settings.gcloud_project.is_some(), sandboxes: None, detail: settings.gcloud_project.map(|project| match settings.gcloud_region { Some(region) => format!("{project} · {region}"), None => project }) },
     ]
 }
 
@@ -72,6 +74,30 @@ pub async fn cloud_connect(app: AppHandle, provider: String, key: String, option
                 settings.vercel_team = team;
                 super::save_settings(&settings)?;
             }
+            "railway" => {
+                let workspace = text("workspace");
+                block(verify_railway(RAILWAY_API, key.trim(), workspace.as_deref()))?;
+                super::set_secret("railway_token", key.trim())?;
+                let mut settings = super::settings();
+                settings.railway_workspace = workspace;
+                super::save_settings(&settings)?;
+            }
+            // Google Cloud uses gcloud's own login; PandaCode stores only the project and region.
+            "gcloud" => {
+                let project = text("project").ok_or("Enter your Google Cloud project ID.")?;
+                if project.len() > 100 || project.starts_with('-') || !project.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"-.:".contains(&b)) {
+                    return Err("That does not look like a Google Cloud project ID (for example my-app-123456).".into());
+                }
+                let region = text("region");
+                if region.as_deref().is_some_and(|r| r.len() > 32 || !r.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')) {
+                    return Err("That does not look like a Google Cloud region (for example us-central1).".into());
+                }
+                super::deploy::gcloud_verify(&project, region.as_deref())?;
+                let mut settings = super::settings();
+                settings.gcloud_project = Some(project);
+                settings.gcloud_region = region;
+                super::save_settings(&settings)?;
+            }
             // AWS uses the CLI's own login; PandaCode stores only the profile and region.
             "aws" => {
                 let region = text("region").ok_or("Choose an AWS region, such as us-east-1.")?;
@@ -100,6 +126,27 @@ async fn verify_vercel(token: &str, team: Option<&str>) -> Result<()> {
     let client = super::http::client(Duration::from_secs(30))?;
     let url = match team { Some(team) => format!("https://api.vercel.com/v2/teams/{team}"), None => "https://api.vercel.com/v2/user".into() };
     super::http::send("Vercel", client.get(url).bearer_auth(token)).await.map(|_| ())
+}
+
+const RAILWAY_API: &str = "https://backboard.railway.com/graphql/v2";
+
+/// An account token can read `me`; a workspace token only its own workspace.
+async fn verify_railway(api: &str, token: &str, workspace: Option<&str>) -> Result<()> {
+    let client = super::http::client(Duration::from_secs(30))?;
+    let body = match workspace {
+        Some(id) => serde_json::json!({"query": "query($id: String!) { workspace(workspaceId: $id) { id } }", "variables": {"id": id}}),
+        None => serde_json::json!({"query": "{ me { id } }"}),
+    };
+    let reply = super::http::send("Railway", client.post(api).bearer_auth(token).json(&body)).await?;
+    if reply["data"]["me"]["id"].is_string() || reply["data"]["workspace"]["id"].is_string() {
+        return Ok(());
+    }
+    // GraphQL reports a bad token or an unknown workspace with HTTP 200 and an errors list.
+    Err(match (workspace, reply["errors"][0]["message"].as_str()) {
+        (Some(_), Some(message)) if !message.to_ascii_lowercase().contains("not authorized") => format!("Railway: {}", message.chars().take(200).collect::<String>()),
+        (None, _) => "Railway refused the token. Use an account token, or a workspace token with its workspace ID.".into(),
+        _ => "Railway refused the token for that workspace. Check the token and the workspace ID.".into(),
+    })
 }
 
 /// Deploy PandaCode's sandbox Worker to the connected Cloudflare account (needs Docker).
@@ -155,6 +202,18 @@ pub async fn cloud_disconnect(app: AppHandle, provider: String) -> Result<Vec<Co
                 super::remove_secret("vercel_token");
                 let mut settings = super::settings();
                 settings.vercel_team = None;
+                super::save_settings(&settings)?;
+            }
+            "railway" => {
+                super::remove_secret("railway_token");
+                let mut settings = super::settings();
+                settings.railway_workspace = None;
+                super::save_settings(&settings)?;
+            }
+            "gcloud" => {
+                let mut settings = super::settings();
+                settings.gcloud_project = None;
+                settings.gcloud_region = None;
                 super::save_settings(&settings)?;
             }
             "aws" => {
@@ -315,4 +374,28 @@ pub async fn cloud_frame(id: String) -> Result<Response> {
 pub async fn cloud_input(id: String, input: Value) -> Result<String> {
     let action = crate::vm::tools::action(&input)?;
     crate::blocking(move || act(&id, &action)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cloud::http::mock;
+
+    #[tokio::test]
+    async fn verifies_railway_account_and_workspace_tokens() {
+        let (base, seen) = mock::serve(|request, _| match request.authorization.as_deref() {
+            Some("Bearer account") if request.body.contains("me {") => (200, r#"{"data":{"me":{"id":"u1"}}}"#),
+            Some("Bearer workspace") if request.body.contains(r#""id":"ws-1""#) => (200, r#"{"data":{"workspace":{"id":"ws-1"}}}"#),
+            Some("Bearer workspace") => (200, r#"{"data":{"workspace":null},"errors":[{"message":"Workspace not found"}]}"#),
+            _ => (200, r#"{"data":null,"errors":[{"message":"Not Authorized"}]}"#),
+        });
+        let api = format!("{base}/graphql/v2");
+        verify_railway(&api, "account", None).await.unwrap();
+        verify_railway(&api, "workspace", Some("ws-1")).await.unwrap();
+        assert!(verify_railway(&api, "workspace", None).await.unwrap_err().contains("workspace token with its workspace ID"));
+        assert_eq!(verify_railway(&api, "workspace", Some("ws-2")).await.unwrap_err(), "Railway: Workspace not found");
+        assert!(verify_railway(&api, "bad", Some("ws-1")).await.unwrap_err().contains("refused the token"));
+        let seen = seen.lock().unwrap();
+        assert!(seen.iter().all(|r| r.method == "POST" && r.path == "/graphql/v2"));
+    }
 }

@@ -5,7 +5,10 @@ use std::{
     collections::HashMap,
     io::Read,
     process::{Child, Command, Stdio},
-    sync::{Arc, Condvar, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Condvar, Mutex,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -14,6 +17,9 @@ use std::{
 const IDLE: Duration = Duration::from_secs(6);
 const POLL_GAP: Duration = Duration::from_millis(120);
 const MAX_FRAME: usize = 8 * 1024 * 1024;
+/// Frame numbers keep rising across producers, so a window that polled the cover
+/// stream still sees the first inner-display frame after a pose change.
+static SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Default)]
 struct Latest {
@@ -33,7 +39,7 @@ impl Producer {
     }
     fn push(&self, jpeg: Vec<u8>) {
         if let Ok(mut latest) = self.latest.lock() {
-            latest.seq += 1;
+            latest.seq = SEQ.fetch_add(1, Ordering::Relaxed) + 1;
             latest.jpeg = Arc::new(jpeg);
             latest.error = None;
         }
@@ -135,11 +141,11 @@ fn run_axe(producer: &Arc<Producer>, udid: &str) -> bool {
     delivered
 }
 
-fn run_screenshots(producer: &Producer, udid: &str) {
+fn run_screenshots(producer: &Producer, udid: &str, display: Option<&str>) {
     let mut failures = 0;
     while !producer.idle() {
         let started = Instant::now();
-        match super::screenshot(udid, None) {
+        match super::screenshot(udid, None, display) {
             Ok(png) => {
                 failures = 0;
                 producer.push(png);
@@ -157,9 +163,11 @@ fn run_screenshots(producer: &Producer, udid: &str) {
 }
 
 impl Streams {
-    fn producer(&self, udid: &str) -> Arc<Producer> {
+    fn producer(&self, udid: &str, display: Option<&'static str>) -> Arc<Producer> {
+        let key = format!("{udid}|{}", display.unwrap_or_default());
+        let udid = key.as_str();
         let mut map = self.0.lock().unwrap_or_else(|poison| poison.into_inner());
-        if let Some(existing) = map.get(udid) {
+        if let Some(existing) = map.get(&key) {
             let finished = existing.latest.lock().map(|l| l.finished).unwrap_or(true);
             if !finished {
                 *existing.pulled.lock().unwrap_or_else(|p| p.into_inner()) = Instant::now();
@@ -167,15 +175,16 @@ impl Streams {
             }
         }
         let producer = Arc::new(Producer { latest: Mutex::default(), ready: Condvar::new(), pulled: Mutex::new(Instant::now()) });
-        map.insert(udid.to_string(), producer.clone());
-        let (worker, udid) = (producer.clone(), udid.to_string());
+        map.insert(key.clone(), producer.clone());
+        let (worker, udid) = (producer.clone(), udid.split('|').next().unwrap_or_default().to_string());
         thread::spawn(move || {
             // An AXe stream that ends after delivering frames was stopped on purpose
             // or lost the device; only one that never delivered falls back.
-            // AXe streams iOS only; Android frames come from screencap.
-            let streamed = super::android::avd(&udid).is_none() && run_axe(&worker, &udid);
+            // AXe streams iOS only; Android frames come from screencap. Its stream likely
+            // shows only the main display, so a Duo's inner display uses screenshots.
+            let streamed = super::android::avd(&udid).is_none() && display != Some(super::duo::INNER) && run_axe(&worker, &udid);
             if !streamed && !worker.idle() {
-                run_screenshots(&worker, &udid);
+                run_screenshots(&worker, &udid, display);
             }
             worker.finish(None);
         });
@@ -183,8 +192,8 @@ impl Streams {
     }
 
     /// The newest frame after `after`, waiting up to `wait` for one to arrive.
-    pub fn next(&self, udid: &str, after: u64, wait: Duration) -> Result<Option<Frame>, String> {
-        let producer = self.producer(udid);
+    pub fn next(&self, udid: &str, display: Option<&'static str>, after: u64, wait: Duration) -> Result<Option<Frame>, String> {
+        let producer = self.producer(udid, display);
         let deadline = Instant::now() + wait;
         let mut latest = producer.latest.lock().map_err(|e| e.to_string())?;
         loop {
@@ -207,7 +216,10 @@ impl Streams {
 
     /// Stop a device's producer, e.g. when it shuts down.
     pub fn stop(&self, udid: &str) {
-        if let Some(producer) = self.0.lock().ok().and_then(|mut map| map.remove(udid)) {
+        let prefix = format!("{udid}|");
+        let mut map = self.0.lock().unwrap_or_else(|poison| poison.into_inner());
+        let keys: Vec<String> = map.keys().filter(|k| k.starts_with(&prefix)).cloned().collect();
+        for producer in keys.iter().filter_map(|k| map.remove(k)) {
             if let Ok(mut pulled) = producer.pulled.lock() {
                 *pulled = Instant::now() - IDLE * 2;
             }

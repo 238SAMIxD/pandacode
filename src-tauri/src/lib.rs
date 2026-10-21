@@ -2363,6 +2363,10 @@ async fn github_repo_pulls(repo: String) -> Result<Vec<github_hub::HubPull>> {
 async fn github_repo_issues(repo: String) -> Result<Vec<github_hub::HubIssue>> {
     blocking(move || github_hub::issues(&repo)).await
 }
+#[tauri::command]
+async fn github_repo_runs(repo: String) -> Result<Vec<github_hub::HubRun>> {
+    blocking(move || github_hub::runs(&repo)).await
+}
 /// Which local projects check out which GitHub repositories, by their `origin` remote.
 #[tauri::command]
 async fn github_project_repos(state: State<'_, AppState>) -> Result<Vec<github_hub::ProjectRepo>> {
@@ -3079,6 +3083,7 @@ pub fn run() {
                 project_icon,
                 github_repo_pulls,
                 github_repo_issues,
+                github_repo_runs,
                 github_project_repos,
                 github_clone_repo,
                 github_search,
@@ -3093,6 +3098,8 @@ pub fn run() {
                 github_link_pull_request,
                 simulator::commands::simulator_status,
                 simulator::commands::simulator_select,
+                simulator::commands::simulator_create_duo,
+                simulator::commands::simulator_pose,
                 simulator::commands::simulator_power,
                 simulator::commands::simulator_frame,
                 simulator::commands::simulator_input,

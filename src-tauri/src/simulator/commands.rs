@@ -2,7 +2,7 @@
 use std::time::Duration;
 use tauri::{ipc::Response, AppHandle, Manager};
 
-use super::{Input, Simulators, Status};
+use super::{duo::Pose, Input, Simulators, Status};
 use crate::Result;
 
 fn udid(value: &str) -> Result<String> {
@@ -19,6 +19,33 @@ pub async fn simulator_select(app: AppHandle, udid: Option<String>) -> Result<St
     crate::blocking(move || {
         let sims = app.state::<Simulators>();
         sims.select(udid)?;
+        Ok(sims.status())
+    })
+    .await
+}
+
+/// Finds or creates the iPhone Duo simulator and selects it.
+#[tauri::command]
+pub async fn simulator_create_duo(app: AppHandle) -> Result<Status> {
+    crate::blocking(move || {
+        let udid = super::duo::create()?;
+        let sims = app.state::<Simulators>();
+        sims.select(Some(udid))?;
+        Ok(sims.status())
+    })
+    .await
+}
+
+/// Fold or unfold an iPhone Duo (`closed`, `book` or `open`) by moving its hinge.
+#[tauri::command]
+pub async fn simulator_pose(app: AppHandle, udid: String, pose: Pose) -> Result<Status> {
+    let udid = self::udid(&udid)?;
+    crate::blocking(move || {
+        let sims = app.state::<Simulators>();
+        if !sims.resolve(Some(&udid), true)?.duo {
+            return Err("Only iPhone Duo folds.".into());
+        }
+        sims.fold(&udid, pose)?;
         Ok(sims.status())
     })
     .await
@@ -47,7 +74,8 @@ pub async fn simulator_power(app: AppHandle, udid: String, on: bool) -> Result<S
 pub async fn simulator_frame(app: AppHandle, udid: String, after: u64) -> Result<Response> {
     let udid = self::udid(&udid)?;
     crate::blocking(move || {
-        let frame = app.state::<Simulators>().streams.next(&udid, after, Duration::from_millis(1500))?;
+        let sims = app.state::<Simulators>();
+        let frame = sims.streams.next(&udid, sims.display(&udid), after, Duration::from_millis(1500))?;
         Ok(Response::new(frame.map_or_else(Vec::new, |frame| {
             let mut bytes = Vec::with_capacity(frame.jpeg.len() + 8);
             bytes.extend_from_slice(&frame.seq.to_le_bytes());
@@ -64,7 +92,7 @@ pub async fn simulator_input(app: AppHandle, udid: String, input: Input) -> Resu
     crate::blocking(move || {
         let sims = app.state::<Simulators>();
         let device = sims.resolve(Some(&udid), true)?;
-        super::input(&udid, sims.screen(&device)?, &input)
+        super::input(&udid, sims.shown(&device)?, &sims.duo(&udid), &input)
     })
     .await
 }
@@ -77,7 +105,11 @@ pub async fn simulator_appearance(udid: String, mode: String) -> Result<String> 
 
 /// A full-resolution PNG for copying or attaching.
 #[tauri::command]
-pub async fn simulator_capture(udid: String) -> Result<Response> {
+pub async fn simulator_capture(app: AppHandle, udid: String) -> Result<Response> {
     let udid = self::udid(&udid)?;
-    crate::blocking(move || super::screenshot(&udid, None).map(Response::new)).await
+    crate::blocking(move || {
+        let display = app.state::<Simulators>().display(&udid);
+        super::screenshot(&udid, None, display).map(Response::new)
+    })
+    .await
 }

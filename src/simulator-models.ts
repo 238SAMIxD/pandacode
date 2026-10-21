@@ -3,7 +3,7 @@
  * lengths in millimetres are converted with the body's own width. No logos. */
 
 export type Finish = { id: string; name: string; color: string };
-type Camera = 'pro-plateau' | 'air-plateau' | 'capsule' | 'pro-square' | 'dual-diagonal' | 'dual-vertical' | 'single-square' | 'single' | 'pad-pro' | 'pad-single' | 'pixel-pill' | 'pixel-bar' | 'android-square';
+type Camera = 'pro-plateau' | 'air-plateau' | 'capsule' | 'pro-square' | 'dual-diagonal' | 'dual-vertical' | 'single-square' | 'single' | 'pad-pro' | 'pad-single' | 'pixel-pill' | 'pixel-bar' | 'android-square' | 'duo-dual';
 export type ModelSpec = {
   key: string;
   camera: Camera;
@@ -35,6 +35,9 @@ const SPECS: { match: RegExp; spec: Omit<ModelSpec, 'key'> }[] = [
   { match: /^android:pixel_[678]/, spec: { ...ANDROID, camera: 'pixel-bar', depth: 0.12,
     finishes: [f('obsidian', 'Obsidian', '#2c2d30'), f('hazel', 'Hazel', '#8e9488'), f('rose', 'Rose', '#f2d2cf')] } },
   { match: /^android:/, spec: { ...ANDROID, camera: 'android-square', depth: 0.11, finishes: [f('black', 'Black', '#28292c'), f('silver', 'Silver', '#d9dadb')] } },
+  // iPhone Duo (V68): titanium, 48MP Dual Fusion, depth of the closed body (11.3 of 84.1 mm).
+  { match: /iPhone-Duo|V68/, spec: { camera: 'duo-dual', front: 'island', depth: 0.134, back: 'glass', cameraControl: true, smartConnector: false,
+    finishes: [f('night-sky', 'Night Sky', '#1f2430'), f('star-white', 'Star White', '#ecebe6')] } },
   { match: /iPhone-17-Pro/, spec: { camera: 'pro-plateau', front: 'island', depth: 0.122, back: 'metal-glass', cameraControl: true, smartConnector: false,
     finishes: [f('cosmic-orange', 'Cosmic Orange', '#d9692f'), f('deep-blue', 'Deep Blue', '#33405c'), f('silver', 'Silver', '#dcdcda')] } },
   { match: /iPhone-Air/, spec: { camera: 'air-plateau', front: 'island', depth: 0.075, back: 'glass', cameraControl: true, smartConnector: false,
@@ -70,13 +73,17 @@ const SPECS: { match: RegExp; spec: Omit<ModelSpec, 'key'> }[] = [
     finishes: [f('blue', 'Blue', '#9ebfdf'), f('pink', 'Pink', '#efb8c2'), f('yellow', 'Yellow', '#f2db78'), f('silver', 'Silver', '#e2e3e4')] } },
 ];
 
+/** The foldable iPhone Duo, by device type (`…SimDeviceType.iPhone-Duo`, product code V68). */
+export const isDuo = (deviceType: string): boolean => /iPhone-Duo|V68/.test(deviceType);
+
 /** The hardware of a simulated device type, e.g. `com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro`. */
 export function modelSpec(deviceType: string, family: 'phone' | 'pad'): ModelSpec {
   const key = deviceType.split('.').pop() ?? '';
   const found = SPECS.find(entry => entry.match.test(key)) ?? SPECS.find(entry => entry.match.test(family === 'pad' ? 'iPad' : 'iPhone'))!;
   // An Android tablet without a recognized profile still gets tablet hardware.
   if (key.startsWith('android:') && family === 'pad' && !found.match.source.includes('tablet')) return { key, ...SPECS[0].spec };
-  return { key, ...found.spec };
+  // Every Duo device type shares one finish memory.
+  return { key: isDuo(key) ? 'iPhone-Duo' : key, ...found.spec };
 }
 
 const FINISH_STORE = 'pandacode.simulatorFinish';
