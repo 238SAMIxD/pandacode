@@ -826,8 +826,10 @@ function renderNavigation(): void {
   const row = (s: Session, inFolder = false, inProject = false): string => {
     const p = state.projects.find(p => p.id === s.projectId);
     const activityAt = lastActivity(s);
-    const age = activityAt == null ? '' : responseAge(activityAt, now);
     const live = state.streams.get(s.id);
+    const startedAt = live?.startedAt ?? s.lastPromptAt;
+    const elapsed = isRunning(s.id) && startedAt != null ? formatDuration(now - startedAt) : '';
+    const age = elapsed || (activityAt == null ? '' : responseAge(activityAt, now));
     const status = live && (live.approvals.size || live.inputs.size) ? 'attention' : isRunning(s.id) ? 'running' : limitActive(s, now) ? 'limited' : '';
     const statusLabel = status === 'attention' ? live?.inputs.size ? 'Needs your answer' : 'Needs approval' : status === 'limited' ? `Usage limit · ${resetLabel(s.limitedUntil, now)}` : 'Running';
     // Three lines, like a card: where (app icon, checkout, age), what (title), and the branch,
@@ -838,7 +840,7 @@ function renderNavigation(): void {
     // Worktree tasks show their branch; the worktree mark keeps its accessible name either way.
     const worktreeMark = s.worktreePath ? `<span class="task-worktree" role="img" aria-label="Worktree" title="${escape(s.worktreePath)}">${icon('worktree')}</span>` : '';
     const branch = s.worktreePath ? `<span class="task-branch">${worktreeMark}${s.worktreeBranch ? `<span>${escape(s.worktreeBranch)}</span>` : ''}</span>` : '';
-    const signals = `${status ? `<span class="task-indicator ${status}" role="img" aria-label="${statusLabel}" title="${statusLabel}"></span>` : ''}${age ? `<span class="task-age" title="Last message: ${escape(new Date(activityAt!).toLocaleString())}">${age}</span>` : ''}`;
+    const signals = `${status ? `<span class="task-indicator ${status}" role="img" aria-label="${statusLabel}" title="${statusLabel}"></span>` : ''}${age ? `<span class="task-age${elapsed ? ' task-runtime' : ''}"${elapsed ? ` data-started-at="${startedAt}"` : ''} title="${elapsed ? `Working for ${elapsed}` : `Last message: ${escape(new Date(activityAt!).toLocaleString())}`}">${age}</span>` : ''}`;
     const button = `<button class="task-item${inFolder ? ' task-oneline' : ''} ${s.id === state.sessionId ? 'selected' : ''}" data-action="select-task" data-id="${escape(s.id)}" data-activity="${activeTask(s, now) ? 'active' : 'inactive'}" draggable="true" data-pinned="${Boolean(s.pinned)}" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" ${s.id === state.sessionId ? 'aria-current="page"' : ''} aria-description="${shortProvider(s.provider)}" title="${escape(s.worktreeBranch ? `${s.title}\n${s.worktreeBranch}` : s.title)}">`;
     const pin = s.pinned ? `<span class="task-pin" role="img" aria-label="Pinned">${icon('pin')}</span>` : '';
     const projectName = `<span class="task-project">${escape(p?.name ?? 'Project')}</span>`;
@@ -897,6 +899,7 @@ function renderNavigation(): void {
   }
   if (focusSelector) nav.querySelector<HTMLElement>(focusSelector)?.focus({ preventScroll: true });
   renderBoardView();
+  updateWorkTimer();
   window.clearTimeout(activityTimer);
   if (!document.hidden) {
     const expiry = state.sessions.reduce((next, s) => activeTask(s, now) ? Math.min(next, lastActivity(s)! + ACTIVITY_WINDOW) : next, Infinity);
@@ -1243,12 +1246,18 @@ function workingLabel(current: Stream): string {
   return `${label} · ${formatDuration(Date.now() - current.startedAt)}`;
 }
 function updateWorkTimer(): void {
-  if (!transcriptVisible() || !state.streams.has(state.sessionId)) { clearTimeout(workTimer); workTimer = 0; return; }
+  if (document.hidden || ((!transcriptVisible() || !state.streams.has(state.sessionId)) && !document.querySelector('.task-runtime'))) { clearTimeout(workTimer); workTimer = 0; return; }
   if (workTimer) return;
   workTimer = window.setTimeout(() => {
     workTimer = 0;
     const current = state.streams.get(state.sessionId), label = document.querySelector<HTMLElement>('#stream-region .turn-activity-label');
     if (current && label) label.textContent = workingLabel(current);
+    const now = Date.now();
+    for (const timer of document.querySelectorAll<HTMLElement>('.task-runtime')) {
+      const elapsed = formatDuration(now - Number(timer.dataset.startedAt));
+      timer.textContent = elapsed;
+      timer.title = `Working for ${elapsed}`;
+    }
     updateWorkTimer();
   }, 1000);
 }
