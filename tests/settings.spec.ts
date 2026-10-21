@@ -9,6 +9,87 @@ const GROUPS = ['General', 'Appearance', 'Agents', 'Providers', 'Agent teams', '
 const prompt = (page: Page) => page.getByRole('textbox', { name: 'Message your coding agent' });
 const providerCalls = (page: Page) => page.evaluate(() => (window as any).__settingsProviders.calls);
 
+test('settings organization keeps long default model names clear of labels', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('pandacode.defaultProvider', 'claude');
+    localStorage.setItem('pandacode.defaultModel.claude', 'custom-provider/model-' + 'x'.repeat(160));
+  });
+  await open(page);
+  await settings(page);
+  await tab(page, 'Agents').click();
+  const model = page.getByRole('button', { name: 'Default model for new tasks', exact: true });
+  for (const width of [1440, 900]) {
+    await page.setViewportSize({ width, height: 940 });
+    const label = (await model.locator('..').locator('strong').boundingBox())!;
+    const button = (await model.boundingBox())!;
+    expect(label.width).toBeGreaterThan(60);
+    expect(label.x + label.width + 8).toBeLessThanOrEqual(button.x);
+    expect(button.x + button.width).toBeLessThanOrEqual(width);
+  }
+});
+
+test('settings organization selects the default provider and model without changing the current task', async ({ page }) => {
+  await open(page);
+  const selected = await page.locator('.task-item.selected').getAttribute('data-id');
+  const currentModel = await page.locator('#model-picker-trigger').textContent();
+  await prompt(page).fill('Keep this draft while selecting defaults.');
+  await settings(page);
+  await tab(page, 'Agents').click();
+  await page.getByRole('button', { name: 'Default agent for new tasks', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Default agent', exact: true }).getByRole('menuitemradio', { name: 'Claude Code', exact: true }).click();
+  const model = page.getByRole('button', { name: 'Default model for new tasks', exact: true });
+  await model.click();
+  await page.locator('.model-menu-option[data-provider="claude"][data-model="opus"]').click();
+  await expect(model).toContainText('Opus');
+  await back(page).click();
+  await expect(page.locator('.task-item.selected')).toHaveAttribute('data-id', selected!);
+  await expect(page.locator('#model-picker-trigger')).toHaveText(currentModel!);
+  await expect(prompt(page)).toHaveValue('Keep this draft while selecting defaults.');
+  await page.locator('.new-task-button').click();
+  await expect(page.locator('#model-picker-trigger')).toContainText('Opus');
+  await expect(page.locator('#model-picker-trigger .provider-logo[data-provider="claude"]')).toBeVisible();
+  await page.locator('#model-picker-trigger').click();
+  await page.locator('.model-menu-option[data-provider="codex"][data-model="default"]').click();
+  await page.locator('.new-task-button').click();
+  await expect(page.locator('#model-picker-trigger')).toContainText('Opus');
+  await expect(page.locator('#model-picker-trigger .provider-logo[data-provider="claude"]')).toBeVisible();
+  await page.reload();
+  await expect(prompt(page)).toBeEnabled();
+  await settings(page);
+  await tab(page, 'Agents').click();
+  await expect(model).toContainText('Opus');
+  await page.getByRole('button', { name: 'Default agent for new tasks', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Default agent', exact: true }).getByRole('menuitemradio', { name: 'Kimi Code', exact: true }).click();
+  await expect(model).not.toContainText('Opus');
+});
+
+test('settings organization recovers a failed default model catalog and permits a custom model', async ({ page }) => {
+  await open(page);
+  await page.route('**/src/preview.ts*', async route => {
+    const response = await route.fetch();
+    const source = await response.text();
+    await route.fulfill({ response, body: source.replace(/switch\s*\(command\)\s*\{/, `
+      if (command === 'list_provider_models' && args.provider === 'claude' && !window.__allowDefaultModels) throw new Error('Catalog unavailable');
+      switch (command) {
+    `) });
+  });
+  await page.reload();
+  await expect(prompt(page)).toBeEnabled();
+  await settings(page);
+  await tab(page, 'Agents').click();
+  const model = page.getByRole('button', { name: 'Default model for new tasks', exact: true });
+  await model.click();
+  const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
+  await expect(picker.getByRole('status').filter({ hasText: 'Could not load models for Claude Code' })).toBeVisible();
+  await picker.getByRole('searchbox').fill('custom-default-model');
+  await picker.getByRole('button', { name: 'Use "custom-default-model" with Claude Code', exact: true }).click();
+  await expect(model).toHaveText('custom-default-model');
+  await page.evaluate(() => { (window as any).__allowDefaultModels = true; });
+  await model.click();
+  await expect(picker.locator('.model-menu-option[data-provider="claude"][data-model="opus"]')).toBeVisible();
+  await expect(picker.locator('.model-menu-catalog-error')).toBeHidden();
+});
+
 async function open(page: Page): Promise<void> {
   await page.route('**/src/preview.ts*', async route => {
     const response = await route.fetch();

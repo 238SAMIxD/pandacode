@@ -20,6 +20,8 @@ export type SettingsSection = 'general' | 'appearance' | 'agents' | 'providers' 
 interface SettingsOptions {
   providers: Provider[];
   defaultProvider: ProviderId;
+  defaultModel: string;
+  activityExpanded: boolean;
   compact: boolean;
   wallpapers: boolean;
   theme: 'light' | 'dark';
@@ -57,7 +59,7 @@ const switchRow = (id: string, title: string, detail: string, checked: boolean) 
 function sectionHtml(id: SettingsSection, options: SettingsOptions): string {
   const defaultName = options.providers.find(provider => provider.id === options.defaultProvider)?.name ?? options.defaultProvider;
   switch (id) {
-    case 'general': return `<div class="settings-group">${uiSizeControls()}${switchRow('compact-mode', 'Compact conversation', 'Less space between messages.', options.compact)}</div>
+    case 'general': return `<div class="settings-group">${uiSizeControls()}${switchRow('compact-mode', 'Compact conversation', 'Less space between messages.', options.compact)}${switchRow('expand-tool-activity', 'Expand tool activity', 'Show grouped activity expanded by default.', options.activityExpanded)}</div>
       <h3 class="settings-heading">Quick launcher</h3><div id="launcher-settings"></div>`;
     case 'appearance': return `<div class="settings-group">
         <div class="setting-row"><div><strong>Theme</strong><small>${options.theme === 'dark' ? 'Dark' : 'Light'}. Imported VS Code themes keep their own.</small></div><button type="button" class="secondary-button" data-action="toggle-theme">${icon(options.theme === 'dark' ? 'sun' : 'moon')}Use ${options.theme === 'dark' ? 'light' : 'dark'}</button></div>
@@ -67,6 +69,7 @@ function sectionHtml(id: SettingsSection, options: SettingsOptions): string {
       <h3 class="settings-heading">Wallpapers</h3><div class="settings-embed" data-embed="wallpapers"></div>`;
     case 'agents': return `<div class="settings-group">
         <div class="setting-row settings-default-row"><div><strong>Default agent</strong><small>Used for new tasks.</small></div><button type="button" id="default-provider" class="settings-select" data-action="default-provider" aria-label="Default agent for new tasks" aria-haspopup="dialog" aria-expanded="false">${providerLogo(options.defaultProvider)}<span>${escape(defaultName)}</span>${icon('down')}</button></div>
+        <div class="setting-row settings-default-row"><div><strong>Default model</strong><small>Used for new tasks.</small></div><button type="button" id="default-model" class="settings-select" data-action="default-model" aria-label="Default model for new tasks" aria-haspopup="dialog" aria-expanded="false"><span>${escape(options.defaultModel)}</span>${icon('down')}</button></div>
         <div class="setting-row"><div><strong>Agent updates</strong><small>Keep installed agents up to date.</small></div><button type="button" class="secondary-button" data-action="agent-updates" aria-haspopup="dialog">Check updates</button></div>
       </div>
       <div class="settings-heading settings-agents-heading"><h3>Installed agents</h3><button type="button" class="settings-refresh">${icon('refresh')}Refresh agents</button></div>

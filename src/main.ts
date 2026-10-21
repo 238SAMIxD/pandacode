@@ -83,7 +83,7 @@ const state = {
   git: null as GitStatus | null, files: [] as FileEntry[], filePath: '', gitError: '', filesError: '', inspectorLoading: false,
   selectedFile: '', selectedContent: '', selectedKind: '' as '' | 'diff' | 'file', selectedStaged: false, filePreviewLoading: false,
   browserUrl: '',
-  attachments: [] as string[], drafts: new Map<string, string>(), defaultProvider: (localStorage.getItem('pandacode.provider') ?? 'claude') as ProviderId,
+  attachments: [] as string[], drafts: new Map<string, string>(), defaultProvider: (localStorage.getItem('pandacode.defaultProvider') ?? localStorage.getItem('pandacode.provider') ?? 'claude') as ProviderId,
   browserAttachments: new Map<string, BrowserAttachment[]>(),
   moodboardAttachments: new Map<string, { id: string; projectId: string; name: string }[]>(),
   generation: 0, hasOlder: false,
@@ -787,7 +787,7 @@ function beginMenuOpen(anchor: HTMLElement): { epoch: number; release: () => voi
   return { epoch, release };
 }
 function rememberedModel(id: ProviderId): string {
-  const model = localStorage.getItem('pandacode.model.' + id) || state.sessions.find(s => s.provider === id && s.model)?.model || 'default';
+  const model = localStorage.getItem('pandacode.defaultModel.' + id) || localStorage.getItem('pandacode.model.' + id) || state.sessions.find(s => s.provider === id && s.model)?.model || 'default';
   return model.length <= 200 ? model : 'default';
 }
 function loadModels(id: ProviderId): Promise<ProviderModel[]> {
@@ -1035,15 +1035,16 @@ function renderTranscript(preservePosition = false): void {
 function savedActivityHtml(messages: Message[]): string {
   return groupToolRuns(messages, message => message.role === 'tool' ? savedToolKey(message) : undefined)
     .map(run => run.kind === 'tools'
-      ? renderToolGroup(run.items.map(message => ({ key: savedToolKey(message), content: message.content })))
+      ? renderToolGroup(run.items.map(message => ({ key: savedToolKey(message), content: message.content })), activityExpanded())
       : messageHtml(run.item)).join('');
 }
 function savedToolKey(message: Message): string {
   const tool = decodeToolActivity(message.content);
   return tool ? 'tool:' + tool.id : 'message:' + message.id;
 }
+function activityExpanded(): boolean { return localStorage.getItem('pandacode.activityExpanded') === 'true'; }
 function activityHtml(key: string, label: string, body: string, live = false): string {
-  return `<details class="turn-activity${live ? ' live-activity' : ''}" data-turn-key="${escape(key)}"${live || state.view === 'board' ? ' open' : ''}><summary class="turn-activity-summary"><span class="turn-activity-label">${escape(label)}</span>${icon('chevron')}</summary><div class="turn-activity-body">${body}</div></details>`;
+  return `<details class="turn-activity${live ? ' live-activity' : ''}" data-turn-key="${escape(key)}"${activityExpanded() ? ' open' : ''}><summary class="turn-activity-summary"><span class="turn-activity-label">${escape(label)}</span>${icon('chevron')}</summary><div class="turn-activity-body">${body}</div></details>`;
 }
 type ToolGroupView = { key: string; toolKeys: string[]; open: boolean; focused: boolean };
 function captureToolGroups(root: ParentNode): ToolGroupView[] {
@@ -1210,11 +1211,11 @@ function paintLiveActivity(region: HTMLElement, current: Stream, transcript: HTM
       let node = previous.get(key);
       const previousEntries = node ? liveGroupEntries.get(node) : undefined;
       if (!node) {
-        const html = renderToolGroup(run.items);
+        const html = renderToolGroup(run.items, activityExpanded());
         const template = document.createElement('template'); template.innerHTML = html;
         node = template.content.firstElementChild as HTMLElement; node.dataset.streamKey = key;
       } else if (!previousEntries || previousEntries.length !== run.items.length || run.items.some((entry, index) => entry !== previousEntries[index])) {
-        const html = renderToolGroup(run.items);
+        const html = renderToolGroup(run.items, activityExpanded());
         const views = captureTools(node);
         const template = document.createElement('template'); template.innerHTML = html;
         const fresh = template.content.firstElementChild!;
@@ -2743,7 +2744,7 @@ async function showModel(anchor: HTMLElement): Promise<void> {
         }
         const updated = await call<Session>('configure_session', { sessionId: selected.id, provider: providerId, model });
         const index = state.sessions.findIndex(s => s.id === selected.id); if (index >= 0) state.sessions[index] = updated;
-        state.defaultProvider = providerId;
+        if (!localStorage.getItem('pandacode.defaultProvider')) state.defaultProvider = providerId;
         localStorage.setItem('pandacode.provider', providerId); localStorage.setItem('pandacode.model.' + providerId, model);
         if (selected.id === state.sessionId && generation === state.generation) {
           if (providerId !== selected.provider) {
@@ -2924,8 +2925,36 @@ async function showProjectFilter(anchor: HTMLElement): Promise<void> {
 async function showDefaultProvider(anchor: HTMLElement): Promise<void> {
   await showChoices(anchor, { title: 'Default agent', items: state.providers.map(p => ({ id: p.id, label: p.name, provider: p.id, selected: state.defaultProvider === p.id })), onSelect: id => {
     state.defaultProvider = id as ProviderId; localStorage.setItem('pandacode.provider', id);
-    anchor.innerHTML = `${providerLogo(state.defaultProvider)}<span>${escape(provider(state.defaultProvider)?.name ?? shortProvider(state.defaultProvider))}</span>${icon('down')}`;
+    localStorage.setItem('pandacode.defaultProvider', id);
+    refreshDefaultAgent();
   } });
+}
+function defaultModelLabel(): string {
+  const id = state.defaultProvider, model = rememberedModel(id);
+  return (provider(id)?.models.find(entry => entry.id === model) ?? fallbackModel(id, model)).name;
+}
+function refreshDefaultAgent(): void {
+  const agent = document.getElementById('default-provider'), model = document.querySelector('#default-model span');
+  if (agent) agent.innerHTML = `${providerLogo(state.defaultProvider)}<span>${escape(provider(state.defaultProvider)?.name ?? shortProvider(state.defaultProvider))}</span>${icon('down')}`;
+  if (model) model.textContent = defaultModelLabel();
+}
+async function showDefaultModel(anchor: HTMLElement): Promise<void> {
+  if (pendingMenuOpen?.anchor === anchor) { cancelPendingMenu(); return; }
+  if (modelPickerCleanup) { closeModelPicker(); return; }
+  closeMenus();
+  const { epoch, release } = beginMenuOpen(anchor);
+  const { openModelPicker } = await import('./model-picker').finally(release);
+  if (epoch !== menuEpoch || !anchor.isConnected) return;
+  modelPickerCleanup = openModelPicker({
+    anchor, providers: state.providers, current: { provider: state.defaultProvider, model: rememberedModel(state.defaultProvider) },
+    canSwitchProvider: true, loadModels, placement: 'below', onClose: () => { modelPickerCleanup = undefined; },
+    onSelect: async (providerId, model) => {
+      state.defaultProvider = providerId;
+      localStorage.setItem('pandacode.provider', providerId); localStorage.setItem('pandacode.model.' + providerId, model);
+      localStorage.setItem('pandacode.defaultProvider', providerId); localStorage.setItem('pandacode.defaultModel.' + providerId, model);
+      refreshDefaultAgent();
+    },
+  });
 }
 function showDeleteTask(): void {
   const task = session(); if (!task || isRunning(task.id) || configuringSessions.has(task.id)) return;
@@ -2984,7 +3013,7 @@ async function showSettings(section?: import('./settings').SettingsSection): Pro
   settingsOpening = import('./settings').then(({ mountSettings }) => {
     if (host.hidden) return;
     settingsView = mountSettings(host, {
-      providers: state.providers, defaultProvider: state.defaultProvider,
+      providers: state.providers, defaultProvider: state.defaultProvider, defaultModel: defaultModelLabel(), activityExpanded: activityExpanded(),
       compact: document.body.classList.contains('compact'), wallpapers: wallpapers.enabled,
       theme: currentTheme(), preview, section, discover: discoverSettingsProviders,
       github: target => github.mountSettings(target, project()?.id ?? state.projects[0]?.id ?? ''),
@@ -3374,6 +3403,7 @@ async function action(name: string, element: HTMLElement): Promise<void> {
     case 'mode': await showMode(element); break;
     case 'filter-projects': await showProjectFilter(element); break;
     case 'default-provider': await showDefaultProvider(element); break;
+    case 'default-model': await showDefaultModel(element); break;
     case 'close-dialog': closeModal(); break;
     case 'copy-file': await navigator.clipboard.writeText(state.selectedContent); notify('File copied'); break;
     case 'copy-path': await navigator.clipboard.writeText(workspacePath()); notify(session()?.worktreePath ? 'Worktree path copied' : 'Project path copied'); break;
@@ -3456,6 +3486,10 @@ document.addEventListener('change', event => {
   // A switch toggles natively (the data-action click path cancels the default), then saves.
   if (input.classList.contains('limit-resume-switch')) run(limitAction('limit-resume-at-reset', input));
   if (input.id === 'compact-mode') { document.body.classList.toggle('compact', input.checked); localStorage.setItem('pandacode.compact', String(input.checked)); }
+  if (input.id === 'expand-tool-activity') {
+    localStorage.setItem('pandacode.activityExpanded', String(input.checked));
+    document.querySelectorAll<HTMLDetailsElement>('.turn-activity, .tool-group').forEach(group => { group.open = input.checked; });
+  }
 });
 document.addEventListener('keydown', event => {
   if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey || event.isComposing || event.defaultPrevented || event.key.toLowerCase() !== 'b' || state.view !== 'conversation' || document.querySelector<HTMLDialogElement>('#dialog')!.open) return;

@@ -1901,6 +1901,48 @@ async function showTurnFixture(page: Page, entries: Array<{ role: string; conten
 
 const turnTool = (id: string, name: string, status = 'completed') => JSON.stringify({ type: 'tool_activity', version: 1, id, name, status, input: `${name} input`, output: `${name} output` });
 
+test('tool activity settings persist expanded and collapsed groups with compact spacing', async ({ page }) => {
+  await showTurnFixture(page, [
+    { role: 'user', content: 'Inspect these files.', at: 0 },
+    ...Array.from({ length: 12 }, (_, index) => ({ role: 'tool', content: turnTool(`compact-${index}`, 'Read'), at: (index + 1) * 1000 })),
+    { role: 'assistant', content: 'Inspection complete.', at: 15000 },
+  ]);
+  const turn = page.locator('details.turn-activity');
+  const groups = turn.locator('.tool-group');
+  await expect(turn).not.toHaveAttribute('open', '');
+  await turn.locator('.turn-activity-summary').click();
+  await expect(groups).toHaveCount(3);
+  const first = (await groups.nth(0).boundingBox())!;
+  const second = (await groups.nth(1).boundingBox())!;
+  expect(second.y - first.y - first.height).toBeLessThanOrEqual(4);
+  expect(first.height).toBeGreaterThanOrEqual(30);
+  await prompt(page).fill('Keep my draft while changing activity.');
+  await page.keyboard.press('Meta+,');
+  const expand = page.getByRole('checkbox', { name: 'Expand tool activity', exact: true });
+  await expect(expand).not.toBeChecked();
+  await expand.check();
+  await page.getByRole('button', { name: 'Back to the workspace', exact: true }).click();
+  await expect(turn).toHaveAttribute('open', '');
+  await expect(turn.locator('.tool-group[open]')).toHaveCount(3);
+  await expect(prompt(page)).toHaveValue('Keep my draft while changing activity.');
+  await page.reload();
+  await expect(turn).toHaveAttribute('open', '');
+  await expect(turn.locator('.tool-group[open]')).toHaveCount(3);
+  await page.keyboard.press('Meta+,');
+  await expand.uncheck();
+  await page.getByRole('button', { name: 'Back to the workspace', exact: true }).click();
+  await expect(turn).not.toHaveAttribute('open', '');
+  await turn.locator('.turn-activity-summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(turn).toHaveAttribute('open', '');
+  await expect(turn.locator('.tool-group[open]')).toHaveCount(0);
+  await groups.first().locator('.tool-group-summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(groups.first()).toHaveAttribute('open', '');
+  await page.reload();
+  await expect(turn).not.toHaveAttribute('open', '');
+});
+
 test('times each tool turn independently using saved durations and labels older estimates', async ({ page }) => {
   await showTurnFixture(page, [
     { role: 'user', content: 'First task', at: 0, turnDurationMs: 83_000 },
@@ -2421,7 +2463,10 @@ test('keeps an observed streaming response active when metadata reloads before p
   });
   expect(observedResponseAt).toBeGreaterThan(0);
   await page.getByRole('button', { name: 'Task actions', exact: true }).click();
-  const renameAction = page.getByRole('dialog', { name: 'Task actions', exact: true }).getByRole('menuitem', { name: 'Rename task', exact: true });
+  const actions = page.getByRole('dialog', { name: 'Task actions', exact: true });
+  await expect(actions.getByRole('menuitem', { name: 'Pin task', exact: true })).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  const renameAction = actions.getByRole('menuitem', { name: 'Rename task', exact: true });
   await expect(renameAction).toBeFocused();
   await renameAction.press('Enter');
   const dialog = page.getByRole('dialog');
