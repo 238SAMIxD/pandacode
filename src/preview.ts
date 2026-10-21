@@ -268,7 +268,12 @@ const previewSimulator = (() => {
       if (!duo) { duo = { udid: 'A1B2C3D4-0000-4000-8000-00000000D0D0', name: 'iPhone Duo', runtime: 'iOS 27.1', state: 'Shutdown', family: 'phone', deviceType: 'com.apple.CoreSimulator.SimDeviceType.iPhone-Duo', duo: true }; devices.push(duo); }
       selected = duo.udid; return status();
     },
-    pose(udid: unknown, pose: 'closed' | 'book' | 'open') { poses.set(device(udid).udid, pose); lastTap = null; seq++; return status(); },
+    /** A real fold takes about half a second before the new display answers. */
+    async pose(udid: unknown, pose: 'closed' | 'book' | 'open') {
+      const found = device(udid);
+      await new Promise(resolve => setTimeout(resolve, 250));
+      poses.set(found.udid, pose); lastTap = null; seq++; return status();
+    },
     select(udid: unknown) { if (udid != null) device(udid); selected = udid == null ? null : String(udid); return status(); },
     power(udid: unknown, on: boolean) { device(udid).state = on ? 'Booted' : 'Shutdown'; seq++; return status(); },
     async frame(udid: unknown, after: number) {
@@ -1126,7 +1131,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'vm_input': result = previewVm.input(args.name, args.input); break;
     case 'vm_desktop': result = previewVm.desktop(args.name); break;
     case 'simulator_status': result = previewSimulator.status(); break;
-    case 'simulator_pose': result = previewSimulator.pose(args.udid, args.pose); break;
+    case 'simulator_pose': result = await previewSimulator.pose(args.udid, args.pose); break;
     case 'simulator_create_duo': result = previewSimulator.createDuo(); break;
     case 'simulator_select': result = previewSimulator.select(args.udid); break;
     case 'simulator_power': result = previewSimulator.power(args.udid, Boolean(args.on)); break;

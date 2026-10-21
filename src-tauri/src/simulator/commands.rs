@@ -42,7 +42,8 @@ pub async fn simulator_pose(app: AppHandle, udid: String, pose: Pose) -> Result<
     let udid = self::udid(&udid)?;
     crate::blocking(move || {
         let sims = app.state::<Simulators>();
-        if !sims.resolve(Some(&udid), true)?.duo {
+        // Listing devices again would cost a `simctl` call; the hinge helper fails on a stopped one.
+        if !sims.known_duo(&udid) {
             return Err("Only iPhone Duo folds.".into());
         }
         sims.fold(&udid, pose)?;

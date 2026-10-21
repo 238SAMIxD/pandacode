@@ -41,6 +41,16 @@ const SPINE = 1.8 * MM, BARREL = 0.29;
 // Each half of the inner display stops this short of the hinge; a bent strip spans the rest.
 const BEND = 0.04, BEND_SEGMENTS = 16;
 
+// Apple logo (Simple Icons, CC0) on a 24-unit grid, y down: M and relative c commands only.
+const APPLE_PATH = 'M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701';
+const APPLE: THREE.Shape[] = APPLE_PATH.split('M').filter(Boolean).map(part => {
+  const n = (part.match(/-?\d*\.?\d+/g) ?? []).map(Number), shape = new THREE.Shape();
+  let x = n[0], y = n[1];
+  shape.moveTo(x, y);
+  for (let i = 2; i + 5 < n.length; i += 6) { shape.bezierCurveTo(x + n[i], y + n[i + 1], x + n[i + 2], y + n[i + 3], x + n[i + 4], y + n[i + 5]); x += n[i + 4]; y += n[i + 5]; }
+  return shape;
+});
+
 /** Display sizes in points, with the native sizes where the shape has none; the inner display is landscape. */
 export function duoDisplays(duo: unknown): DuoDisplays {
   const given = (typeof duo === 'object' && duo ? duo : {}) as Partial<Record<'cover' | 'inner', Partial<Size>>>;
@@ -116,24 +126,32 @@ export function buildDuo(parent: THREE.Group, finish: Finish, displays: DuoDispl
   // The 3D-printed hinge cover: bead-blasted titanium, rougher than the frame.
   const printed = new THREE.MeshPhysicalMaterial({ color: tone, metalness: 0.85, roughness: 0.46, envMapIntensity: 1.2 });
   // Ceramic Shield back: matte glass in the finish; Night Sky has a faint interference sheen.
-  const back = new THREE.MeshPhysicalMaterial({ color: color.clone().offsetHSL(0, light ? -0.03 : 0.12, light ? -0.015 : 0), metalness: 0.2, roughness: 0.45, clearcoat: 0.35, clearcoatRoughness: 0.55, iridescence: light ? 0 : 0.1, iridescenceIOR: 1.3, iridescenceThicknessRange: [320, 480], envMapIntensity: 0.9 });
+  // Reflections on the back take the finish's hue, so dark finishes stay navy instead of hazing grey.
+  const sheen = color.clone().offsetHSL(0, 0, 0.5);
+  const back = new THREE.MeshPhysicalMaterial({ color: color.clone().offsetHSL(-0.015, light ? -0.03 : -0.06, light ? -0.015 : 0.02), metalness: 0.15, roughness: 0.62, clearcoat: 0.12, clearcoatRoughness: 0.7, envMapIntensity: 0.9, specularIntensity: light ? 1 : 0.8, specularColor: sheen });
+  // The camera plateau a shade darker and satin; the Apple logo darker still and glossy.
+  const plateau = new THREE.MeshPhysicalMaterial({ color: color.clone().offsetHSL(-0.015, -0.06, light ? -0.06 : -0.025), metalness: 0.1, roughness: 0.5, clearcoat: 0.15, clearcoatRoughness: 0.4, envMapIntensity: 0.4, specularIntensity: 0.5, specularColor: sheen });
+  const logo = new THREE.MeshPhysicalMaterial({ color: color.clone().offsetHSL(-0.015, 0.02, light ? -0.1 : -0.02), roughness: 0.15, clearcoat: 0.8, clearcoatRoughness: 0.1, envMapIntensity: 0.8, specularIntensity: 1, specularColor: sheen });
   // Nano-texture on the inner display: soft, low reflections.
   const nano = new THREE.MeshPhysicalMaterial({ color: 0x030304, roughness: 0.3, specularIntensity: 0.35, envMapIntensity: 0.12 });
   const nanoGlare = new THREE.MeshPhysicalMaterial({ color: 0x000000, roughness: 0.5, envMapIntensity: 1, transparent: true, opacity: 0.12, depthWrite: false, blending: THREE.AdditiveBlending });
   const lensGlass = new THREE.MeshPhysicalMaterial({ color: 0x060607, roughness: 0.06, clearcoat: 0.6, clearcoatRoughness: 0.05, envMapIntensity: 0.3 });
   const lensFace = new THREE.MeshBasicMaterial({ color: 0x08080a });
-  const lensInner = new THREE.MeshPhysicalMaterial({ color: 0x141518, metalness: 0.4, roughness: 0.25, envMapIntensity: 0.2 });
-  const lensElement = new THREE.MeshPhysicalMaterial({ color: 0x1e1f23, metalness: 0.5, roughness: 0.3, envMapIntensity: 0.22 });
+  // Lens bezels: raised titanium in the body's color. Glints: soft violet light added at each lens center.
+  const bezel = new THREE.MeshPhysicalMaterial({ color: color.clone().offsetHSL(-0.015, 0, light ? -0.1 : 0.01), metalness: 0.75, roughness: 0.32, envMapIntensity: 0.7 });
+  const glint = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
+  const shade = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.07, depthWrite: false });
   const ring = new THREE.MeshPhysicalMaterial({ color: tone, metalness: 0.85, roughness: 0.2, clearcoat: 0.6, clearcoatRoughness: 0.15, envMapIntensity: 1.2 });
   const ringDark = new THREE.MeshStandardMaterial({ color: 0x1b1c20, metalness: 0.7, roughness: 0.35 });
-  const flash = new THREE.MeshPhysicalMaterial({ color: 0xf4f1ea, roughness: 0.2, clearcoat: 1 });
+  const flash = new THREE.MeshPhysicalMaterial({ color: 0x85817b, metalness: 0.5, roughness: 0.45, clearcoat: 0.2, clearcoatRoughness: 0.3 });
+  const flashRim = new THREE.MeshPhysicalMaterial({ color: 0x5f5c58, metalness: 0.6, roughness: 0.4 });
   const hole = new THREE.MeshBasicMaterial({ color: 0x050505 });
   const antenna = new THREE.MeshPhysicalMaterial({ color: color.clone().offsetHSL(0, -0.15, light ? -0.18 : 0.06), roughness: 0.55, clearcoat: 0.3 });
   const lenticular = new THREE.ShaderMaterial({
     uniforms: { uOpen: { value: 0 }, uWidth: { value: inner.width } }, vertexShader: LENTICULAR_VERTEX, fragmentShader: LENTICULAR_FRAGMENT,
     transparent: true, depthWrite: false, toneMapped: false, blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
   });
-  const materials: THREE.Material[] = [titanium, printed, back, nano, nanoGlare, lensGlass, lensFace, lensInner, lensElement, ring, ringDark, flash, hole, antenna, lenticular];
+  const materials: THREE.Material[] = [titanium, printed, back, nano, nanoGlare, lensGlass, lensFace, bezel, glint, shade, ring, ringDark, flash, flashRim, hole, antenna, lenticular, plateau, logo];
 
   // root (pose: yaw and centering) ⊃ right half, hinge barrel, pivot ⊃ left half.
   const root = new THREE.Group(), right = new THREE.Group(), pivot = new THREE.Group(), left = new THREE.Group();
@@ -195,32 +213,53 @@ export function buildDuo(parent: THREE.Group, finish: Finish, displays: DuoDispl
   const island = new THREE.Mesh(plate(1.05, 0.32, 0.16), shared.ink);
   island.position.set(0, cover.height / 2 - 0.27, 0.001); coverMesh.add(island);
 
-  // Rear camera: a raised sapphire-and-titanium pill with two 48MP Fusion lenses, top left as seen from behind.
-  const backZ = -HALF, pw = 1.25, ph = 2.35, px = W - 0.95, py = H / 2 - 1.3, t = 0.05;
-  const pill = new THREE.ExtrudeGeometry(roundedRect(pw - 0.03, ph - 0.03, pw / 2 - 0.015), { depth: t - 0.03, bevelEnabled: true, bevelThickness: 0.015, bevelSize: 0.015, bevelSegments: 4, curveSegments: 32 });
-  faceBack(pill).translate(0, 0, -0.015);
-  put(right, new THREE.Mesh(pill, back), px, py, backZ, false);
-  const lens = (x: number, y: number, z: number, r: number) => {
-    const height = 0.07, outer = r * 1.2, lip = r * 0.07;
-    const wall = new THREE.CylinderGeometry(outer, outer * 1.03, height, 64, 1, true); wall.rotateX(Math.PI / 2);
-    put(right, new THREE.Mesh(wall, ring), x, y, z - height / 2, false);
-    put(right, new THREE.Mesh(faceBack(new THREE.TorusGeometry(outer - lip, lip, 16, 64)), ring), x, y, z - height, false);
-    put(right, new THREE.Mesh(faceBack(new THREE.RingGeometry(r, outer - lip, 64)), ring), x, y, z - height + 0.001, false);
-    put(right, new THREE.Mesh(faceBack(new THREE.CircleGeometry(r, 48)), lensFace), x, y, z - height + 0.004, false);
-    put(right, new THREE.Mesh(faceBack(new THREE.RingGeometry(r * 0.5, r * 0.62, 64)), lensElement), x, y, z - height + 0.0035, false);
-    put(right, new THREE.Mesh(faceBack(new THREE.CircleGeometry(r * 0.3, 48)), lensInner), x, y, z - height + 0.003, false);
+  // Rear camera, measured from Apple's back view in shares of the width from the top-left
+  // (seen from behind): a dark raised plateau holding two 48MP Fusion lenses, then the mic over the flash.
+  const backZ = -HALF, t = 0.07, at = (fromOuter: number, fromTop: number): [number, number] => [W - W * fromOuter, H / 2 - W * fromTop];
+  const [px, py] = at(0.395, 0.198), pw = W * 0.695, ph = W * 0.279;
+  const pill = new THREE.ExtrudeGeometry(roundedRect(pw - 0.06, ph - 0.06, ph / 2 - 0.03), { depth: t - 0.06, bevelEnabled: true, bevelThickness: 0.03, bevelSize: 0.03, bevelSegments: 6, curveSegments: 32 });
+  faceBack(pill).translate(0, 0, -0.03);
+  put(right, new THREE.Mesh(pill, plateau), px, py, backZ, false);
+  // A soft shadow around the plateau: stacked faint plates, each a little larger.
+  for (let i = 1; i <= 4; i++) {
+    const grow = i * 0.025;
+    put(right, new THREE.Mesh(faceBack(plate(pw + grow * 2, ph + grow * 2, ph / 2 + grow)), shade), px, py - 0.02, backZ - 0.001, false);
+  }
+  /** A disc whose color fades from `center` to black at the rim, for additive glints. */
+  const glow = (radius: number, center: [number, number, number]) => {
+    const geometry = faceBack(new THREE.CircleGeometry(radius, 32)), colors: number[] = [];
+    for (let i = 0; i < geometry.attributes.position.count; i++) colors.push(...(i === 0 ? center : [0, 0, 0]));
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    return new THREE.Mesh(geometry, glint);
   };
-  lens(px, py + 0.55, backZ - t, 0.41); lens(px, py - 0.55, backZ - t, 0.41);
-  put(right, new THREE.Mesh(faceBack(new THREE.CircleGeometry(0.12, 48)), flash), px - 0.95, py + 0.5, backZ - 0.003, false);
-  put(right, new THREE.Mesh(faceBack(new THREE.CircleGeometry(0.1, 48)), lensGlass), px - 0.95, py - 0.1, backZ - 0.003, false);
-  put(right, new THREE.Mesh(faceBack(new THREE.CircleGeometry(0.03, 24)), hole), px - 0.95, py - 0.55, backZ - 0.003, false);
+  const lens = (x: number, y: number, z: number, r: number) => {
+    const height = 0.05, outer = r * 1.3, lip = r * 0.1;
+    const wall = new THREE.CylinderGeometry(outer, outer * 1.03, height, 64, 1, true); wall.rotateX(Math.PI / 2);
+    put(right, new THREE.Mesh(wall, bezel), x, y, z - height / 2, false);
+    put(right, new THREE.Mesh(faceBack(new THREE.TorusGeometry(outer - lip, lip, 16, 64)), bezel), x, y, z - height, false);
+    put(right, new THREE.Mesh(faceBack(new THREE.RingGeometry(r, outer - lip, 64)), bezel), x, y, z - height + 0.001, false);
+    put(right, new THREE.Mesh(faceBack(new THREE.CircleGeometry(r, 48)), lensFace), x, y, z - height + 0.004, false);
+    put(right, new THREE.Mesh(faceBack(new THREE.RingGeometry(r * 0.86, r, 64)), hole), x, y, z - height + 0.003, false);
+    put(right, glow(r * 0.6, [0.04, 0.04, 0.1]), x, y, z - height + 0.002, false);
+    put(right, glow(r * 0.13, [0.16, 0.12, 0.32]), x - r * 0.06, y + r * 0.04, z - height + 0.0015, false);
+  };
+  for (const fromOuter of [0.179, 0.395]) lens(...at(fromOuter, 0.189), backZ - t, W * 0.075);
+  put(right, new THREE.Mesh(faceBack(plate(W * 0.034, W * 0.013, W * 0.0065)), hole), ...at(0.6, 0.139), backZ - t - 0.002, false);
+  put(right, new THREE.Mesh(faceBack(new THREE.CircleGeometry(W * 0.024, 48)), flashRim), ...at(0.6, 0.245), backZ - t - 0.002, false);
+  put(right, new THREE.Mesh(faceBack(new THREE.CircleGeometry(W * 0.019, 48)), flash), ...at(0.6, 0.245), backZ - t - 0.003, false);
+  // The Apple logo, centered: glossy against the matte back.
+  for (const shape of APPLE) {
+    const mark = new THREE.ShapeGeometry(shape, 12);
+    mark.translate(-12, -12, 0).scale(-W * 0.0105, -W * 0.0105, 1);
+    put(right, new THREE.Mesh(faceBack(mark), logo), W / 2, H / 2 - W * 0.737, backZ - 0.002, false);
+  }
 
-  // Buttons: volume and the Touch ID side button on the cover half, Camera Control on the other.
+  // Buttons: volume on top and the Touch ID side button on the cover half, Camera Control on the other.
   const depth = HALF * 0.5;
   const key = (group: THREE.Group, width: number, height: number, d: number, x: number, y: number, material: THREE.Material = titanium) =>
     put(group, new THREE.Mesh(new RoundedBoxGeometry(width, height, d, 3, Math.min(width, height, d) / 2.2), material), x, y, -HALF / 2);
-  key(left, 0.08, 0.62, depth, -W - 0.02, H * 0.3); key(left, 0.08, 0.62, depth, -W - 0.02, H * 0.19);
-  buttons.set(key(left, 0.08, 1.05, depth, -W - 0.02, H * 0.02, ring), 'lock');
+  key(left, W * 0.13, 0.08, depth, -W * 0.79, H / 2 + 0.02); key(left, W * 0.125, 0.08, depth, -W * 0.63, H / 2 + 0.02);
+  buttons.set(key(left, 0.08, 1.1, depth, -W - 0.02, H * 0.06, ring), 'lock');
   key(right, 0.05, 1.1, depth * 0.9, W + 0.005, -H * 0.17, ringDark); key(right, 0.04, 0.98, depth * 0.7, W + 0.025, -H * 0.17, lensGlass);
 
   // Antenna bands near the outer corners, USB-C and speakers on the bottom of the camera half.

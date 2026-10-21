@@ -16,9 +16,24 @@ type ModelPickerOptions = {
   onSelect: (provider: ProviderId, model: string) => Promise<void>;
   onEffortSelect?: (effort: string | null) => Promise<void>;
   loadModels?: (provider: ProviderId) => Promise<ProviderModel[]>;
+  /** Model IDs to list first in a shortened catalog, newest first; null lists every model. Search always covers all. */
+  recent?: (provider: ProviderId) => string[] | null;
   onClose?: () => void;
   placement?: 'above' | 'below';
 };
+
+const RECENT_LIMIT = 5;
+const recentKey = (provider: ProviderId) => `pandacode.recent-models.${provider}`;
+function storedRecent(provider: ProviderId): string[] {
+  try {
+    const stored = JSON.parse(localStorage.getItem(recentKey(provider)) || '[]');
+    return Array.isArray(stored) ? stored.filter((id): id is string => typeof id === 'string') : [];
+  } catch { return []; }
+}
+function rememberRecent(provider: ProviderId, model: string): void {
+  if (model === 'default') return;
+  try { localStorage.setItem(recentKey(provider), JSON.stringify([model, ...storedRecent(provider).filter(id => id !== model)].slice(0, RECENT_LIMIT))); } catch { /* Ordering only. */ }
+}
 
 /** A transient picker with local state and listeners released on dismissal. */
 export function openModelPicker(options: ModelPickerOptions): () => void {
@@ -213,6 +228,15 @@ export function openModelPicker(options: ModelPickerOptions): () => void {
     }
   }
 
+  /** Default plus the most recent models, padded from the catalog, when the caller asks for a short list. */
+  function shortList(provider: ProviderId, models: ProviderModel[]): ProviderModel[] {
+    const recent = options.recent?.(provider);
+    if (!recent) return models;
+    const byId = new Map(models.map(model => [model.id, model]));
+    const first = [...(provider === current.provider ? [current.model] : []), ...recent, ...storedRecent(provider)].filter(id => id !== 'default' && byId.has(id));
+    const ids = [...new Set([...first, ...models.map(model => model.id).filter(id => id !== 'default')])].slice(0, RECENT_LIMIT);
+    return [byId.get('default')!, ...ids.map(id => byId.get(id)!)];
+  }
   function renderChoices(): void {
     if (closed) return;
     const focused = panel.contains(document.activeElement) ? (document.activeElement as HTMLElement).closest<HTMLButtonElement>('.model-menu-option') : null;
@@ -228,7 +252,7 @@ export function openModelPicker(options: ModelPickerOptions): () => void {
     let markup = teamMarkup + providers.map(provider => {
       const models = modelChoices(provider.id, provider.models, provider.id === current.provider ? current.model : '');
       const providerMatches = [provider.id, provider.name].some(name => name.toLowerCase().includes(normalized));
-      const visible = models.filter(model => !query || providerMatches || [model.id, model.name, model.description].some(value => value.toLowerCase().includes(normalized)));
+      const visible = query ? models.filter(model => providerMatches || [model.id, model.name, model.description].some(value => value.toLowerCase().includes(normalized))) : shortList(provider.id, models);
       const locked = !canSwitchProvider && provider.id !== current.provider;
       const unavailable = !provider.installed;
       const custom = Boolean(query && !namedHarness && !models.some(model => [model.id, model.name].some(value => value.toLowerCase() === normalized)) && !locked);
@@ -269,7 +293,10 @@ export function openModelPicker(options: ModelPickerOptions): () => void {
     position();
     try {
       if (button.dataset.team) await options.onTeamSelect?.(button.dataset.team);
-      else await onSelect(button.dataset.provider as ProviderId, button.dataset.model!);
+      else {
+        await onSelect(button.dataset.provider as ProviderId, button.dataset.model!);
+        if (options.recent) rememberRecent(button.dataset.provider as ProviderId, button.dataset.model!);
+      }
       close();
     } catch (reason) {
       if (closed) return;

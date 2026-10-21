@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use std::{
     path::{Path, PathBuf},
     process::Command,
+    sync::Mutex,
     time::{Duration, Instant},
 };
 
@@ -20,9 +21,12 @@ pub const COVER: &str = "primary";
 pub const INNER: &str = "primary-1";
 const UNAVAILABLE: &str = "iPhone Duo needs Xcode 27.1 or later with the iOS 27.1 simulator runtime (Xcode → Settings → Components). Xcode 27.1 requires macOS 26.6.";
 const HELPER: &str = include_str!("duo_helper.m");
-/// How long a fold animates, and how long the matching display may take to light up.
-const SWEEP_SECONDS: &str = "0.8";
+/// The hinge jumps: the window animates the fold itself, and each second of sweep
+/// delayed the new display by as much (measured: 0.8 s sweep 1.4 s, none 0.4 s).
+const SWEEP_SECONDS: &str = "0";
+/// How long the matching display may take to light up, polled at `SWITCH_POLL`.
 const SWITCH: Duration = Duration::from_secs(6);
+const SWITCH_POLL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
@@ -180,8 +184,19 @@ fn tool(program: &str, args: &[String], label: &str) -> Result<String, String> {
     command.args(args);
     Ok(String::from_utf8_lossy(&checked(run_process(command, label, 1024 * 1024, Duration::from_secs(120))?)?.bytes).trim().to_string())
 }
-/// The helper for the selected Xcode, compiled and ad-hoc signed on first use.
+/// The helper for the selected Xcode, compiled and ad-hoc signed on first use, and
+/// remembered so taps and folds skip `xcode-select` while the binary is there.
 fn helper_path() -> Result<PathBuf, String> {
+    static KNOWN: Mutex<Option<PathBuf>> = Mutex::new(None);
+    let mut known = KNOWN.lock().unwrap_or_else(|poison| poison.into_inner());
+    if let Some(path) = known.as_ref().filter(|p| p.is_file()) {
+        return Ok(path.clone());
+    }
+    let path = build_helper()?;
+    *known = Some(path.clone());
+    Ok(path)
+}
+fn build_helper() -> Result<PathBuf, String> {
     let developer = tool("/usr/bin/xcode-select", &["-p".into()], "xcode-select")?;
     let key: String = Sha256::digest([HELPER.as_bytes(), developer.as_bytes()].concat()).iter().take(6).map(|b| format!("{b:02x}")).collect();
     let dir = std::env::temp_dir().join("pandacode-simulator");
@@ -212,19 +227,22 @@ pub fn helper(udid: &str, args: &[String]) -> Result<(), String> {
     xcrun(&all, QUICK).map(|_| ())
 }
 
-/// Sweep the hinge from `from` to `to`, then wait until the matching display is active.
-pub fn fold(udid: &str, from: Pose, to: Pose) -> Result<(), String> {
+/// Move the hinge from `from` to `to`, then wait until the matching display is active.
+/// Returns the displays as last read, so callers need not ask `devicectl` again.
+pub fn fold(udid: &str, from: Pose, to: Pose) -> Result<Vec<Display>, String> {
     helper(udid, &["hinge-sweep".into(), from.degrees().to_string(), to.degrees().to_string(), SWEEP_SECONDS.into()])?;
     let wanted = to != Pose::Closed;
     let deadline = Instant::now() + SWITCH;
     loop {
-        if displays(udid).ok().and_then(|list| active(&list).map(|d| d.inner)) == Some(wanted) {
-            return Ok(());
+        if let Ok(list) = displays(udid) {
+            if active(&list).map(|d| d.inner) == Some(wanted) {
+                return Ok(list);
+            }
         }
         if Instant::now() > deadline {
             return Err(format!("iPhone Duo did not switch to its {} display within {} seconds.", if wanted { "inner" } else { "cover" }, SWITCH.as_secs()));
         }
-        std::thread::sleep(Duration::from_millis(200));
+        std::thread::sleep(SWITCH_POLL);
     }
 }
 

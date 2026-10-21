@@ -13,6 +13,9 @@ async function open(page: Page): Promise<void> {
       window.__simEmit ??= (name, event) => emit(name, event);
       if (command.startsWith('simulator_') && command !== 'simulator_frame') (window.__simCalls ??= []).push({ command, args: structuredClone(args) });
       if (command === 'simulator_frame') (window.__simFrames = (window.__simFrames ?? 0) + 1);
+      if (command === 'simulator_pose' && window.__simPoseHold) await window.__simPoseHold;
+      if (command === 'simulator_pose' && window.__simPoseFail) throw new Error(window.__simPoseFail);
+      if (command === 'simulator_frame' && window.__simFrameHold) await window.__simFrameHold;
       switch (command) {
     `) });
   });
@@ -208,7 +211,7 @@ test('iPhone Duo is added from the device menu and takes three poses', async ({ 
   await pose.click();
   await page.getByRole('menuitemradio', { name: /Open/ }).click();
   await expect(pose).toHaveAccessibleName('iPhone Duo pose: Open');
-  expect((await calls(page, 'simulator_pose')).at(-1).args).toEqual({ udid: 'A1B2C3D4-0000-4000-8000-00000000D0D0', pose: 'open' });
+  await expect.poll(async () => (await calls(page, 'simulator_pose')).at(-1)?.args).toEqual({ udid: 'A1B2C3D4-0000-4000-8000-00000000D0D0', pose: 'open' });
   await page.getByRole('button', { name: /Device finish/ }).click();
   await expect(page.getByRole('menuitemradio', { name: 'Night Sky' })).toBeVisible();
   await expect(page.getByRole('menuitemradio', { name: 'Star White' })).toBeVisible();
@@ -231,6 +234,45 @@ test('iPhone Duo is added from the device menu and takes three poses', async ({ 
   const cover = (await inputs(page))[1];
   expect(cover.x).toBeGreaterThan(0); expect(cover.x).toBeLessThan(466);
   expect(cover.y).toBeGreaterThan(0); expect(cover.y).toBeLessThan(678);
+});
+
+test('iPhone Duo folds on click and shows a spinner until the new display answers', async ({ page }) => {
+  await open(page);
+  await showSimulator(page);
+  const panel = page.locator('#simulator-panel'), screen = panel.locator('.sim-stage');
+  const pose = panel.locator('[data-sim="pose"]');
+  await panel.getByRole('button', { name: 'Choose simulator' }).click();
+  await page.getByRole('menuitemradio', { name: /Add iPhone Duo/ }).click();
+  await panel.getByRole('button', { name: 'Boot simulator' }).click();
+  await expect(pose).toHaveAccessibleName('iPhone Duo pose: Closed');
+  await expect.poll(() => page.evaluate(() => (window as any).__simFrames ?? 0)).toBeGreaterThan(0);
+  // Hold the native fold and the frames: the hinge must still move at once.
+  await page.evaluate(() => {
+    const w = window as any;
+    w.__simPoseHold = new Promise(resolve => { w.__simPoseRelease = resolve; });
+    w.__simFrameHold = new Promise(resolve => { w.__simFrameRelease = resolve; });
+  });
+  await pose.click();
+  await page.getByRole('menuitemradio', { name: /Open/ }).click();
+  await expect(pose).toHaveAccessibleName('iPhone Duo pose: Open', { timeout: 200 });
+  await expect(screen).toHaveAttribute('aria-busy', 'true');
+  await expect(pose).toBeDisabled();
+  await page.evaluate(() => { const w = window as any; w.__simPoseHold = null; w.__simPoseRelease(); });
+  await expect(pose).toBeEnabled();
+  await page.waitForTimeout(300);
+  await expect(screen).toHaveAttribute('aria-busy', 'true');
+  await page.evaluate(() => { const w = window as any; w.__simFrameHold = null; w.__simFrameRelease(); });
+  await expect(screen).not.toHaveAttribute('aria-busy');
+  expect((await calls(page, 'simulator_pose')).at(-1).args.pose).toBe('open');
+
+  // A fold that fails moves back and says why.
+  await page.evaluate(() => { (window as any).__simPoseFail = 'The hinge is stuck.'; });
+  await pose.click();
+  await page.getByRole('menuitemradio', { name: /Closed/ }).click();
+  await expect(pose).toHaveAccessibleName('iPhone Duo pose: Closed', { timeout: 200 });
+  await expect(page.locator('#toast')).toContainText('The hinge is stuck.');
+  await expect(pose).toHaveAccessibleName('iPhone Duo pose: Open');
+  await expect(screen).not.toHaveAttribute('aria-busy');
 });
 
 test('iPhone Duo follows a pose changed outside PandaCode', async ({ page }) => {

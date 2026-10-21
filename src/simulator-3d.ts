@@ -23,6 +23,8 @@ export type Device3D = {
   setShape(shape: DeviceShape): void;
   setFrame(image: CanvasImageSource & { width: number; height: number }): void;
   setMessage(text: string): void;
+  /** A spinner on the display facing the user until the next frame or `setLoading(false)`. */
+  setLoading(loading: boolean): void;
   setDark(dark: boolean): void;
   /** Repaint the body in one of the model's finishes. */
   setFinish(finish: Finish): void;
@@ -212,11 +214,12 @@ export function mountDevice3D(host: HTMLElement, options: Options): Device3D {
 
   /* Rendering runs only while visible and stops when nothing moves. */
   let frame = 0, dirty = true, active = false, turning: { from: THREE.Quaternion; to: THREE.Quaternion; start: number; duration: number } | undefined;
-  let touchFade = 0;
+  let touchFade = 0, loading = false;
   const tick = (now: number) => {
     frame = 0;
     if (!active) return;
     let moving = controls.update();
+    if (loading) { paintSpinner(now); moving = true; }
     if (folding) {
       const t = Math.min(1, (now - folding.start) / FOLD_MS), eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
       fold = THREE.MathUtils.lerp(folding.from, folding.to, eased);
@@ -359,6 +362,7 @@ export function mountDevice3D(host: HTMLElement, options: Options): Device3D {
     return display;
   }
   function setMessage(text: string): void {
+    loading = false;
     const { pixels, paint, texture } = activeDisplay();
     paint.fillStyle = '#000'; paint.fillRect(0, 0, pixels.width, pixels.height);
     if (text) {
@@ -367,6 +371,19 @@ export function mountDevice3D(host: HTMLElement, options: Options): Device3D {
       paint.fillText(text, pixels.width / 2, pixels.height / 2, pixels.width * 0.86);
     }
     texture.needsUpdate = true; wake();
+  }
+  /** A looping status spinner: twelve spokes, the brightest one turning once a second. */
+  function paintSpinner(now: number): void {
+    const { pixels, paint, texture } = activeDisplay();
+    const cx = pixels.width / 2, cy = pixels.height / 2, radius = Math.min(pixels.width, pixels.height) / 18, lead = Math.floor((now / 1000) * 12) % 12;
+    paint.fillStyle = '#000'; paint.fillRect(0, 0, pixels.width, pixels.height);
+    paint.lineWidth = radius / 4; paint.lineCap = 'round';
+    for (let i = 0; i < 12; i++) {
+      const angle = (i / 12) * Math.PI * 2, sin = Math.sin(angle), cos = Math.cos(angle);
+      paint.strokeStyle = `rgba(255,255,255,${0.15 + 0.7 * (1 - ((lead - i + 12) % 12) / 11)})`;
+      paint.beginPath(); paint.moveTo(cx + sin * radius * 0.5, cy - cos * radius * 0.5); paint.lineTo(cx + sin * radius, cy - cos * radius); paint.stroke();
+    }
+    texture.needsUpdate = true;
   }
   function resetView(animate = true): void {
     camera.position.set(0, 0, fitDistance); controls.target.set(0, 0, 0); controls.update();
@@ -389,6 +406,7 @@ export function mountDevice3D(host: HTMLElement, options: Options): Device3D {
       build(); wake();
     },
     setFrame(image) {
+      loading = false;
       const { pixels, paint, texture } = activeDisplay();
       // Frames arrive at whatever scale the producer chose; each one fills the display.
       // A Duo's inner screenshot may arrive portrait for the landscape display: turn it a quarter.
@@ -399,6 +417,7 @@ export function mountDevice3D(host: HTMLElement, options: Options): Device3D {
       texture.needsUpdate = true; wake();
     },
     setMessage,
+    setLoading(next) { loading = next; if (next) paintSpinner(performance.now()); wake(); },
     setDark() { wake(); },
     setFinish(next) { finish = next; build(); wake(); },
     resetView,

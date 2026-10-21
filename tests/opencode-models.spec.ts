@@ -58,8 +58,8 @@ async function failuresAndDelay(page: Page): Promise<void> {
 test('selected OpenCode models survive reload and appear in the composer without unselected models', async ({ page }) => {
   await boot(page);
   await openPicker(page);
-  // Nothing selected yet: the whole catalog is listed, as OpenCode itself does.
-  await expect(picker(page).getByRole('button', { name: /^OpenCode ·/ })).toHaveCount(4);
+  // Nothing selected yet: searching reaches the whole catalog, as OpenCode itself does.
+  await expect(picker(page).getByRole('button', { name: /^OpenCode ·/ })).toHaveCount(8);
   await page.keyboard.press('Escape');
   await openModels(page);
   await modelCheckbox(page, 'Big Pickle').check();
@@ -92,6 +92,23 @@ test('selected OpenCode models survive reload and appear in the composer without
   await expect(picker(page).getByRole('button', { name: /^OpenCode ·/ })).toHaveCount(3);
 });
 
+test('without a saved selection the picker lists Default plus the five most recent OpenCode models', async ({ page }) => {
+  await boot(page);
+  await openPicker(page);
+  const search = picker(page).getByRole('searchbox', { name: 'Search harnesses and models', exact: true });
+  await search.fill('');
+  const openCode = picker(page).getByRole('button', { name: /^OpenCode ·/ });
+  await expect(openCode).toHaveCount(6);
+  await expect(picker(page).getByRole('button', { name: 'OpenCode · Grok 4', exact: true })).toHaveCount(0);
+  // Search still reaches models beyond the short list.
+  await search.fill('grok-4');
+  await picker(page).getByRole('button', { name: 'OpenCode · Grok 4', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Choose harness and model', exact: true })).toContainText('Grok 4');
+  await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
+  await expect(openCode).toHaveCount(6);
+  await expect(openCode.nth(1)).toHaveAccessibleName('OpenCode · Grok 4');
+});
+
 test('deselecting a model does not change an existing task using it', async ({ page }) => {
   await boot(page);
   await openModels(page);
@@ -111,8 +128,8 @@ test('deselecting a model does not change an existing task using it', async ({ p
   await picker(page).getByRole('button', { name: 'OpenCode · Default', exact: true }).click();
   await page.keyboard.press('Escape');
   await openPicker(page);
-  // Clearing the selection lists the whole catalog again.
-  await expect(picker(page).getByRole('button', { name: /^OpenCode ·/ })).toHaveCount(4);
+  // Clearing the selection makes the whole catalog searchable again.
+  await expect(picker(page).getByRole('button', { name: /^OpenCode ·/ })).toHaveCount(8);
 });
 
 test('refresh and save failures keep draft choices available for retry', async ({ page }) => {
@@ -207,7 +224,9 @@ test('saving in the workspace invalidates the already-open launcher model cache 
   try {
     await launcher.goto('/?view=launcher');
     await openPicker(launcher);
-    await expect(picker(launcher).getByRole('button', { name: /^OpenCode ·/ })).toHaveCount(4);
+    await expect(picker(launcher).getByRole('button', { name: /^OpenCode ·/ })).toHaveCount(8);
+    await picker(launcher).getByRole('searchbox', { name: 'Search harnesses and models', exact: true }).fill('');
+    await expect(picker(launcher).getByRole('button', { name: /^OpenCode ·/ })).toHaveCount(6);
     // Wait for its initial catalog request to finish so this really warms the cache.
     await expect(picker(launcher).locator('[data-catalog-loading="opencode"]')).toBeHidden();
     await launcher.keyboard.press('Escape');

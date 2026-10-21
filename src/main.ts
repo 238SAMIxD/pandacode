@@ -32,6 +32,7 @@ import { initializeNativeAppearance } from './appearance';
 import { currentTheme, setTheme } from './theme';
 import { palette } from './palette';
 import { contextSummary, fallbackModel, parseContextUsage } from './model-catalog';
+import { openCodeChoices, type OpenCodeModels } from './preview-opencode';
 import { approvalMode, approvalModes } from './approval-modes';
 import { renderTaskBoard, renderTaskDetails, taskStage } from './task-board';
 import { streamMarkdown } from './streaming-markdown';
@@ -790,10 +791,21 @@ function rememberedModel(id: ProviderId): string {
   const model = localStorage.getItem('pandacode.model.' + id) || state.sessions.find(s => s.provider === id && s.model)?.model || 'default';
   return model.length <= 200 ? model : 'default';
 }
+let openCodeSaved = false;
+/** OpenCode models by last use when no Settings selection narrows the picker. */
+function recentModels(id: ProviderId): string[] | null {
+  if (id !== 'opencode' || openCodeSaved) return null;
+  const used = state.sessions.filter(s => s.provider === id && s.model);
+  return used.sort((a, b) => (b.lastPromptAt ?? b.updatedAt) - (a.lastPromptAt ?? a.updatedAt)).map(s => s.model);
+}
 function loadModels(id: ProviderId): Promise<ProviderModel[]> {
   const cached = modelCatalogs.get(id);
   if (cached && cached.expires > Date.now()) return cached.pending;
-  const pending = call<ProviderModel[]>('list_provider_models', { provider: id }).then(models => {
+  // OpenCode's own listing also says whether Settings saved a selection, which keeps the picker's full list.
+  const request = id === 'opencode'
+    ? call<OpenCodeModels>('list_opencode_models').then(result => { openCodeSaved = result.selectedModelIds.length > 0; return openCodeChoices(result); })
+    : call<ProviderModel[]>('list_provider_models', { provider: id });
+  const pending = request.then(models => {
     if (modelCatalogs.get(id)?.pending === pending) {
       const entry = provider(id); if (entry) entry.models = models;
       if (session()?.provider === id) refreshModelLabels();
@@ -2710,7 +2722,7 @@ async function showModel(anchor: HTMLElement): Promise<void> {
     },
     anchor, providers: state.providers, current: { provider: selected.provider, model: selected.model || 'default', reasoningEffort: selected.reasoningEffort ?? null, contextUsage: selected.contextUsage },
     canSwitchProvider: true,
-    loadModels, onClose: () => { modelPickerCleanup = undefined; },
+    loadModels, recent: recentModels, onClose: () => { modelPickerCleanup = undefined; },
     onEffortSelect: async reasoningEffort => {
       if (selected.id !== state.sessionId || generation !== state.generation || isRunning()) throw new Error('Select the task again to change its reasoning effort.');
       configuringSessions.add(selected.id);

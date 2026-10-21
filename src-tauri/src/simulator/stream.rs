@@ -145,7 +145,7 @@ fn run_screenshots(producer: &Producer, udid: &str, display: Option<&str>) {
     let mut failures = 0;
     while !producer.idle() {
         let started = Instant::now();
-        match super::screenshot(udid, None, display) {
+        match super::frame(udid, display) {
             Ok(png) => {
                 failures = 0;
                 producer.push(png);
@@ -189,6 +189,11 @@ impl Streams {
             worker.finish(None);
         });
         producer
+    }
+
+    /// Start capturing ahead of the first request, e.g. right after a fold.
+    pub fn start(&self, udid: &str, display: Option<&'static str>) {
+        self.producer(udid, display);
     }
 
     /// The newest frame after `after`, waiting up to `wait` for one to arrive.

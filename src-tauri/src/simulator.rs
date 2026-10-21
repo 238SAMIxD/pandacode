@@ -281,14 +281,19 @@ impl Simulators {
     }
     pub fn status(&self) -> Status {
         let mut status = Status { axe: axe_path().is_some(), axe_install: AXE_INSTALL.into(), android: android::emulator_path().is_some(), selected: self.selected(), ..Default::default() };
-        match devices() {
+        // The Duo probe (two `simctl` lists, once a minute) runs beside the device list.
+        let (listed, duo_available) = std::thread::scope(|scope| {
+            let probe = scope.spawn(|| self.duo_available());
+            (devices(), probe.join().unwrap_or(false))
+        });
+        match listed {
             Ok(list) => {
                 status.available = true;
                 if status.selected.as_ref().is_some_and(|u| !list.iter().any(|d| &d.udid == u)) {
                     status.selected = None;
                 }
                 self.note_duos(&list);
-                status.duo_available = self.duo_available();
+                status.duo_available = duo_available;
                 status.pose = status.selected.as_deref().filter(|u| list.iter().any(|d| d.duo && d.udid == *u)).map(|u| self.pose(u));
                 let shown = status.selected.clone().and_then(|u| list.iter().find(|d| d.udid == u).cloned());
                 status.screen = shown.filter(|d| d.platform == "ios" || d.state == "Booted").and_then(|d| self.screen(&d).ok());
@@ -310,6 +315,10 @@ impl Simulators {
             Some((at, yes)) if at.elapsed() < Duration::from_secs(60) => yes,
             _ => { let yes = duo::probe(); *cache = Some((Instant::now(), yes)); yes }
         }
+    }
+    /// A Duo listed by an earlier status; asks no simulator tool.
+    pub fn known_duo(&self, udid: &str) -> bool {
+        self.recorded(udid).is_some()
     }
     fn recorded(&self, udid: &str) -> Option<duo::Pose> {
         self.poses.lock().ok().and_then(|p| p.get(udid).copied())
@@ -350,12 +359,14 @@ impl Simulators {
             None => screen.shown(self.display(&device.udid)),
         })
     }
-    /// Move the hinge to the pose, remember it and restart the device's stream.
+    /// Move the hinge to the pose, remember it and start the new display's stream at once,
+    /// so its first frame is being captured while the window hears back.
     pub fn fold(&self, udid: &str, pose: duo::Pose) -> Result<(), String> {
-        duo::fold(udid, self.pose(udid), pose)?;
+        let displays = duo::fold(udid, self.pose(udid), pose)?;
         self.poses.lock().map_err(|e| e.to_string())?.insert(udid.to_string(), pose);
-        self.duo_displays.lock().map_err(|e| e.to_string())?.remove(udid);
+        self.duo_displays.lock().map_err(|e| e.to_string())?.insert(udid.to_string(), (Instant::now(), displays));
         self.streams.stop(udid);
+        self.streams.start(udid, Some(duo::display_for(pose)));
         Ok(())
     }
     /// Forget a device's cached screen, e.g. after it boots or shuts down.
@@ -379,6 +390,25 @@ pub fn shutdown(udid: &str) -> Result<(), String> {
         Err(error) if !error.contains("current state: Shutdown") => Err(error),
         _ => Ok(()),
     }
+}
+
+/// A frame for the live view: a JPEG straight from `simctl` (a Duo's inner display
+/// as PNG took 1.5 s and 4.8 MB, as JPEG 0.5 s and 0.4 MB); Android stays PNG.
+pub fn frame(udid: &str, display: Option<&str>) -> Result<Vec<u8>, String> {
+    if android::avd(udid).is_some() {
+        return screenshot(udid, None, display);
+    }
+    let dir = std::env::temp_dir().join("pandacode-simulator");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(format!("{}-{}.jpg", udid, crate::storage::id()));
+    let display = display.map(|d| format!("--display={d}"));
+    let file = path.to_string_lossy();
+    let mut args = vec!["simctl", "io", udid, "screenshot", "--type=jpeg"];
+    args.extend(display.as_deref());
+    args.push(&file);
+    let result = xcrun(&args, QUICK).and_then(|_| std::fs::read(&path).map_err(|e| e.to_string()));
+    let _ = std::fs::remove_file(&path);
+    result
 }
 
 /// A PNG of the screen at full resolution, or JPEG resized to points when `points` is set.

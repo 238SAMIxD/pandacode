@@ -83,8 +83,15 @@ export function mountSimulator(root: HTMLElement, host: SimulatorHost) {
   const spec = () => modelSpec(current()?.duo ? DUO_TYPE : current()?.deviceType ?? '', current()?.family ?? 'phone');
 
   function message(text: string): void {
+    stage.removeAttribute('aria-busy');
     device?.setMessage(text);
     if (flat) { flat.removeAttribute('src'); flat.alt = text; }
+  }
+  /** A spinner on the display until its first frame arrives; `aria-busy` tells assistive tech. */
+  function loading(): void {
+    stage.setAttribute('aria-busy', 'true');
+    device?.setLoading(true);
+    if (flat) { flat.removeAttribute('src'); flat.alt = 'Loading display…'; }
   }
   function say(text: string): void { statusLine.textContent = text; statusLine.hidden = !text; }
 
@@ -141,6 +148,8 @@ export function mountSimulator(root: HTMLElement, host: SimulatorHost) {
 
   async function refresh(): Promise<void> {
     try {
+      // The 3D view loads while the simulator tools answer.
+      const view = ensureView();
       let next = await call('simulator_status');
       // Show something useful: the first running device, else the newest one.
       if (!next.selected && next.devices.length) next = await call('simulator_select', { udid: (next.devices.find(d => d.state === 'Booted') ?? next.devices[0]).udid });
@@ -148,7 +157,7 @@ export function mountSimulator(root: HTMLElement, host: SimulatorHost) {
       const changed = next.selected !== status?.selected;
       status = next;
       if (changed) seq = 0;
-      await ensureView();
+      await view;
       render();
       pump();
     } catch (error) { say(error instanceof Error ? error.message : String(error)); }
@@ -170,6 +179,7 @@ export function mountSimulator(root: HTMLElement, host: SimulatorHost) {
             const blob = new Blob([data.slice(8)]);
             if (device) { const bitmap = await createImageBitmap(blob); if (generation === pumpGeneration) device.setFrame(bitmap); bitmap.close(); }
             else if (flat) { const url = URL.createObjectURL(blob); flat.onload = () => URL.revokeObjectURL(url); flat.src = url; }
+            if (generation === pumpGeneration) stage.removeAttribute('aria-busy');
             failures = 0;
           }
         } catch (error) {
@@ -263,14 +273,23 @@ export function mountSimulator(root: HTMLElement, host: SimulatorHost) {
     try { status = await call('simulator_create_duo'); seq = 0; say(''); render(); pump(); }
     catch (error) { say(''); host.notify(error instanceof Error ? error.message : String(error)); }
   }
+  /** The hinge moves on click; the simulator follows in the background, and the new
+   * display shows a spinner until its first frame. A failed fold moves back. */
   async function setPose(pose: DuoPose): Promise<void> {
-    const udid = status?.selected; if (!udid || poseBusy || pose === (status?.pose ?? 'closed')) return;
-    poseBusy = true; render();
+    const udid = status?.selected, before = status?.pose ?? 'closed';
+    if (!udid || !status || poseBusy || pose === before) return;
+    poseBusy = true; pumpGeneration++;
+    status = { ...status, pose };
+    device?.setPose(pose, true); render(); loading();
     try {
-      status = await call('simulator_pose', { udid, pose });
-      device?.setPose(status.pose ?? pose, true); seq = 0; render(); pump();
-    } catch (error) { host.notify(error instanceof Error ? error.message : String(error)); }
-    finally { poseBusy = false; render(); }
+      const next = await call('simulator_pose', { udid, pose });
+      if (disposed || next.selected !== status?.selected) return;
+      status = next; device?.setPose(next.pose ?? pose, true);
+    } catch (error) {
+      // The old display's newest frame replaces the spinner.
+      if (status?.selected === udid) { status = { ...status, pose: before }; device?.setPose(before, true); seq = 0; }
+      host.notify(error instanceof Error ? error.message : String(error));
+    } finally { poseBusy = false; render(); pump(); }
   }
   /** The Duo's hinge can move outside PandaCode (Xcode's Device Hub), so follow the real pose while it is on screen. */
   function watchPose(): void {
@@ -282,7 +301,7 @@ export function mountSimulator(root: HTMLElement, host: SimulatorHost) {
       try {
         const next = await call('simulator_status');
         if (disposed || poseBusy || next.selected !== status?.selected || !next.pose || next.pose === device?.getPose()) return;
-        status = next; device?.setPose(next.pose, true); seq = 0; render(); pump();
+        status = next; device?.setPose(next.pose, true); render(); loading(); pump();
       } catch { /* the next tick tries again */ } finally { polling = false; }
     }, 3000);
   }
