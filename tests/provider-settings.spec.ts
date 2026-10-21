@@ -50,7 +50,7 @@ async function delayedConnections(page: Page): Promise<void> {
   await expect(page.locator('.task-item.selected .task-title')).toHaveText('Make search feel instant');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('tab', { name: 'Providers', exact: true }).click();
-  await expect(page.locator('#settings-panel-providers details summary')).toHaveCount(3);
+  await expect(page.locator('#settings-panel-providers details summary')).toHaveCount(4);
   for (const summary of await page.locator('#settings-panel-providers details summary').all()) await summary.click();
 }
 
@@ -110,7 +110,7 @@ test('provider connections are grouped in Providers and never accept secrets in 
   await expect(dialog.getByText('opencode auth login', { exact: true })).toBeVisible();
   await expect(dialog.getByText('agy', { exact: true })).toBeVisible();
   await expect(dialog.getByText('grok login', { exact: true })).toBeVisible();
-  const paths = dialog.locator('details');
+  const paths = dialog.locator('details').filter({ has: page.getByLabel('Grok executable', { exact: true }) });
   await paths.last().locator('summary').click();
   await dialog.getByLabel('Grok executable', { exact: true }).fill('/tmp/my-grok');
   await paths.last().getByRole('button', { name: 'Apply', exact: true }).click();
@@ -164,7 +164,7 @@ test('provider connections expose all new harnesses and real GLM model names', a
   await expect(page.getByText('GLM-4.7', { exact: true }).first()).toBeVisible();
 });
 
-for (const providerId of ['claude', 'codex', 'kimi', 'opencode', 'glm', 'antigravity', 'grok', 'mimo']) {
+for (const providerId of ['claude', 'codex', 'kimi', 'opencode', 'glm', 'antigravity', 'grok', 'mimo', 'pi']) {
   test(`provider connections start ${providerId} tasks with Full access and retain explicit restrictions when switching`, async ({ page }) => {
     await page.addInitScript(provider => localStorage.setItem('pandacode.provider', provider), providerId);
     await page.route('**/src/preview.ts*', async route => {
@@ -199,3 +199,34 @@ for (const providerId of ['claude', 'codex', 'kimi', 'opencode', 'glm', 'antigra
     await expect.poll(readTask).toMatchObject({provider:next, mode:'full'});
   });
 }
+
+test('Pi offers four approval modes with Accept edits', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('pandacode.provider', 'pi'));
+  await page.goto('/');
+  await page.locator('.new-task-button').click();
+  await page.locator('#mode-picker-trigger').click();
+  const items = page.getByRole('dialog', { name: 'Permissions', exact: true }).getByRole('menuitemradio');
+  await expect(items).toHaveCount(4);
+  await expect(items.filter({ hasText: 'Accept edits' })).toHaveCount(1);
+});
+
+test('settings organization supports Pi models and executable settings', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('.task-item.selected')).toHaveAttribute('data-id', 'session-1');
+  await page.locator('.new-task-button').click();
+  const trigger = page.getByRole('button', { name: 'Choose harness and model', exact: true });
+  await trigger.click();
+  const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
+  const pi = picker.locator('.model-menu-option').filter({ has: page.locator('[data-provider="pi"]') });
+  await pi.first().click();
+  await expect(trigger.locator('[data-provider="pi"]')).toBeVisible();
+  await trigger.click();
+  await expect(picker.locator('.model-menu-option').filter({ has: page.locator('[data-provider="pi"]') }).filter({ hasText: 'Claude Sonnet 4.5' })).toContainText('200K context');
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('tab', { name: 'Providers', exact: true }).click();
+  const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Pi', exact: true }) });
+  await expect(card.getByRole('link', { name: 'Install Pi' })).toHaveAttribute('href', 'https://github.com/earendil-works/pi');
+  await card.locator('summary').click();
+  await expect(card.getByLabel('Pi executable', { exact: true })).toBeVisible();
+});

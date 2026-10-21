@@ -83,6 +83,7 @@ const providers: Provider[] = [
   { id: 'antigravity', name: 'Antigravity', installed: false, path: null, version: '', models: [] },
   { id: 'grok', name: 'Grok Build', installed: true, path: '/sample/bin/grok', version: 'grok 1.0.40 (sample)', models: [] },
   { id: 'mimo', name: 'MiMo Token Plan', installed: true, path: '/sample/bin/claude', version: 'Sample provider', models: [] },
+  { id: 'pi', name: 'Pi', installed: true, path: '/sample/bin/pi', version: 'Sample provider', models: [] },
 ];
 // Mirrors providers::mimo::ENDPOINTS; the native side is the authority.
 const previewMimoEndpoints = [
@@ -94,6 +95,7 @@ const previewMimoEndpoints = [
 let previewMimoEndpoint: string | null = null;
 // Representative catalog fixtures only; the native app queries installed harnesses.
 const catalogs: Record<ProviderId, ProviderModel[]> = {
+  pi: [{ id: 'anthropic/claude-sonnet-4-5', name: 'Claude Sonnet 4.5', description: 'Sample Pi model.', reasoningEfforts: [{ id: 'low', name: 'Low', description: '' }, { id: 'high', name: 'High', description: '' }], contextWindow: 200000 }],
   opencode: openCodePreviewModels,
   glm: [{ id: 'glm-4.7', name: 'GLM-4.7', description: 'Z.ai Coding Plan via Claude Code.' }],
   mimo: [

@@ -3,6 +3,7 @@ mod acp;
 pub(crate) mod claude;
 mod codex;
 mod kimi;
+mod pi;
 
 use serde::Serialize;
 use serde_json::Value;
@@ -314,7 +315,7 @@ pub(crate) fn invalidate_provider(provider: &str) {
 fn validate_provider(provider: &str) -> Result<(), String> {
     if !matches!(
         provider,
-        "claude" | "codex" | "kimi" | "glm" | "opencode" | "antigravity" | "grok" | "mimo"
+        "claude" | "codex" | "kimi" | "glm" | "opencode" | "antigravity" | "grok" | "mimo" | "pi"
     ) {
         return Err("Unknown harness.".into());
     }
@@ -340,6 +341,7 @@ async fn discover_catalog(provider: &str, cwd: &Path, key: Key, started: Instant
             "opencode" | "antigravity" | "grok" => acp::discover(provider, cwd).await,
             "codex" => codex::discover(cwd).await,
             "kimi" => kimi::discover(cwd).await,
+            "pi" => pi::discover(cwd).await,
             _ => unreachable!(),
         };
         let committed = CACHE

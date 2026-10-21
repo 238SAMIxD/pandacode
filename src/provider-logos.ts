@@ -11,6 +11,7 @@ const logos: Record<ProviderId, string> = {
   antigravity: new URL('./assets/providers/antigravity.png', import.meta.url).href,
   grok: new URL('./assets/providers/grok.png', import.meta.url).href,
   mimo: new URL('./assets/providers/mimo.png', import.meta.url).href,
+  pi: new URL('./assets/providers/pi.png', import.meta.url).href,
 };
 
 /** Decorative provider mark. The surrounding control supplies its accessible name. */
