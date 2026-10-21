@@ -158,6 +158,13 @@ export function mountProviderSettings(host: HTMLElement, saved: () => Promise<un
     }
   };
   const click = async (event: MouseEvent) => {
+    const link = (event.target as HTMLElement).closest<HTMLAnchorElement>('a[href]');
+    if (link && host.contains(link)) {
+      event.preventDefault(); event.stopPropagation();
+      try { await call('open_external_url', { url: link.href }); }
+      catch (error) { if (!disposed) message(String(error), true); }
+      return;
+    }
     const target = (event.target as HTMLElement).closest<HTMLElement>('button'); if (!target) return;
     if (target.hasAttribute('data-check-claude')) { void checkClaude(); return; }
     const removing = target.dataset.removeKey as KeyedProvider | undefined;
