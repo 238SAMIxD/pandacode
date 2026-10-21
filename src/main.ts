@@ -22,6 +22,7 @@ import type { AgentEvent, BrowserAttachment, ContextUsage, FileEntry, GitStatus,
 import type { BrowserPanel } from './browser';
 import { call, chooseFolder, preview, subscribe } from './bridge';
 import { $, button, escape, icon, markdown, morph } from './dom';
+import { mountExternalLinks } from './external-links';
 import { bindMessageActions, messageActionsHtml } from './message-actions';
 import { providerLogo } from './provider-logos';
 import { decodeToolActivity, groupToolRuns, renderToolActivity, renderToolGroup, renderToolStatus } from './tool-activity';
@@ -3355,6 +3356,7 @@ async function action(name: string, element: HTMLElement): Promise<void> {
     case 'suggest': { const prompt = document.querySelector<HTMLTextAreaElement>('#prompt'); if (prompt) { prompt.value = element.dataset.text!; prompt.focus(); } break; }
   }
 }
+mountExternalLinks(document, url => call('open_external_url', { url }), report);
 document.addEventListener('click', event => { if ((event.target as Element).closest('.markdown,.streaming-content,.message-content')) return; const element = (event.target as Element).closest<HTMLElement>('[data-action]'); if (!element || element instanceof HTMLButtonElement && element.disabled) return; event.preventDefault(); run(action(element.dataset.action!, element)); });
 document.addEventListener('submit', event => {
   const form = event.target as HTMLFormElement; event.preventDefault();

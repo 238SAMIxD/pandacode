@@ -2911,6 +2911,7 @@ pub fn run() {
                     list_providers,
                     list_provider_models,
                     search_files,
+                    open_external_url,
                 ];
                 return handler(invoke);
             }

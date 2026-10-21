@@ -101,6 +101,13 @@ export async function overlayCall<T>(command: string, args: Record<string, unkno
   if (command === 'overlay_toggle') { window.open(`${location.origin}/?view=launcher`, 'pandacode-launcher', 'width=650,height=510'); return undefined as T; }
   if (command === 'overlay_hide') { document.documentElement.dataset.overlayHidden = 'true'; return undefined as T; }
   if (command === 'overlay_open_task') { window.dispatchEvent(new CustomEvent('pandacode-overlay-open-task',{detail:args})); return undefined as T; }
+  if (command === 'open_external_url') {
+    const raw = String(args.url ?? '');
+    const url = new URL(raw);
+    if (raw.length > 8192 || !['http:', 'https:'].includes(url.protocol) || !url.host || url.username || url.password) throw new Error('Use an HTTP or HTTPS URL without embedded credentials.');
+    window.open(url.href, '_blank', 'noopener,noreferrer');
+    return undefined as T;
+  }
   throw new Error(`Unknown launcher command: ${command}`);
 }
 let contextTimer: number | undefined;
