@@ -37,6 +37,7 @@ pub(crate) mod concurrent_process_tests;
 mod extra_models;
 mod glm;
 mod mimo;
+mod deepseek;
 mod kimi_models;
 mod launch;
 mod pi;
@@ -429,12 +430,12 @@ pub struct ReasoningEffortInfo {
 
 pub fn validate_reasoning_effort(provider: &str, effort: Option<&str>) -> Result<(), String> {
     let valid = match (provider, effort) {
-        ("claude" | "codex" | "kimi" | "glm" | "opencode" | "antigravity" | "grok" | "mimo" | "pi", None) => true,
+        ("claude" | "codex" | "kimi" | "glm" | "opencode" | "antigravity" | "grok" | "mimo" | "pi" | "deepseek", None) => true,
         ("claude" | "glm" | "mimo", Some(value)) => {
             ["low", "medium", "high", "xhigh", "max"].contains(&value)
         }
         // The current app-server schema deliberately permits catalog-defined effort IDs.
-        ("codex" | "opencode" | "antigravity" | "grok", Some(value)) => {
+        ("codex" | "opencode" | "antigravity" | "grok" | "deepseek", Some(value)) => {
             !value.is_empty()
                 && value.len() <= 64
                 && value
@@ -487,6 +488,7 @@ pub(crate) fn executable(name: &str) -> Option<PathBuf> {
         "glm" | "mimo" => "claude",
         "antigravity" if cfg!(windows) => "agy_acp_server",
         "antigravity" => "agy_acp_server.par",
+        "deepseek" => "dsh",
         other => other,
     };
     launch::find(name)
@@ -573,6 +575,7 @@ pub fn discover() -> Vec<ProviderInfo> {
         ("grok", "Grok Build"),
         ("mimo", "MiMo Token Plan"),
         ("pi", "Pi"),
+        ("deepseek", "DeepSeek"),
     ]
     .into_iter()
     .map(|(id, name)| {
@@ -640,7 +643,7 @@ fn selected_opencode_models(catalog: Vec<ModelInfo>, selected: &[String]) -> Vec
 }
 
 pub(crate) async fn list_model_catalog(provider: &str) -> Result<Vec<ModelInfo>, String> {
-    static DISCOVERY: OnceLock<[tokio::sync::Semaphore; 9]> = OnceLock::new();
+    static DISCOVERY: OnceLock<[tokio::sync::Semaphore; 10]> = OnceLock::new();
     let index = match provider {
         "claude" => 0,
         "codex" => 1,
@@ -651,11 +654,12 @@ pub(crate) async fn list_model_catalog(provider: &str) -> Result<Vec<ModelInfo>,
         "grok" => 6,
         "mimo" => 7,
         "pi" => 8,
+        "deepseek" => 9,
         _ => return Err("Unknown provider".into()),
     };
     let semaphore =
         &DISCOVERY.get_or_init(|| std::array::from_fn(|_| tokio::sync::Semaphore::new(1)))[index];
-    let _permit = if matches!(provider, "opencode" | "antigravity" | "grok") {
+    let _permit = if matches!(provider, "opencode" | "antigravity" | "grok" | "deepseek") {
         // Saving models refreshes both windows. Queue their bounded metadata
         // queries so one window does not cache incomplete ID-only fallbacks.
         tokio::time::timeout(Duration::from_secs(if provider == "opencode" { 20 } else { 65 }), semaphore.acquire())
@@ -678,6 +682,7 @@ pub(crate) async fn list_model_catalog(provider: &str) -> Result<Vec<ModelInfo>,
         "grok" => acp::grok_models(&path).await,
         "mimo" => Ok(mimo::models()),
         "pi" => pi::models(&path).await,
+        "deepseek" => deepseek::models(&path).await,
         _ => unreachable!(),
     }
 }
@@ -1223,7 +1228,7 @@ impl Protocol {
         // not retain a second copy for the rest of a potentially long turn.
         let mut content = std::mem::take(&mut self.image_blocks);
         let mut text = std::mem::take(&mut self.config.prompt);
-        if self.config.provider == "grok" && self.config.mode == "plan" && !text.trim().is_empty() {
+        if matches!(self.config.provider.as_str(), "grok" | "deepseek") && self.config.mode == "plan" && !text.trim().is_empty() {
             text = format!("{}\n\n{text}", acp::GROK_PLAN_PREFIX);
         }
         if !text.trim().is_empty() {
@@ -1598,7 +1603,7 @@ impl Protocol {
                     json!({"experimentalApi":true,"requestAttestation":false});
                 request
             }
-            "kimi" | "opencode" | "antigravity" | "grok" => {
+            "kimi" | "opencode" | "antigravity" | "grok" | "deepseek" => {
                 json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"pandacode","version":"0.1.0"}}})
             }
             _ => {
@@ -1630,7 +1635,7 @@ impl Protocol {
                 };
                 json!({"id":request["id"],"result":result})
             }
-            "kimi" | "opencode" | "antigravity" | "grok" => {
+            "kimi" | "opencode" | "antigravity" | "grok" | "deepseek" => {
                 let options = request["params"]["options"].as_array();
                 let kinds = if approved {
                     ["allow_once", "allow_always"]
@@ -1656,7 +1661,7 @@ impl Protocol {
             "codex" => {
                 json!({"id":900,"method":"turn/interrupt","params":{"threadId":self.remote_id,"turnId":self.turn_id}})
             }
-            "kimi" | "opencode" | "antigravity" | "grok" => {
+            "kimi" | "opencode" | "antigravity" | "grok" | "deepseek" => {
                 json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":self.remote_id}})
             }
             _ => {
@@ -1685,7 +1690,7 @@ impl Protocol {
             "codex" => self.codex(value),
             "kimi" => self.kimi(value),
             "pi" => self.pi(value),
-            "opencode" | "antigravity" | "grok" => self.acp(value),
+            "opencode" | "antigravity" | "grok" | "deepseek" => self.acp(value),
             _ => self.claude(value),
         }
     }
@@ -2607,7 +2612,7 @@ fn configure_command(command: &mut Command, config: &RunConfig) {
             command.args(["app-server", "--enable", "goals"]);
         }
         "pi" => pi::configure(command, config),
-        "opencode" | "antigravity" | "grok" => acp::configure(command, config),
+        "opencode" | "antigravity" | "grok" | "deepseek" => acp::configure(command, config),
         "kimi" => {
             if use_model {
                 command.args(["--model", &config.model]);
@@ -2669,7 +2674,7 @@ async fn run_inner(
     input: UnboundedReceiver<RunInput>,
     host: Option<ToolHost>,
 ) -> Result<(), String> {
-    if !["claude", "codex", "kimi", "opencode", "glm", "antigravity", "grok", "mimo", "pi"]
+    if !["claude", "codex", "kimi", "opencode", "glm", "antigravity", "grok", "mimo", "pi", "deepseek"]
         .contains(&config.provider.as_str())
     {
         return Err("Unknown provider".into());
@@ -2688,6 +2693,8 @@ async fn run_inner(
         Some(glm::configure(&mut command)?)
     } else if config.provider == "mimo" {
         Some(mimo::configure(&mut command)?)
+    } else if config.provider == "deepseek" {
+        deepseek::configure(&mut command)?
     } else {
         None
     };
@@ -2809,7 +2816,7 @@ async fn run_process_with_tools(
             };
             (host.map(host_tools::HostTools::new).transpose()?, server)
         }
-        ("claude" | "glm" | "mimo" | "kimi" | "opencode" | "antigravity" | "grok" | "pi", Some(host)) => (
+        ("claude" | "glm" | "mimo" | "kimi" | "opencode" | "antigravity" | "grok" | "pi" | "deepseek", Some(host)) => (
             None,
             mcp_host::Server::start_for_run(
                 host,

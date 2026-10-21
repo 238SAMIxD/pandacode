@@ -85,6 +85,7 @@ fn resolve(path: &Path, windows: bool) -> Result<Launch, String> {
             "claude" => "@anthropic-ai/claude-code",
             "opencode" => "opencode-ai",
             "pi" => "@earendil-works/pi-coding-agent",
+            "dsh" => "@deepseek-ai/dsh",
             _ => return Err(
                 "This batch launcher is unsupported. Select the native harness executable instead."
                     .into(),
@@ -253,9 +254,47 @@ fn search_directories(windows: bool, env: &impl Fn(&str) -> Option<OsString>) ->
             dirs.push(PathBuf::from(dir));
         }
     }
+    let npm = npm_global_bin(windows, env, home.as_deref(), &dirs);
+    dirs.extend(npm);
     let mut seen = std::collections::HashSet::new();
     dirs.retain(|dir| seen.insert(dir.clone()));
     dirs
+}
+
+/// Where `npm i -g` puts CLIs, located the way npm does, without running it: a configured
+/// `prefix` (environment, then `~/.npmrc`), else the prefix of the real `node` binary, so
+/// a node reached through a symlink (`~/.local/bin/node`, a version manager) still counts.
+fn npm_global_bin(
+    windows: bool,
+    env: &impl Fn(&str) -> Option<OsString>,
+    home: Option<&Path>,
+    dirs: &[PathBuf],
+) -> Option<PathBuf> {
+    let npmrc = || {
+        let text = std::fs::read_to_string(home?.join(".npmrc")).ok()?;
+        let value = text.lines().find_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            (key.trim() == "prefix").then(|| value.trim().trim_matches('"').to_owned())
+        })?;
+        Some(match (value.strip_prefix("~/"), home) {
+            (Some(rest), Some(home)) => home.join(rest),
+            _ => PathBuf::from(value),
+        })
+    };
+    let configured = ["NPM_CONFIG_PREFIX", "npm_config_prefix"]
+        .iter()
+        .find_map(|key| env(key).filter(|value| !value.is_empty()).map(PathBuf::from))
+        .or_else(npmrc)
+        .filter(|prefix| prefix.is_absolute());
+    // Windows' default prefix (%APPDATA%\npm) is already searched and holds the shims itself.
+    if windows {
+        return configured;
+    }
+    let prefix = configured.or_else(|| {
+        let node = find_in_directories("node", dirs.to_vec(), false)?.canonicalize().ok()?;
+        Some(node.parent()?.parent()?.to_path_buf())
+    })?;
+    Some(prefix.join("bin"))
 }
 
 /// GUI launches inherit a minimal PATH. Use the same ordered locations as CLI
@@ -360,6 +399,37 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[cfg(unix)]
+    fn executable(f: &Fixture, name: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = f.file(name, "#!/bin/sh\n");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn npm_global_clis_are_found_beside_the_real_node_or_a_configured_prefix() {
+        let f = Fixture::new();
+        // node installed under its own prefix, reached only through a symlink on PATH.
+        let node = executable(&f, "runtime/bin/node");
+        let dsh = executable(&f, "runtime/bin/dsh");
+        fs::create_dir_all(f.0.join("links")).unwrap();
+        std::os::unix::fs::symlink(&node, f.0.join("links/node")).unwrap();
+        let path = f.0.join("links").into_os_string();
+        let home = f.0.join("home").into_os_string();
+        let env = |key: &str| match key {
+            "PATH" => Some(path.clone()),
+            "HOME" => Some(home.clone()),
+            _ => None,
+        };
+        assert_eq!(find_in_directories("dsh", search_directories(false, &env), false), Some(dsh));
+        // A prefix set with `npm config set prefix` wins over node's own.
+        let configured = executable(&f, "home/.npm-packages/bin/dsh");
+        f.file("home/.npmrc", "fund=false\nprefix = ~/.npm-packages\n");
+        assert_eq!(find_in_directories("dsh", search_directories(false, &env), false), Some(configured));
     }
 
     #[test]

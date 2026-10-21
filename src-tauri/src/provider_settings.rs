@@ -46,6 +46,11 @@ pub const MIMO_KEY: Credential = Credential {
     label: "MiMo",
     env: "MIMO_API_KEY",
 };
+pub const DEEPSEEK_KEY: Credential = Credential {
+    account: "deepseek-api",
+    label: "DeepSeek",
+    env: "DEEPSEEK_API_KEY",
+};
 
 pub fn setup(dir: &Path) -> Result<()> {
     let path = dir.join("provider-settings.json");
@@ -118,6 +123,10 @@ pub(crate) fn glm_key_for_usage() -> Result<Option<String>> {
 
 pub fn mimo_key() -> Result<Option<String>> {
     stored_key(MIMO_KEY)
+}
+
+pub fn deepseek_key() -> Result<Option<String>> {
+    stored_key(DEEPSEEK_KEY)
 }
 
 #[cfg(target_os = "macos")]
@@ -259,6 +268,8 @@ pub struct Configuration {
     glm_key_from_environment: bool,
     mimo_key_saved: bool,
     mimo_key_from_environment: bool,
+    deepseek_key_saved: bool,
+    deepseek_key_from_environment: bool,
     mimo_endpoint: Option<String>,
     /// The clusters the app knows; the UI offers exactly these.
     mimo_endpoints: Vec<MimoEndpoint>,
@@ -277,13 +288,14 @@ fn configuration() -> Result<Configuration> {
         (runtime.settings.executable_paths.clone(), runtime.settings.mimo_endpoint.clone(), runtime.settings.claude_connection_mode)
     };
     #[cfg(target_os = "macos")]
-    let (glm_key_saved, mimo_key_saved, credential_storage_error) =
-        (glm_key()?.is_some(), mimo_key()?.is_some(), None);
+    let (glm_key_saved, mimo_key_saved, deepseek_key_saved, credential_storage_error) =
+        (glm_key()?.is_some(), mimo_key()?.is_some(), deepseek_key()?.is_some(), None);
     #[cfg(not(target_os = "macos"))]
-    let (glm_key_saved, mimo_key_saved, credential_storage_error) = {
+    let (glm_key_saved, mimo_key_saved, deepseek_key_saved, credential_storage_error) = {
         let (glm, glm_error) = credential_status(glm_key());
         let (mimo, mimo_error) = credential_status(mimo_key());
-        (glm, mimo, glm_error.or(mimo_error))
+        let (deepseek, deepseek_error) = credential_status(deepseek_key());
+        (glm, mimo, deepseek, glm_error.or(mimo_error).or(deepseek_error))
     };
     let from_environment = |name: &str| std::env::var(name).is_ok_and(|key| validate_key(&key).is_ok());
     Ok(Configuration {
@@ -292,6 +304,8 @@ fn configuration() -> Result<Configuration> {
         glm_key_from_environment: from_environment(GLM_KEY.env),
         mimo_key_saved,
         mimo_key_from_environment: from_environment(MIMO_KEY.env),
+        deepseek_key_saved,
+        deepseek_key_from_environment: from_environment(DEEPSEEK_KEY.env),
         mimo_endpoint,
         mimo_endpoints: mimo_endpoints(),
         claude_connection_mode,
@@ -317,7 +331,7 @@ pub async fn provider_configuration() -> Result<Configuration> {
 }
 
 fn validated_executable(provider: &str, path: &str) -> Result<Option<String>> {
-    if !matches!(provider, "opencode" | "antigravity" | "glm" | "grok" | "mimo" | "pi") {
+    if !matches!(provider, "opencode" | "antigravity" | "glm" | "grok" | "mimo" | "pi" | "deepseek") {
         return Err("This provider does not support an executable override.".into());
     }
     if path.trim().is_empty() {
@@ -519,6 +533,24 @@ pub async fn provider_remove_mimo_key() -> Result<Configuration> {
     })
     .await
 }
+#[tauri::command]
+pub async fn provider_save_deepseek_key(key: String) -> Result<Configuration> {
+    crate::blocking(move || {
+        save_key(DEEPSEEK_KEY, &key)?;
+        crate::providers::acp_catalog::invalidate("deepseek");
+        configuration()
+    })
+    .await
+}
+#[tauri::command]
+pub async fn provider_remove_deepseek_key() -> Result<Configuration> {
+    crate::blocking(|| {
+        remove_key(DEEPSEEK_KEY)?;
+        crate::providers::acp_catalog::invalidate("deepseek");
+        configuration()
+    })
+    .await
+}
 
 pub(crate) fn mimo_endpoint() -> Option<String> {
     CONFIG.get()?.lock().ok()?.settings.mimo_endpoint.clone()
@@ -597,6 +629,8 @@ mod tests {
             glm_key_from_environment: false,
             mimo_key_saved: false,
             mimo_key_from_environment: false,
+            deepseek_key_saved: false,
+            deepseek_key_from_environment: false,
             mimo_endpoint: None,
             mimo_endpoints: mimo_endpoints(),
             claude_connection_mode: Default::default(),
@@ -616,6 +650,8 @@ mod tests {
             glm_key_from_environment: true,
             mimo_key_saved: true,
             mimo_key_from_environment: false,
+            deepseek_key_saved: false,
+            deepseek_key_from_environment: false,
             mimo_endpoint: Some("token-plan-sgp".into()),
             mimo_endpoints: mimo_endpoints(),
             claude_connection_mode: Default::default(),

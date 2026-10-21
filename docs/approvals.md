@@ -57,6 +57,18 @@ tools; Accept edits allows edit/write and asks for the rest; Plan mode allows
 read-only tools and declines everything else; Full access runs every tool without
 asking.
 
+DeepSeek (`dsh --profile acp`) enforces modes with its own sandbox, chosen by
+`DSH_PERMISSION_MODE` in its process environment. dsh asks only when a tool wants to
+escalate past the sandbox, never before each workspace edit. Standard runs
+`workspace-write` and asks on escalation; Accept edits is the same sandbox and also
+approves escalations from dsh's edit/write/str_replace_editor tools; Plan mode runs
+`read-only`, declines every escalation and prefixes the prompt with the plan
+instruction; Full access runs `danger-full-access`, which never asks. A dsh session
+keeps the sandbox it was created with, so after a mode change PandaCode starts a
+fresh dsh session (dsh's own history of the task does not carry over). A
+`permission.defaultPreset` in `~/.dsh/settings.yaml` overrides the environment for
+new sessions.
+
 Kimi's actual mode behaviour is verified against its installed engine source:
 `default` is manual, `yolo` auto-approves routine operations, and `auto` is fully
 unattended. Its ACP mode descriptions can lag behind those engine semantics, so

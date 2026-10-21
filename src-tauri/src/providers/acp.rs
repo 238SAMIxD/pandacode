@@ -30,8 +30,18 @@ pub(super) const GROK_SIGN_IN: &str =
 /// declining state-changing permission requests and telling the model up front.
 pub(super) const GROK_PLAN_PREFIX: &str = "Plan mode is on for this session: work read-only. Investigate with read-only tools, then reply with a concrete, step-by-step plan. Do not edit files or run commands that change state; requests to do so will be declined.";
 
+/// DeepSeek Harness serves ACP from its `acp` profile.
+pub(super) const DEEPSEEK_ARGS: [&str; 2] = ["--profile", "acp"];
+/// dsh reports every tool as kind "other"; these are its file-editing tools.
+const DEEPSEEK_EDIT_TOOLS: [&str; 3] = ["edit", "write", "str_replace_editor"];
+
 pub(super) fn configure(command: &mut Command, config: &RunConfig) {
     match config.provider.as_str() {
+        "deepseek" => {
+            command.args(DEEPSEEK_ARGS);
+            // Overrides any inherited value so PandaCode's mode picks the sandbox.
+            command.env(super::deepseek::PERMISSION_ENV, super::deepseek::sandbox(&config.mode));
+        }
         "opencode" => {
             command.arg("acp");
             command.env("OPENCODE_CONFIG_CONTENT", configuration(&config.mode));
@@ -179,6 +189,15 @@ impl Protocol {
             let result = &value["result"];
             match id {
                 1 => {
+                    if self.config.provider == "deepseek" && !self.remote_id.is_empty() {
+                        match super::deepseek::saved_session(&self.remote_id, &self.config.mode) {
+                            Some(id) => self.remote_id = id,
+                            None => {
+                                self.remote_id.clear();
+                                step.events.push(self.event("status", "Approval mode changed: starting a fresh DeepSeek session", None));
+                            }
+                        }
+                    }
                     if result["protocolVersion"] != 1 {
                         return Err("This harness does not support ACP protocol v1.".into());
                     }
@@ -246,8 +265,12 @@ impl Protocol {
                             }
                         }
                     }
-                    step.events
-                        .push(self.event("session", self.remote_id.clone(), None));
+                    let saved = if self.config.provider == "deepseek" {
+                        super::deepseek::resume_id(&self.remote_id, &self.config.mode)
+                    } else {
+                        self.remote_id.clone()
+                    };
+                    step.events.push(self.event("session", saved, None));
                     self.acp_mode(&mut step)?;
                 }
                 4 => {
@@ -288,6 +311,16 @@ impl Protocol {
             // ACP modes aren't universally approval policies. Keep user prompts
             // intact unless Full access, or Auto edits for an explicit edit call.
             let options = value["params"]["options"].as_array();
+            let deepseek = self.config.provider == "deepseek";
+            if deepseek && self.config.mode == "plan" {
+                // dsh runs read-only here and asks only to escalate past it.
+                if let Some(selected) = options.and_then(|values| values.iter().find(|entry| entry["kind"] == "reject_once")) {
+                    let name = self.tools.get(field(&value["params"]["toolCall"], "toolCallId")).map_or("a state-changing action", |tool| tool.name.as_str());
+                    step.events.push(self.event("status", format!("Plan mode declined: {}", model_text(Some(name), "a state-changing action", 200)), None));
+                    step.write.push(json!({"jsonrpc":"2.0","id":value["id"],"result":{"outcome":{"outcome":"selected","optionId":selected["optionId"]}}}));
+                    return Ok(step);
+                }
+            }
             if grok && self.config.mode == "plan" {
                 let tool = &value["params"]["toolCall"];
                 let wanted = if grok_read_only(tool) { "allow_once" } else { "reject_once" };
@@ -308,8 +341,11 @@ impl Protocol {
                     .count()
                     == 1
             });
-            let auto = self.config.mode == "full"
-                || (self.config.mode == "auto" && value["params"]["toolCall"]["kind"] == "edit");
+            let edit = value["params"]["toolCall"]["kind"] == "edit"
+                || (deepseek
+                    && self.tools.get(field(&value["params"]["toolCall"], "toolCallId"))
+                        .is_some_and(|tool| DEEPSEEK_EDIT_TOOLS.contains(&tool.name.as_str())));
+            let auto = self.config.mode == "full" || (self.config.mode == "auto" && edit);
             let structured_question = options.is_some_and(|options| {
                 options.iter().any(|option| {
                     field(option, "optionId")
@@ -412,7 +448,7 @@ impl Protocol {
             .and_then(|model| model["_meta"]["totalContextTokens"].as_u64())
     }
     fn acp_mode(&mut self, step: &mut Step) -> Result<(), String> {
-        if self.config.provider == "grok" {
+        if matches!(self.config.provider.as_str(), "grok" | "deepseek") {
             // No session modes over ACP; plan mode lives in the permission policy.
             return self.acp_model(step);
         }

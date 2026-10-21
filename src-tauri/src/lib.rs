@@ -3002,6 +3002,8 @@ pub fn run() {
                 provider_settings::provider_remove_glm_key,
                 provider_settings::provider_save_mimo_key,
                 provider_settings::provider_remove_mimo_key,
+                provider_settings::provider_save_deepseek_key,
+                provider_settings::provider_remove_deepseek_key,
                 provider_settings::provider_set_mimo_endpoint,
                 architect::profiles::architect_profiles,
                 architect::profiles::architect_save_profile,

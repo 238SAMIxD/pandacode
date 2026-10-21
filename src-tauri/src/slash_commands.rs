@@ -315,7 +315,7 @@ pub(crate) fn invalidate_provider(provider: &str) {
 fn validate_provider(provider: &str) -> Result<(), String> {
     if !matches!(
         provider,
-        "claude" | "codex" | "kimi" | "glm" | "opencode" | "antigravity" | "grok" | "mimo" | "pi"
+        "claude" | "codex" | "kimi" | "glm" | "opencode" | "antigravity" | "grok" | "mimo" | "pi" | "deepseek"
     ) {
         return Err("Unknown harness.".into());
     }
@@ -339,6 +339,7 @@ async fn discover_catalog(provider: &str, cwd: &Path, key: Key, started: Instant
             "claude" => claude::discover(cwd).await,
             "glm" | "mimo" => claude::discover_for(provider, cwd).await,
             "opencode" | "antigravity" | "grok" => acp::discover(provider, cwd).await,
+            "deepseek" => Ok(Catalog::default()),
             "codex" => codex::discover(cwd).await,
             "kimi" => kimi::discover(cwd).await,
             "pi" => pi::discover(cwd).await,

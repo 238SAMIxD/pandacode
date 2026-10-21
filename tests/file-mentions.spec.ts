@@ -216,6 +216,30 @@ test('conversation mentions search the selected task and send the inserted path 
   expect(await calls(page, 'read_file')).toHaveLength(0);
 });
 
+test('a quoted mention stays closed after macOS smart quotes curl its quotes', async ({ page }) => {
+  await setup(page);
+  const input = draft(page);
+  await input.pressSequentially('@design');
+  await expect(row(page, 'docs/design notes.md')).toBeVisible();
+  await input.press('Enter');
+  await expect(input).toHaveValue('@"docs/design notes.md" ');
+  for (const [open, close] of [['"', '\u201D'], ['\u201C', '\u201D']]) {
+    // Text checking replaces the quotes in place when a space is typed.
+    await input.evaluate((node: HTMLTextAreaElement, [open, close]) => {
+      node.value = `@${open}docs/design notes.md${close} `;
+      node.setSelectionRange(node.value.length, node.value.length);
+      node.dispatchEvent(new Event('input', { bubbles: true }));
+    }, [open, close]);
+    for (const word of ['word', ' ', 'more', ' ']) {
+      await input.pressSequentially(word);
+      await expect(menu(page)).toHaveCount(0);
+    }
+  }
+  // Typing a new curly-quoted mention still searches.
+  await input.pressSequentially('@\u201Cdesign');
+  await expect(row(page, 'docs/design notes.md')).toBeVisible();
+});
+
 test('slash commands and file mentions transfer keyboard ownership as the caret moves', async ({ page }) => {
   await installAppProbe(page);
   const prompt = page.locator('#prompt');

@@ -22,22 +22,23 @@ function mentionToken(textarea: HTMLTextAreaElement): Token | undefined {
   const caret = textarea.selectionStart;
   if (caret !== textarea.selectionEnd) return;
   const before = textarea.value.slice(0, caret);
-  // An email address or package@version is ordinary text, not a file mention.
-  const match = /(?:^|[\s([{])(@(?:"(?:[^"\\\r\n]|\\.)*|[^\s"@()[\]{},;]*))$/.exec(before);
+  // An email address or package@version is ordinary text, not a file mention. macOS smart quotes
+  // can curl the quotes around a finished `@"path with spaces"`, so curly quotes delimit it too.
+  const match = /(?:^|[\s([{])(@(?:["\u201C](?:[^"\u201C\u201D\\\r\n]|\\.)*|[^\s"\u201C\u201D@()[\]{},;]*))$/.exec(before);
   if (!match) return;
   const raw = match[1], start = caret - raw.length;
   let end = caret, query = raw.slice(1);
-  if (raw.startsWith('@"')) {
+  if (/^@["\u201C]/.test(raw)) {
     query = raw.slice(2);
     try { query = JSON.parse('"' + query + '"'); } catch { /* A partially typed escape is still searchable. */ }
     let escaped = false;
     while (end < textarea.value.length && !/[\r\n]/.test(textarea.value[end])) {
       const next = textarea.value[end++];
-      if (!escaped && next === '"') break;
+      if (!escaped && (next === '"' || next === '\u201D')) break;
       escaped = !escaped && next === '\\';
     }
   } else {
-    end += /^[^\s"@()[\]{},;]*/.exec(textarea.value.slice(caret))![0].length;
+    end += /^[^\s"\u201C\u201D@()[\]{},;]*/.exec(textarea.value.slice(caret))![0].length;
   }
   return query.length <= 256 ? { start, end, query } : undefined;
 }
