@@ -225,7 +225,7 @@ mark{background:color-mix(in srgb,var(--accent) 45%,transparent);color:inherit;b
 .composer-area{padding:0 30px 17px;margin:0 auto;width:100%;max-width:950px;flex-shrink:0}
 .composer{border:1px solid transparent;border-radius:6px;background:#ffffff;box-shadow:0 2px 5px rgb(0 0 0 / .025), 0 8px 24px rgb(0 0 0 / .035);transition:border-color 120ms, box-shadow 120ms}
 .composer:focus-within{border-color:transparent;box-shadow:0 0 0 3px rgb(var(--accent-rgb) / .12), 0 8px 24px rgb(0 0 0 / .035)}
-.composer textarea{width:100%;min-height:76px;max-height:180px;padding:16px 17px 10px;display:block;border:0;background:none;font-size:.94rem;line-height:1.7;color:var(--text);border-radius:6px;box-shadow:none}
+.composer textarea{width:100%;min-height:76px;max-height:180px;overflow-y:hidden;padding:16px 17px 10px;display:block;border:0;background:none;font-size:.94rem;line-height:1.7;color:var(--text);border-radius:6px;box-shadow:none}
 .composer textarea::placeholder{color:var(--muted)}
 .composer-toolbar{display:flex;align-items:center;justify-content:space-between;padding:0 10px 10px;gap:8px}
 .composer-tools{display:flex;align-items:center;gap:8px;min-width:0;flex:1}
