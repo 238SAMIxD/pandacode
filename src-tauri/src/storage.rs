@@ -960,7 +960,7 @@ impl Store {
         mode: &str,
     ) -> Result<Session> {
         self.project(project_id)?;
-        if !["claude", "codex", "kimi", "opencode", "glm", "antigravity", "grok", "mimo", "pi", "deepseek"].contains(&provider) {
+        if !["claude", "codex", "kimi", "opencode", "glm", "antigravity", "grok", "mimo", "pi", "deepseek", "commandcode"].contains(&provider) {
             return Err("Unknown provider.".into());
         }
         if !valid_permission_mode(mode) {
@@ -1122,7 +1122,7 @@ impl Store {
         project_id: Option<&str>,
     ) -> Result<Session> {
         crate::architect::check_manual(self, sid)?;
-        if !["claude", "codex", "kimi", "opencode", "glm", "antigravity", "grok", "mimo", "pi", "deepseek"].contains(&provider) {
+        if !["claude", "codex", "kimi", "opencode", "glm", "antigravity", "grok", "mimo", "pi", "deepseek", "commandcode"].contains(&provider) {
             return Err("Unknown provider.".into());
         }
         if model.len() > 200 {
@@ -1621,7 +1621,7 @@ fn handoff_from_provider(content: &str) -> Option<String> {
     let from = value.get("fromProvider")?.as_str()?;
     let to = value.get("toProvider")?.as_str()?;
     value.get("summary")?.as_str()?;
-    let known = |provider: &str| matches!(provider, "claude" | "codex" | "kimi" | "opencode" | "glm" | "antigravity" | "grok" | "mimo" | "pi" | "deepseek");
+    let known = |provider: &str| matches!(provider, "claude" | "codex" | "kimi" | "opencode" | "glm" | "antigravity" | "grok" | "mimo" | "pi" | "deepseek" | "commandcode");
     (known(from) && known(to)).then(|| from.to_owned())
 }
 
@@ -3368,7 +3368,7 @@ mod tests {
         {
             let store = Store::open(&path).unwrap();
             let project = store.add_project(&dir).unwrap();
-            for provider in ["claude", "codex", "kimi", "glm", "opencode", "antigravity", "grok", "mimo", "pi", "deepseek"] {
+            for provider in ["claude", "codex", "kimi", "glm", "opencode", "antigravity", "grok", "mimo", "pi", "deepseek", "commandcode"] {
                 for mode in ["ask", "auto", "plan", "full"] {
                     let session = store
                         .create_session(&project.id, provider, "default", mode)

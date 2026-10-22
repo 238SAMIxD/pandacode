@@ -42,6 +42,10 @@ pub(super) fn configure(command: &mut Command, config: &RunConfig) {
             // Overrides any inherited value so PandaCode's mode picks the sandbox.
             command.env(super::deepseek::PERMISSION_ENV, super::deepseek::sandbox(&config.mode));
         }
+        "commandcode" => {
+            // Modes are Command Code's own session modes; the saved key is set by the run.
+            command.args(super::commandcode::ACP_ARGS);
+        }
         "opencode" => {
             command.arg("acp");
             command.env("OPENCODE_CONFIG_CONTENT", configuration(&config.mode));
@@ -164,6 +168,9 @@ impl Protocol {
         if value.get("error").is_some() {
             if grok && (value["id"] == 7 || value["error"]["code"] == -32000) {
                 return Err(GROK_SIGN_IN.into());
+            }
+            if self.config.provider == "commandcode" && value["error"]["code"] == -32000 {
+                return Err(super::commandcode::SIGN_IN.into());
             }
             if value["error"]["code"] == -32000 {
                 return Err(format!("{} requires authentication. Sign in using its own CLI or official extension, then retry.", self.config.provider));
@@ -452,7 +459,11 @@ impl Protocol {
             // No session modes over ACP; plan mode lives in the permission policy.
             return self.acp_model(step);
         }
-        let candidates: &[&str] = if self.config.provider == "opencode" {
+        let candidates: &[&str] = if self.config.provider == "commandcode" {
+            // Command Code's ACP modes are its permission modes, so each PandaCode
+            // choice has exactly one, and a missing one must not widen access.
+            &[super::commandcode::mode_id(&self.config.mode)]
+        } else if self.config.provider == "opencode" {
             if self.config.mode == "plan" {
                 &["plan"]
             } else {
@@ -472,7 +483,7 @@ impl Protocol {
                     .push(choice_request(&self.remote_id, 4, option, id)?);
                 return Ok(());
             }
-            if self.config.mode == "plan" || self.config.provider == "opencode" {
+            if self.config.mode == "plan" || matches!(self.config.provider.as_str(), "opencode" | "commandcode") {
                 return Err("This harness does not advertise the selected task mode.".into());
             }
         } else if let Some(modes) = self.acp_config["modes"]["availableModes"].as_array() {
@@ -483,7 +494,7 @@ impl Protocol {
                 step.write.push(json!({"jsonrpc":"2.0","id":4,"method":"session/set_mode","params":{"sessionId":self.remote_id,"modeId":mode["id"]}}));
                 return Ok(());
             }
-            if self.config.mode == "plan" || self.config.provider == "opencode" {
+            if self.config.mode == "plan" || matches!(self.config.provider.as_str(), "opencode" | "commandcode") {
                 return Err("This harness does not advertise the selected task mode.".into());
             }
         } else if self.config.mode == "plan" {

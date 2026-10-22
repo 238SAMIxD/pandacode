@@ -13,6 +13,7 @@ const logos: Record<ProviderId, string> = {
   mimo: new URL('./assets/providers/mimo.png', import.meta.url).href,
   pi: new URL('./assets/providers/pi.png', import.meta.url).href,
   deepseek: new URL('./assets/providers/deepseek.png', import.meta.url).href,
+  commandcode: new URL('./assets/providers/commandcode.png', import.meta.url).href,
 };
 
 /** Decorative provider mark. The surrounding control supplies its accessible name. */
