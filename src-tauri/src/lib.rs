@@ -2674,6 +2674,19 @@ async fn search_files(
     blocking(move || workspace::search_files(&root, query, limit)).await
 }
 #[tauri::command]
+async fn search_text(
+    state: State<'_, AppState>,
+    project_id: String,
+    session_id: Option<String>,
+    query: String,
+    match_case: bool,
+    whole_word: bool,
+    regex: bool,
+) -> Result<workspace::TextSearchResult> {
+    let root = state.root(&project_id, session_id.as_deref())?;
+    blocking(move || workspace::search_text(&root, &query, match_case, whole_word, regex)).await
+}
+#[tauri::command]
 async fn read_file(
     state: State<'_, AppState>,
     project_id: String,
@@ -3227,6 +3240,7 @@ pub fn run() {
                 describe_folder,
                 list_files,
                 search_files,
+                search_text,
                 read_file,
                 workspace_image,
                 resolve_workspace_files,

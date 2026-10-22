@@ -8,6 +8,7 @@ import './turn-changes.css';
 import './team-progress.css';
 import './motion.css';
 import './sidebar-tree.css';
+import './inspector-bar.css';
 import './message-queue.css';
 import './usage-limit.css';
 import './document-viewer.css';
@@ -59,6 +60,7 @@ import { createGithub, githubEnabled } from './github';
 import { startAppUpdates } from './app-updates';
 import { projectIconHtml } from './project-icons';
 import { createPullView } from './github-pull';
+import { createSearchPanel } from './search-panel';
 import { createTokenSaver } from './token-saver-panel';
 import { MAX_IMAGES, mountPromptAttachments, type PromptImage } from './attachments';
 import { compactSublines, infoMark, installTooltips } from './tooltip';
@@ -80,7 +82,7 @@ const state = {
   projectId: '', sessionId: '', messages: [] as Message[], messagesLoading: false, messagesError: '', streams: new Map<string, Stream>(),
   view: (({ board: 'board', github: 'github' } as Record<string, 'board' | 'github'>)[localStorage.getItem('pandacode.view') ?? ''] ?? 'conversation') as WorkspaceView, boardPanel: false,
   sidebarCollapsed: localStorage.getItem('pandacode.sidebarCollapsed') === 'true',
-  query: '', archived: false, inspector: false, inspectorTab: 'changes' as 'changes' | 'files' | 'browser' | 'pull' | 'simulator' | 'vm',
+  query: '', archived: false, inspector: false, inspectorTab: 'files' as 'changes' | 'files' | 'search' | 'browser' | 'pull' | 'simulator' | 'vm',
   projectFilter: localStorage.getItem('pandacode.projectFilter') ?? '', collapsedFolders: readCollapsed(localStorage, 'pandacode.collapsedFolders'), expandedFolders: new Set<string>(),
   /** Follow-ups typed while an agent works, per task, in delivery order; mirrored from native storage. */
   queues: new Map<string, QueuedMessage[]>(), queueHolds: new Map<string, HoldReason>(), queueEditing: '', queueBusy: new Set<string>(),
@@ -277,7 +279,7 @@ $app.innerHTML = `<div class="workspace">
     <div id="terminal-drawer" class="terminal-drawer" hidden><div class="drawer-heading"><span>${icon('terminal')}<span id="terminal-project" class="muted"></span></span><div class="terminal-tabs" role="tablist" aria-label="Terminal tabs"></div><div class="terminal-heading-actions"><button class="icon-button" data-terminal-action="new" aria-label="New terminal" title="New terminal">${icon('plus')}</button><button class="icon-button" data-terminal-action="minimize" aria-label="Minimize terminal" title="Minimize terminal">${icon('minimize')}</button><button class="icon-button" data-terminal-action="close" aria-label="Close terminal" title="Close terminal" aria-haspopup="dialog">${icon('close')}</button></div></div><div id="terminal-host"></div></div>
   </main>
   <section id="settings-page" aria-label="Settings" hidden></section>
-  <aside id="inspector" class="inspector" aria-label="Project inspector"><header class="inspector-heading"><div class="inspector-tabs"><button class="selected" data-action="tab-changes">Changes <span id="changes-count"></span></button><button data-action="tab-files">Files</button><button data-action="browser">Browser</button><button data-action="tab-pull" hidden>PR</button><button data-action="tab-simulator" aria-label="Simulators" title="iOS & Android simulators" ${isMac || isWindows ? '' : 'hidden'}>${icon('phone')}</button><button data-action="tab-vm" aria-label="Virtual machines" title="Virtual machines" ${isMac ? '' : 'hidden'}>${icon('monitor')}</button></div>${button('refresh-inspector', 'Refresh project', 'refresh')}</header><div id="inspector-content" class="inspector-content"></div><section id="browser-panel" class="browser-panel" aria-label="Browser" hidden></section><section id="simulator-panel" class="simulator-panel" aria-label="Simulators" hidden></section><section id="vm-panel" class="vm-panel" aria-label="Virtual machines" hidden></section></aside>
+  <aside id="inspector" class="inspector" aria-label="Project inspector"><nav class="inspector-tabs" aria-label="Panel views"><button class="selected" data-action="tab-files" aria-label="Files" title="Files">${icon('file')}</button><button data-action="tab-search" aria-label="Search" title="Search">${icon('search')}</button><button data-action="tab-changes" aria-label="Changes" title="Changes">${icon('branch')}<span id="changes-count"></span></button><button data-action="browser" aria-label="Browser" title="Browser">${icon('globe')}</button><button data-action="tab-pull" hidden>${icon('pull')}</button><button data-action="tab-simulator" aria-label="Simulators" title="iOS & Android simulators" ${isMac || isWindows ? '' : 'hidden'}>${icon('phone')}</button><button data-action="tab-vm" aria-label="Virtual machines" title="Virtual machines" ${isMac ? '' : 'hidden'}>${icon('monitor')}</button></nav><header class="inspector-heading"><h2 id="inspector-title" class="inspector-title">Files</h2>${button('refresh-inspector', 'Refresh project', 'refresh')}</header><div id="inspector-content" class="inspector-content"></div><section id="browser-panel" class="browser-panel" aria-label="Browser" hidden></section><section id="simulator-panel" class="simulator-panel" aria-label="Simulators" hidden></section><section id="vm-panel" class="vm-panel" aria-label="Virtual machines" hidden></section></aside>
 </div><div id="toast" class="toast" role="status" hidden></div><dialog id="dialog"></dialog>`;
 publishSpringEasings();
 installDialogMotion(document.querySelector<HTMLDialogElement>('#dialog')!);
@@ -319,6 +321,11 @@ const tokenSaver = createTokenSaver({
   },
 });
 void tokenSaver.loadTools();
+const searchPanel = createSearchPanel({
+  call,
+  context: () => project() ? workspaceContext() : null,
+  open: path => run(openFile(path, 'file')),
+});
 const pullView = createPullView({
   call,
   openUrl: url => call('open_external_url', { url }),
@@ -569,8 +576,9 @@ function restoreThreadPanel(task?: Session): void {
   clearWorkspaceInspector(false);
   const saved = task && threadPanels.get(task.id);
   const sameWorkspace = saved?.workspace === workspaceKey();
-  state.inspector = saved?.open ?? false;
-  state.inspectorTab = saved?.tab ?? 'changes'; state.filePath = sameWorkspace ? saved?.folder ?? '' : '';
+  // Without saved state the conversation opens the panel on Files, unless it would cover the chat.
+  state.inspector = saved?.open ?? (state.view === 'conversation' && !matchMedia('(max-width: 920px)').matches);
+  state.inspectorTab = saved?.tab ?? 'files'; state.filePath = sameWorkspace ? saved?.folder ?? '' : '';
   state.selectedFile = sameWorkspace ? saved?.file ?? '' : ''; state.selectedKind = sameWorkspace ? saved?.kind ?? '' : ''; state.selectedStaged = saved?.staged ?? false;
   state.browserUrl = sameWorkspace ? saved?.browserUrl ?? '' : ''; selectedFileContext = sameWorkspace && saved?.context ? { ...saved.context } : undefined;
   state.filePreviewLoading = Boolean(state.selectedKind);
@@ -2550,6 +2558,7 @@ async function performAgentUiAction(request: AgentUiAction): Promise<unknown> {
   }
   throw new Error('Unknown app action.');
 }
+const INSPECTOR_TITLES: Record<typeof state.inspectorTab, string> = { files: 'Files', search: 'Search', changes: 'Changes', browser: 'Browser', pull: 'Pull request', simulator: 'Simulators', vm: 'Virtual machines' };
 function renderInspector(): void {
   const diffEpoch = ++inspectorDiffEpoch;
   inspectorDiff?.dispose(); inspectorDiff = undefined;
@@ -2564,8 +2573,14 @@ function renderInspector(): void {
   const pullTab = $('.inspector-tabs').querySelector<HTMLButtonElement>('[data-action="tab-pull"]')!;
   pullTab.hidden = !pullTask;
   if (pullTask) { pullTab.title = `Pull request #${pullTask.pullRequest!.number}`; pullTab.setAttribute('aria-label', `Pull request #${pullTask.pullRequest!.number}`); }
-  $('.inspector-tabs').querySelectorAll('button').forEach(el => el.classList.toggle('selected', el.dataset.action === (state.inspectorTab === 'browser' ? 'browser' : 'tab-' + state.inspectorTab)));
-  trackSegment($('.inspector-tabs'), $('.inspector-tabs').querySelector<HTMLElement>(':scope > button.selected'));
+  $('.inspector-tabs').querySelectorAll('button').forEach(el => {
+    const selected = el.dataset.action === (state.inspectorTab === 'browser' ? 'browser' : 'tab-' + state.inspectorTab);
+    el.classList.toggle('selected', selected);
+    if (selected) el.setAttribute('aria-current', 'true'); else el.removeAttribute('aria-current');
+  });
+  const changeCount = state.git?.files.length ?? 0;
+  $('.inspector-tabs [data-action="tab-changes"]').setAttribute('aria-label', changeCount ? `Changes, ${changeCount} changed ${changeCount === 1 ? 'file' : 'files'}` : 'Changes');
+  $('#inspector-title').textContent = INSPECTOR_TITLES[state.inspectorTab];
   $('#changes-count').textContent = state.git?.files.length ? String(state.git.files.length) : '';
   syncBrowserPanel();
   syncSimulatorPanel();
@@ -2577,6 +2592,7 @@ function renderInspector(): void {
   if (!project()) { target.innerHTML = '<div class="inspector-empty">Open a project to browse files and review changes.</div>'; return; }
   const remote = session()?.remoteDevice;
   if (remote) { $('#changes-count').textContent = ''; target.innerHTML = `<div class="inspector-empty">${icon('monitor')}<h3>Runs on ${escape(remote.name)}</h3><p>Its changes and files are on that computer, so review and commit them there.</p></div>`; return; }
+  if (state.inspectorTab === 'search' && !state.selectedKind) { searchPanel.show(target); return; }
   if (state.inspectorLoading) { target.innerHTML = `<div class="inspector-empty" role="status">${icon('refresh')}<p>${state.inspectorTab === 'changes' ? 'Loading changes…' : 'Loading files…'}</p></div>`; return; }
   const loadError = state.inspectorTab === 'changes' ? state.gitError : state.filesError;
   if (loadError) {
@@ -2605,7 +2621,7 @@ function renderInspector(): void {
   if (!state.git?.isRepo) { target.innerHTML = '<div class="inspector-empty">'+icon('branch')+'<h3>No Git repository</h3><p>Open a Git repository to review changes.</p></div>'; return; }
   const staged = state.git.files.filter(file => ![' ', '?', '!', '.'].includes(file.index));
   const unstaged = state.git.files.filter(file => ![' ', '!', '.'].includes(file.working) || file.index === '?');
-  const fileRows = (files: typeof staged, isStaged: boolean) => files.map(file => `<div class="change-row"><button class="change-file" data-action="open-diff" data-path="${escape(file.path)}" data-staged="${isStaged}">${icon('file')}<span><strong>${escape(file.path.split('/').pop())}</strong><small>${escape(file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : 'root')}</small></span><span class="file-status ${file.index === '?' ? 'new' : ''}">${file.index === '?' ? 'A' : escape(isStaged ? file.index : file.working)}</span></button>${button(isStaged ? 'unstage-file' : 'stage-file', isStaged ? 'Unstage file' : 'Stage file', isStaged ? 'close' : 'plus', 'stage-button', `data-path="${escape(file.path)}"`)}</div>`).join('');
+  const fileRows = (files: typeof staged, isStaged: boolean) => files.map(file => `<div class="change-row"><button class="change-file" data-action="open-diff" data-path="${escape(file.path)}" data-staged="${isStaged}">${fileIcon(file.path.split('/').pop() ?? file.path, false)}<span><strong>${escape(file.path.split('/').pop())}</strong><small>${escape(file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : 'root')}</small></span><span class="file-status ${file.index === '?' ? 'new' : ''}">${file.index === '?' ? 'A' : escape(isStaged ? file.index : file.working)}</span></button>${button(isStaged ? 'unstage-file' : 'stage-file', isStaged ? 'Unstage file' : 'Stage file', isStaged ? 'close' : 'plus', 'stage-button', `data-path="${escape(file.path)}"`)}</div>`).join('');
   target.innerHTML = `<div class="branch-card"><span>${icon('branch')}<span>${escape(state.git.branch || 'No commits yet')}</span></span><button data-action="worktree" title="Create isolated worktree" aria-label="Create isolated worktree">${icon('plus')}</button></div><div class="change-summary"><span>${state.git.files.length ? state.git.files.length + ' changed files' : 'Working tree clean'}</span>${state.git.files.length ? '' : icon('check')}</div>${staged.length ? `<section class="change-group"><div class="change-group-title"><span>Staged <small>${staged.length}</small></span><button data-action="unstage-all">Unstage all</button></div>${fileRows(staged, true)}</section>` : ''}${unstaged.length ? `<section class="change-group"><div class="change-group-title"><span>Changes <small>${unstaged.length}</small></span><button data-action="stage-all">Stage all</button></div>${fileRows(unstaged, false)}</section>` : ''}<form id="commit-form" class="commit-form"><label for="commit-message">Commit message</label><textarea id="commit-message" placeholder="Describe these changes…" rows="3" aria-label="Commit message"></textarea><button class="commit-button" ${!staged.length ? 'disabled' : ''}>${icon('check')}Commit${staged.length ? ' ' + staged.length + ' file' + (staged.length > 1 ? 's' : '') : ''}</button></form>`;
 }
 async function openRunPreview(url: string, context: { projectId: string; sessionId?: string }): Promise<void> {
@@ -3564,8 +3580,9 @@ async function action(name: string, element: HTMLElement): Promise<void> {
     case 'tab-pull': state.inspectorTab = 'pull'; state.selectedKind = ''; renderInspector(); break;
     case 'open-pull': if (element.dataset.sessionId) await openPullRequest(element.dataset.sessionId); break;
     case 'tab-changes': case 'tab-files': state.inspectorTab = name === 'tab-files' ? 'files' : 'changes'; state.selectedKind = ''; renderInspector(); break;
+    case 'tab-search': state.inspectorTab = 'search'; state.selectedKind = ''; renderInspector(); document.querySelector<HTMLInputElement>('#inspector-content .search-input')?.focus(); break;
     case 'browser': inspectorSuppressed = false; state.inspector = true; state.inspectorTab = 'browser'; state.selectedKind = ''; renderInspector(); break;
-    case 'refresh-inspector': if (state.inspectorTab === 'pull') { pullView.forget(state.sessionId); renderInspector(); break; } refreshFileLinks(workspaceContext()); await refreshInspector(); break;
+    case 'refresh-inspector': if (state.inspectorTab === 'pull') { pullView.forget(state.sessionId); renderInspector(); break; } if (state.inspectorTab === 'search') searchPanel.refresh(); refreshFileLinks(workspaceContext()); await refreshInspector(); break;
     case 'open-folder': state.filePath = element.dataset.path!; await refreshInspector(); break;
     case 'parent-folder': state.filePath = state.filePath.split('/').slice(0, -1).join('/'); await refreshInspector(); break;
     case 'run-project': if (!element.dataset.sessionId || element.dataset.sessionId === state.sessionId) await projectRunner.run(); break;
