@@ -23,3 +23,11 @@ test('production entry does not eagerly initialize a terminal or a local HTTP se
   assert.match(config.app.security.csp, /script-src 'self' 'wasm-unsafe-eval';/);
   assert.doesNotMatch(config.app.security.csp, /(^|\s)'unsafe-eval'/);
 });
+
+test('file icon chunk is not loaded or preloaded by the entry', async () => {
+  const html = await readFile(new URL('../dist/index.html', import.meta.url), 'utf8');
+  const entry = html.match(/<script[^>]+src="([^"]+)"/)[1];
+  const source = await readFile(new URL(`../dist${entry}`, import.meta.url), 'utf8');
+  assert.ok(!/file-icons/.test(html), 'index.html must not preload the icon chunk');
+  assert.ok(!/^\s*import[^;]*file-icons/m.test(source), 'entry must not statically import the icon chunk');
+});
