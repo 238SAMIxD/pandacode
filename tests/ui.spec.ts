@@ -1412,7 +1412,7 @@ test('chooses the default agent inside Settings without closing the Settings pag
   await trigger.click();
   await expect(menu.getByRole('menuitemradio', { name: 'Claude Code', exact: true })).toBeFocused();
   await page.keyboard.press('End');
-  await expect(menu.getByRole('menuitemradio', { name: 'Oh My Pi', exact: true })).toBeFocused();
+  await expect(menu.getByRole('menuitemradio', { name: 'GitHub Copilot CLI', exact: true })).toBeFocused();
   await page.keyboard.press('Home');
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowDown');
@@ -2626,7 +2626,8 @@ test('changes the empty task project while keeping its draft, harness, model, an
   await modelPicker.getByRole('searchbox', { name: 'Search harnesses and models', exact: true }).fill('project-switch-model');
   await modelPicker.getByRole('button', { name: 'Use "project-switch-model" with Kimi Code', exact: true }).click();
   await expect.poll(() => savedSelection(page)).toEqual({ provider: 'kimi', model: 'project-switch-model' });
-  await page.getByRole('button', { name: 'Toggle inspector (⌘ ⇧ B)', exact: true }).click();
+  await expect(page.getByRole('complementary', { name: 'Project inspector' })).toBeVisible();
+  await page.locator('.inspector-tabs [data-action="tab-changes"]').click();
   await page.locator('[data-action="open-diff"]').first().click();
   await expect(page.locator('.diff-viewer')).toBeVisible();
   await page.getByRole('button', { name: 'Change task project', exact: true }).first().click();
@@ -2752,7 +2753,8 @@ test('applies a delayed project switch after leaving and reselecting the same em
   await expect(prompt(page)).toHaveAttribute('data-session-id', sessionId!);
   await expect(openTaskProject(page)).toHaveText('pandacode');
   await expect(page.locator('#composer-area').getByRole('button', { name: 'Change task project', exact: true })).toHaveText('pandacode');
-  await page.getByRole('button', { name: 'Toggle inspector (⌘ ⇧ B)', exact: true }).click();
+  await expect(page.getByRole('complementary', { name: 'Project inspector' })).toBeVisible();
+  await page.locator('.inspector-tabs [data-action="tab-changes"]').click();
   await expect(page.getByRole('complementary', { name: 'Project inspector' })).toContainText('test/pandacode-project');
   await expect(prompt(page)).toHaveValue('Retain this draft when I return before the project write finishes');
   const projectId = await page.evaluate(async sessionId => {
@@ -3165,7 +3167,8 @@ test('routes worktree files, Git, and terminals by task and retains each checkou
   const taskId = await page.locator('.task-item.selected').getAttribute('data-id');
   await expect(page.locator('#terminal-drawer')).toBeHidden();
   await expect.poll(() => page.evaluate(() => (window as any).__pandacodeWorktreeCalls.filter((call: any) => call.command === 'close_terminal').length)).toBe(0);
-  await page.getByRole('button', { name: 'Toggle inspector (⌘ ⇧ B)', exact: true }).click();
+  await expect(page.getByRole('complementary', { name: 'Project inspector' })).toBeVisible();
+  await page.locator('.inspector-tabs [data-action="tab-changes"]').click();
   await expect(page.locator('#inspector-content')).toContainText('codex/worktree-routing');
   await page.locator('[data-action="open-diff"]').first().click();
   await expect(page.locator('.diff-viewer')).toBeVisible();
@@ -3211,17 +3214,19 @@ test('clears worktree inspector actions immediately and ignores stale same-proje
   await submitWorktree(page, 'codex/worktree-races');
   await expect(newTaskHeading(page)).toBeVisible();
   const taskId = await page.locator('.task-item.selected').getAttribute('data-id');
-  await page.getByRole('button', { name: 'Toggle inspector (⌘ ⇧ B)', exact: true }).click();
+  await expect(page.getByRole('complementary', { name: 'Project inspector' })).toBeVisible();
+  await page.locator('.inspector-tabs [data-action="tab-changes"]').click();
   await page.locator('[data-action="open-diff"]').first().click();
   await expect(page.locator('.diff-viewer')).toBeVisible();
   await page.evaluate(() => { (window as any).__pandacodeDelayWorktreeHistory = true; });
   await page.locator('.task-item[data-id="session-1"]').click();
   await expect.poll(() => page.evaluate(() => typeof (window as any).__pandacodeReleaseWorktreeHistory)).toBe('function');
+  await page.locator('.inspector-tabs [data-action="tab-changes"]').click();
   await expect(page.locator('.diff-viewer,.change-row')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Stage file', exact: true })).toHaveCount(0);
   await page.evaluate(() => { (window as any).__pandacodeDelayWorktreeHistory = false; (window as any).__pandacodeReleaseWorktreeHistory(); });
   await expect(page.locator('.change-row')).toHaveCount(3);
-  await page.locator('#inspector-toggle').click();
+  await expect(page.getByRole('complementary', { name: 'Project inspector' })).toBeVisible();
   await page.evaluate(() => { (window as any).__pandacodeDelayWorktreeDiff = true; });
   await page.locator('[data-action="open-diff"]').first().click();
   await expect.poll(() => page.evaluate(() => typeof (window as any).__pandacodeReleaseWorktreeDiff)).toBe('function');

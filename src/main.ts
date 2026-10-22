@@ -1028,7 +1028,8 @@ function renderHeader(): void {
   const s = session(), bar = document.querySelector<HTMLElement>('#composer-area .composer-context');
   if (s && bar) {
     const markup = worktrees.contextBar(s, fresh);
-    if (bar.outerHTML !== markup && !bar.querySelector('[aria-expanded="true"]')) bar.outerHTML = markup;
+    // A menu opening from the bar keeps its anchor; replacing it mid-open would cancel the menu.
+    if (bar.outerHTML !== markup && !bar.querySelector('[aria-expanded="true"]') && !(pendingMenuOpen && bar.contains(pendingMenuOpen.anchor))) bar.outerHTML = markup;
   }
 }
 /** What the empty prompt invites: a task, or a message to the bot whose thread this is. */
@@ -3888,10 +3889,13 @@ async function boot(): Promise<void> {
   const savedProject = localStorage.getItem('pandacode.project');
   const recent = state.sessions.find(s => !s.archived);
   activateProject(state.projects.find(p => p.id === savedProject)?.id ?? recent?.projectId ?? state.projects[0]?.id ?? '');
-  const first = state.sessions.find(s => !s.archived && s.projectId === state.projectId); if (first) await selectSession(first.id); else { render(); await refreshInspector(); }
+  const first = state.sessions.find(s => !s.archived && s.projectId === state.projectId);
+  // selectSession bumps the generation before its first await; a later bump means the user picked a task meanwhile.
+  const selecting = first ? selectSession(first.id) : undefined, bootGeneration = state.generation;
+  if (selecting) await selecting; else { render(); await refreshInspector(); }
   run(fileIconsReady.then(refreshFileIcons));
   window.addEventListener('pandacode-theme-change', refreshFileIcons);
-  if (state.view !== 'conversation') { state.boardPanel = false; renderInspector(); renderBoardView(); }
+  if (state.view !== 'conversation' && state.generation === bootGeneration) { state.boardPanel = false; renderInspector(); renderBoardView(); }
   if (!preview && !state.providers.some(p => p.installed)) notify('Open Settings to check your installed agent CLIs.');
 }
 // PandaCode's own updates: checked on GitHub Releases, installed when no agent is working.
