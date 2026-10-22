@@ -54,6 +54,7 @@ fn setup() -> TeamSetup {
             max_assignments: 15,
             workspace: "shared".into(),
             summary_limit: 1500,
+            lead_guidance: None,
         },
     }
 }

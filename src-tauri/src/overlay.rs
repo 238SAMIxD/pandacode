@@ -1886,6 +1886,7 @@ mod tests {
                 max_assignments: 4,
                 workspace: "shared".into(),
                 summary_limit: 1500,
+                lead_guidance: None,
             }),
             Some(ModelSelection {
                 provider: "claude".into(),

@@ -420,3 +420,10 @@ test('active team profile changes keep the latest pending setup and can cancel i
   assert.equal(continued.workers.at(-1).provider, 'claude');
   assert.equal(history.filter(message => message.role === 'user').length, 2);
 });
+
+test('architect preview carries lead guidance and rejects oversized guidance', t => {
+  const { api } = fixture(t);
+  assert.equal(api.configure('parent', { ...config(), leadGuidance: '  You only lead.  ' }).config.leadGuidance, 'You only lead.');
+  assert.equal(api.configure('parent', { ...config(), leadGuidance: '   ' }).config.leadGuidance, undefined);
+  assert.throws(() => api.configure('parent', { ...config(), leadGuidance: 'x'.repeat(2001) }), /Lead guidance/);
+});

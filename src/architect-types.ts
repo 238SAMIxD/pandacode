@@ -22,6 +22,9 @@ export interface TeamConfig {
   maxAssignments: number;
   workspace: 'shared';
   summaryLimit: number;
+  /** Extra instructions for the lead, added to the built-in team rules. Empty means the
+   * built-in rules alone. */
+  leadGuidance?: string | null;
 }
 export type ModelSelection = Pick<WorkerProfile, 'provider' | 'model' | 'reasoningEffort'>;
 export interface TeamSetup { architect: ModelSelection; config: TeamConfig }

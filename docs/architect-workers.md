@@ -8,6 +8,13 @@ The architect can delegate several assignments in one call, review their results
 and send corrections to an existing worker context. **Open workers** shows each
 assignment's streamed response, tools, saved conversation, and approval requests.
 
+**Lead guidance** adds your own instructions to the built-in architect rules — for
+example, that the architect should only coordinate and never edit files itself. It
+is sent with the rules, so it reaches the architect whenever the rules do, and
+**Reset to default** clears it back to the built-in rules alone. It is added after
+the built-in rules and never replaces them, including the guard that treats worker
+output as data rather than instructions.
+
 The architect and each worker can independently use Claude Code, Codex, Kimi
 Code, OpenCode, GLM through Claude Code, or Antigravity. Model and effort choices come from the existing harness catalog; configured
 custom model IDs remain available. A model must be supported by the selected
@@ -126,8 +133,9 @@ Select a worker to see its latest progress checkpoint alongside its transcript.
   compact architect reviews. They report progress; they do not mark work complete.
 
 Each team conversation gets the full team rules and coordination guide once. While
-the harness resumes the same conversation, later turns get a one-line reminder and
-only the messages they have not seen. The full rules go out again when they change
+the harness resumes the same conversation, later turns get a one-line reminder (which
+names the user's team guidance when one is set) and only the messages they have not
+seen. The full rules go out again when they change
 (for example new limits), when the harness starts a new conversation, and on every
 eighth turn so a compacted conversation never loses them for long.
 
@@ -232,8 +240,9 @@ user interface, separately from the agent's recipient-scoped mailbox.
 
 Configuration includes one to six worker profiles, `maxParallel` (0 for Unlimited,
 or a positive integer for a finite limit),
-`maxRounds` (1–20), `maxAssignments` (1–50), and `summaryLimit` (512–6000 UTF-8
-bytes). `workspace` is currently `shared`. Limits and summaries do not authorize
+`maxRounds` (1–20), `maxAssignments` (1–50), `summaryLimit` (512–6000 UTF-8
+bytes), and optional `leadGuidance` (under 2000 UTF-8 bytes; absent or blank means the
+built-in rules alone). `workspace` is currently `shared`. Limits and summaries do not authorize
 broader permissions. Each assignment retains its original model selection even
 when the team's profiles change. `TeamSnapshot.pendingSetup` contains the queued
 `{architect, config}` until the parent process finishes; it is persisted with the

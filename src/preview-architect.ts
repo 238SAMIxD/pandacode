@@ -72,7 +72,9 @@ export function createPreviewArchitect(host: PreviewHost) {
     if (config.workspace !== 'shared') throw new Error('Workers must use the task’s shared workspace.');
     if (config.rosterOnly && (!config.auto || !workers.length)) throw new Error('A named agent team needs at least one model.');
     if (config.name != null && (typeof config.name !== 'string' || !config.name.trim() || config.name.length > 80)) throw new Error('Team names must be 1–80 characters.');
-    return { ...(config.auto ? { auto: true } : {}), ...(config.rosterOnly ? { rosterOnly: true } : {}), ...(config.name != null ? { name: config.name } : {}), workers, maxParallel: integer(config.maxParallel, 0, Number.MAX_SAFE_INTEGER, 'Parallel workers'), maxRounds: integer(config.maxRounds, 1, 20, 'Review rounds'), maxAssignments: integer(config.maxAssignments, 1, 50, 'Assignments'), workspace: 'shared', summaryLimit: integer(config.summaryLimit, 512, 6000, 'Summary limit') };
+    const guidance = typeof config.leadGuidance === 'string' ? config.leadGuidance.trim() : '';
+    if (guidance.length > 2000) throw new Error('Lead guidance must be under 2000 characters.');
+    return { ...(config.auto ? { auto: true } : {}), ...(config.rosterOnly ? { rosterOnly: true } : {}), ...(config.name != null ? { name: config.name } : {}), ...(guidance ? { leadGuidance: guidance } : {}), workers, maxParallel: integer(config.maxParallel, 0, Number.MAX_SAFE_INTEGER, 'Parallel workers'), maxRounds: integer(config.maxRounds, 1, 20, 'Review rounds'), maxAssignments: integer(config.maxAssignments, 1, 50, 'Assignments'), workspace: 'shared', summaryLimit: integer(config.summaryLimit, 512, 6000, 'Summary limit') };
   }
   try {
     const saved: unknown = JSON.parse(localStorage.getItem(storageKey) ?? '{}');
