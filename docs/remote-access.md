@@ -68,6 +68,25 @@ Relay token: `base64url(JSON {acct, dev, iat, exp}) + "." + base64url(HMAC-SHA25
 It is valid for 30 days, and only while the device is still registered on the account. Revoking a
 device closes its socket and makes its token invalid.
 
+**Refresh.** While connected, the desktop checks the token at connect and every 12 hours. With
+fewer than 7 days left it calls `POST /v1/token` and stores the fresh token (same account and
+device, later expiry) in the keychain and in memory. A failure is left for the next check; a
+`401` follows the sign-out rule above.
+
+**Startup.** Only a computer with an account in `remote.json` reads the keychain. A missing (or
+expired) token means signed out. Any other keychain error (a locked keychain, `-25308` right
+after an update relaunch) is not a sign-out: status shows signed in but not connected, and the
+token is read again after 5 s, 15 s and 60 s; when it reads, the socket starts and
+`remote://status` is sent.
+
+**Adopting pre-0.3.20 items.** Before 0.3.20 the keychain accounts were `relay-token` and
+`device-key`. At startup, when the scoped token or key is missing, the installed app (data
+folder `ai.pandacode.desktop`, never a dev build) reads those once per launch. It adopts them only
+if the legacy token parses, is unexpired and its `dev` is this device id: the token is written
+to the scoped name, and so is the legacy key when it differs from the scoped one (the relay
+registered the legacy key for this device id). After both writes succeed the legacy items are
+deleted.
+
 Build config is `option_env!("PANDACODE_RELAY_URL")` and `option_env!("PANDACODE_GITHUB_CLIENT_ID")`.
 Environment variables of the same names override them at run time. If either is missing, remote
 access is shown as "not configured in this build".
@@ -81,6 +100,7 @@ All routes except auth take `Authorization: Bearer <relay token>`. Errors are `{
   The desktop uses it only for an explicit `remote_devices` (or trust) call made before the
   socket's first presence frame.
 - `DELETE /v1/devices/:id` → `{ ok: true }`
+- `POST /v1/token` → `{ token }`: a fresh 30-day token for the same account and device
 - `GET /v1/connect?host=0|1` (WebSocket upgrade) → joins the account's Durable Object, advertising
   whether this device hosts
 
@@ -175,12 +195,14 @@ more power than local ones.
 | Method | Params | Result |
 |---|---|---|
 | `subscribe` | `{ sessionIds: [...] }` (≤ 500) | `{ tasks: [{ sessionId, status, lastId, title }] }` for those that exist. Adds the ids to this device's subscription for 10 minutes; the viewer renews every 9 minutes and on every presence frame. An expired subscription starts over. |
+| `providers.list` | `{ force?: boolean }` | the host's `list_providers` result: `[{ id, name, installed, path, version, models }]`. `force` drops the same ACP catalog caches. If it would not fit one reply, the longest `models` lists are halved until it does. |
+| `providers.models` | `{ provider, force?: boolean }` | the host's `list_provider_models` result: `[{ id, name, description, reasoningEfforts, defaultReasoningEffort, contextWindow }]`, its tail dropped to fit one reply. `provider` must be a known harness id (`Unknown provider.`). |
 | `task.start` | `{ repo: "owner/name", branch?, worktree, prompt, provider, model, mode?, effort? }` | `{ sessionId }` |
 | `task.messages` | `{ sessionId, afterId }` | `{ messages: [{ id, role, content, createdAt, turnDurationMs }], hasMore, title }` |
 | `task.send` | `{ sessionId, text }` | `{ queued: boolean }`. Queued if the task is running, like Enter. If the run ended between the check and the queue add, the host takes the entry back and sends it. |
 | `task.stop` | `{ sessionId }` | `{}` |
 | `task.steer` | `{ sessionId, text }` | `{}` (as `steer_task`) |
-| `task.configure` | `{ sessionId, provider?, model?, effort?, mode? }` | `{}`. `provider` and `model` together; `effort: null` clears it; `mode` changes permissions. |
+| `task.configure` | `{ sessionId, provider?, model?, effort?, mode? }` | `{}`. `provider` and `model` together (a provider not installed there is refused as in `task.start`); `effort: null` clears it; `mode` changes permissions. |
 | `approval.respond` | `{ sessionId, requestId, approve: boolean }` | `{}` |
 | `input.respond` | `{ sessionId, requestId, response }` | `{}` (as `respond_user_input`) |
 
@@ -209,6 +231,22 @@ The host's worst case is about 9.5 minutes (clone, fetch and local git steps, ea
 viewer waits 3 minutes longer. A `task.start` runs beside the peer's ordered request queue (at
 most 4 at once, then it queues), so a slow clone never delays that peer's other requests, which
 stay in order.
+
+### Model lists for another computer
+
+A mirror's model picker lists the host's harnesses and models, not this computer's:
+`list_providers` and `list_provider_models` take an optional `deviceId` and then ask that host
+(`providers.list`, `providers.models`). This computer's own id, or an empty one, lists locally.
+The viewer keeps each reply for 10 minutes per device (and per device and provider for models);
+`force` asks again, and concurrent identical requests share one call. A device's lists are
+dropped when it goes offline, comes back, changes hosting, is untrusted or revoked, and on
+sign-out. Every request, cached or not, first gets the usual errors for an unknown, untrusted or
+offline (`That computer is offline.`) host.
+
+`remote_start_task` and a mirror's `configure_session` are refused here when the cached lists
+show the provider isn't installed there (`<Provider> is not installed on <host>.`) or the model
+isn't among its models (`<model> is not available for <provider> on <host>.`; `default` always
+passes). With nothing cached the host decides, and it refuses a provider it doesn't have.
 
 ### Events
 
@@ -261,6 +299,8 @@ Requests from one peer are answered in order, except `task.start` (above).
 | `remote_revoke_device` | `{ deviceId }` | `{}` |
 | `remote_targets` | | `[{ deviceId, name, platform, online }]`: other devices trusted here (so, symmetrically, trusting this one) with hosting on |
 | `remote_repo_check` | `{ projectId }` | `{ repo: "owner/name" \| null, branch, ahead, dirty, pushed }`. `repo` is null without a GitHub `origin`; `ahead` is `rev-list --count @{u}..HEAD` (0 without an upstream); `pushed` is whether `origin/<branch>` exists. Local refs only, no network. |
+| `list_providers` | `{ force?, deviceId? }` | as without `deviceId`, from that host (see Model lists) |
+| `list_provider_models` | `{ provider, force?, deviceId? }` | as without `deviceId`, from that host |
 | `remote_start_task` | `{ deviceId, projectId, prompt, provider, model, mode?, effort?, worktree?, branch?, sessionId? }` | the mirror `Session` plus `sessionId`. `branch` defaults to the checkout's. An empty New task draft without its own worktree passed as `sessionId` becomes the mirror; otherwise a new task is made. On failure nothing is left: a new row is deleted, a draft stays a draft. |
 
 Window events: `remote://status` (status), `remote://presence` (devices), and for mirrors the

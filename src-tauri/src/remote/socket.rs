@@ -10,6 +10,8 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::{self, client::IntoClientRequest, Message};
 
 const PING: Duration = Duration::from_secs(30);
+/// How often a connected computer checks whether its token is due for a refresh.
+const REFRESH: Duration = Duration::from_secs(12 * 3600);
 /// The error a call gets when the relay can't deliver it to an offline computer.
 pub(crate) const OFFLINE: &str = "That computer is offline.";
 /// Hosts keep a subscription for 10 minutes; it is renewed before then.
@@ -132,9 +134,17 @@ async fn session(app: &tauri::AppHandle, generation: u64, token: &str) -> Outcom
     let mut ping = tokio::time::interval_at(tokio::time::Instant::now() + PING, PING);
     // The first subscription follows the first presence frame.
     let mut renew = tokio::time::interval_at(tokio::time::Instant::now() + RENEW, RENEW);
+    // The first tick is now: a token is checked at connect, then every 12 h.
+    let mut refresh = tokio::time::interval(REFRESH);
     let mut heard = Instant::now();
     loop {
         tokio::select! {
+            _ = refresh.tick() => {
+                let token = remote(app).lock().token.clone();
+                if let Some(token) = token.filter(|token| config::needs_refresh(token, chrono::Utc::now().timestamp())) {
+                    tauri::async_runtime::spawn(refresh_token(app.clone(), token));
+                }
+            }
             // None once stop() or a restart drops the outbox.
             outgoing = rx.recv() => match outgoing {
                 Some(text) => if write.send(Message::text(text)).await.is_err() { return closed(None) },
@@ -161,6 +171,34 @@ async fn session(app: &tauri::AppHandle, generation: u64, token: &str) -> Outcom
                 Some(Ok(_)) => heard = Instant::now(),
             },
         }
+    }
+}
+
+/// Trades a token in its last week for a fresh 30-day one (`POST /v1/token`). Failures are
+/// left for the next check; a refused token signs out as any 401 does.
+async fn refresh_token(app: tauri::AppHandle, old: String) {
+    let Some(build) = config::build() else { return };
+    let reply = match auth::relay(&build, &old, reqwest::Method::POST, "/v1/token").await {
+        Ok(reply) => reply,
+        Err(error) if error == auth::SIGNED_OUT => return sign_out_local(&app, Some(&old)),
+        Err(_) => return,
+    };
+    let Some(fresh) = reply["token"].as_str().filter(|token| token.len() <= 4096) else { return };
+    let (Some(was), Some(now)) = (config::parse_token(&old), config::parse_token(fresh)) else { return };
+    if now.acct != was.acct || now.dev != was.dev || now.exp <= was.exp {
+        return;
+    }
+    let state = remote(&app);
+    {
+        let mut inner = state.lock();
+        // Signed out or in again meanwhile: the old token is no longer the one to replace.
+        if inner.token.as_deref() != Some(old.as_str()) {
+            return;
+        }
+        inner.token = Some(fresh.to_owned());
+    }
+    if let Err(error) = crate::secret_store::set(config::SERVICE, &state.accounts.token, fresh) {
+        eprintln!("Could not save the refreshed PandaCode Connect token: {error}");
     }
 }
 
@@ -279,8 +317,15 @@ fn presence(app: &tauri::AppHandle, list: &Value) {
 }
 
 /// The list replaces the known devices. A device missing from it is gone, with its subscription.
+/// A device that went offline, came back or changed hosting loses its cached harness lists.
 fn apply_presence(inner: &mut Inner, list: &[Value]) {
-    inner.devices = parse_devices(list);
+    let devices = parse_devices(list);
+    for old in &inner.devices {
+        if !devices.iter().any(|d| d.id == old.id && d.online == old.online && d.host == old.host) {
+            inner.catalog.forget(&old.id);
+        }
+    }
+    inner.devices = devices;
     inner.presence = true;
     let Inner { devices, subscribers, keys, .. } = inner;
     subscribers.retain(|id, _| devices.iter().any(|d| &d.id == id));
@@ -396,6 +441,22 @@ mod tests {
         assert_eq!(inner.subscribers.keys().collect::<Vec<_>>(), ["a"]);
         apply_presence(&mut inner, &[]);
         assert!(inner.devices.is_empty() && inner.subscribers.is_empty());
+    }
+
+    #[test]
+    fn going_offline_or_coming_back_forgets_cached_lists() {
+        let mut inner = Inner::default();
+        let row = |id: &str, online: bool| json!({"id": id, "online": online, "host": true});
+        apply_presence(&mut inner, &[row("a", true), row("b", true)]);
+        let now = std::time::Instant::now();
+        for id in ["a", "b"] {
+            inner.catalog.put((id.into(), None), now, json!([]));
+        }
+        apply_presence(&mut inner, &[row("a", false), row("b", true)]);
+        assert!(!inner.catalog.knows("a") && inner.catalog.knows("b"));
+        inner.catalog.put(("a".into(), None), now, json!([]));
+        apply_presence(&mut inner, &[row("a", true), row("b", true)]);
+        assert!(!inner.catalog.knows("a") && inner.catalog.knows("b"));
     }
 
     #[test]
