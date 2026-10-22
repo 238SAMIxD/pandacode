@@ -3206,6 +3206,7 @@ pub fn run() {
                 provider_settings::provider_remove_commandcode_key,
                 provider_settings::provider_set_mimo_endpoint,
                 architect::profiles::architect_profiles,
+                architect::profiles::architect_set_lead_guidance,
                 architect::profiles::architect_save_profile,
                 architect::profiles::architect_delete_profile,
                 architect::architect_get,

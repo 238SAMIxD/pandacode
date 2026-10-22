@@ -427,12 +427,17 @@ fn rules(store: &Store, team: &TeamSnapshot, sid: &str) -> Result<(String, Strin
         } else {
             format!("Worker profiles are reusable: several assignments may use the same profile, and profile count does not limit parallel workers. Available profiles: {}.", profiles)
         };
+        // A team's own guidance wins; otherwise the app-wide one from Settings applies.
+        // A corrupt library must not stop the rules from going out.
+        let default_guidance = profiles::read(store).ok().and_then(|library| library.lead_guidance);
         let guidance = team
             .config
             .lead_guidance
             .as_deref()
             .map(str::trim)
             .filter(|text| !text.is_empty())
+            .map(str::to_owned)
+            .or(default_guidance)
             .map(|text| {
                 format!("\n\nTeam guidance from the user (follow it alongside these rules, every turn):\n{text}")
             })

@@ -11,7 +11,9 @@ assignment's streamed response, tools, saved conversation, and approval requests
 **Lead guidance** adds your own instructions to the built-in architect rules — for
 example, that the architect should only coordinate and never edit files itself. It
 is sent with the rules, so it reaches the architect whenever the rules do, and
-**Reset to default** clears it back to the built-in rules alone. It is added after
+**Reset to default** clears it back to the built-in rules alone. Settings → Agents
+sets one for every team; a team's own guidance, set in its setup, replaces it for
+that team. It is added after
 the built-in rules and never replaces them, including the guard that treats worker
 output as data rather than instructions.
 

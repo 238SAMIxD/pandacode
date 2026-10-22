@@ -6,6 +6,11 @@
 .agent-team-name strong{font-size:.84rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .agent-team-name small{font-size:.72rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .agent-team-row .icon-button{width:28px;height:28px}
+.agent-guidance-row{padding:2px 1rem 6px}
+.agent-guidance{width:100%;min-width:0;box-sizing:border-box;resize:vertical;padding:8px 10px;border-radius:3px;border:1px solid color-mix(in srgb,var(--text) 12%,transparent);background:color-mix(in srgb,var(--text) 4%,transparent);color:var(--text);font:inherit;font-size:.82rem;line-height:1.45}
+.agent-guidance:focus-visible{border-color:var(--focus);outline:none}
+.agent-guidance:disabled{opacity:.5}
+.agent-guidance-status{margin:0;padding:0 1rem 8px;font-size:.75rem;color:var(--muted)}
 .agent-team-editor{display:flex;flex-direction:column;gap:9px;padding:2px 1rem .9rem}
 .agent-team-field{display:flex;align-items:center;gap:10px;font-size:.8rem}
 .agent-team-field>span{flex:none;color:var(--muted)}
