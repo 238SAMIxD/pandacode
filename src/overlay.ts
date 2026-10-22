@@ -1,5 +1,6 @@
 import './overlay.css';
 import { escape, icon } from './dom';
+import { mountExternalLinks } from './external-links';
 import { providerLogo } from './provider-logos';
 import { nativeOverlay, overlayCall, type OverlaySnapshot, type OverlayTask, type LaunchContext } from './overlay-client';
 import type { FileEntry, ProviderId, ProviderModel } from './types';
@@ -194,6 +195,7 @@ window.addEventListener('keydown',event => {
   if (event.key === 'ArrowDown' && event.target === search) { event.preventDefault(); list.querySelector<HTMLButtonElement>('[data-task]')?.focus(); }
 });
 window.addEventListener('pagehide',() => { setVisible(false); fileMentions.dispose(); });
+mountExternalLinks(document, url => overlayCall('open_external_url', { url }), error => showFeedback(error instanceof Error ? error.message : String(error), true));
 if (nativeOverlay) {
   void import('@tauri-apps/api/event').then(({listen}) => listen<boolean>('overlay-visibility',event => setVisible(event.payload)));
   void import('@tauri-apps/api/event').then(({listen}) => listen<{sessionIds: string[]}>('sessions-deleted', event => removeDeletedSessions(event.payload.sessionIds)));
