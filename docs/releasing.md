@@ -16,6 +16,7 @@ uncommitted work.
 | Target | Runner / Rust target | Asset |
 | --- | --- | --- |
 | `darwin-aarch64` | `macos-latest` / `aarch64-apple-darwin` | `PandaCode-macOS-arm64.dmg` |
+| `darwin-x86_64` | `macos-15-intel` / `x86_64-apple-darwin` | `PandaCode-macOS-x64.dmg` |
 | `windows-x86_64` | `windows-2022` / `x86_64-pc-windows-msvc` | `PandaCode-Windows-x64-setup.exe` |
 | `linux-x86_64` | `ubuntu-22.04` / `x86_64-unknown-linux-gnu` | `PandaCode-Linux-x86_64.AppImage` |
 | `linux-aarch64` | `ubuntu-24.04-arm` / `aarch64-unknown-linux-gnu` | `PandaCode-Linux-aarch64.AppImage` |
@@ -23,8 +24,8 @@ uncommitted work.
 Each asset has a `NAME.sha256` file beside it (`sha256sum` format). Asset names
 do not contain the version, so
 `https://github.com/aicodeking/pandacode/releases/latest/download/<asset>`
-always serves the newest build. There is no Intel Mac or Windows ARM
-release target.
+always serves the newest build. There is no Windows ARM release target. The Intel Mac build runs natively on
+`macos-15-intel` because `build.mjs` refuses to cross-build.
 
 ## Automatic updates
 
@@ -32,7 +33,7 @@ Installed copies update themselves from GitHub Releases with Tauri's updater
 (`src/app-updates.ts`, `plugins.updater` in `src-tauri/tauri.conf.json`). Each release
 also carries:
 
-- `PandaCode-macOS-arm64.app.tar.gz` and a `.sig` for each platform's update file
+- `PandaCode-macOS-arm64.app.tar.gz`, `PandaCode-macOS-x64.app.tar.gz` and a `.sig` for each platform's update file
   (Windows and Linux update from their installer and AppImage), signed with the
   update key;
 - `latest.json`, written by `scripts/release/updater-manifest.mjs`, naming the version,
@@ -133,7 +134,7 @@ On each native OS, after `npm ci`:
 
 ```sh
 npm run release:build            # builds the host's target
-# or: node scripts/release/build.mjs darwin-aarch64|windows-x86_64|linux-x86_64|linux-aarch64
+# or: node scripts/release/build.mjs darwin-aarch64|darwin-x86_64|windows-x86_64|linux-x86_64|linux-aarch64
 ```
 
 The script checks that all version files agree, runs `tauri build` for the

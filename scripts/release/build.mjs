@@ -2,7 +2,7 @@
 // release/<version>/ under its stable GitHub Release asset name, with a
 // SHA-256 sidecar. Nothing is uploaded; .github/workflows/release.yml does that.
 //
-//   node scripts/release/build.mjs [darwin-aarch64|windows-x86_64|linux-x86_64|linux-aarch64]
+//   node scripts/release/build.mjs [darwin-aarch64|darwin-x86_64|windows-x86_64|linux-x86_64|linux-aarch64]
 //
 // Signing is optional. Without Apple credentials the macOS app gets an ad-hoc
 // signature; Windows and Linux builds are unsigned. With TAURI_SIGNING_PRIVATE_KEY
@@ -54,7 +54,7 @@ export function buildPlan(releaseTarget, inherited, platform = process.platform,
   // Update files need the signing key; local builds without it skip them.
   const shared = { createUpdaterArtifacts: Boolean(base.TAURI_SIGNING_PRIVATE_KEY?.trim()), ...appImageBundleOptions(releaseTarget) };
   const cargoTarget = { CARGO_TARGET_DIR: resolve(root, 'src-tauri/target') };
-  if (releaseTarget === 'darwin-aarch64') {
+  if (releaseTarget.startsWith('darwin-')) {
     const signing = macosSigning(base);
     const env = signing.mode === 'adhoc' ? withoutApple(base) : base;
     return plan(config, { ...env, ...cargoTarget, APPLE_SIGNING_IDENTITY: signing.identity }, signing.mode, { ...shared, macOS: { signingIdentity: signing.identity } });
@@ -139,7 +139,7 @@ async function main() {
   const bundleRoot = resolve(root, 'src-tauri/target', config.triple, 'release/bundle');
   const bundleDir = resolve(bundleRoot, config.bundleDir);
   const source = resolve(bundleDir, builtArtifact(await readdir(bundleDir), releaseVersion, releaseTarget));
-  if (releaseTarget === 'darwin-aarch64') {
+  if (releaseTarget.startsWith('darwin-')) {
     const app = resolve(bundleRoot, 'macos/PandaCode.app');
     await verifyMacApp(app, build.signing.mode);
     await verifyDmg(source, app, releaseVersion);
