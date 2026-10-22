@@ -176,3 +176,22 @@ test('team model names keep space beside lead and effort controls', async ({ pag
     expect(size.visible).toBeGreaterThanOrEqual(size.full);
   }
 });
+
+test('the model filter is a full-height field, not a collapsed line', async ({ page }) => {
+  await install(page);
+  await openAgents(page);
+  await settings(page).getByRole('button', { name: 'New team' }).click();
+  const nameField = settings(page).getByRole('textbox', { name: 'Team name', exact: true });
+  const filter = settings(page).locator('.agent-team-filter');
+  await expect(filter).toBeVisible();
+  const measure = (locator: ReturnType<typeof settings.locator>) => locator.evaluate(el => {
+    const box = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    return { height: box.height, width: box.width, paddingLeft: parseFloat(style.paddingLeft) };
+  });
+  const [nameBox, filterBox] = [await measure(nameField), await measure(filter)];
+  // The filter is a column child: `flex:1` collapsed it to a 15px text strip with no box.
+  expect(filterBox.height).toBeGreaterThanOrEqual(nameBox.height);
+  expect(filterBox.paddingLeft).toBeGreaterThanOrEqual(8);
+  expect(filterBox.width).toBeGreaterThan(300);
+});

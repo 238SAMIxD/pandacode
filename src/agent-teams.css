@@ -9,8 +9,10 @@
 .agent-team-editor{display:flex;flex-direction:column;gap:9px;padding:2px 1rem .9rem}
 .agent-team-field{display:flex;align-items:center;gap:10px;font-size:.8rem}
 .agent-team-field>span{flex:none;color:var(--muted)}
-.agent-team-editor input[type=text],.agent-team-filter{flex:1;min-width:0;height:32px;padding:0 10px;border-radius:3px;border:1px solid color-mix(in srgb,var(--text) 12%,transparent);background:color-mix(in srgb,var(--text) 4%,transparent);color:var(--text);font:inherit;font-size:.82rem}
+.agent-team-editor input[type=text],.agent-team-filter{min-width:0;height:32px;padding:0 10px;border-radius:3px;border:1px solid color-mix(in srgb,var(--text) 12%,transparent);background:color-mix(in srgb,var(--text) 4%,transparent);color:var(--text);font:inherit;font-size:.82rem}
 .agent-team-editor input:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+.agent-team-editor input[type=text]{flex:1}
+.agent-team-filter{flex:none;align-self:stretch;-webkit-appearance:none;appearance:none}
 .agent-team-models{max-height:260px;overflow:auto;display:flex;flex-direction:column;gap:6px;padding-right:4px}
 .agent-team-models h4{display:flex;align-items:center;gap:6px;margin:4px 0 2px;font-size:.72rem;font-weight:600;color:var(--muted)}
 .agent-team-models h4 svg{width:13px;height:13px}
