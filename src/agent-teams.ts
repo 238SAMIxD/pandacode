@@ -184,6 +184,7 @@ export function mountAgentTeams(host: HTMLElement, options: AgentTeamsOptions): 
     if (busy) return;
     busy = true; error.hidden = true; guidanceSave.disabled = true;
     const wanted = guidance.value.trim();
+    if (new TextEncoder().encode(wanted).length > 2000) { busy = false; guidanceSave.disabled = false; showError(new Error('Lead guidance must be under 2000 bytes.')); return; }
     void (async () => {
       try {
         library = await options.call<TeamLibrary>('architect_set_lead_guidance', { guidance: wanted || null });
