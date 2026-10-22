@@ -86,7 +86,7 @@ export async function repackAppImage(appImage, { command = execute, log = () => 
     }
     const root = join(work, 'squashfs-root');
     const removed = [];
-    for (const directory of ['usr/lib', 'usr/lib64', 'usr/lib/x86_64-linux-gnu']) {
+    for (const directory of ['usr/lib', 'usr/lib64', 'usr/lib/x86_64-linux-gnu', 'usr/lib/aarch64-linux-gnu']) {
       let names;
       try {
         names = await readdir(join(root, directory));

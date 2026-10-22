@@ -20,6 +20,7 @@ embedded editor engine.
   <a href="https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-macOS-arm64.dmg">macOS (Apple silicon)</a> ·
   <a href="https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-Windows-x64-setup.exe">Windows x64</a> ·
   <a href="https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-Linux-x86_64.AppImage">Linux x64</a> ·
+  <a href="https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-Linux-aarch64.AppImage">Linux arm64</a> ·
   <a href="https://github.com/aicodeking/pandacode/releases">All releases</a>
 </p>
 
@@ -138,6 +139,7 @@ Download the latest build from
 | macOS (Apple silicon) | [`PandaCode-macOS-arm64.dmg`](https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-macOS-arm64.dmg) | macOS 12+ |
 | Windows x64 | [`PandaCode-Windows-x64-setup.exe`](https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-Windows-x64-setup.exe) | Windows 10 1809+ or Windows 11 |
 | Linux x64 | [`PandaCode-Linux-x86_64.AppImage`](https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-Linux-x86_64.AppImage) | Ubuntu 22.04+ or compatible, X11 or XWayland |
+| Linux arm64 | [`PandaCode-Linux-aarch64.AppImage`](https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-Linux-aarch64.AppImage) | Ubuntu 24.04+ aarch64 or compatible, X11 or XWayland |
 
 Or from a terminal: `npx pandacode` downloads the latest build, verifies its
 signature and installs it (on macOS it is signed locally for you, so no
@@ -148,7 +150,7 @@ Release builds are not code-signed, so your OS will warn the first time:
 - **macOS:** if macOS says it cannot verify PandaCode, open **System Settings →
   Privacy & Security** and click **Open Anyway**.
 - **Windows:** if SmartScreen appears, click **More info → Run anyway**.
-- **Linux:** `chmod +x PandaCode-Linux-x86_64.AppImage`, then run it. Some
+- **Linux:** `chmod +x PandaCode-Linux-x86_64.AppImage` (or `-aarch64`), then run it. Some
   distributions need FUSE 2 (`libfuse2`), or set `APPIMAGE_EXTRACT_AND_RUN=1`.
 
 Each file has a `.sha256` checksum beside it. Once installed, PandaCode updates

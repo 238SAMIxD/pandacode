@@ -34,6 +34,7 @@ test('Windows installs per user, bootstraps WebView2 and links the C++ runtime s
 test('Linux bundles the external-link helper without changing Mac or Windows bundles', () => {
   const expected = { linux: { appimage: { files: { '/usr/bin/xdg-open': '/usr/bin/xdg-open' } } } };
   assert.deepEqual(appImageBundleOptions('linux-x86_64'), expected);
+  assert.deepEqual(appImageBundleOptions('linux-aarch64'), expected);
   assert.deepEqual(config(buildPlan('linux-x86_64', env, 'linux', 'x64')).bundle.linux, expected.linux);
   assert.deepEqual(appImageBundleOptions('darwin-aarch64'), {});
   assert.equal(config(buildPlan('windows-x86_64', env, 'win32', 'x64')).bundle.linux, undefined);

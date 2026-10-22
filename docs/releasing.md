@@ -18,11 +18,12 @@ uncommitted work.
 | `darwin-aarch64` | `macos-latest` / `aarch64-apple-darwin` | `PandaCode-macOS-arm64.dmg` |
 | `windows-x86_64` | `windows-2022` / `x86_64-pc-windows-msvc` | `PandaCode-Windows-x64-setup.exe` |
 | `linux-x86_64` | `ubuntu-22.04` / `x86_64-unknown-linux-gnu` | `PandaCode-Linux-x86_64.AppImage` |
+| `linux-aarch64` | `ubuntu-24.04-arm` / `aarch64-unknown-linux-gnu` | `PandaCode-Linux-aarch64.AppImage` |
 
 Each asset has a `NAME.sha256` file beside it (`sha256sum` format). Asset names
 do not contain the version, so
 `https://github.com/aicodeking/pandacode/releases/latest/download/<asset>`
-always serves the newest build. There is no Intel Mac, Windows ARM or Linux ARM
+always serves the newest build. There is no Intel Mac or Windows ARM
 release target.
 
 ## Automatic updates
@@ -132,7 +133,7 @@ On each native OS, after `npm ci`:
 
 ```sh
 npm run release:build            # builds the host's target
-# or: node scripts/release/build.mjs darwin-aarch64|windows-x86_64|linux-x86_64
+# or: node scripts/release/build.mjs darwin-aarch64|windows-x86_64|linux-x86_64|linux-aarch64
 ```
 
 The script checks that all version files agree, runs `tauri build` for the

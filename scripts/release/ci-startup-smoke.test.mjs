@@ -48,6 +48,7 @@ test('file-removal errors are warnings even when the original operation succeede
 test('startup smoke refuses local, self-hosted, and mismatched systems', () => {
   const env = { GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', RUNNER_TEMP: tmpdir() };
   assert.doesNotThrow(() => assertHostedRunner(env, 'linux-x86_64', 'linux'));
+  assert.doesNotThrow(() => assertHostedRunner(env, 'linux-aarch64', 'linux'));
   for (const invalid of [{}, { ...env, RUNNER_ENVIRONMENT: 'self-hosted' }, { ...env, RUNNER_TEMP: 'relative' }]) assert.throws(() => assertHostedRunner(invalid, 'linux-x86_64', 'linux'), /disposable/);
   assert.throws(() => assertHostedRunner(env, 'linux-x86_64', 'win32'), /matching/);
   assert.throws(() => assertHostedRunner(env, 'darwin-aarch64', 'darwin'), /matching/);
@@ -56,6 +57,7 @@ test('startup smoke refuses local, self-hosted, and mismatched systems', () => {
 test('only the exact target/version package is launched', () => {
   assert.equal(selectPackage(['PandaCode_1.2.3_x64-setup.exe', 'PandaCode_1.2.3_x64-setup.exe.sig'], '1.2.3', 'windows-x86_64'), 'PandaCode_1.2.3_x64-setup.exe');
   assert.equal(selectPackage(['PandaCode_1.2.3_amd64.AppImage'], '1.2.3', 'linux-x86_64'), 'PandaCode_1.2.3_amd64.AppImage');
+  assert.equal(selectPackage(['PandaCode_1.2.3_aarch64.AppImage'], '1.2.3', 'linux-aarch64'), 'PandaCode_1.2.3_aarch64.AppImage');
   assert.throws(() => selectPackage(['PandaCode_1.2.2_amd64.AppImage'], '1.2.3', 'linux-x86_64'), /exactly one/);
   assert.throws(() => selectPackage(Array(101).fill('PandaCode_1.2.3_amd64.AppImage'), '1.2.3', 'linux-x86_64'), /exactly one/);
 });
