@@ -845,6 +845,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'resolve_slash_command': result = resolveSlash(session(args.sessionId).provider, String(args.text)); break;
     case 'list_agent_integrations': result = { servers: [{ name: 'Preview documentation', description: 'Sample MCP integration', status: 'ready', authStatus: 'not required', tools: [{ name: 'search_docs', description: 'Search sample documentation.' }] }], skills: [{ name: 'Project guidelines', description: 'Sample skill', status: 'enabled' }], apps: [], warnings: [] }; break;
     case 'list_app_tools': result = [{ name: 'pandacode_list_tasks', description: 'List project tasks.' }, { name: 'pandacode_open_browser', description: 'Open a URL in the app browser.' }]; break;
+    case 'run_turn_checks': result = { checked: false, reason: 'Browser preview has no project checks.' }; break;
     case 'agent_ui_request_active': result = true; break;
     case 'resolve_agent_ui_action': break;
     case 'open_external_url': { const url = new URL(args.url); if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Use an HTTP or HTTPS URL.'); window.open(url.href, '_blank', 'noopener,noreferrer'); break; }

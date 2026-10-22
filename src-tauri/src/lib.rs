@@ -7,6 +7,7 @@ mod architect;
 mod bots;
 mod browser;
 mod child_env;
+mod checks;
 mod command_operations;
 mod context_recovery;
 mod conversation_fork;
@@ -2707,6 +2708,19 @@ async fn get_run_script(
     let root = state.root(&project_id, session_id.as_deref())?;
     blocking(move || run_script::inspect(&root)).await
 }
+/// The task checkout's own fast check, run once at the user's request after a
+/// clean turn. Bounded; no plan is a result, not an error.
+#[tauri::command]
+async fn run_turn_checks(state: State<'_, AppState>, session_id: String) -> Result<serde_json::Value> {
+    let project_id = state
+        .store
+        .lock()
+        .map_err(|e| e.to_string())?
+        .session(&session_id)?
+        .project_id;
+    let root = state.root(&project_id, Some(&session_id))?;
+    blocking(move || Ok(checks::turn_report(&root))).await
+}
 #[tauri::command]
 async fn get_run_script_preview(
     app: tauri::AppHandle,
@@ -3217,6 +3231,7 @@ pub fn run() {
                 prepare_file_preview,
                 get_run_script,
                 get_run_script_preview,
+                run_turn_checks,
                 start_run_script_terminal,
                 start_terminal,
                 write_terminal,

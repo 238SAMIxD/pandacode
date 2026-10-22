@@ -13,6 +13,7 @@ import './usage-limit.css';
 import './document-viewer.css';
 import { renderDocument, setDocumentView } from './document-viewer';
 import { canSteer, moved, queuePanel, type HoldReason, type QueuedMessage } from './message-queue';
+import { afterRun as turnChecksAfterRun, enabled as turnChecksEnabled, noteManualSend, setEnabled as turnChecksSetEnabled } from './turn-checks';
 import { limitActive, limitBanner, resetLabel } from './usage-limit';
 import { cascade, enterView, glideIn, glideOut, hideToast, installDialogMotion, publishSpringEasings, revealIn, showToast, trackSegment } from './motion';
 import { updateTeamProgress } from './team-progress';
@@ -2023,6 +2024,20 @@ async function sendQueuedNow(s: Session, id: string): Promise<void> {
   await call(team ? 'architect_control' : 'stop_session', { sessionId: s.id, ...(team ? { action: 'stop' } : {}) });
   notify('Stopping the run to send this message…');
 }
+/** Runs the optional turn-end project check (Settings → Agents) for a clean finish, queueing one repair on failure. */
+async function maybeTurnChecks(id: string): Promise<void> {
+  const task = state.sessions.find(item => item.id === id);
+  await turnChecksAfterRun(id, {
+    call,
+    task,
+    isTeam: teams.has(id),
+    isBot: botProjects.has(task?.projectId ?? ''),
+    isRunning: isRunning(id),
+    queued: queueOf(id).length,
+    onQueued: queued => { void run(dispatchQueue(queued)); },
+    onError: () => {},
+  });
+}
 /** Sends a task's next queued message once it is idle and its queue is not held (Send now skips the hold). */
 async function dispatchQueue(id: string): Promise<void> {
   if (!queueOf(id).length) return;
@@ -2114,6 +2129,7 @@ async function send(): Promise<void> {
   if (target) return sendRemote(s, target, draft, text);
   // Preparing attachments or awaiting admission blocks only this task.
   configuringSessions.add(s.id);
+  noteManualSend(s.id);
   const filePaths = [...state.attachments], browserItems = state.browserAttachments.get(s.id) ?? [];
   const moodboardItems = (state.moodboardAttachments.get(s.id) ?? []).filter(item => item.projectId === s.projectId);
   const promptItems = attachments.list(s.id);
@@ -2310,6 +2326,7 @@ function onAgent(event: AgentEvent): void {
     if (first?.stopping) sendFirst.set(event.sessionId, { id: first.id });
     if (first?.stopping && ending === 'stopped') { if (first.hold) state.queueHolds.set(event.sessionId, first.hold); else state.queueHolds.delete(event.sessionId); }
     else if (ending) state.queueHolds.set(event.sessionId, ending);
+    if (!ending) void maybeTurnChecks(event.sessionId);
     if (event.sessionId === state.sessionId) { renderStream(); renderComposer(); }
     void finishResponse(event.sessionId, finishing).finally(() => run(dispatchQueue(event.sessionId))); return;
   }
@@ -3051,6 +3068,7 @@ async function showSettings(section?: import('./settings').SettingsSection): Pro
       compact: document.body.classList.contains('compact'), wallpapers: wallpapers.enabled,
       theme: currentTheme(), preview, section, discover: discoverSettingsProviders,
       projects: { list: userProjects, remove: removeProject },
+      turnChecks: turnChecksEnabled(),
       github: target => github.mountSettings(target, project()?.id ?? state.projects[0]?.id ?? ''),
       teams: { loadModels, call },
       cloud: { call, listen: (name, callback) => subscribe(name, callback) },
@@ -3576,6 +3594,7 @@ document.addEventListener('input', event => { const input = event.target as HTML
 document.addEventListener('change', event => {
   const input = event.target as HTMLInputElement;
   if (input.id === 'daily-wallpapers') wallpapers.setEnabled(input.checked);
+  if (input.id === 'turn-checks') turnChecksSetEnabled(input.checked);
   // A switch toggles natively (the data-action click path cancels the default), then saves.
   if (input.classList.contains('limit-resume-switch')) run(limitAction('limit-resume-at-reset', input));
   if (input.id === 'compact-mode') { document.body.classList.toggle('compact', input.checked); localStorage.setItem('pandacode.compact', String(input.checked)); }
