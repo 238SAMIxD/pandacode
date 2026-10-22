@@ -852,7 +852,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'list_slash_commands': result = slashCatalog(session(args.sessionId).provider); break;
     case 'resolve_slash_command': result = resolveSlash(session(args.sessionId).provider, String(args.text)); break;
     case 'list_agent_integrations': result = { servers: [{ name: 'Preview documentation', description: 'Sample MCP integration', status: 'ready', authStatus: 'not required', tools: [{ name: 'search_docs', description: 'Search sample documentation.' }] }], skills: [{ name: 'Project guidelines', description: 'Sample skill', status: 'enabled' }], apps: [], warnings: [] }; break;
-    case 'list_app_tools': result = [{ name: 'pandacode_list_tasks', description: 'List project tasks.' }, { name: 'pandacode_open_browser', description: 'Open a URL in the app browser.' }]; break;
+    case 'list_app_tools': result = [{ name: 'pandacode_list_tasks', description: 'List project tasks.' }, { name: 'pandacode_code_search', description: 'Search the checkout with the local codedb index.' }, { name: 'pandacode_open_browser', description: 'Open a URL in the app browser.' }]; break;
     case 'run_turn_checks': result = { checked: false, reason: 'Browser preview has no project checks.' }; break;
     case 'agent_ui_request_active': result = true; break;
     case 'resolve_agent_ui_action': break;
