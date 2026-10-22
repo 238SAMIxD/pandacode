@@ -377,7 +377,7 @@ test.describe('on Windows', () => {
     await page.goto('/');
     await showSimulator(page);
     const panel = page.locator('#simulator-panel');
-    await expect(panel.locator('.sim-status')).toHaveText('Install the Android SDK (Android Studio) to use Android emulators.');
+    await expect(panel.locator('.sim-status')).toHaveText('Install Android Studio (or the Android command-line tools) into %LOCALAPPDATA%\\Android\\Sdk, create an emulator in Device Manager, then reopen this tab.');
     await expect(panel.locator('.sim-axe')).toBeHidden();
   });
 });

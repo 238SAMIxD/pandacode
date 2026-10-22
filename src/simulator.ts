@@ -35,7 +35,8 @@ const poseName = (pose: DuoPose | null | undefined) => POSES.find(p => p.id === 
 const sleep = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms));
 const isDark = () => document.documentElement.dataset.theme === 'dark' || (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
 
-const NO_SDK = 'Install the Android SDK (Android Studio) to use Android emulators.';
+/** Matches `WINDOWS_SETUP` in android_setup.rs: Windows has no one-click setup. */
+const NO_SDK = 'Install Android Studio (or the Android command-line tools) into %LOCALAPPDATA%\\Android\\Sdk, create an emulator in Device Manager, then reopen this tab.';
 /** Windows runs Android emulators only: iOS devices, Xcode and AXe never appear there. */
 const forPlatform = (status: SimStatus): SimStatus => {
   if (!isWindows) return status;
