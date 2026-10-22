@@ -14,6 +14,7 @@ const ASSETS = {
   'darwin-arm64': 'PandaCode-macOS-arm64.app.tar.gz',
   'win32-x64': 'PandaCode-Windows-x64-setup.exe',
   'linux-x64': 'PandaCode-Linux-x86_64.AppImage',
+  'linux-arm64': 'PandaCode-Linux-aarch64.AppImage',
 };
 
 export function assetFor(platform = process.platform, arch = process.arch) {

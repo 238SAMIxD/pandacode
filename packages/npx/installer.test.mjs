@@ -48,7 +48,8 @@ test('picks the asset per platform', () => {
   assert.equal(assetFor('win32', 'x64'), 'PandaCode-Windows-x64-setup.exe');
   assert.equal(assetFor('linux', 'x64'), 'PandaCode-Linux-x86_64.AppImage');
   assert.throws(() => assetFor('darwin', 'x64'), /no build/);
-  assert.throws(() => assetFor('linux', 'arm64'), /no build/);
+  assert.equal(assetFor('linux', 'arm64'), 'PandaCode-Linux-aarch64.AppImage');
+  assert.throws(() => assetFor('win32', 'arm64'), /no build/);
 });
 
 test('writes a desktop entry', () => {
