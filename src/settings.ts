@@ -28,6 +28,8 @@ interface SettingsOptions {
   wallpapers: boolean;
   theme: 'light' | 'dark';
   preview: boolean;
+  /** Runs the checkout's fast check after a clean turn and queues one repair on failure. */
+  turnChecks: boolean;
   section?: SettingsSection;
   discover(): Promise<Provider[]>;
   /** Mounts the optional GitHub row; returns its cleanup. */
@@ -78,6 +80,7 @@ function sectionHtml(id: SettingsSection, options: SettingsOptions): string {
         <div class="setting-row settings-default-row"><div><strong>Default agent</strong><small>Used for new tasks.</small></div><button type="button" id="default-provider" class="settings-select" data-action="default-provider" aria-label="Default agent for new tasks" aria-haspopup="dialog" aria-expanded="false">${providerLogo(options.defaultProvider)}<span>${escape(defaultName)}</span>${icon('down')}</button></div>
         <div class="setting-row settings-default-row"><div><strong>Default model</strong><small>Used for new tasks.</small></div><button type="button" id="default-model" class="settings-select" data-action="default-model" aria-label="Default model for new tasks" aria-haspopup="dialog" aria-expanded="false"><span>${escape(options.defaultModel)}</span>${icon('down')}</button></div>
         <div class="setting-row"><div><strong>Agent updates</strong><small>Keep installed agents up to date.</small></div><button type="button" class="secondary-button" data-action="agent-updates" aria-haspopup="dialog">Check updates</button></div>
+        ${switchRow('turn-checks', 'Project checks after turns', 'Run the project’s fast check when a turn ends; queue one fix on failure.', options.turnChecks)}
       </div>
       <div class="settings-heading settings-agents-heading"><h3>Installed agents</h3><button type="button" class="settings-refresh">${icon('refresh')}Refresh agents</button></div>
       <div class="settings-provider-status" role="status" hidden></div>
