@@ -3458,3 +3458,24 @@ test('streaming keeps the transcript at the bottom after sending and leaves a re
   await expect(page.locator('#stream-region .live-message')).toHaveCount(0);
   expect(Math.abs(await historyOffset(anchor) - anchorY)).toBeLessThan(2);
 });
+
+test('shows a folder’s new-task button on focus and hover and starts a task in that project', async ({ page }) => {
+  const second = page.locator('#navigation .folder-group').nth(1);
+  const name = (await second.locator('.folder-heading span').last().textContent())!;
+  const add = second.locator('.folder-new-task');
+  await expect(add).toHaveCSS('opacity', '0');
+  await add.focus();
+  await expect(add).toHaveCSS('opacity', '1');
+  await page.mouse.move(0, 0);
+  await add.blur();
+  await second.locator('.folder-row').hover();
+  await expect(add).toHaveCSS('opacity', '1');
+  await add.click();
+  await expect(newTaskHeading(page)).toHaveAccessibleName(`What should we build in ${name}?`);
+  // The heading itself still only folds the project's tasks.
+  const heading = second.locator('.folder-heading');
+  const expanded = await heading.getAttribute('aria-expanded');
+  await heading.click();
+  await expect(heading).toHaveAttribute('aria-expanded', expanded === 'true' ? 'false' : 'true');
+  await expect(newTaskHeading(page)).toHaveAccessibleName(`What should we build in ${name}?`);
+});

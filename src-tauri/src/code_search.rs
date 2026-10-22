@@ -43,9 +43,11 @@ fn search_with(
     command
         .arg(root)
         .arg(command_name)
-        .arg(query)
         .arg("--no-telemetry")
+        .arg("--")
+        .arg(query)
         .env("CODEDB_NO_TELEMETRY", "1")
+        .env("CODEDB_NO_CLI_DAEMON", "1")
         .current_dir(root);
     let output = run_process(command, "codedb", OUTPUT_LIMIT, TIMEOUT)?;
     if !output.status.success() {
@@ -103,7 +105,7 @@ mod tests {
         fake(
             &codedb,
             &format!(
-                "printf '%s|%s|%s|%s|%s' \"$1\" \"$2\" \"$3\" \"$4\" \"$CODEDB_NO_TELEMETRY\" > '{}'\nprintf 'src/main.rs:1  fn main()'",
+                "printf '%s|%s|%s|%s|%s|%s|%s' \"$1\" \"$2\" \"$3\" \"$4\" \"$5\" \"$CODEDB_NO_TELEMETRY\" \"$CODEDB_NO_CLI_DAEMON\" > '{}'\nprintf 'src/main.rs:1  fn main()'",
                 marker.display()
             ),
         );
@@ -111,7 +113,7 @@ mod tests {
             search_with(Some(&codedb), temp.path(), "  hello  ", false).unwrap();
         assert_eq!(
             fs::read_to_string(&marker).unwrap(),
-            format!("{}|search|hello|--no-telemetry|1", temp.path().display())
+            format!("{}|search|--no-telemetry|--|hello|1|1", temp.path().display())
         );
         assert_eq!(report["query"], "hello");
         assert_eq!(report["symbols"], false);

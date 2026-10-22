@@ -355,10 +355,14 @@ impl Protocol {
                     return Ok(step);
                 }
             }
-            if copilot && self.config.mode == "plan" {
+            // Read and search requests keep the ordinary approval path, as in Standard mode.
+            if copilot
+                && self.config.mode == "plan"
+                && !matches!(field(&value["params"]["toolCall"], "kind"), "read" | "search")
+            {
                 let tool = &value["params"]["toolCall"];
                 let kind = field(tool, "kind");
-                let read_only = matches!(kind, "read" | "search" | "think");
+                let read_only = kind == "think";
                 let wanted = if read_only {
                     "allow_once"
                 } else {
@@ -1110,14 +1114,13 @@ mod tests {
         }
     }
     #[test]
-    fn copilot_plan_mode_allows_read_requests_and_declines_other_permissions() {
+    fn copilot_plan_mode_allows_think_and_declines_other_permissions() {
         let mut cfg = config("github-copilot");
         cfg.mode = "plan".into();
         let mut p = Protocol::new(cfg);
         p.remote_id = "copilot-session".into();
         for (kind, expected) in [
-            ("read", "yes"),
-            ("search", "yes"),
+            ("think", "yes"),
             ("execute", "no"),
             ("edit", "no"),
             ("other", "cancelled"),
@@ -1144,6 +1147,18 @@ mod tests {
                     .iter()
                     .any(|event| event.text.contains("Plan mode declined")));
             }
+        }
+    }
+    #[test]
+    fn copilot_plan_mode_sends_read_and_search_through_normal_approval() {
+        let mut cfg = config("github-copilot");
+        cfg.mode = "plan".into();
+        let mut p = Protocol::new(cfg);
+        p.remote_id = "copilot-session".into();
+        for kind in ["read", "search"] {
+            let request = json!({"jsonrpc":"2.0","id":"permission","method":"session/request_permission","params":{"sessionId":"copilot-session","toolCall":{"title":"Requested action","kind":kind},"options":[{"optionId":"yes","kind":"allow_once"},{"optionId":"no","kind":"reject_once"}]}});
+            let step = p.receive(request).unwrap();
+            assert!(step.write.is_empty(), "{kind} must wait for the user");
         }
     }
     #[test]

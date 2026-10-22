@@ -2721,12 +2721,22 @@ async fn run_inner(
         return Err("Unknown permission mode".into());
     }
     validate_reasoning_effort(&config.provider, config.reasoning_effort.as_deref())?;
-    let path = executable(&config.provider)
+    let connection = crate::connections::for_task(&config.session_id, &config.provider)
+        .map(|connection| crate::connections::launch(&connection))
+        .transpose()?;
+    let path = connection
+        .as_ref()
+        .and_then(|connection| connection.executable.clone())
+        .or_else(|| executable(&config.provider))
         .ok_or_else(|| format!("{} CLI is not installed or is not on PATH", config.provider))?;
     config.cwd = external_path(&config.cwd);
     let image_blocks = attachments::load(&config.provider, &config.images).await?;
     let mut command = command(&path)?;
     configure_command(&mut command, &config);
+    // A named connection's arguments and environment win over the global setup.
+    if let Some(connection) = &connection {
+        connection.apply(&mut command);
+    }
     let key = if config.provider == "glm" {
         Some(glm::configure(&mut command)?)
     } else if config.provider == "mimo" {
@@ -2748,8 +2758,10 @@ async fn run_inner(
     )
     .await
     .map_err(|error| {
-        key.as_ref()
-            .map_or(error.clone(), |key| error.replace(key, "[redacted]"))
+        let error = key
+            .as_ref()
+            .map_or(error.clone(), |key| error.replace(key, "[redacted]"));
+        connection.as_ref().map_or(error.clone(), |connection| connection.redact(&error))
     })
 }
 

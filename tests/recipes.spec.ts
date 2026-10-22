@@ -22,11 +22,11 @@ async function mount(page: Page, slash: string[]): Promise<void> {
 
 test('dry-runs a recipe and queues its steps in order', async ({ page }) => {
   await mount(page, ['/review']);
-  await page.getByRole('button', { name: /review-diff/ }).click();
-  const table = page.getByRole('table', { name: 'Dry run for review-diff' });
+  await page.locator('#recipes-root').getByRole('button', { name: /review-diff/ }).click();
+  const table = page.locator('#recipes-root').getByRole('table', { name: 'Dry run for review-diff' });
   await expect(table.locator('.recipe-status')).toHaveText(['Supported', 'Supported', 'Supported', 'Manual']);
-  await page.getByRole('button', { name: 'Run', exact: true }).click();
-  await expect(page.getByRole('status')).toHaveText('Queued 4 messages.');
+  await page.locator('#recipes-root').getByRole('button', { name: 'Run', exact: true }).click();
+  await expect(page.locator('#recipes-root').getByRole('status')).toHaveText('Queued 4 messages.');
   const queued: string[] = await page.evaluate(() => (window as any).__queued);
   expect(queued[0]).toBe('Review the changed files and summarize risks.');
   expect(queued[1]).toBe('/review');
@@ -36,24 +36,24 @@ test('dry-runs a recipe and queues its steps in order', async ({ page }) => {
 
 test('a missing command uses its fallback text, and a step without one blocks Run', async ({ page }) => {
   await mount(page, []);
-  await page.getByRole('button', { name: /review-diff/ }).click();
+  await page.locator('#recipes-root').getByRole('button', { name: /review-diff/ }).click();
   await expect(page.locator('.recipe-status').nth(1)).toHaveText('Fallback');
-  await expect(page.getByRole('button', { name: 'Run', exact: true })).toBeEnabled();
-  await page.getByRole('button', { name: /needs-ship/ }).click();
+  await expect(page.locator('#recipes-root').getByRole('button', { name: 'Run', exact: true })).toBeEnabled();
+  await page.locator('#recipes-root').getByRole('button', { name: /needs-ship/ }).click();
   await expect(page.locator('.recipe-status')).toHaveText('Blocked');
-  await expect(page.getByRole('button', { name: 'Run', exact: true })).toBeDisabled();
+  await expect(page.locator('#recipes-root').getByRole('button', { name: 'Run', exact: true })).toBeDisabled();
 });
 
 test('creates and deletes a recipe, rejecting bad names', async ({ page }) => {
   await mount(page, []);
-  await page.getByRole('button', { name: 'New recipe' }).click();
-  const json = page.getByRole('textbox', { name: 'Recipe JSON' });
+  await page.locator('#recipes-root').getByRole('button', { name: 'New recipe' }).click();
+  const json = page.locator('#recipes-root').getByRole('textbox', { name: 'Recipe JSON' });
   await json.fill('{"name":"Bad Name","steps":[{"kind":"prompt","text":"x"}]}');
-  await page.getByRole('button', { name: 'Save' }).click();
-  await expect(page.getByRole('status')).toContainText('Recipe names use');
+  await page.locator('#recipes-root').getByRole('button', { name: 'Save' }).click();
+  await expect(page.locator('#recipes-root').getByRole('status')).toContainText('Recipe names use');
   await json.fill('{"name":"mine","description":"","steps":[{"kind":"prompt","text":"x"}]}');
-  await page.getByRole('button', { name: 'Save' }).click();
-  await expect(page.getByRole('button', { name: /mine/ })).toBeVisible();
-  await page.getByRole('button', { name: 'Delete' }).click();
-  await expect(page.getByRole('button', { name: /mine/ })).toHaveCount(0);
+  await page.locator('#recipes-root').getByRole('button', { name: 'Save' }).click();
+  await expect(page.locator('#recipes-root').getByRole('button', { name: /mine/ })).toBeVisible();
+  await page.locator('#recipes-root').getByRole('button', { name: 'Delete' }).click();
+  await expect(page.locator('#recipes-root').getByRole('button', { name: /mine/ })).toHaveCount(0);
 });

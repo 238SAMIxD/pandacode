@@ -3,6 +3,8 @@ import { call, preview } from './bridge';
 import { escape, icon } from './dom';
 import { providerLogo } from './provider-logos';
 import { infoMark } from './tooltip';
+import type { ConnectionSnapshot } from './connections';
+import type { ProviderId } from './types';
 
 type ClaudeMode = 'inherit' | 'subscription';
 interface ClaudeStatus { mode: ClaudeMode; source: string; environmentVariables: string[]; endpoint: string | null; savedLogin: 'signedIn' | 'notSignedIn' | 'otherCredentials' | 'unknown'; conflict: boolean; }
@@ -39,12 +41,12 @@ function keyForm(provider: KeyedProvider, label: string): string {
       <div class="connection-key-status"><span id="${provider}-key-status" role="status">Checking connection…</span><button type="button" class="secondary-button" id="remove-${provider}-key" data-remove-key="${provider}" hidden>Remove saved key</button></div>`;
 }
 
-export function mountProviderSettings(host: HTMLElement, saved: () => Promise<unknown>): () => void {
-  let disposed = false, pending = false;
+export function mountProviderSettings(host: HTMLElement, saved: () => Promise<unknown>, named?: { harnesses: { id: ProviderId; name: string }[]; saved: (snapshot: ConnectionSnapshot) => void }): () => void {
+  let disposed = false, pending = false, unmountNamed: (() => void) | undefined;
   let configurationRevision = 0;
   const editedPaths = new Set<HTMLInputElement>();
   host.classList.add('provider-connections');
-  host.innerHTML = `<p class="dialog-description">Use your existing agent accounts. Each connection keeps its own configuration.</p>
+  host.innerHTML = `<p class="dialog-description">Use your existing agent accounts. Each connection keeps its own configuration.</p>${named ? '<section id="named-connections"></section>' : ''}
     <section class="connection-card" id="claude-connection"><h3>${providerLogo('claude')}Claude Code</h3>
       <div class="connection-auth-label"><label for="claude-connection-mode">Claude connection</label>${infoMark(claudeHelp, 'Claude connection details')}<span class="sr-only" id="claude-connection-help">${escape(claudeHelp)}</span></div>
       <div class="connection-select"><select id="claude-connection-mode" aria-describedby="claude-connection-help"><option value="inherit">Use current environment</option><option value="subscription">Prefer saved Claude login</option></select></div>
@@ -212,7 +214,8 @@ export function mountProviderSettings(host: HTMLElement, saved: () => Promise<un
   host.addEventListener('submit', submit); host.addEventListener('click', click); host.addEventListener('input', input); host.addEventListener('change', change);
   void call<Configuration>('provider_configuration').then(config => { if (!disposed && configurationRevision === 0) render(config); }).catch(error => { if (!disposed && configurationRevision === 0) message(String(error), true); });
   void checkClaude();
-  return () => { disposed = true; for (const input of keyInputs) input.value = ''; editedPaths.clear(); host.removeEventListener('submit', submit); host.removeEventListener('click', click); host.removeEventListener('input', input); host.removeEventListener('change', change); };
+  if (named) void import('./connections').then(({ mountConnections }) => { if (!disposed) unmountNamed = mountConnections(host.querySelector<HTMLElement>('#named-connections')!, named.harnesses, named.saved); });
+  return () => { disposed = true; unmountNamed?.(); for (const input of keyInputs) input.value = ''; editedPaths.clear(); host.removeEventListener('submit', submit); host.removeEventListener('click', click); host.removeEventListener('input', input); host.removeEventListener('change', change); };
 }
 
 function pathForm(provider: string, label: string, placeholder: string): string {

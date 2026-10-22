@@ -10,6 +10,8 @@ use std::{
 
 const MAX_MATCHES: usize = 2_000;
 const MAX_FILES: usize = 50_000;
+const MAX_ENTRIES: usize = 200_000;
+const MAX_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
 const PREVIEW_CHARS: usize = 300;
 const CONTEXT_BEFORE: usize = 40;
@@ -80,7 +82,6 @@ pub fn search_text(
         .filter_entry(|entry| {
             !super::file_search::excluded(entry.file_name(), entry.file_type().is_some_and(|t| t.is_dir()))
         })
-        .sort_by_file_name(|a, b| a.cmp(b))
         .build();
     let generation = {
         let mut latest = generations();
@@ -89,22 +90,27 @@ pub fn search_text(
         next
     };
     let started = Instant::now();
-    let (mut files, mut total, mut scanned) = (Vec::new(), 0, 0);
+    let (mut files, mut total, mut scanned, mut entries, mut bytes_read) = (Vec::<TextFileMatches>::new(), 0, 0, 0usize, 0u64);
     for entry in walker.flatten() {
-        if !entry.file_type().is_some_and(|t| t.is_file()) {
-            continue;
-        }
+        // Directories count too, so a huge tree of empty folders still stops.
         if generations().get(&root) != Some(&generation) {
             return Err("Search was replaced by a newer one.".into());
         }
-        scanned += 1;
-        if scanned > MAX_FILES || started.elapsed() > DEADLINE {
+        entries += 1;
+        if entries > MAX_ENTRIES || started.elapsed() > DEADLINE {
+            files.sort_by(|a, b| a.path.cmp(&b.path));
             return Ok(TextSearchResult { files, truncated: true });
         }
-        if entry.metadata().map_or(true, |m| m.len() > MAX_FILE_BYTES) {
+        if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
         }
-        let Ok(bytes) = std::fs::read(entry.path()) else { continue };
+        scanned += 1;
+        if scanned > MAX_FILES || bytes_read >= MAX_TOTAL_BYTES {
+            files.sort_by(|a, b| a.path.cmp(&b.path));
+            return Ok(TextSearchResult { files, truncated: true });
+        }
+        let Some(bytes) = read_inside(&root, entry.path()) else { continue };
+        bytes_read += bytes.len() as u64;
         // Binary and non-UTF-8 files are skipped, as in VS Code's default search.
         if bytes[..bytes.len().min(8192)].contains(&0) {
             continue;
@@ -136,10 +142,41 @@ pub fn search_text(
             files.push(TextFileMatches { path: path.to_owned(), matches });
         }
         if total >= MAX_MATCHES {
+            files.sort_by(|a, b| a.path.cmp(&b.path));
             return Ok(TextSearchResult { files, truncated: true });
         }
     }
+    // The walk is unsorted (sorting would buffer whole directories); order the bounded result.
+    files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(TextSearchResult { files, truncated: false })
+}
+
+/// Reads a regular file through one opened handle, refusing it if the path is (or became) a
+/// symlink, resolves outside `root`, or is no longer the file that was opened.
+fn read_inside(root: &Path, path: &Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    if std::fs::symlink_metadata(path).ok()?.file_type().is_symlink() {
+        return None;
+    }
+    let file = std::fs::File::open(path).ok()?;
+    let opened = file.metadata().ok()?;
+    if !opened.is_file() || opened.len() > MAX_FILE_BYTES {
+        return None;
+    }
+    if !path.canonicalize().ok()?.starts_with(root) {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let now = std::fs::symlink_metadata(path).ok()?;
+        if (now.dev(), now.ino()) != (opened.dev(), opened.ino()) {
+            return None;
+        }
+    }
+    let mut bytes = Vec::with_capacity(opened.len() as usize);
+    file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() as u64 <= MAX_FILE_BYTES).then_some(bytes)
 }
 
 /// A trimmed window of the line around its first match; ranges are UTF-16 offsets into it.
@@ -289,6 +326,31 @@ mod tests {
         assert!(error.starts_with("Invalid regular expression"), "{error}");
         // The same text is fine as a literal.
         assert!(search_text(&f.0, "(unclosed", false, false, false).is_ok());
+    }
+
+    #[test]
+    fn read_inside_refuses_symlinks_and_outside_paths() {
+        let f = Fixture::new();
+        f.write("ok.txt", "hi");
+        assert_eq!(read_inside(&f.0, &f.0.join("ok.txt")).unwrap(), b"hi");
+        let other = Fixture::new();
+        other.write("x.txt", "hi");
+        assert!(read_inside(&f.0, &other.0.join("x.txt")).is_none());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(other.0.join("x.txt"), f.0.join("link.txt")).unwrap();
+            assert!(read_inside(&f.0, &f.0.join("link.txt")).is_none());
+        }
+    }
+
+    #[test]
+    fn results_are_ordered_by_path_without_a_sorted_walk() {
+        let f = Fixture::new();
+        for name in ["c.txt", "a/z.txt", "b.txt", "a/a.txt"] {
+            f.write(name, "needle");
+        }
+        let paths: Vec<_> = f.search("needle", false, false, false).files.into_iter().map(|f| f.path).collect();
+        assert_eq!(paths, ["a/a.txt", "a/z.txt", "b.txt", "c.txt"]);
     }
 
     #[cfg(unix)]

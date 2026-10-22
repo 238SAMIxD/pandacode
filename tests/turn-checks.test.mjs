@@ -102,3 +102,40 @@ test('shouldRepair is the pure gate behind the flow', () => {
   assert.equal(checks.shouldRepair({ on: true, report: passed, alreadyRepaired: false }), false);
   assert.equal(checks.shouldRepair({ on: true, report: noPlan, alreadyRepaired: false }), false);
 });
+
+test('late results are dropped when the task moved on during the check', async () => {
+  memory.clear();
+  memory.set('pandacode.turnChecks', 'true');
+  for (const [label, change] of [
+    ['running', state => { state.running = true; }],
+    ['queued', state => { state.queued = 1; }],
+    ['setting off', () => memory.set('pandacode.turnChecks', 'false')],
+    ['manual send', () => checks.noteManualSend('late')],
+  ]) {
+    memory.set('pandacode.turnChecks', 'true');
+    const state = { running: false, queued: 0 };
+    const calls = [];
+    await checks.afterRun('late', {
+      call: async command => { calls.push(command); if (command === 'run_turn_checks') { change(state); return failed; } return {}; },
+      task: { id: 'late' }, isTeam: false, isBot: false,
+      isRunning: () => state.running, queued: () => state.queued,
+      onQueued: () => assert.fail(label), onError: error => { throw error; },
+    });
+    assert.deepEqual(calls, ['run_turn_checks'], label);
+  }
+});
+
+test('plan and read-only tasks are never checked, including a mode change mid-check', async () => {
+  memory.clear();
+  memory.set('pandacode.turnChecks', 'true');
+  const base = { task: { id: 'p' }, isTeam: false, isBot: false, isRunning: false, queued: 0, onQueued: () => {}, onError: error => { throw error; } };
+  for (const mode of ['plan', 'read-only']) {
+    const calls = [];
+    await checks.afterRun('p', { ...base, mode, call: async command => { calls.push(command); return failed; } });
+    assert.deepEqual(calls, [], mode);
+  }
+  let mode = 'auto';
+  const calls = [];
+  await checks.afterRun('p', { ...base, mode: () => mode, call: async command => { calls.push(command); mode = 'plan'; return failed; } });
+  assert.deepEqual(calls, ['run_turn_checks']);
+});

@@ -25,6 +25,7 @@ import { mountWallpapers } from './wallpapers';
 import type { AgentEvent, BrowserAttachment, ContextUsage, FileEntry, GitStatus, Message, MessagePage, Mode, Project, Provider, ProviderId, ProviderModel, Session, TaskLink, ToolActivity, TurnChanges } from './types';
 import type { BrowserPanel } from './browser';
 import { call, chooseFolder, preview, subscribe } from './bridge';
+import { jjChip, showJjPanel, type JjStatus } from './jj';
 import { $, button, escape, fileIcon, fileIconsReady, icon, markdown, morph } from './dom';
 import { mountExternalLinks } from './external-links';
 import { bindMessageActions, messageActionsHtml } from './message-actions';
@@ -71,6 +72,7 @@ import { teamActive, type TeamSnapshot, type TeamEvent, type TeamLibrary, type T
 import type { ArchitectView } from './architect';
 import { syncOverlayContext } from './overlay-client';
 import { initializeAgentUpdates } from './agent-updates';
+import { isChatProject, NO_PROJECT } from './chats';
 
 /* Visual thesis: calm surfaces, system typography, yellow selection, and bamboo details.
  * Content: project navigation → conversation → contextual source review.
@@ -83,11 +85,11 @@ const state = {
   projectId: '', sessionId: '', messages: [] as Message[], messagesLoading: false, messagesError: '', streams: new Map<string, Stream>(),
   view: (({ board: 'board', github: 'github' } as Record<string, 'board' | 'github'>)[localStorage.getItem('pandacode.view') ?? ''] ?? 'conversation') as WorkspaceView, boardPanel: false,
   sidebarCollapsed: localStorage.getItem('pandacode.sidebarCollapsed') === 'true',
-  query: '', archived: false, inspector: false, inspectorTab: 'files' as 'changes' | 'files' | 'search' | 'browser' | 'pull' | 'simulator' | 'vm',
+  query: '', archived: false, inspector: false, inspectorTab: 'files' as 'changes' | 'files' | 'search' | 'browser' | 'pull' | 'simulator' | 'vm' | 'design',
   projectFilter: localStorage.getItem('pandacode.projectFilter') ?? '', collapsedFolders: readCollapsed(localStorage, 'pandacode.collapsedFolders'), expandedFolders: new Set<string>(),
   /** Follow-ups typed while an agent works, per task, in delivery order; mirrored from native storage. */
   queues: new Map<string, QueuedMessage[]>(), queueHolds: new Map<string, HoldReason>(), queueEditing: '', queueBusy: new Set<string>(),
-  git: null as GitStatus | null, files: [] as FileEntry[], filePath: '', gitError: '', filesError: '', inspectorLoading: false,
+  git: null as GitStatus | null, jj: null as JjStatus | null, files: [] as FileEntry[], filePath: '', gitError: '', filesError: '', inspectorLoading: false,
   selectedFile: '', selectedContent: '', selectedKind: '' as '' | 'diff' | 'file', selectedStaged: false, filePreviewLoading: false,
   browserUrl: '',
   attachments: [] as string[], drafts: new Map<string, string>(), defaultProvider: (localStorage.getItem('pandacode.defaultProvider') ?? localStorage.getItem('pandacode.provider') ?? 'claude') as ProviderId,
@@ -129,6 +131,7 @@ let workTimer = 0;
 let browserPanel: BrowserPanel | undefined, browserWanted = false;
 let simulatorPanel: ReturnType<typeof import('./simulator').mountSimulator> | undefined, simulatorLoading: Promise<void> | undefined;
 let vmPanel: ReturnType<typeof import('./vm-panel').mountVmPanel> | undefined, vmLoading: Promise<void> | undefined;
+let designPanel: ReturnType<typeof import('./design-canvas').mountDesignCanvas> | undefined, designLoading: Promise<void> | undefined;
 let browserLifecycle = Promise.resolve();
 let browserOwner = '', browserRevision = 0, inspectorSuppressed = false;
 type ThreadPanel = { workspace: string; open: boolean; tab: typeof state.inspectorTab; folder: string; file: string; kind: typeof state.selectedKind; staged: boolean; context?: FileLinkContext; browserUrl: string };
@@ -266,7 +269,7 @@ const $app = document.querySelector<HTMLDivElement>('#app')!;
 $app.innerHTML = `<div class="workspace">
   <aside id="workspace-sidebar" class="sidebar" aria-label="Projects and tasks">
     <div class="brand" data-tauri-drag-region><span class="brand-name" data-tauri-drag-region>PandaCode</span></div>
-    <div class="sidebar-actions"><button class="new-task-button" data-action="new-task">${icon('plus')}<span>New task</span><kbd>${shortcut('N')}</kbd></button><button class="search-trigger" data-action="search">${icon('search')}<span>Search</span><kbd>${shortcut('K')}</kbd></button></div>
+    <div class="sidebar-actions"><button class="new-task-button" data-action="new-task">${icon('plus')}<span>New task</span><kbd>${shortcut('N')}</kbd></button><button class="new-chat-button" data-action="new-chat" title="New chat (no project)">${icon('chat')}<span>New chat</span></button><button class="search-trigger" data-action="search">${icon('search')}<span>Search</span><kbd>${shortcut('K')}</kbd></button></div>
     <div class="sidebar-projects"><button id="project-filter" class="project-filter" data-action="filter-projects" aria-label="Filter projects" aria-haspopup="dialog" aria-expanded="false"><span data-filter-label>All projects</span>${icon('down')}</button>${button('import-conversations', 'Import conversations', 'download', 'import-trigger')}${button('add-project', 'Open project', 'plus')}</div>
     <div id="navigation" class="navigation"></div>
     <div id="sidebar-note" class="sidebar-note" hidden></div>
@@ -280,7 +283,7 @@ $app.innerHTML = `<div class="workspace">
     <div id="terminal-drawer" class="terminal-drawer" hidden><div class="drawer-heading"><span>${icon('terminal')}<span id="terminal-project" class="muted"></span></span><div class="terminal-tabs" role="tablist" aria-label="Terminal tabs"></div><div class="terminal-heading-actions"><button class="icon-button" data-terminal-action="new" aria-label="New terminal" title="New terminal">${icon('plus')}</button><button class="icon-button" data-terminal-action="minimize" aria-label="Minimize terminal" title="Minimize terminal">${icon('minimize')}</button><button class="icon-button" data-terminal-action="close" aria-label="Close terminal" title="Close terminal" aria-haspopup="dialog">${icon('close')}</button></div></div><div id="terminal-host"></div></div>
   </main>
   <section id="settings-page" aria-label="Settings" hidden></section>
-  <aside id="inspector" class="inspector" aria-label="Project inspector"><nav class="inspector-tabs" aria-label="Panel views"><button class="selected" data-action="tab-files" aria-label="Files" title="Files">${icon('file')}</button><button data-action="tab-search" aria-label="Search" title="Search">${icon('search')}</button><button data-action="tab-changes" aria-label="Changes" title="Changes">${icon('branch')}<span id="changes-count"></span></button><button data-action="browser" aria-label="Browser" title="Browser">${icon('globe')}</button><button data-action="tab-pull" hidden>${icon('pull')}</button><button data-action="tab-simulator" aria-label="Simulators" title="iOS & Android simulators" ${isMac || isWindows ? '' : 'hidden'}>${icon('phone')}</button><button data-action="tab-vm" aria-label="Virtual machines" title="Virtual machines" ${isMac ? '' : 'hidden'}>${icon('monitor')}</button></nav><header class="inspector-heading"><h2 id="inspector-title" class="inspector-title">Files</h2>${button('refresh-inspector', 'Refresh project', 'refresh')}</header><div id="inspector-content" class="inspector-content"></div><section id="browser-panel" class="browser-panel" aria-label="Browser" hidden></section><section id="simulator-panel" class="simulator-panel" aria-label="Simulators" hidden></section><section id="vm-panel" class="vm-panel" aria-label="Virtual machines" hidden></section></aside>
+  <aside id="inspector" class="inspector" aria-label="Project inspector"><nav class="inspector-tabs" aria-label="Panel views"><button class="selected" data-action="tab-files" aria-label="Files" title="Files">${icon('file')}</button><button data-action="tab-search" aria-label="Search" title="Search">${icon('search')}</button><button data-action="tab-changes" aria-label="Changes" title="Changes">${icon('branch')}<span id="changes-count"></span></button><button data-action="browser" aria-label="Browser" title="Browser">${icon('globe')}</button><button data-action="tab-pull" hidden>${icon('pull')}</button><button data-action="tab-simulator" aria-label="Simulators" title="iOS & Android simulators" ${isMac || isWindows ? '' : 'hidden'}>${icon('phone')}</button><button data-action="tab-vm" aria-label="Virtual machines" title="Virtual machines" ${isMac ? '' : 'hidden'}>${icon('monitor')}</button><button data-action="tab-design" aria-label="Design" title="Design canvas">${icon('sketch')}</button></nav><header class="inspector-heading"><h2 id="inspector-title" class="inspector-title">Files</h2>${button('refresh-inspector', 'Refresh project', 'refresh')}</header><div id="inspector-content" class="inspector-content"></div><section id="browser-panel" class="browser-panel" aria-label="Browser" hidden></section><section id="simulator-panel" class="simulator-panel" aria-label="Simulators" hidden></section><section id="vm-panel" class="vm-panel" aria-label="Virtual machines" hidden></section><section id="design-panel" class="design-panel" aria-label="Design" hidden></section></aside>
 </div><div id="toast" class="toast" role="status" hidden></div><dialog id="dialog"></dialog>`;
 publishSpringEasings();
 installDialogMotion(document.querySelector<HTMLDialogElement>('#dialog')!);
@@ -402,10 +405,21 @@ const attachments = mountPromptAttachments({
   notify: message => notify(message),
   report: error => report(error),
   rerender: taskId => { if (taskId === state.sessionId) renderAttachmentBar(); },
-  menu: (anchor, items, onSelect) => showChoices(anchor, { title: 'Attach', width: 340, actions: true, items, onSelect: id => { closeChoiceMenu(); run(onSelect(id)); } }),
+  menu: (anchor, items, onSelect) => showChoices(anchor, { title: 'Attach', width: 340, actions: true, items: [...items, { id: 'recipes', label: 'Workflow recipes…', description: 'Queue saved steps', icon: 'play' }], onSelect: id => { closeChoiceMenu(); run(id === 'recipes' ? openRecipes() : onSelect(id)); } }),
   projectFiles: () => { state.inspector = true; state.inspectorTab = 'files'; state.selectedKind = ''; renderInspector(); },
   sketch: (taskId, existing) => run(openSketch(taskId, existing)),
 });
+async function openRecipes(): Promise<void> {
+  const s = session(); if (!s) return;
+  const { mountRecipes } = await import('./recipes');
+  modal('Workflow recipes', '<div id="recipes-body"></div>', 'recipes-dialog');
+  mountRecipes($('#recipes-body'), {
+    call, projectId: s.projectId, provider: s.provider,
+    slashCommands: async () => (await call<{ commands: { name: string }[] }>('list_slash_commands', { sessionId: s.id })).commands.map(c => c.name),
+    enqueue: async text => { const entry = await call<QueuedMessage>('queue_add', { sessionId: s.id, text, attachments: [] }); setQueue(s.id, [...queueOf(s.id), entry]); },
+    done: () => { closeModal(); if (s.id === state.sessionId) renderComposer(); void run(dispatchQueue(s.id)); },
+  });
+}
 async function openSketch(taskId: string, existing?: PromptImage): Promise<void> {
   const { showSketch } = await import('./sketch');
   const task = state.sessions.find(s => s.id === taskId);
@@ -686,7 +700,8 @@ function modelLabel(s?: Session): string {
   if (!s) return 'Default model';
   const named = teams.get(s.id)?.config;
   if (named?.rosterOnly && named.name) return named.name;
-  const model = selectedModel(s), name = model.name === 'Default' ? 'Default model' : model.name;
+  const model = selectedModel(s), connection = taskConnection(s);
+  const name = connection ? `${connection.name} · ${model.name === 'Default' ? 'Default' : model.name}` : model.name === 'Default' ? 'Default model' : model.name;
   const effort = s.reasoningEffort && (model.reasoningEfforts?.find(effort => effort.id === s.reasoningEffort)?.name ?? s.reasoningEffort);
   return effort ? `${name} · ${effort}` : name;
 }
@@ -835,6 +850,13 @@ function loadModels(id: ProviderId): Promise<ProviderModel[]> {
 const remoteCatalogs = new Map<string, Promise<Provider[]>>();
 const remoteModelCatalogs = new Map<string, Promise<ProviderModel[]>>();
 let localChoice: { provider: ProviderId; model: string } | undefined;
+/** Named provider connections (Settings → Providers) and which task uses which. */
+let namedConnections: import('./connections').ConnectionSnapshot = { connections: [], tasks: {} };
+function taskConnection(s: Session): import('./connections').Connection | undefined {
+  const id = namedConnections.tasks[s.id];
+  return namedConnections.connections.find(c => c.id === id && c.provider === s.provider);
+}
+function onNamedConnections(snapshot: import('./connections').ConnectionSnapshot): void { namedConnections = snapshot; refreshModelLabels(); }
 /** The computer the composer's picker lists: a mirror task's, a new task's chosen one, else undefined (local). */
 function composerDevice(): string | undefined {
   const s = session();
@@ -928,6 +950,9 @@ function renderNavigation(): void {
       + `<span class="task-line task-meta">${branch}${linkMark}${pin}${projectName}${providerLogo(s.provider, 'task-provider')}</span></button>`;
   };
   const pinned = visible.filter(s => s.pinned).sort(compareThreadOrder);
+  // Projectless chats get their own group; a chosen project filter hides them.
+  const chats = state.projectFilter ? [] : visible.filter(s => !s.pinned && chatTask(s)).sort(compareThreadOrder);
+  const chatGroup = chats.length ? `<section class="task-group chats-group" data-thread-group="chats" aria-label="Chats"><div class="group-heading">${icon('chat')}Chats</div><div class="task-list">${chats.map(s => row(s, true)).join('')}</div></section>` : '';
   const folders = folderGroups({
     projects: state.projectFilter ? state.projects.filter(p => p.id === state.projectFilter) : userProjects(),
     tasks: visible.filter(s => !s.pinned).sort(compareThreadOrder), activity: lastActivity, includeEmpty: !state.query,
@@ -955,9 +980,9 @@ function renderNavigation(): void {
   note.innerHTML = hidden && !state.archived ? `<button class="filter-note" data-action="show-all-projects" title="Show tasks from every project"><span>${hidden} more in other projects</span><strong>Show all</strong></button>` : '';
   note.hidden = !note.innerHTML;
   // Morph rather than replace: unchanged rows keep their nodes, so nothing flickers.
-  morph(nav, !userProjects().length ? '<div class="sidebar-empty">Open a project to get started.</div>' : state.archived
+  morph(nav, !userProjects().length && !chats.length && !pinned.length ? '<div class="sidebar-empty">Open a project to get started.</div>' : state.archived
     ? `<section class="task-group archived-group" data-thread-group="archived" aria-label="Archived tasks"><div class="group-heading">Archived<span>${visible.length}</span></div><div class="task-list">${[...visible].sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || compareThreadOrder(a, b)).map(s => row(s)).join('') || '<div class="no-tasks">No archived tasks</div>'}</div></section>`
-    : `${pinned.length ? `<section class="task-group pinned-group" data-thread-group="pinned" aria-label="Pinned tasks"><div class="group-heading">${icon('pin')}Pinned</div><div class="task-list">${pinned.map(s => row(s, false, Boolean(state.projectFilter))).join('')}</div></section>` : ''}${folders.map(folder).join('') || (state.query ? '<div class="no-tasks">No matching tasks</div>' : '')}`);
+    : `${pinned.length ? `<section class="task-group pinned-group" data-thread-group="pinned" aria-label="Pinned tasks"><div class="group-heading">${icon('pin')}Pinned</div><div class="task-list">${pinned.map(s => row(s, false, Boolean(state.projectFilter))).join('')}</div></section>` : ''}${chatGroup}${folders.map(folder).join('') || (state.query && !chats.length ? '<div class="no-tasks">No matching tasks</div>' : '')}`);
   if (retainedRow) {
     const replacement = nav.querySelector<HTMLElement>(`.task-item[data-id="${CSS.escape(retainedRow.dataset.id!)}"]`);
     if (replacement) {
@@ -994,10 +1019,12 @@ function renderHeader(): void {
   const p = project();
   terminalPanel.select(p ? workspaceContext() : undefined, p?.name ?? '');
   projectRunner.paint();
-  const fresh = newTaskView(), bot = botForThread();
+  const fresh = newTaskView(), bot = botForThread(), chat = chatTask(session());
   $('.conversation-pane').classList.toggle('new-task-page', fresh);
+  // A chat has no project: no project bar, deploy or run script.
+  document.body.classList.toggle('chat-thread', chat);
   $('.conversation-pane').classList.toggle('bot-thread', Boolean(bot));
-  $('#breadcrumb').innerHTML = bot ? botCrumb(bot) : p && !fresh ? `${icon('folder')}<button data-action="select-project" data-id="${escape(p.id)}">${escape(p.name)}</button>` : '';
+  $('#breadcrumb').innerHTML = bot ? botCrumb(bot) : chat ? `${icon('chat')}<span>Chat</span>` : p && !fresh ? `${icon('folder')}<button data-action="select-project" data-id="${escape(p.id)}">${escape(p.name)}</button>` : '';
   const s = session(), bar = document.querySelector<HTMLElement>('#composer-area .composer-context');
   if (s && bar) {
     const markup = worktrees.contextBar(s, fresh);
@@ -1005,7 +1032,7 @@ function renderHeader(): void {
   }
 }
 /** What the empty prompt invites: a task, or a message to the bot whose thread this is. */
-function composerPlaceholder(): string { const bot = botForThread(); return bot ? `Message ${escape(bot.name)}…` : 'Describe a task…'; }
+function composerPlaceholder(): string { const bot = botForThread(); return bot ? `Message ${escape(bot.name)}…` : chatTask(session()) ? 'Ask anything…' : 'Describe a task…'; }
 /** A bot thread's header: who you're talking to, its state, and its settings. */
 function botCrumb(bot: import('./bots').Bot): string {
   const s = session();
@@ -1072,6 +1099,10 @@ function renderTranscript(preservePosition = false): void {
   }
   const bot = botForThread();
   if (newTaskView() && bot) { transcript.innerHTML = `${botWelcome(bot)}<div id="stream-region"></div>`; return; }
+  if (newTaskView() && chatTask(s)) {
+    transcript.innerHTML = `<div class="new-task-welcome chat-welcome"><span class="new-task-mark" aria-hidden="true">${icon('bamboo')}</span><h1>What’s on your mind?</h1><button id="welcome-project" class="welcome-project" data-action="change-task-project" aria-haspopup="dialog" aria-expanded="false">Move to project…</button></div><div id="stream-region"></div>`;
+    return;
+  }
   if (newTaskView()) {
     const name = project()?.name ?? 'this project';
     transcript.innerHTML = `<div class="new-task-welcome"><span class="new-task-mark" aria-hidden="true">${icon('bamboo')}</span><h1 aria-label="What should we build in ${escape(name)}?">What should we build in <button id="welcome-project" class="welcome-project" data-action="change-task-project" aria-label="Change task project" aria-haspopup="dialog" aria-expanded="false" title="${escape(project()?.path)}" ${s.worktreePath ? 'disabled' : ''}>${escape(name)}</button>?</h1></div><div id="stream-region"></div>`;
@@ -1778,7 +1809,7 @@ async function selectSession(id: string, focusComposer = false): Promise<void> {
   }
   if (state.view !== 'conversation') state.boardPanel = true;
   // A bot's conversation lives in the Bots section; it never re-points the project filter.
-  if (state.projectFilter && state.projectFilter !== s.projectId && !botProjects.has(s.projectId)) setProjectFilter(s.projectId);
+  if (state.projectFilter && state.projectFilter !== s.projectId && !botProjects.has(s.projectId) && !chatTask(s)) setProjectFilter(s.projectId);
   if (state.collapsedFolders.delete(s.projectId)) saveCollapsedFolders();
   state.sessionId = s.id; activateProject(s.projectId, false); if (changingTask) restoreThreadPanel(s); state.archived = s.archived; state.attachments = [];
   const remembered = changingTask ? threadPages.get(id) : undefined;
@@ -2082,16 +2113,19 @@ async function sendQueuedNow(s: Session, id: string): Promise<void> {
 }
 /** Runs the optional turn-end project check (Settings → Agents) for a clean finish, queueing one repair on failure. */
 async function maybeTurnChecks(id: string): Promise<void> {
-  const task = state.sessions.find(item => item.id === id);
+  await ensureBotProjects();
+  const current = () => state.sessions.find(item => item.id === id);
+  const task = current();
   await turnChecksAfterRun(id, {
     call,
     task,
     isTeam: teams.has(id),
     isBot: botProjects.has(task?.projectId ?? ''),
-    isRunning: isRunning(id),
-    queued: queueOf(id).length,
+    isRunning: () => isRunning(id),
+    queued: () => queueOf(id).length,
+    mode: () => current()?.codexSettings?.collaborationMode?.mode === 'plan' ? 'plan' : current()?.mode,
     onQueued: queued => { void run(dispatchQueue(queued)); },
-    onError: () => {},
+    onError: error => console.warn('Project checks failed to run', error),
   });
 }
 /** Sends a task's next queued message once it is idle and its queue is not held (Send now skips the hold). */
@@ -2459,15 +2493,16 @@ function onAgent(event: AgentEvent): void {
 async function refreshInspector(): Promise<void> {
   void projectRunner.refresh();
   const request = ++inspectorRequest;
-  const p = project(); if (!p) { state.git = null; state.files = []; state.gitError = ''; state.filesError = ''; state.inspectorLoading = false; renderInspector(); return; }
+  const p = project(); if (!p) { state.git = null; state.jj = null; state.files = []; state.gitError = ''; state.filesError = ''; state.inspectorLoading = false; renderInspector(); return; }
   state.inspectorLoading = true; renderInspector();
   const id = p.id, folder = state.filePath, context = workspaceContext(), key = workspaceKey();
-  const results = await Promise.allSettled([call<GitStatus>('git_status', context), call<FileEntry[]>('list_files', { ...context, path: folder })]);
+  const results = await Promise.allSettled([call<GitStatus>('git_status', context), call<FileEntry[]>('list_files', { ...context, path: folder }), call<JjStatus>('jj_status', context)]);
   if (request !== inspectorRequest || id !== state.projectId || key !== workspaceKey() || folder !== state.filePath) return;
   state.inspectorLoading = false;
   state.git = results[0].status === 'fulfilled' ? results[0].value : null;
   state.gitError = results[0].status === 'rejected' ? errorText(results[0].reason) || 'Git status could not be loaded.' : '';
   state.files = results[1].status === 'fulfilled' ? results[1].value : [];
+  state.jj = results[2].status === 'fulfilled' ? results[2].value : null;
   state.filesError = results[1].status === 'rejected' ? errorText(results[1].reason) || 'The folder could not be read.' : '';
   renderInspector(); renderHeader();
 }
@@ -2502,6 +2537,22 @@ function syncVmPanel(): void {
     });
     if (state.inspector && state.inspectorTab === 'vm' && !inspectorSuppressed) vmPanel.show();
   }).catch(error => { vmLoading = undefined; report(error); });
+}
+/** The design canvas stays mounted once opened; hidden, it makes no calls. */
+function syncDesignPanel(): void {
+  const wanted = state.inspector && state.inspectorTab === 'design' && !inspectorSuppressed;
+  $('#design-panel').hidden = !wanted;
+  if (wanted) { $('#inspector-content').hidden = true; $('.inspector-heading>[data-action="refresh-inspector"]').hidden = true; }
+  if (!wanted) { designPanel?.hide(); return; }
+  if (designPanel) { designPanel.show(); return; }
+  designLoading ??= import('./design-canvas').then(({ mountDesignCanvas }) => {
+    designPanel = mountDesignCanvas($('#design-panel'), {
+      call, notify,
+      context: () => state.projectId ? { projectId: state.projectId, sessionId: state.sessionId || null } : null,
+      compose: text => { const prompt = document.querySelector<HTMLTextAreaElement>('#prompt'); if (prompt) { prompt.value = text; prompt.dispatchEvent(new Event('input', { bubbles: true })); prompt.focus(); } },
+    });
+    if (state.inspector && state.inspectorTab === 'design' && !inspectorSuppressed) designPanel.show();
+  }).catch(error => { designLoading = undefined; report(error); });
 }
 function openVm(): void { inspectorSuppressed = false; state.inspector = true; state.inspectorTab = 'vm'; state.selectedKind = ''; renderInspector(); }
 function openSimulator(): void { inspectorSuppressed = false; state.inspector = true; state.inspectorTab = 'simulator'; state.selectedKind = ''; renderInspector(); }
@@ -2575,7 +2626,7 @@ async function performAgentUiAction(request: AgentUiAction): Promise<unknown> {
   }
   throw new Error('Unknown app action.');
 }
-const INSPECTOR_TITLES: Record<typeof state.inspectorTab, string> = { files: 'Files', search: 'Search', changes: 'Changes', browser: 'Browser', pull: 'Pull request', simulator: 'Simulators', vm: 'Virtual machines' };
+const INSPECTOR_TITLES: Record<typeof state.inspectorTab, string> = { files: 'Files', search: 'Search', changes: 'Changes', browser: 'Browser', pull: 'Pull request', simulator: 'Simulators', vm: 'Virtual machines', design: 'Design' };
 function renderInspector(): void {
   const diffEpoch = ++inspectorDiffEpoch;
   inspectorDiff?.dispose(); inspectorDiff = undefined;
@@ -2602,7 +2653,8 @@ function renderInspector(): void {
   syncBrowserPanel();
   syncSimulatorPanel();
   syncVmPanel();
-  if (state.inspectorTab === 'browser' || state.inspectorTab === 'simulator' || state.inspectorTab === 'vm') { pullView.dispose(); return; }
+  syncDesignPanel();
+  if (state.inspectorTab === 'browser' || state.inspectorTab === 'simulator' || state.inspectorTab === 'vm' || state.inspectorTab === 'design') { pullView.dispose(); return; }
   const target = $('#inspector-content');
   if (state.inspectorTab === 'pull' && pullTask && visible) { pullView.show(target, pullTask); return; }
   pullView.dispose();
@@ -2635,11 +2687,18 @@ function renderInspector(): void {
   if (state.inspectorTab === 'files') {
     target.innerHTML = `<div class="file-folder-path"><span>${escape(project()?.name)}${state.filePath ? ' / ' + escape(state.filePath) : ''}</span>${state.filePath ? button('parent-folder', 'Go to parent folder', 'arrow') : ''}</div><div class="file-list">${state.files.map(file => `<div class="file-row"><button data-action="${file.isDir ? 'open-folder' : isPreviewableFile(file.path) ? 'preview-file' : 'open-file'}" data-path="${escape(file.path)}">${fileIcon(file.name, file.isDir)}<span>${escape(file.name)}</span>${file.isDir ? icon('chevron') : ''}</button>${!file.isDir && /\.(html?|svg)$/i.test(file.path) ? button('open-file', 'View source of ' + file.name, 'file', 'file-attach', `data-path="${escape(file.path)}"`) : ''}${!file.isDir ? button('attach-file', 'Attach ' + file.name, 'plus', 'file-attach', `data-path="${escape(file.path)}"`) : ''}</div>`).join('') || '<div class="inspector-empty">This folder is empty.</div>'}</div>`; return;
   }
+  if (state.jj?.isRepo && !state.jj.colocated) {
+    showJjPanel(target, state.jj, {
+      call, notify, context: () => workspaceContext(), changed: status => { state.jj = status; },
+      openDiff: (path, patch) => { selectedFileContext = workspaceContext(); state.selectedFile = path; state.selectedContent = patch; state.selectedKind = 'diff'; state.selectedStaged = false; state.filePreviewLoading = false; state.inspector = true; renderInspector(); },
+    });
+    return;
+  }
   if (!state.git?.isRepo) { target.innerHTML = '<div class="inspector-empty">'+icon('branch')+'<h3>No Git repository</h3><p>Open a Git repository to review changes.</p></div>'; return; }
   const staged = state.git.files.filter(file => ![' ', '?', '!', '.'].includes(file.index));
   const unstaged = state.git.files.filter(file => ![' ', '!', '.'].includes(file.working) || file.index === '?');
   const fileRows = (files: typeof staged, isStaged: boolean) => files.map(file => `<div class="change-row"><button class="change-file" data-action="open-diff" data-path="${escape(file.path)}" data-staged="${isStaged}">${fileIcon(file.path.split('/').pop() ?? file.path, false)}<span><strong>${escape(file.path.split('/').pop())}</strong><small>${escape(file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : 'root')}</small></span><span class="file-status ${file.index === '?' ? 'new' : ''}">${file.index === '?' ? 'A' : escape(isStaged ? file.index : file.working)}</span></button>${button(isStaged ? 'unstage-file' : 'stage-file', isStaged ? 'Unstage file' : 'Stage file', isStaged ? 'close' : 'plus', 'stage-button', `data-path="${escape(file.path)}"`)}</div>`).join('');
-  target.innerHTML = `<div class="branch-card"><span>${icon('branch')}<span>${escape(state.git.branch || 'No commits yet')}</span></span><button data-action="worktree" title="Create isolated worktree" aria-label="Create isolated worktree">${icon('plus')}</button></div><div class="change-summary"><span>${state.git.files.length ? state.git.files.length + ' changed files' : 'Working tree clean'}</span>${state.git.files.length ? '' : icon('check')}</div>${staged.length ? `<section class="change-group"><div class="change-group-title"><span>Staged <small>${staged.length}</small></span><button data-action="unstage-all">Unstage all</button></div>${fileRows(staged, true)}</section>` : ''}${unstaged.length ? `<section class="change-group"><div class="change-group-title"><span>Changes <small>${unstaged.length}</small></span><button data-action="stage-all">Stage all</button></div>${fileRows(unstaged, false)}</section>` : ''}<form id="commit-form" class="commit-form"><label for="commit-message">Commit message</label><textarea id="commit-message" placeholder="Describe these changes…" rows="3" aria-label="Commit message"></textarea><button class="commit-button" ${!staged.length ? 'disabled' : ''}>${icon('check')}Commit${staged.length ? ' ' + staged.length + ' file' + (staged.length > 1 ? 's' : '') : ''}</button></form>`;
+  target.innerHTML = `<div class="branch-card"><span>${icon('branch')}<span>${escape(state.git.branch || 'No commits yet')}</span>${jjChip(state.jj)}</span><button data-action="worktree" title="Create isolated worktree" aria-label="Create isolated worktree">${icon('plus')}</button></div><div class="change-summary"><span>${state.git.files.length ? state.git.files.length + ' changed files' : 'Working tree clean'}</span>${state.git.files.length ? '' : icon('check')}</div>${staged.length ? `<section class="change-group"><div class="change-group-title"><span>Staged <small>${staged.length}</small></span><button data-action="unstage-all">Unstage all</button></div>${fileRows(staged, true)}</section>` : ''}${unstaged.length ? `<section class="change-group"><div class="change-group-title"><span>Changes <small>${unstaged.length}</small></span><button data-action="stage-all">Stage all</button></div>${fileRows(unstaged, false)}</section>` : ''}<form id="commit-form" class="commit-form"><label for="commit-message">Commit message</label><textarea id="commit-message" placeholder="Describe these changes…" rows="3" aria-label="Commit message"></textarea><button class="commit-button" ${!staged.length ? 'disabled' : ''}>${icon('check')}Commit${staged.length ? ' ' + staged.length + ' file' + (staged.length > 1 ? 's' : '') : ''}</button></form>`;
 }
 async function openRunPreview(url: string, context: { projectId: string; sessionId?: string }): Promise<void> {
   const current = () => state.projectId === context.projectId && state.sessionId === (context.sessionId ?? '');
@@ -2769,6 +2828,7 @@ async function changeTaskProject(projectId: string): Promise<void> {
   try {
     const updated = await call<Session>('configure_session', { sessionId: selected.id, provider: selected.provider, model: selected.model, projectId });
     const index = state.sessions.findIndex(s => s.id === selected.id); if (index >= 0) state.sessions[index] = updated;
+    if (chatTask(selected)) await forgetChat(selected.projectId);
     if (selected.id !== state.sessionId) { renderNavigation(); return; }
     // The user may have left and reselected this task while the write ran.
     // Reload its new project before permitting any file or composer action.
@@ -2797,10 +2857,11 @@ async function showProjectPicker(anchor: HTMLElement): Promise<void> {
   const { openProjectPicker } = await import('./project-picker').finally(release);
   if (epoch !== menuEpoch || projectPickerCleanup || !anchor.isConnected || selected.id !== state.sessionId || generation !== state.generation || !newTaskView()) return;
   projectPickerCleanup = openProjectPicker({
-    anchor, projects: userProjects(), currentProjectId: selected.projectId,
+    anchor, projects: [{ id: NO_PROJECT, name: 'No project', path: 'Chat in its own folder' }, ...userProjects()], currentProjectId: chatTask(selected) ? NO_PROJECT : selected.projectId,
     onClose: () => { projectPickerCleanup = undefined; },
     onSelect: async projectId => {
       if (selected.id !== state.sessionId || generation !== state.generation) throw new Error('Select the task again to change its project.');
+      if (projectId === NO_PROJECT) { if (!chatTask(selected)) await createChat(); return; }
       await changeTaskProject(projectId);
     },
     onNewProject: () => { if (selected.id === state.sessionId && generation === state.generation) showOpenProject(true); },
@@ -2816,7 +2877,7 @@ async function showModel(anchor: HTMLElement): Promise<void> {
   closeChoiceMenu();
   const { epoch, release } = beginMenuOpen(anchor);
   const generation = state.generation;
-  const [{ openModelPicker }, library] = await Promise.all([import('./model-picker'), call<TeamLibrary>('architect_profiles').catch(() => null)]).finally(release);
+  const [{ openModelPicker }, library] = await Promise.all([import('./model-picker'), call<TeamLibrary>('architect_profiles').catch(() => null), call<import('./connections').ConnectionSnapshot>('connections_list').then(snapshot => { namedConnections = snapshot; }).catch(() => undefined)]).finally(release);
   if (epoch !== menuEpoch || modelPickerCleanup || !anchor.isConnected || selected.id !== state.sessionId || generation !== state.generation || isRunning()) return;
   const device = composerDevice();
   const named = library && !device ? namedTeams(library) : [];
@@ -2836,6 +2897,8 @@ async function showModel(anchor: HTMLElement): Promise<void> {
     },
     anchor, providers: device ? [] : state.providers, current: { provider: selected.provider, model: selected.model || 'default', reasoningEffort: selected.reasoningEffort ?? null, contextUsage: selected.contextUsage },
     canSwitchProvider: true,
+    // Connections are this computer's; a task on another computer uses that host's setup.
+    connections: device ? [] : namedConnections.connections, currentConnection: device ? null : taskConnection(selected)?.id ?? null,
     loadModels: device ? id => remoteModels(device, id) : loadModels, loadProviders: device ? () => remoteProviders(device) : undefined,
     recent: device ? undefined : recentModels, onClose: () => { modelPickerCleanup = undefined; },
     onEffortSelect: async reasoningEffort => {
@@ -2850,7 +2913,7 @@ async function showModel(anchor: HTMLElement): Promise<void> {
         }
       } finally { configuringSessions.delete(selected.id); }
     },
-    onSelect: async (providerId, model) => {
+    onSelect: async (providerId, model, connection) => {
       if (selected.id !== state.sessionId || generation !== state.generation || isRunning()) throw new Error('Select the task again to change its model.');
       configuringSessions.add(selected.id);
       try {
@@ -2861,6 +2924,7 @@ async function showModel(anchor: HTMLElement): Promise<void> {
         }
         const updated = await call<Session>('configure_session', { sessionId: selected.id, provider: providerId, model });
         const index = state.sessions.findIndex(s => s.id === selected.id); if (index >= 0) state.sessions[index] = updated;
+        if (!device && (connection ?? null) !== (namedConnections.tasks[selected.id] ?? null)) namedConnections = await call('connection_assign', { sessionId: selected.id, connectionId: connection });
         if (!device) {
           if (!localStorage.getItem('pandacode.defaultProvider')) state.defaultProvider = providerId;
           localStorage.setItem('pandacode.provider', providerId); localStorage.setItem('pandacode.model.' + providerId, model);
@@ -2887,7 +2951,7 @@ async function showModel(anchor: HTMLElement): Promise<void> {
 }
 /** Deploy: pick a connected platform, then a new task in this project ships it end to end. */
 async function showDeploy(anchor: HTMLElement): Promise<void> {
-  if (!project()) { notify('Open a project to deploy it.'); return; }
+  if (!project() || chatTask(session())) { notify('Open a project to deploy it.'); return; }
   const [{ deployItems, deployBrief }, connections] = await Promise.all([import('./deploy'), call<import('./cloud-settings').CloudConnection[]>('cloud_connections').catch(() => [])]);
   await showChoices(anchor, { title: 'Deploy', width: 300, actions: true, items: deployItems(connections), onSelect: async id => {
     closeChoiceMenu();
@@ -2901,8 +2965,9 @@ async function showDeploy(anchor: HTMLElement): Promise<void> {
 }
 async function createTask(projectId = state.projectId): Promise<void> {
   if (creatingTask) return;
-  const active = state.projects.find(p => p.id === projectId)
-    ?? state.projects.find(p => p.id === localStorage.getItem('pandacode.project')) ?? state.projects[0];
+  const projects = state.projects.filter(p => !isChatProject(p));
+  const active = projects.find(p => p.id === projectId)
+    ?? projects.find(p => p.id === localStorage.getItem('pandacode.project')) ?? userProjects()[0];
   if (!active) { notify('Open a project to start a task.'); return; }
   closeModelPicker();
   closeProjectPicker();
@@ -2924,6 +2989,30 @@ async function createTask(projectId = state.projectId): Promise<void> {
   state.sessions.unshift(created);
   if (generation !== state.generation) { renderNavigation(); return; }
   state.query = ''; closeModal(); await selectSession(created.id, true);
+}
+/** A projectless chat: its own folder, the usual harness and model. */
+async function createChat(): Promise<void> {
+  if (creatingTask) return;
+  closeModelPicker(); closeProjectPicker();
+  const generation = state.generation;
+  const harness = state.providers.find(p => p.id === state.defaultProvider && p.installed)
+    ?? state.providers.find(p => p.installed) ?? state.providers[0];
+  if (!harness) { notify('Open Settings to check your installed agents.'); return; }
+  leaveDraft('');
+  creatingTask = true;
+  let created: Session;
+  try {
+    created = await call<Session>('chat_create', { provider: harness.id, model: rememberedModel(harness.id), mode: 'full' });
+    state.projects = await call<Project[]>('list_projects');
+  } finally { creatingTask = false; }
+  state.sessions.unshift(created);
+  if (generation !== state.generation) { renderNavigation(); return; }
+  if (state.projectFilter) setProjectFilter('');
+  state.query = ''; closeModal(); await selectSession(created.id, true);
+}
+/** Drops a chat's hidden project (and its empty folder) once no task uses it. */
+async function forgetChat(projectId: string): Promise<void> {
+  if (await call<boolean>('chat_cleanup', { projectId }).catch(() => false)) state.projects = state.projects.filter(p => p.id !== projectId);
 }
 type ChoiceOptions = Omit<Parameters<typeof import('./choice-menu').openChoiceMenu>[0], 'anchor' | 'onClose'>;
 async function showChoices(anchor: HTMLElement, options: ChoiceOptions): Promise<void> {
@@ -3090,6 +3179,7 @@ function showDeleteTask(): void {
     void (async () => {
       try {
         const result = await call<{deletedSessionIds: string[]}>('delete_session', { sessionId: task.id });
+        if (chatTask(task)) await forgetChat(task.projectId);
         removeDeletedSessions(result.deletedSessionIds);
         if (ownsDialog()) closeModal();
         notify('Task deleted');
@@ -3140,6 +3230,7 @@ async function showSettings(section?: import('./settings').SettingsSection): Pro
       github: target => github.mountSettings(target, project()?.id ?? state.projects[0]?.id ?? ''),
       teams: { loadModels, call },
       cloud: { call, listen: (name, callback) => subscribe(name, callback) },
+      skills: { call, projects: () => userProjects().map(p => ({ id: p.id, name: p.name })) },
       remote: remoteHost,
       embed: {
         colors: async target => (await import('./theme-settings')).mountThemeSettings(target, { call, notify, chooseVsix: () => import('./bridge').then(bridge => bridge.chooseVsix()) }),
@@ -3149,7 +3240,7 @@ async function showSettings(section?: import('./settings').SettingsSection): Pro
           const unsubscribe = wallpapers.subscribe(() => { const box = host.querySelector<HTMLInputElement>('#daily-wallpapers'); if (box) box.checked = wallpapers.enabled; });
           return () => { unsubscribe(); cleanup(); };
         },
-        providerConnections: async target => (await import('./provider-settings')).mountProviderSettings(target, async () => { modelCatalogs.clear(); await discoverSettingsProviders(); renderComposer(); }),
+        providerConnections: async target => (await import('./provider-settings')).mountProviderSettings(target, async () => { modelCatalogs.clear(); await discoverSettingsProviders(); renderComposer(); }, { harnesses: state.providers.map(p => ({ id: p.id, name: p.name })), saved: onNamedConnections }),
         openCodeModels: async target => (await import('./opencode-model-settings')).mountOpenCodeModels(target, () => invalidateModels('opencode')),
       },
       close: closeSettings,
@@ -3196,7 +3287,7 @@ async function showProviderConnections(): Promise<void> {
   const host = dialog.querySelector<HTMLElement>('#provider-connections-content')!;
   const { mountProviderSettings } = await import('./provider-settings');
   if (!dialog.open || !host.isConnected) return;
-  providerSettingsCleanup = mountProviderSettings(host, async () => { modelCatalogs.clear(); await discoverSettingsProviders(); renderComposer(); });
+  providerSettingsCleanup = mountProviderSettings(host, async () => { modelCatalogs.clear(); await discoverSettingsProviders(); renderComposer(); }, { harnesses: state.providers.map(p => ({ id: p.id, name: p.name })), saved: onNamedConnections });
 }
 function invalidateModels(id: ProviderId): void {
   modelCatalogs.delete(id);
@@ -3379,7 +3470,9 @@ async function reloadBotProjects(withProjects = true): Promise<void> {
   if (withProjects) state.projects = await call<Project[]>('list_projects');
   renderNavigation(); renderHeader();
 }
-const userProjects = (): Project[] => state.projects.filter(project => !botProjects.has(project.id));
+const userProjects = (): Project[] => state.projects.filter(project => !botProjects.has(project.id) && !isChatProject(project));
+/** Whether a task runs as a projectless chat. */
+const chatTask = (task: Session | undefined): boolean => Boolean(task && isChatProject(state.projects.find(p => p.id === task.projectId)));
 /* PandaCode Connect. A new task can start on another computer: the context bar offers the
  * signed-in account's targets; the started task is an ordinary session with `remoteDevice`. */
 const remoteHost: RemoteHost = { call, listen: (name, callback) => subscribe(name as 'remote://status', callback), notify, openUrl: url => call('open_external_url', { url }) };
@@ -3497,7 +3590,7 @@ function showCommands(): void {
   modal('Go to anything', `<div class="command-search">${icon('search')}<input id="command-query" aria-label="Search tasks and commands" placeholder="Search tasks and commands…" autocomplete="off"></div><div id="command-results" class="command-results"></div><div class="command-footer"><span>↑ ↓ to navigate</span><span>↵ to open</span><span>esc to close</span></div>`, 'command-dialog'); renderCommands('');
 }
 function renderCommands(query: string): void {
-  const commands = [{ action: 'new-task', label: 'New task', icon: 'plus', shortcut: shortcut('N') }, { action: 'add-project', label: 'Open project', icon: 'folder', shortcut: '' }, { action: 'browser', label: 'Open browser', icon: 'globe', shortcut: '' }, { action: 'terminal', label: 'Toggle terminal', icon: 'terminal', shortcut: shortcut('J') }, { action: 'settings', label: 'Settings', icon: 'settings', shortcut: shortcut(',') }, { action: 'agent-usage', label: 'Agent usage', icon: 'activity', shortcut: '' }, { action: 'bots', label: 'Bots', icon: 'bot', shortcut: '' }, { action: 'import-conversations', label: 'Import conversations', icon: 'download', shortcut: '' }, { action: 'worktree', label: 'Create worktree', icon: 'branch', shortcut: '' }, ...(githubEnabled() ? [{ action: 'github-view', label: 'GitHub', icon: 'github', shortcut: '' }] : [])].filter(c => c.label.toLowerCase().includes(query.toLowerCase()));
+  const commands = [{ action: 'new-task', label: 'New task', icon: 'plus', shortcut: shortcut('N') }, { action: 'new-chat', label: 'New chat (no project)', icon: 'chat', shortcut: '' }, { action: 'add-project', label: 'Open project', icon: 'folder', shortcut: '' }, { action: 'browser', label: 'Open browser', icon: 'globe', shortcut: '' }, { action: 'terminal', label: 'Toggle terminal', icon: 'terminal', shortcut: shortcut('J') }, { action: 'settings', label: 'Settings', icon: 'settings', shortcut: shortcut(',') }, { action: 'agent-usage', label: 'Agent usage', icon: 'activity', shortcut: '' }, { action: 'bots', label: 'Bots', icon: 'bot', shortcut: '' }, { action: 'import-conversations', label: 'Import conversations', icon: 'download', shortcut: '' }, { action: 'worktree', label: 'Create worktree', icon: 'branch', shortcut: '' }, ...(githubEnabled() ? [{ action: 'github-view', label: 'GitHub', icon: 'github', shortcut: '' }] : [])].filter(c => c.label.toLowerCase().includes(query.toLowerCase()));
   const tasks = listedSessions().filter(s => s.title.toLowerCase().includes(query.toLowerCase())).slice(0, 12);
   $('#command-results').innerHTML = `${commands.length ? '<div class="command-section">Commands</div>' : ''}${commands.map(c => `<button data-action="${c.action}" data-command="true">${icon(c.icon)}<span>${c.label}</span><kbd>${c.shortcut}</kbd></button>`).join('')}${tasks.length ? '<div class="command-section">Tasks</div>' : ''}${tasks.map(s => `<button data-action="select-task" data-id="${escape(s.id)}" data-command="true">${providerLogo(s.provider)}<span>${escape(s.title)}<small>${escape(state.projects.find(p => p.id === s.projectId)?.name)} · ${shortProvider(s.provider)}</small></span></button>`).join('')}${!commands.length && !tasks.length ? '<div class="inspector-empty">No matching tasks or commands.</div>' : ''}`;
   $('#command-results').querySelector('button')?.classList.add('command-selected');
@@ -3515,6 +3608,7 @@ async function action(name: string, element: HTMLElement): Promise<void> {
   switch (name) {
     case 'support': await openSupport(); break;
     case 'new-task': if (state.view === 'board') showBoardTaskForm(); else await createTask(); break;
+    case 'new-chat': if (state.view !== 'conversation') setWorkspaceView('conversation'); await createChat(); break;
     case 'board-view': setWorkspaceView('board'); break;
     case 'conversation-view': setWorkspaceView('conversation'); break;
     case 'github-view': setWorkspaceView('github'); break;
@@ -3592,6 +3686,7 @@ async function action(name: string, element: HTMLElement): Promise<void> {
     case 'terminal': await toggleTerminal(); break;
     case 'toggle-inspector': state.inspector = inspectorSuppressed || !state.inspector; inspectorSuppressed = false; renderInspector(); break;
     case 'tab-vm': openVm(); break;
+    case 'tab-design': inspectorSuppressed = false; state.inspector = true; state.inspectorTab = 'design'; state.selectedKind = ''; renderInspector(); break;
     case 'deploy': await showDeploy(element); break;
     case 'tab-simulator': case 'simulator': if (name === 'simulator' && state.inspector && state.inspectorTab === 'simulator' && !inspectorSuppressed) { state.inspectorTab = 'changes'; renderInspector(); } else openSimulator(); break;
     case 'token-saver': tokenSaver.open(element, state.sessionId); break;
@@ -3746,6 +3841,9 @@ async function boot(): Promise<void> {
   // An agent booted or asked to show a simulator: bring the panel forward.
   // An agent started or asked to show a VM: bring the panel forward.
   run(subscribe('vm-changed', event => { if (event && !Array.isArray(event) && event.show) openVm(); void vmPanel?.refresh(); }).then(() => undefined));
+  // bridge.ts has no typed overload for this event yet.
+  run((subscribe as (name: string, callback: () => void) => Promise<() => void>)('design-changed', () => void designPanel?.refresh()).then(() => undefined));
+  run(subscribe('agent-event', (event: AgentEvent) => { if (event.kind === 'done' && event.sessionId === state.sessionId) void designPanel?.refresh(); }).then(() => undefined));
   run(subscribe('simulator-changed', event => { if (event?.show) openSimulator(); void simulatorPanel?.refresh(); }).then(() => undefined));
   run(subscribe('bots-changed', () => run((async () => { botProjectsLoad = reloadBotProjects(); await botProjectsLoad; botsView?.refresh(); })())).then(() => undefined));
   run(initRemote());
@@ -3779,6 +3877,7 @@ async function boot(): Promise<void> {
   })()));
   await connectAgentUiActions(() => transcriptVisible() ? state.sessionId : '', performAgentUiAction);
   [state.projects, state.sessions, state.providers] = await Promise.all([call<Project[]>('list_projects'), call<Session[]>('list_sessions'), call<Provider[]>('list_providers')]);
+  run(call<import('./connections').ConnectionSnapshot>('connections_list').then(onNamedConnections));
   // Queues from an earlier launch wait for an explicit Resume.
   for (const entry of await call<QueuedMessage[]>('queue_list').catch(() => [])) {
     state.queues.set(entry.sessionId, [...(state.queues.get(entry.sessionId) ?? []), entry]);

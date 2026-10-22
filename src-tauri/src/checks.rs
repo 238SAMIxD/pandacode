@@ -83,7 +83,7 @@ fn run(root: &Path, plan: &Plan) -> Result<Value, String> {
         "name": plan.name,
         "ok": ok,
         "output": if ok { String::new() } else { tail(&combined) },
-        "truncated": output.stdout.truncated,
+        "truncated": output.stdout.truncated || output.stderr.truncated,
     }))
 }
 

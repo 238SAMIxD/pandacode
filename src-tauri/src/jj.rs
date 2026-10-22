@@ -177,7 +177,7 @@ fn parse_log(output: &str) -> Result<Vec<Change>, String> {
     let fields: Vec<&str> = output.split('\0').collect();
     // Each record ends in NUL, so the split leaves one trailing remainder (a newline at most).
     let records = &fields[..fields.len() - 1];
-    if records.len() % FIELDS != 0 || !fields[fields.len() - 1].trim().is_empty() {
+    if !records.len().is_multiple_of(FIELDS) || !fields[fields.len() - 1].trim().is_empty() {
         return Err("jj returned an unexpected log.".into());
     }
     Ok(records
@@ -220,8 +220,8 @@ mod tests {
 
     #[test]
     fn parses_log_records_with_multiline_descriptions() {
-        let output = "kntqzsqtwlyn\0a1b2c3d4e5f6\0Add search\n\nWith a body line.\n\0main,feature\0Ada\03 minutes ago\00\00\01\0\
-                      zzzzzzzzzzzz\0000000000000\0\0\0\0\00\01\00\0";
+        let output = "kntqzsqtwlyn\x00a1b2c3d4e5f6\x00Add search\n\nWith a body line.\n\x00main,feature\x00Ada\x003 minutes ago\x000\x000\x001\x00\
+                      zzzzzzzzzzzz\x00000000000000\x00\x00\x00\x00\x000\x001\x000\x00";
         let changes = parse_log(output).unwrap();
         assert_eq!(changes.len(), 2);
         assert_eq!(changes[0].description, "Add search\n\nWith a body line.");

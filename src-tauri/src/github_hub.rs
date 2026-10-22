@@ -347,6 +347,7 @@ fn job_of(job: &serde_json::Value, summaries: &std::collections::HashMap<i64, St
 }
 
 /// Jobs (latest attempt) and artifacts from the REST `jobs` and `artifacts` responses.
+#[cfg(test)]
 pub fn details_of(jobs: &serde_json::Value, artifacts: &serde_json::Value) -> RunDetails {
     details_with(jobs, artifacts, &Default::default())
 }
