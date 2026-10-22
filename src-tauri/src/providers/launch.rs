@@ -204,6 +204,7 @@ pub(crate) fn command(path: &Path) -> Result<tokio::process::Command, String> {
     let launch = resolve(path, cfg!(windows))?;
     let mut command = tokio::process::Command::new(launch.program);
     command.args(launch.args);
+    crate::child_env::sanitize(&mut command);
     #[cfg(windows)]
     command.creation_flags(0x08000000); // CREATE_NO_WINDOW: stdio adapters have no console UI.
     Ok(command)
@@ -213,6 +214,7 @@ pub(super) fn std_command(path: &Path) -> Result<std::process::Command, String> 
     let launch = resolve(path, cfg!(windows))?;
     let mut command = std::process::Command::new(launch.program);
     command.args(launch.args);
+    crate::child_env::sanitize(&mut command);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -225,6 +227,7 @@ pub(crate) fn pty_command(path: &Path) -> Result<portable_pty::CommandBuilder, S
     let launch = resolve(path, cfg!(windows))?;
     let mut command = portable_pty::CommandBuilder::new(launch.program);
     command.args(launch.args);
+    crate::child_env::sanitize(&mut command);
     Ok(command)
 }
 
@@ -263,6 +266,7 @@ fn search_directories(windows: bool, env: &impl Fn(&str) -> Option<OsString>) ->
             ".opencode/bin",
             ".cargo/bin",
             ".bun/bin",
+            ".grok/bin",
             ".volta/bin",
             ".npm-global/bin",
         ] {
@@ -456,7 +460,9 @@ mod tests {
         let f = Fixture::new();
         // node installed under its own prefix, reached only through a symlink on PATH.
         let node = executable(&f, "runtime/bin/node");
-        let dsh = executable(&f, "runtime/bin/dsh");
+        // A name no system directory holds, so a real Homebrew CLI cannot answer first.
+        let cli = "pandacode-fixture-npm-cli";
+        let dsh = executable(&f, &format!("runtime/bin/{cli}"));
         fs::create_dir_all(f.0.join("links")).unwrap();
         std::os::unix::fs::symlink(&node, f.0.join("links/node")).unwrap();
         let path = f.0.join("links").into_os_string();
@@ -466,11 +472,25 @@ mod tests {
             "HOME" => Some(home.clone()),
             _ => None,
         };
-        assert_eq!(find_in_directories("dsh", search_directories(false, &env), false), Some(dsh));
+        assert_eq!(find_in_directories(cli, search_directories(false, &env), false), Some(dsh));
         // A prefix set with `npm config set prefix` wins over node's own.
-        let configured = executable(&f, "home/.npm-packages/bin/dsh");
+        let configured = executable(&f, &format!("home/.npm-packages/bin/{cli}"));
         f.file("home/.npmrc", "fund=false\nprefix = ~/.npm-packages\n");
-        assert_eq!(find_in_directories("dsh", search_directories(false, &env), false), Some(configured));
+        assert_eq!(find_in_directories(cli, search_directories(false, &env), false), Some(configured));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn grok_installer_directory_is_searched() {
+        let f = Fixture::new();
+        // The official Grok Build installer puts the CLI in ~/.grok/bin only.
+        let grok = executable(&f, "home/.grok/bin/pandacode-fixture-grok");
+        let home = f.0.join("home").into_os_string();
+        let env = |key: &str| (key == "HOME").then(|| home.clone());
+        assert_eq!(
+            find_in_directories("pandacode-fixture-grok", search_directories(false, &env), false),
+            Some(grok)
+        );
     }
 
     #[test]
