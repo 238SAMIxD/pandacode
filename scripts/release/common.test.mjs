@@ -9,19 +9,20 @@ test('release versions cannot become paths, prereleases, or shell commands', () 
 });
 
 test('only the published targets are accepted', () => {
-  assert.deepEqual(Object.keys(targets), ['darwin-aarch64', 'darwin-x86_64', 'windows-x86_64', 'linux-x86_64', 'linux-aarch64']);
+  assert.deepEqual(Object.keys(targets), ['darwin-aarch64', 'darwin-x86_64', 'windows-x86_64', 'windows-aarch64', 'linux-x86_64', 'linux-aarch64']);
   for (const target of ['windows-arm64', '../mac', 'toString', '__proto__', null]) assert.throws(() => targetConfig(target));
 });
 
 test('release asset names are stable across versions', () => {
   const assets = Object.values(targets).map(config => config.asset);
-  assert.equal(new Set(assets).size, 5);
+  assert.equal(new Set(assets).size, 6);
   for (const asset of assets) assert.doesNotMatch(asset, /\d+\.\d+\.\d+/);
 });
 
 test('the host maps to its native target', () => {
   assert.equal(hostTarget('darwin', 'arm64'), 'darwin-aarch64');
   assert.equal(hostTarget('win32', 'x64'), 'windows-x86_64');
+  assert.equal(hostTarget('win32', 'arm64'), 'windows-aarch64');
   assert.equal(hostTarget('linux', 'x64'), 'linux-x86_64');
   assert.equal(hostTarget('linux', 'arm64'), 'linux-aarch64');
   assert.equal(hostTarget('darwin', 'x64'), 'darwin-x86_64');

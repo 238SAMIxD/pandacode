@@ -7,15 +7,16 @@ const env = { PANDACODE_LICENSE_PUBLIC_KEY: 'stale', PANDACODE_UPDATE_PUBLIC_KEY
 const config = plan => JSON.parse(plan.args.at(-1));
 
 test('builds require the native host and never forward old license keys or Apple variables to Windows and Linux', () => {
-  for (const [target, platform] of [['windows-x86_64', 'win32'], ['linux-x86_64', 'linux']]) {
-    const plan = buildPlan(target, env, platform, 'x64');
+  for (const [target, platform] of [['windows-x86_64', 'win32'], ['windows-aarch64', 'win32'], ['linux-x86_64', 'linux']]) {
+    const arch = target === 'windows-aarch64' ? 'arm64' : 'x64';
+    const plan = buildPlan(target, env, platform, arch);
     for (const name of ['APPLE_ID', 'APPLE_SIGNING_IDENTITY', 'PANDACODE_LICENSE_PUBLIC_KEY', 'PANDACODE_UPDATE_PUBLIC_KEY']) assert.equal(plan.env[name], undefined, name);
     assert.equal(plan.env.PATH, 'test-path');
     assert.equal(plan.signing.mode, 'unsigned');
     // The update signing key is the one secret a build needs: it signs the in-app update file.
     assert.equal(plan.env.TAURI_SIGNING_PRIVATE_KEY, 'stale');
     assert.equal(config(plan).bundle.createUpdaterArtifacts, true);
-    assert.equal(config(buildPlan(target, { PATH: 'p' }, platform, 'x64')).bundle.createUpdaterArtifacts, false);
+    assert.equal(config(buildPlan(target, { PATH: 'p' }, platform, arch)).bundle.createUpdaterArtifacts, false);
     assert.equal(config(plan).plugins, undefined);
     assert.throws(() => buildPlan(target, env, 'darwin', 'arm64'), /native/);
   }

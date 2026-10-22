@@ -2,7 +2,7 @@
 // release/<version>/ under its stable GitHub Release asset name, with a
 // SHA-256 sidecar. Nothing is uploaded; .github/workflows/release.yml does that.
 //
-//   node scripts/release/build.mjs [darwin-aarch64|darwin-x86_64|windows-x86_64|linux-x86_64|linux-aarch64]
+//   node scripts/release/build.mjs [darwin-aarch64|darwin-x86_64|windows-x86_64|windows-aarch64|linux-x86_64|linux-aarch64]
 //
 // Signing is optional. Without Apple credentials the macOS app gets an ad-hoc
 // signature; Windows and Linux builds are unsigned. With TAURI_SIGNING_PRIVATE_KEY
@@ -61,7 +61,7 @@ export function buildPlan(releaseTarget, inherited, platform = process.platform,
   }
   // Neither Windows nor Linux uses Apple credentials, even if a shell has them.
   const env = { ...withoutApple(base), ...cargoTarget };
-  if (releaseTarget === 'windows-x86_64') {
+  if (releaseTarget.startsWith('windows-')) {
     // A local STATIC_VCRUNTIME=false must not produce an installer that only
     // starts on machines with the Visual C++ redistributable installed.
     return plan(config, { ...env, STATIC_VCRUNTIME: 'true' }, 'unsigned', { ...shared, windows: { webviewInstallMode: { type: 'downloadBootstrapper', silent: true }, nsis: { installMode: 'currentUser' } } });
