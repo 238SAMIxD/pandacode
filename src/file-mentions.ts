@@ -1,5 +1,5 @@
 import './file-mentions.css';
-import { icon } from './dom';
+import { fileIcon, icon } from './dom';
 import { hidePopover, showPopover } from './popover-motion';
 import type { FileEntry } from './types';
 
@@ -120,7 +120,7 @@ export function mountFileMentions(textarea: HTMLTextAreaElement, options: Option
         row.setAttribute('role', 'option'); row.id = `${list.id}-option-${++rowId}`; row.title = file.path;
         const copy = document.createElement('span'), name = document.createElement('strong'), directory = document.createElement('small');
         name.textContent = file.isDir ? file.name + '/' : file.name; directory.textContent = file.detail ?? (file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : 'Project root');
-        copy.append(name, directory); row.innerHTML = icon(file.icon ?? (file.isDir ? 'folder' : 'file')); row.append(copy); rows.set(file.path, row);
+        copy.append(name, directory); row.innerHTML = file.icon ? icon(file.icon) : fileIcon(file.name, file.isDir); row.append(copy); rows.set(file.path, row);
         if (file.mention) row.classList.add('file-mention-reference');
         if (file.isDir) row.classList.add('file-mention-folder');
       }
