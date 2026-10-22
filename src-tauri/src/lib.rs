@@ -7,6 +7,7 @@ mod architect;
 mod bots;
 mod browser;
 mod child_env;
+mod code_search;
 mod command_operations;
 mod context_recovery;
 mod conversation_fork;
