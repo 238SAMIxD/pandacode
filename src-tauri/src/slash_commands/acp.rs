@@ -12,6 +12,12 @@ pub(super) async fn discover(provider: &str, cwd: &Path) -> Result<Catalog, Stri
         "opencode" => {
             command.arg("acp");
         }
+        // Command Code serves ACP from its `acp` command and reads the saved key
+        // before its own login.
+        "commandcode" => {
+            command.arg("acp");
+            crate::providers::commandcode_key_environment(&mut command);
+        }
         // Grok Build publishes its command list right after session/new, which
         // needs the cached-credential authenticate step first.
         "grok" => {

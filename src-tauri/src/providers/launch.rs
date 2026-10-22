@@ -86,6 +86,7 @@ fn resolve(path: &Path, windows: bool) -> Result<Launch, String> {
             "opencode" => "opencode-ai",
             "pi" => "@earendil-works/pi-coding-agent",
             "dsh" => "@deepseek-ai/dsh",
+            "command-code" | "cmdc" | "commandcode" => "command-code",
             _ => return Err(
                 "This batch launcher is unsupported. Select the native harness executable instead."
                     .into(),

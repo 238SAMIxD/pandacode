@@ -87,6 +87,7 @@ const providers: Provider[] = [
   { id: 'mimo', name: 'MiMo Token Plan', installed: true, path: '/sample/bin/claude', version: 'Sample provider', models: [] },
   { id: 'pi', name: 'Pi', installed: true, path: '/sample/bin/pi', version: 'Sample provider', models: [] },
   { id: 'deepseek', name: 'DeepSeek', installed: true, path: '/sample/bin/dsh', version: 'Sample provider', models: [] },
+  { id: 'commandcode', name: 'Command Code', installed: true, path: '/sample/bin/command-code', version: '1.87.1 (sample)', models: [] },
 ];
 // Mirrors providers::mimo::ENDPOINTS; the native side is the authority.
 const previewMimoEndpoints = [
@@ -104,6 +105,12 @@ const catalogs: Record<ProviderId, ProviderModel[]> = {
     { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', description: 'Strongest DeepSeek model.', reasoningEfforts: [{ id: 'off', name: 'Off', description: 'No extended reasoning.' }, { id: 'low', name: 'Low', description: 'Light reasoning.' }, { id: 'high', name: 'High', description: 'Thorough reasoning. Recommended.' }, { id: 'max', name: 'Max', description: 'Maximum reasoning for the hardest tasks.' }], defaultReasoningEffort: 'high', contextWindow: 1000000 },
     { id: 'deepseek-v41-flash', name: 'DeepSeek V41 Flash', description: 'Updated Flash model.', reasoningEfforts: [{ id: 'off', name: 'Off', description: 'No extended reasoning.' }, { id: 'low', name: 'Low', description: 'Light reasoning.' }, { id: 'high', name: 'High', description: 'Thorough reasoning. Recommended.' }, { id: 'max', name: 'Max', description: 'Maximum reasoning for the hardest tasks.' }], defaultReasoningEffort: 'high', contextWindow: 1000000 },
     { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision Exp', description: 'Experimental image input.', reasoningEfforts: [{ id: 'off', name: 'Off', description: 'No extended reasoning.' }, { id: 'low', name: 'Low', description: 'Light reasoning.' }, { id: 'high', name: 'High', description: 'Thorough reasoning. Recommended.' }, { id: 'max', name: 'Max', description: 'Maximum reasoning for the hardest tasks.' }], defaultReasoningEffort: 'high', contextWindow: 1000000 },
+  ],
+  commandcode: [
+    { id: 'deepseek/deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', description: 'fast hybrid-attention reasoning', reasoningEfforts: [{ id: 'off', name: 'Off', description: '' }, { id: 'low', name: 'Low', description: '' }, { id: 'high', name: 'High', description: '' }, { id: 'max', name: 'Max', description: '' }], defaultReasoningEffort: 'max' },
+    { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5', description: 'best combo of speed & intelligence (recommended)' },
+    { id: 'gpt-6-luna', name: 'GPT-6 Luna', description: 'most efficient OpenAI model for focused, high-volume tasks' },
+    { id: 'moonshotai/Kimi-K3', name: 'Kimi K3', description: 'long-horizon coding & knowledge work with 1M context' },
   ],
   opencode: openCodePreviewModels,
   glm: [{ id: 'glm-4.7', name: 'GLM-4.7', description: 'Z.ai Coding Plan via Claude Code.' }],
@@ -614,12 +621,12 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
         message: supported ? null : 'This harness does not expose account limits. Check its account dashboard.' };
       break;
     }
-    case 'provider_configuration': result = { executablePaths: {}, claudeConnectionMode: previewClaudeMode, glmKeySaved: false, glmKeyFromEnvironment: false, deepseekKeySaved: false, deepseekKeyFromEnvironment: false, mimoKeySaved: false, mimoKeyFromEnvironment: false, mimoEndpoint: previewMimoEndpoint, mimoEndpoints: previewMimoEndpoints, secureStorageAvailable: false }; break;
+    case 'provider_configuration': result = { executablePaths: {}, claudeConnectionMode: previewClaudeMode, glmKeySaved: false, glmKeyFromEnvironment: false, deepseekKeySaved: false, deepseekKeyFromEnvironment: false, commandcodeKeySaved: false, commandcodeKeyFromEnvironment: false, mimoKeySaved: false, mimoKeyFromEnvironment: false, mimoEndpoint: previewMimoEndpoint, mimoEndpoints: previewMimoEndpoints, secureStorageAvailable: false }; break;
     case 'provider_set_mimo_endpoint':
       if (!previewMimoEndpoints.some(entry => entry.id === args.endpoint)) throw new Error('Choose one of the MiMo endpoints listed in Settings.');
       previewMimoEndpoint = args.endpoint;
-      result = { executablePaths: {}, claudeConnectionMode: previewClaudeMode, glmKeySaved: false, glmKeyFromEnvironment: false, deepseekKeySaved: false, deepseekKeyFromEnvironment: false, mimoKeySaved: false, mimoKeyFromEnvironment: false, mimoEndpoint: previewMimoEndpoint, mimoEndpoints: previewMimoEndpoints, secureStorageAvailable: false }; break;
-    case 'provider_save_glm_key': case 'provider_remove_glm_key': case 'provider_save_deepseek_key': case 'provider_remove_deepseek_key': case 'provider_save_mimo_key': case 'provider_remove_mimo_key': case 'provider_set_executable': throw new Error('Provider connections can only be changed in the desktop app.');
+      result = { executablePaths: {}, claudeConnectionMode: previewClaudeMode, glmKeySaved: false, glmKeyFromEnvironment: false, deepseekKeySaved: false, deepseekKeyFromEnvironment: false, commandcodeKeySaved: false, commandcodeKeyFromEnvironment: false, mimoKeySaved: false, mimoKeyFromEnvironment: false, mimoEndpoint: previewMimoEndpoint, mimoEndpoints: previewMimoEndpoints, secureStorageAvailable: false }; break;
+    case 'provider_save_glm_key': case 'provider_remove_glm_key': case 'provider_save_deepseek_key': case 'provider_remove_deepseek_key': case 'provider_save_commandcode_key': case 'provider_remove_commandcode_key': case 'provider_save_mimo_key': case 'provider_remove_mimo_key': case 'provider_set_executable': throw new Error('Provider connections can only be changed in the desktop app.');
     case 'turn_change_summary': {
       session(args.sessionId);
       const summary = (messages[String(args.sessionId)] ?? []).find(m => m.turnChanges?.id === args.changeId)?.turnChanges;

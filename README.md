@@ -2,9 +2,9 @@
 
 A small, native desktop workspace for coding agents. PandaCode runs the coding
 CLIs you already use — **Claude Code, Codex, Kimi Code, OpenCode, GLM Coding
-Plan and Xiaomi MiMo** (through Claude Code), **Antigravity and xAI's Grok
-Build** (through ACP) **Pi** (through its RPC mode) and **DeepSeek** (through ACP) — side by side, with
-your projects, Git, a terminal and a browser in one window.
+Plan and Xiaomi MiMo** (through Claude Code), **Antigravity, xAI's Grok Build,
+DeepSeek and Command Code** (through ACP) and **Pi** (through its RPC mode) —
+side by side, with your projects, Git, a terminal and a browser in one window.
 
 PandaCode is free and open source under the [PandaCode License](LICENSE), the MIT
 License with one addition: forks that are used commercially or released publicly
@@ -115,7 +115,7 @@ Discord, WhatsApp or a browser too.
 - **Your code stays on your machine.** Projects, conversations and settings are
   stored locally in SQLite. Prompts go only to the coding CLI or service you
   pick, under that provider's own terms.
-- **It only talks to services you choose.** Provider keys (GLM, MiMo, DeepSeek, cloud
+- **It only talks to services you choose.** Provider keys (GLM, MiMo, DeepSeek, Command Code, cloud
   sandboxes, bot channels) live in the system keychain and are sent only to
   that provider.
 
@@ -165,6 +165,8 @@ PandaCode does not include provider plans or usage.
 [Pi](https://github.com/earendil-works/pi) installs with `npm i -g @earendil-works/pi-coding-agent`; sign in through Pi's own CLI. PandaCode drives it over Pi's RPC mode and gives it PandaCode's app tools through a local loopback bridge extension. Pi has no approval system of its own, so PandaCode's extension enforces the permission modes; the integrated console needs Full access.
 
 [DeepSeek](https://platform.deepseek.com/api_keys) installs with `npm i -g @deepseek-ai/dsh`; PandaCode launches `dsh --profile acp`. An API key is optional (Settings → Providers, or `DEEPSEEK_API_KEY`); dsh can use its own stored credentials. Usage limits are not shown in PandaCode; check platform.deepseek.com.
+
+[Command Code](https://commandcode.ai/docs/acp) installs with `npm i -g command-code` (Node 22 or newer); PandaCode launches `command-code acp`. Sign in once with `command-code login`, or save an API key in Settings → Providers (or set `COMMAND_CODE_API_KEY`); either one authenticates the same account. Usage limits are not shown in PandaCode; check Command Code Studio.
 
 ## Build from source
 

@@ -315,7 +315,7 @@ pub(crate) fn invalidate_provider(provider: &str) {
 fn validate_provider(provider: &str) -> Result<(), String> {
     if !matches!(
         provider,
-        "claude" | "codex" | "kimi" | "glm" | "opencode" | "antigravity" | "grok" | "mimo" | "pi" | "deepseek"
+        "claude" | "codex" | "kimi" | "glm" | "opencode" | "antigravity" | "grok" | "mimo" | "pi" | "deepseek" | "commandcode"
     ) {
         return Err("Unknown harness.".into());
     }
@@ -338,7 +338,7 @@ async fn discover_catalog(provider: &str, cwd: &Path, key: Key, started: Instant
         let discovered = match provider {
             "claude" => claude::discover(cwd).await,
             "glm" | "mimo" => claude::discover_for(provider, cwd).await,
-            "opencode" | "antigravity" | "grok" => acp::discover(provider, cwd).await,
+            "opencode" | "antigravity" | "grok" | "commandcode" => acp::discover(provider, cwd).await,
             "deepseek" => Ok(Catalog::default()),
             "codex" => codex::discover(cwd).await,
             "kimi" => kimi::discover(cwd).await,
@@ -371,7 +371,7 @@ pub fn observe_runtime(provider: &str, cwd: &Path, data: &Value) -> bool {
     }
     let value = match provider {
         "claude" | "glm" | "mimo" => claude::parse_runtime(data),
-        "opencode" | "antigravity" | "grok" => acp::parse_runtime(provider, data),
+        "opencode" | "antigravity" | "grok" | "commandcode" => acp::parse_runtime(provider, data),
         "kimi" => kimi::parse_runtime(data),
         _ => None,
     };
