@@ -160,3 +160,19 @@ test('an agent team sets the lead effort apart from its workers', async ({ page 
   await expect(leadEffort).toHaveValue('max');
   await expect(models.getByRole('combobox', { name: 'Worker effort for DeepSeek V4 Pro · DeepSeek', exact: true })).toHaveValue('low');
 });
+
+test('team model names keep space beside lead and effort controls', async ({ page }) => {
+  await install(page);
+  await openAgents(page);
+  await settings(page).getByRole('button', { name: 'New team' }).click();
+  await settings(page).getByRole('searchbox', { name: 'Filter models' }).fill('Codex');
+  const row = settings(page).locator('.agent-team-model').filter({ has: page.getByRole('checkbox', { name: 'Include GPT-6-Astra · Codex', exact: true }) });
+  await expect(row).toBeVisible();
+  const label = row.locator('label').first().locator('span');
+  for (const width of [1440, 900]) {
+    await page.setViewportSize({ width, height: 940 });
+    const size = await label.evaluate(el => ({ visible: el.clientWidth, full: el.scrollWidth }));
+    expect(size.visible).toBeGreaterThan(0);
+    expect(size.visible).toBeGreaterThanOrEqual(size.full);
+  }
+});

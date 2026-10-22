@@ -19,6 +19,7 @@
 .agent-team-model>label:first-child{display:flex;align-items:center;gap:8px;flex:1;min-width:0;cursor:pointer}
 .agent-team-model>label:first-child>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .agent-team-model input{accent-color:var(--accent);margin:0;width:14px;height:14px}
+.agent-team-effort{flex:none;width:auto;max-width:40%;font-size:inherit;padding:4px 8px}
 .agent-team-lead{display:flex;align-items:center;gap:5px;font-size:.72rem;color:var(--muted);cursor:pointer}
 .agent-team-lead:has(input:disabled){opacity:.35;cursor:default}
 .agent-team-lead:has(input:checked){color:var(--accent-ink)}
