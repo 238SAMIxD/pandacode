@@ -16,6 +16,8 @@ type ModelPickerOptions = {
   onSelect: (provider: ProviderId, model: string) => Promise<void>;
   onEffortSelect?: (effort: string | null) => Promise<void>;
   loadModels?: (provider: ProviderId) => Promise<ProviderModel[]>;
+  /** Another computer's harnesses: the picker opens with a loading row, then lists them, or one disabled row with the error. */
+  loadProviders?: () => Promise<Provider[]>;
   /** Model IDs to list first in a shortened catalog, newest first; null lists every model. Search always covers all. */
   recent?: (provider: ProviderId) => string[] | null;
   onClose?: () => void;
@@ -38,7 +40,7 @@ function rememberRecent(provider: ProviderId, model: string): void {
 /** A transient picker with local state and listeners released on dismissal. */
 export function openModelPicker(options: ModelPickerOptions): () => void {
   const { anchor, current, canSwitchProvider, onSelect, onEffortSelect, loadModels, onClose } = options;
-  const providers = options.providers.map(provider => ({ ...provider, models: [...provider.models] }));
+  let providers = options.providers.map(provider => ({ ...provider, models: [...provider.models] }));
   const catalogErrors = new Set<ProviderId>();
   const catalogLoading = new Set<ProviderId>();
   const particles = Array.from({ length: 12 }, (_, i) => `<i style="left:${4 + i * 8}%;top:${18 + i * 29 % 58}%;--drift-duration:${2.2 + i % 4 * .4}s;--drift-delay:${-i * .37}s"></i>`).join('');
@@ -57,6 +59,7 @@ export function openModelPicker(options: ModelPickerOptions): () => void {
   const anchorAction = anchor.dataset.action;
   const originalExpanded = anchor.getAttribute('aria-expanded');
   let pending = false;
+  let providersStatus = options.loadProviders ? 'Loading…' : '';
   let closed = false;
   let pointerInside = false;
   let pointerRelease = 0;
@@ -255,7 +258,7 @@ export function openModelPicker(options: ModelPickerOptions): () => void {
       const visible = query ? models.filter(model => providerMatches || [model.id, model.name, model.description].some(value => value.toLowerCase().includes(normalized))) : shortList(provider.id, models);
       const locked = !canSwitchProvider && provider.id !== current.provider;
       const unavailable = !provider.installed;
-      const custom = Boolean(query && !namedHarness && !models.some(model => [model.id, model.name].some(value => value.toLowerCase() === normalized)) && !locked);
+      const custom = provider.id !== 'github-copilot' && Boolean(query && !namedHarness && !models.some(model => [model.id, model.name].some(value => value.toLowerCase() === normalized)) && !locked);
       if (!visible.length && !custom) return '';
       const disabled = locked || unavailable;
       const row = (model: ProviderModel, isCustom: boolean): string => {
@@ -267,7 +270,8 @@ export function openModelPicker(options: ModelPickerOptions): () => void {
       };
       return `<section class="model-menu-group" aria-label="${escape(provider.name)}"><div class="model-menu-group-heading"><h3>${providerLogo(provider.id)}${escape(provider.name)}</h3>${locked ? '<span>New task required</span>' : unavailable ? '<span>Unavailable</span>' : `<span data-catalog-loading="${provider.id}" hidden>Loading…</span>`}</div>${visible.map(model => row(model, false)).join('')}${custom ? row(fallbackModel(provider.id, query), true) : ''}</section>`;
     }).join('');
-    if (!total) markup = '<p class="model-menu-empty">No matching models.</p>';
+    if (providersStatus) markup = `<button type="button" class="model-menu-option" data-available="false" disabled>${icon('monitor')}<span class="model-menu-option-label"><span>${escape(providersStatus)}</span></span></button>`;
+    else if (!total) markup = '<p class="model-menu-empty">No matching models.</p>';
     // Loading and saving are in-place updates: retain rows, focus and scroll position.
     if (markup !== choicesMarkup) {
       list.innerHTML = markup;
@@ -280,7 +284,7 @@ export function openModelPicker(options: ModelPickerOptions): () => void {
     }
     list.querySelectorAll<HTMLElement>('[data-catalog-loading]').forEach(status => { status.hidden = !catalogLoading.has(status.dataset.catalogLoading as ProviderId); });
     catalogError.hidden = catalogErrors.size === 0;
-    catalogError.textContent = catalogErrors.size ? `Could not load models for ${providers.filter(provider => catalogErrors.has(provider.id)).map(provider => provider.name).join(', ')}. You can enter a model ID.` : '';
+    catalogError.textContent = catalogErrors.size ? `Could not load models for ${providers.filter(provider => catalogErrors.has(provider.id)).map(provider => provider.name).join(', ')}. You can enter model IDs for agents that support custom models.` : '';
     updateControls();
     position();
   }
@@ -415,7 +419,8 @@ export function openModelPicker(options: ModelPickerOptions): () => void {
   window.addEventListener('scroll', schedulePosition, true);
   window.visualViewport?.addEventListener('resize', schedulePosition);
   window.visualViewport?.addEventListener('scroll', schedulePosition);
-  if (loadModels) {
+  function loadCatalogs(): void {
+    if (!loadModels) return;
     for (const provider of providers) {
       if (!provider.installed || !canSwitchProvider && provider.id !== current.provider) continue;
       catalogLoading.add(provider.id);
@@ -430,5 +435,18 @@ export function openModelPicker(options: ModelPickerOptions): () => void {
     }
     renderChoices();
   }
+  if (options.loadProviders) {
+    renderChoices();
+    void options.loadProviders().then(found => {
+      if (closed) return;
+      providers = found.map(provider => ({ ...provider, models: [...provider.models] }));
+      providersStatus = providers.length ? '' : 'No harnesses on this computer';
+      loadCatalogs();
+    }).catch(failure => {
+      if (closed) return;
+      providersStatus = failure instanceof Error ? failure.message : String(failure);
+      renderChoices();
+    });
+  } else loadCatalogs();
   return () => close();
 }

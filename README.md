@@ -2,10 +2,10 @@
 
 A small, native desktop workspace for coding agents. PandaCode runs the coding
 CLIs you already use — **Claude Code, Codex, Kimi Code, OpenCode, GLM Coding
-Plan and Xiaomi MiMo** (through Claude Code), **Antigravity, xAI's Grok Build,
-DeepSeek and Command Code** (through ACP) and **Pi** and its fork **omp** (through
-Pi's RPC mode) —
-side by side, with your projects, Git, a terminal and a browser in one window.
+Plan and Xiaomi MiMo** (through Claude Code), **GitHub Copilot CLI, Antigravity,
+xAI's Grok Build, DeepSeek and Command Code** (through ACP), and **Pi** and its
+fork **omp** (through Pi's RPC mode) — side by side, with your projects, Git, a
+terminal and a browser in one window.
 
 PandaCode is free and open source under the [PandaCode License](LICENSE), the MIT
 License with one addition: forks that are used commercially or released publicly
@@ -170,6 +170,7 @@ PandaCode does not include provider plans or usage.
 [DeepSeek](https://platform.deepseek.com/api_keys) installs with `npm i -g @deepseek-ai/dsh`; PandaCode launches `dsh --profile acp`. An API key is optional (Settings → Providers, or `DEEPSEEK_API_KEY`); dsh can use its own stored credentials. Usage limits are not shown in PandaCode; check platform.deepseek.com.
 
 [Command Code](https://commandcode.ai/docs/acp) installs with `npm i -g command-code` (Node 22 or newer); PandaCode launches `command-code acp`. Sign in once with `command-code login`, or save an API key in Settings → Providers (or set `COMMAND_CODE_API_KEY`); either one authenticates the same account. Usage limits are not shown in PandaCode; check Command Code Studio.
+[GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli) installs with `npm install -g @github/copilot`; run `copilot login` in a terminal, then select **GitHub Copilot CLI** in PandaCode. PandaCode launches the local `copilot` executable over ACP. The CLI manages its own sign-in. See [provider details](docs/providers.md#github-copilot-cli).
 
 ## Build from source
 
