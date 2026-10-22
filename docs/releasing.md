@@ -4,7 +4,7 @@ PandaCode releases are GitHub Releases on
 [aicodeking/pandacode](https://github.com/aicodeking/pandacode/releases). There
 are no private servers: pushing a `vX.Y.Z` tag runs
 [`.github/workflows/release.yml`](../.github/workflows/release.yml), which builds
-the three desktop installers on GitHub-hosted runners and attaches them to a
+the desktop installers on GitHub-hosted runners and attaches them to a
 release whose notes come from `releases/X.Y.Z.md`.
 
 Instructions for agents: a request to write or review release instructions does
@@ -18,6 +18,7 @@ uncommitted work.
 | `darwin-aarch64` | `macos-latest` / `aarch64-apple-darwin` | `PandaCode-macOS-arm64.dmg` |
 | `darwin-x86_64` | `macos-15-intel` / `x86_64-apple-darwin` | `PandaCode-macOS-x64.dmg` |
 | `windows-x86_64` | `windows-2022` / `x86_64-pc-windows-msvc` | `PandaCode-Windows-x64-setup.exe` |
+| `windows-aarch64` | `windows-11-arm` / `aarch64-pc-windows-msvc` | `PandaCode-Windows-arm64-setup.exe` |
 | `linux-x86_64` | `ubuntu-22.04` / `x86_64-unknown-linux-gnu` | `PandaCode-Linux-x86_64.AppImage` |
 | `linux-aarch64` | `ubuntu-24.04-arm` / `aarch64-unknown-linux-gnu` | `PandaCode-Linux-aarch64.AppImage` |
 
@@ -134,7 +135,7 @@ On each native OS, after `npm ci`:
 
 ```sh
 npm run release:build            # builds the host's target
-# or: node scripts/release/build.mjs darwin-aarch64|darwin-x86_64|windows-x86_64|linux-x86_64|linux-aarch64
+# or: node scripts/release/build.mjs darwin-aarch64|darwin-x86_64|windows-x86_64|windows-aarch64|linux-x86_64|linux-aarch64
 ```
 
 The script checks that all version files agree, runs `tauri build` for the

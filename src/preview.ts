@@ -707,6 +707,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'architect_get': result = architect.get(args.sessionId); break;
     case 'architect_configure': result = architect.configure(args.sessionId, args.config, args.architect, args.profileId); break;
     case 'architect_profiles': result = architect.profiles(); break;
+    case 'architect_set_lead_guidance': result = architect.setLeadGuidance(args.guidance); break;
     case 'architect_save_profile': result = architect.saveProfile(args.id, args.name, args.setup); break;
     case 'architect_delete_profile': result = architect.deleteProfile(args.id); break;
     case 'architect_start': architect.start(args.sessionId, args.text, args.imageIds); break;

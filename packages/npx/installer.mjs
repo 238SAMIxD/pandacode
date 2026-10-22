@@ -14,6 +14,7 @@ const ASSETS = {
   'darwin-arm64': 'PandaCode-macOS-arm64.app.tar.gz',
   'darwin-x64': 'PandaCode-macOS-x64.app.tar.gz',
   'win32-x64': 'PandaCode-Windows-x64-setup.exe',
+  'win32-arm64': 'PandaCode-Windows-arm64-setup.exe',
   'linux-x64': 'PandaCode-Linux-x86_64.AppImage',
   'linux-arm64': 'PandaCode-Linux-aarch64.AppImage',
 };
