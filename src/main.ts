@@ -23,7 +23,7 @@ import { mountWallpapers } from './wallpapers';
 import type { AgentEvent, BrowserAttachment, ContextUsage, FileEntry, GitStatus, Message, MessagePage, Mode, Project, Provider, ProviderId, ProviderModel, Session, TaskLink, ToolActivity, TurnChanges } from './types';
 import type { BrowserPanel } from './browser';
 import { call, chooseFolder, preview, subscribe } from './bridge';
-import { $, button, escape, icon, markdown, morph } from './dom';
+import { $, button, escape, fileIcon, fileIconsReady, icon, markdown, morph } from './dom';
 import { bindMessageActions, messageActionsHtml } from './message-actions';
 import { providerLogo } from './provider-logos';
 import { decodeToolActivity, groupToolRuns, renderToolActivity, renderToolGroup, renderToolStatus } from './tool-activity';
@@ -2541,7 +2541,7 @@ function renderInspector(): void {
     return;
   }
   if (state.inspectorTab === 'files') {
-    target.innerHTML = `<div class="file-folder-path"><span>${escape(project()?.name)}${state.filePath ? ' / ' + escape(state.filePath) : ''}</span>${state.filePath ? button('parent-folder', 'Go to parent folder', 'arrow') : ''}</div><div class="file-list">${state.files.map(file => `<div class="file-row"><button data-action="${file.isDir ? 'open-folder' : isPreviewableFile(file.path) ? 'preview-file' : 'open-file'}" data-path="${escape(file.path)}">${icon(file.isDir ? 'folder' : 'file')}<span>${escape(file.name)}</span>${file.isDir ? icon('chevron') : ''}</button>${!file.isDir && /\.(html?|svg)$/i.test(file.path) ? button('open-file', 'View source of ' + file.name, 'file', 'file-attach', `data-path="${escape(file.path)}"`) : ''}${!file.isDir ? button('attach-file', 'Attach ' + file.name, 'plus', 'file-attach', `data-path="${escape(file.path)}"`) : ''}</div>`).join('') || '<div class="inspector-empty">This folder is empty.</div>'}</div>`; return;
+    target.innerHTML = `<div class="file-folder-path"><span>${escape(project()?.name)}${state.filePath ? ' / ' + escape(state.filePath) : ''}</span>${state.filePath ? button('parent-folder', 'Go to parent folder', 'arrow') : ''}</div><div class="file-list">${state.files.map(file => `<div class="file-row"><button data-action="${file.isDir ? 'open-folder' : isPreviewableFile(file.path) ? 'preview-file' : 'open-file'}" data-path="${escape(file.path)}">${fileIcon(file.name, file.isDir)}<span>${escape(file.name)}</span>${file.isDir ? icon('chevron') : ''}</button>${!file.isDir && /\.(html?|svg)$/i.test(file.path) ? button('open-file', 'View source of ' + file.name, 'file', 'file-attach', `data-path="${escape(file.path)}"`) : ''}${!file.isDir ? button('attach-file', 'Attach ' + file.name, 'plus', 'file-attach', `data-path="${escape(file.path)}"`) : ''}</div>`).join('') || '<div class="inspector-empty">This folder is empty.</div>'}</div>`; return;
   }
   if (!state.git?.isRepo) { target.innerHTML = '<div class="inspector-empty">'+icon('branch')+'<h3>No Git repository</h3><p>Open a Git repository to review changes.</p></div>'; return; }
   const staged = state.git.files.filter(file => ![' ', '?', '!', '.'].includes(file.index));
@@ -3596,6 +3596,8 @@ new MutationObserver(() => compactSublines(document.querySelector('#dialog')!)).
 window.addEventListener('focus', renderNavigation);
 document.addEventListener('visibilitychange', () => { renderNavigation(); if (!document.hidden) { renderHeader(); renderStream(); } updateWorkTimer(); });
 if (localStorage.getItem('pandacode.compact') === 'true') document.body.classList.add('compact');
+// Material file icons arrive in a lazy chunk and have light-theme variants; markup is baked at render time.
+function refreshFileIcons(): void { render(); if (state.inspector && state.inspectorTab === 'files' && !state.selectedFile) renderInspector(); }
 async function boot(): Promise<void> {
   await subscribe('agent-event', onAgent);
   await subscribe('provider-models-changed', event => invalidateModels(event.provider));
@@ -3650,6 +3652,8 @@ async function boot(): Promise<void> {
   const recent = state.sessions.find(s => !s.archived);
   activateProject(state.projects.find(p => p.id === savedProject)?.id ?? recent?.projectId ?? state.projects[0]?.id ?? '');
   const first = state.sessions.find(s => !s.archived && s.projectId === state.projectId); if (first) await selectSession(first.id); else { render(); await refreshInspector(); }
+  run(fileIconsReady.then(refreshFileIcons));
+  window.addEventListener('pandacode-theme-change', refreshFileIcons);
   if (state.view !== 'conversation') { state.boardPanel = false; renderInspector(); renderBoardView(); }
   if (!preview && !state.providers.some(p => p.installed)) notify('Open Settings to check your installed agent CLIs.');
 }
