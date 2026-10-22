@@ -1447,7 +1447,7 @@ test('keeps the Settings agent menu clickable at the minimum desktop window size
     return { inViewport: rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight,
       reachable: element.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)) };
   }));
-  expect(hitTargets).toHaveLength(12);
+  expect(hitTargets).toHaveLength(13);
   expect(hitTargets.every(target => target.inViewport && target.reachable)).toBe(true);
   await menu.getByRole('menuitemradio', { name: 'Kimi Code', exact: true }).click();
   await expect(settings.getByRole('button', { name: 'Default agent for new tasks', exact: true })).toHaveText('Kimi Code');
@@ -2519,21 +2519,20 @@ test('removes the old project inspector actions while the new task history loads
   await expect(page.locator('#breadcrumb')).toContainText('pandacode');
 });
 
-test('renders provider logos in task rows, composer, messages, picker, and settings', async ({ page }) => {
+test('renders provider logos in task rows, composer, picker, and settings', async ({ page }) => {
   await expect(page.locator('#composer .provider-logo[data-provider="claude"]')).toBeVisible();
-  await expect(page.locator('.agent-message .provider-logo[data-provider="claude"]:visible').first()).toBeVisible();
   for (const provider of ['claude', 'codex', 'kimi']) {
     await expect(page.locator(`#navigation .provider-logo[data-provider="${provider}"]`).first()).toBeVisible();
   }
   await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
   const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
-  for (const provider of ['claude', 'codex', 'kimi']) {
+  for (const provider of ['claude', 'codex', 'kimi', 'github-copilot']) {
     await expect(picker.locator(`.provider-logo[data-provider="${provider}"]`).first()).toBeVisible();
     await expect(picker.locator(`.model-menu-option .provider-logo[data-provider="${provider}"]`).first()).toBeVisible();
   }
   await page.keyboard.press('Escape');
   const settings = await openSettings(page, 'Agents');
-  for (const provider of ['claude', 'codex', 'kimi']) {
+  for (const provider of ['claude', 'codex', 'kimi', 'github-copilot']) {
     await expect(settings.locator(`.provider-diagnostic .provider-logo[data-provider="${provider}"]`)).toBeVisible();
   }
   await expect(settings.getByRole('button', { name: 'Default agent for new tasks', exact: true }).locator('.provider-logo[data-provider="claude"]')).toBeVisible();

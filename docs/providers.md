@@ -33,6 +33,12 @@ is limited to 8 seconds and 1 MiB of output. Provider-supplied `displayName` val
 take precedence; entries without display metadata show the exact wire model name.
 See [Kimi model configuration](https://www.kimi.com/code/docs/en/kimi-code-cli/configuration/config-files#models).
 
+## GitHub Copilot CLI
+
+Install GitHub Copilot CLI using [GitHub's installation guide](https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli), then sign in in a terminal with `copilot login`. PandaCode discovers or uses the configured `copilot` executable and starts its local ACP stdio server with `copilot --no-auto-update --acp --stdio`. The CLI owns GitHub authentication; PandaCode does not store GitHub credentials or add a separate login flow. ACP support is a public preview; see [GitHub's ACP reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/acp-server).
+
+The model picker reads only ACP metadata. It offers the models Copilot advertises and keeps **Default** available if the catalog is empty or unavailable. A model override is sent only when Copilot advertises that setting; the picker does not accept arbitrary model IDs for this provider. Copilot CLI 1.0.82 advertised task modes Agent, Plan and Autopilot, plus an Allow All setting, but no model catalog. PandaCode maps Agent with Allow All off to **Standard**, Plan with Allow All off to **Plan mode**, and Agent with Allow All on to **Full access**. Autopilot is not exposed because it does not map to a PandaCode permission mode. In Plan mode, read, search and think requests can proceed while other permission requests are declined. No prompt is sent during catalog discovery.
+
 ## Claude login and environment credentials
 
 Open **Settings → Agents → Set up → Claude Code** to see the credential source

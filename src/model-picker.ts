@@ -258,7 +258,7 @@ export function openModelPicker(options: ModelPickerOptions): () => void {
       const visible = query ? models.filter(model => providerMatches || [model.id, model.name, model.description].some(value => value.toLowerCase().includes(normalized))) : shortList(provider.id, models);
       const locked = !canSwitchProvider && provider.id !== current.provider;
       const unavailable = !provider.installed;
-      const custom = Boolean(query && !namedHarness && !models.some(model => [model.id, model.name].some(value => value.toLowerCase() === normalized)) && !locked);
+      const custom = provider.id !== 'github-copilot' && Boolean(query && !namedHarness && !models.some(model => [model.id, model.name].some(value => value.toLowerCase() === normalized)) && !locked);
       if (!visible.length && !custom) return '';
       const disabled = locked || unavailable;
       const row = (model: ProviderModel, isCustom: boolean): string => {
@@ -284,7 +284,7 @@ export function openModelPicker(options: ModelPickerOptions): () => void {
     }
     list.querySelectorAll<HTMLElement>('[data-catalog-loading]').forEach(status => { status.hidden = !catalogLoading.has(status.dataset.catalogLoading as ProviderId); });
     catalogError.hidden = catalogErrors.size === 0;
-    catalogError.textContent = catalogErrors.size ? `Could not load models for ${providers.filter(provider => catalogErrors.has(provider.id)).map(provider => provider.name).join(', ')}. You can enter a model ID.` : '';
+    catalogError.textContent = catalogErrors.size ? `Could not load models for ${providers.filter(provider => catalogErrors.has(provider.id)).map(provider => provider.name).join(', ')}. You can enter model IDs for agents that support custom models.` : '';
     updateControls();
     position();
   }

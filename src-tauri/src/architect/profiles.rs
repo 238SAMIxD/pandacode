@@ -25,7 +25,22 @@ impl ModelSelection {
         }
     }
     fn validate(&self) -> Result<()> {
-        if !["claude", "codex", "kimi", "opencode", "glm", "antigravity", "grok", "mimo", "pi", "deepseek", "commandcode", "omp"].contains(&self.provider.as_str())
+        if ![
+            "claude",
+            "codex",
+            "kimi",
+            "opencode",
+            "glm",
+            "antigravity",
+            "grok",
+            "mimo",
+            "pi",
+            "deepseek",
+            "commandcode",
+            "omp",
+            "github-copilot",
+        ]
+        .contains(&self.provider.as_str())
             || self.model.len() > 200
             || self.model.contains('\0')
         {

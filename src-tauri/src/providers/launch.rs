@@ -87,6 +87,7 @@ fn resolve(path: &Path, windows: bool) -> Result<Launch, String> {
             "pi" => "@earendil-works/pi-coding-agent",
             "dsh" => "@deepseek-ai/dsh",
             "command-code" | "cmdc" | "commandcode" => "command-code",
+            "copilot" => "@github/copilot",
             _ => return Err(
                 "This batch launcher is unsupported. Select the native harness executable instead."
                     .into(),
@@ -801,6 +802,7 @@ mod tests {
             ("claude", "@anthropic-ai/claude-code"),
             ("opencode", "opencode-ai"),
             ("pi", "@earendil-works/pi-coding-agent"),
+            ("copilot", "@github/copilot"),
         ] {
             let shim = f.file(&format!("node_modules/.bin/{name}.cmd"), "@echo off");
             f.file(

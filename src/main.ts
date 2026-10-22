@@ -671,7 +671,7 @@ function finishLiveMessage(current: Stream, sessionId: string): void {
   current.tools.push({ key: current.retainedMessageKey, content: current.text.length > 16384 ? current.text.slice(0, 16384) + '\n[Activity preview truncated]' : current.text, commentary: true });
   trimLiveActivity(current, sessionId); current.revision++;
 }
-function shortProvider(id: ProviderId): string { return ({ claude: 'Claude', codex: 'Codex', kimi: 'Kimi', opencode: 'OpenCode', glm: 'GLM', antigravity: 'Antigravity', grok: 'Grok', mimo: 'MiMo', pi: 'Pi', deepseek: 'DeepSeek', commandcode: 'Command Code', omp: 'omp' })[id]; }
+ function shortProvider(id: ProviderId): string { return ({ claude: 'Claude', codex: 'Codex', kimi: 'Kimi', opencode: 'OpenCode', glm: 'GLM', antigravity: 'Antigravity', grok: 'Grok', mimo: 'MiMo', pi: 'Pi', deepseek: 'DeepSeek', commandcode: 'Command Code', omp: 'omp', 'github-copilot': 'GitHub Copilot CLI' })[id]; }
 function selectedModel(s: Session): ProviderModel { return provider(s.provider)?.models.find(model => model.id === (s.model || 'default')) ?? fallbackModel(s.provider, s.model); }
 function modelLabel(s?: Session): string {
   if (!s) return 'Default model';
@@ -3296,7 +3296,7 @@ async function showConversationImport(): Promise<void> {
 /** What the Bots window and a bot's page share: native calls, live turns and approvals. */
 function botsOptions(providers: Provider[]): import('./bots').BotsOptions {
   return {
-    call, providers, notify,
+    call, providers, notify, loadModels,
     defaultModel: provider => rememberedModel(provider),
     running: id => isRunning(id),
     openTask: id => run((async () => { closeModal(); await reloadSessions(); await selectSession(id, true); })()),
