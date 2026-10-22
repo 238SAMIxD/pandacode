@@ -1160,6 +1160,7 @@ mod tests {
             max_assignments: 6,
             workspace: "shared".into(),
             summary_limit: 2000,
+            lead_guidance: None,
         };
         let team = architect::new_team(task.id.clone(), config);
         store

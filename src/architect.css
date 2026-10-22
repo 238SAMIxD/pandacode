@@ -36,6 +36,12 @@
 .architect-model > .icon:last-child { flex-shrink: 0; height: 11px; width: 11px; color: var(--muted); }
 .architect-model:hover:not(:disabled) { background: color-mix(in srgb, var(--raised) 88%, transparent); }
 .architect-model:disabled { opacity: .5; }
+.architect-guidance { display: flex; flex-direction: column; gap: .35rem; margin-top: .55rem; }
+.architect-guidance label { font-size: .79rem; color: var(--muted); }
+.architect-guidance textarea { width: 100%; min-width: 0; box-sizing: border-box; resize: vertical; border: 1px solid var(--border); border-radius: 4px; padding: .5rem .6rem; color: var(--text); background: color-mix(in srgb, var(--raised) 55%, transparent); font: inherit; font-size: .82rem; line-height: 1.45; }
+.architect-guidance textarea:focus-visible { border-color: var(--focus); outline: none; }
+.architect-guidance textarea:disabled { opacity: .5; }
+.architect-guidance-reset { align-self: flex-start; }
 .architect-profiles { display: grid; gap: 5px; }
 .architect-profile { min-width: 0; }
 .architect-profile-heading { display: flex; align-items: center; gap: 4px; margin: 0 2px 3px; }
