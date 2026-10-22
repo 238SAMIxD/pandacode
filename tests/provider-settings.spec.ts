@@ -50,7 +50,7 @@ async function delayedConnections(page: Page): Promise<void> {
   await expect(page.locator('.task-item.selected .task-title')).toHaveText('Make search feel instant');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('tab', { name: 'Providers', exact: true }).click();
-  await expect(page.locator('#settings-panel-providers details summary')).toHaveCount(6);
+  await expect(page.locator('#settings-panel-providers details summary')).toHaveCount(7);
   for (const summary of await page.locator('#settings-panel-providers details summary').all()) await summary.click();
 }
 

@@ -55,7 +55,7 @@ impl Protocol {
             let _ = self.goal_request("turn/steer", params, Purpose::Rpc(reply), &mut step);
             return step;
         }
-        if self.config.provider == "pi" {
+        if matches!(self.config.provider.as_str(), "pi" | "omp") {
             return self.pi_steer(text, reply);
         }
         let _ = reply.send(Err("This agent cannot be steered mid-turn; the message stays queued.".into()));

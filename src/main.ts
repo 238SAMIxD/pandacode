@@ -671,7 +671,7 @@ function finishLiveMessage(current: Stream, sessionId: string): void {
   current.tools.push({ key: current.retainedMessageKey, content: current.text.length > 16384 ? current.text.slice(0, 16384) + '\n[Activity preview truncated]' : current.text, commentary: true });
   trimLiveActivity(current, sessionId); current.revision++;
 }
-function shortProvider(id: ProviderId): string { return ({ claude: 'Claude', codex: 'Codex', kimi: 'Kimi', opencode: 'OpenCode', glm: 'GLM', antigravity: 'Antigravity', grok: 'Grok', mimo: 'MiMo', pi: 'Pi', deepseek: 'DeepSeek', commandcode: 'Command Code' })[id]; }
+function shortProvider(id: ProviderId): string { return ({ claude: 'Claude', codex: 'Codex', kimi: 'Kimi', opencode: 'OpenCode', glm: 'GLM', antigravity: 'Antigravity', grok: 'Grok', mimo: 'MiMo', pi: 'Pi', deepseek: 'DeepSeek', commandcode: 'Command Code', omp: 'omp' })[id]; }
 function selectedModel(s: Session): ProviderModel { return provider(s.provider)?.models.find(model => model.id === (s.model || 'default')) ?? fallbackModel(s.provider, s.model); }
 function modelLabel(s?: Session): string {
   if (!s) return 'Default model';
@@ -1061,7 +1061,7 @@ function savedToolKey(message: Message): string {
 }
 function activityExpanded(): boolean { return localStorage.getItem('pandacode.activityExpanded') === 'true'; }
 function activityHtml(key: string, label: string, body: string, live = false): string {
-  return `<details class="turn-activity${live ? ' live-activity' : ''}" data-turn-key="${escape(key)}"${activityExpanded() ? ' open' : ''}><summary class="turn-activity-summary"><span class="turn-activity-label">${escape(label)}</span>${icon('chevron')}</summary><div class="turn-activity-body">${body}</div></details>`;
+  return `<details class="turn-activity${live ? ' live-activity' : ''}" data-turn-key="${escape(key)}"${live || state.view === 'board' || activityExpanded() ? ' open' : ''}><summary class="turn-activity-summary"><span class="turn-activity-label">${escape(label)}</span>${icon('chevron')}</summary><div class="turn-activity-body">${body}</div></details>`;
 }
 type ToolGroupView = { key: string; toolKeys: string[]; open: boolean; focused: boolean };
 function captureToolGroups(root: ParentNode): ToolGroupView[] {
@@ -3581,7 +3581,7 @@ document.addEventListener('change', event => {
   if (input.id === 'compact-mode') { document.body.classList.toggle('compact', input.checked); localStorage.setItem('pandacode.compact', String(input.checked)); }
   if (input.id === 'expand-tool-activity') {
     localStorage.setItem('pandacode.activityExpanded', String(input.checked));
-    document.querySelectorAll<HTMLDetailsElement>('.turn-activity, .tool-group').forEach(group => { group.open = input.checked; });
+    document.querySelectorAll<HTMLDetailsElement>('.turn-activity:not(.live-activity), .tool-group').forEach(group => { group.open = input.checked; });
   }
 });
 document.addEventListener('keydown', event => {
@@ -3642,7 +3642,8 @@ window.addEventListener('focus', renderNavigation);
 document.addEventListener('visibilitychange', () => { renderNavigation(); if (!document.hidden) { renderHeader(); renderStream(); } updateWorkTimer(); });
 if (localStorage.getItem('pandacode.compact') === 'true') document.body.classList.add('compact');
 // Material file icons arrive in a lazy chunk and have light-theme variants; markup is baked at render time.
-function refreshFileIcons(): void { render(); if (state.inspector && state.inspectorTab === 'files' && !state.selectedFile) renderInspector(); }
+// A full render() here would close open menus mid-click; other icon spots pick the icons up on their next render.
+function refreshFileIcons(): void { if (state.inspector && state.inspectorTab === 'files' && !state.selectedFile) renderInspector(); }
 async function boot(): Promise<void> {
   await subscribe('agent-event', onAgent);
   await subscribe('provider-models-changed', event => invalidateModels(event.provider));

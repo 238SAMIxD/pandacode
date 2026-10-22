@@ -525,3 +525,23 @@ Verified against `command-code` 1.87.1 on 2026-10-22 by driving `command-code ac
 directly; the recorded frames back the unit tests in `providers/commandcode.rs`, and
 an ignored smoke test (`live_command_code_lists_models`) reads the real catalog
 without spending tokens.
+
+## omp (Oh My Pi)
+
+omp (`omp`, from `@oh-my-pi/pi-coding-agent`, a Bun program) is a fork of Pi and
+speaks the same JSONL RPC (`--mode rpc`), so `providers/pi.rs` drives both. The
+differences, read from omp 18.12's `modes/rpc/rpc-types.ts` and CLI flag table:
+
+- A run ends with `prompt_result` (`status` completed/aborted/error) once the
+  session is settled, or with a later `session_settled` when `sessionSettled` is
+  false. Pi's `agent_settled` is never sent.
+- Resume uses `--resume <id>` (omp has no `--session-id`); it looks in the task
+  folder first and fails rather than prompting when stdin is not a terminal.
+- `--approval-mode yolo` turns omp's own approvals off: the same bridge extension
+  as Pi enforces PandaCode's modes, and registers app tools as `essential` so
+  omp does not hide them behind tool discovery.
+- Model discovery skips Pi-only flags (`--offline`, `--no-mcp`, …); slash
+  commands come from `get_available_commands`.
+
+Accounts, models and thinking levels are omp's own. Live check:
+`cargo test installed_omp -- --ignored`.

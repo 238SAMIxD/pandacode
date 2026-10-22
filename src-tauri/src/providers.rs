@@ -70,7 +70,7 @@ pub(crate) const CLAUDE_SESSION_BOUND_TOOLS: &str = "ScheduleWakeup,Monitor,Cron
 
 /// Harnesses that take app instructions as a system prompt (`--append-system-prompt`).
 pub fn takes_system_instructions(provider: &str) -> bool {
-    matches!(provider, "claude" | "glm" | "mimo" | "pi")
+    matches!(provider, "claude" | "glm" | "mimo" | "pi" | "omp")
 }
 
 #[derive(Clone, Debug)]
@@ -431,7 +431,7 @@ pub struct ReasoningEffortInfo {
 
 pub fn validate_reasoning_effort(provider: &str, effort: Option<&str>) -> Result<(), String> {
     let valid = match (provider, effort) {
-        ("claude" | "codex" | "kimi" | "glm" | "opencode" | "antigravity" | "grok" | "mimo" | "pi" | "deepseek" | "commandcode", None) => true,
+        ("claude" | "codex" | "kimi" | "glm" | "opencode" | "antigravity" | "grok" | "mimo" | "pi" | "deepseek" | "commandcode" | "omp", None) => true,
         ("claude" | "glm" | "mimo", Some(value)) => {
             ["low", "medium", "high", "xhigh", "max"].contains(&value)
         }
@@ -443,7 +443,7 @@ pub fn validate_reasoning_effort(provider: &str, effort: Option<&str>) -> Result
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
         }
-        ("pi", Some(value)) => ["off", "minimal", "low", "medium", "high", "xhigh"].contains(&value),
+        ("pi" | "omp", Some(value)) => ["off", "minimal", "low", "medium", "high", "xhigh"].contains(&value),
         ("kimi", Some(value)) => ["on", "off"].contains(&value),
         _ => false,
     };
@@ -584,6 +584,7 @@ pub fn discover() -> Vec<ProviderInfo> {
         ("pi", "Pi"),
         ("deepseek", "DeepSeek"),
         ("commandcode", "Command Code"),
+        ("omp", "Oh My Pi"),
     ]
     .into_iter()
     .map(|(id, name)| {
@@ -652,7 +653,7 @@ fn selected_opencode_models(catalog: Vec<ModelInfo>, selected: &[String]) -> Vec
 }
 
 pub(crate) async fn list_model_catalog(provider: &str) -> Result<Vec<ModelInfo>, String> {
-    static DISCOVERY: OnceLock<[tokio::sync::Semaphore; 11]> = OnceLock::new();
+    static DISCOVERY: OnceLock<[tokio::sync::Semaphore; 12]> = OnceLock::new();
     let index = match provider {
         "claude" => 0,
         "codex" => 1,
@@ -665,6 +666,7 @@ pub(crate) async fn list_model_catalog(provider: &str) -> Result<Vec<ModelInfo>,
         "pi" => 8,
         "deepseek" => 9,
         "commandcode" => 10,
+        "omp" => 11,
         _ => return Err("Unknown provider".into()),
     };
     let semaphore =
@@ -691,7 +693,7 @@ pub(crate) async fn list_model_catalog(provider: &str) -> Result<Vec<ModelInfo>,
         "antigravity" => acp::models(&path).await,
         "grok" => acp::grok_models(&path).await,
         "mimo" => Ok(mimo::models()),
-        "pi" => pi::models(&path).await,
+        "pi" | "omp" => pi::models(&path, provider).await,
         "deepseek" => deepseek::models(&path).await,
         "commandcode" => commandcode::models(&path).await,
         _ => unreachable!(),
@@ -1607,7 +1609,7 @@ impl Protocol {
     }
     fn initial(&self) -> Value {
         match self.config.provider.as_str() {
-            "pi" => json!({"type":"get_state","id":"pandacode-init"}),
+            "pi" | "omp" => json!({"type":"get_state","id":"pandacode-init"}),
             "codex" => {
                 let mut request = json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"pandacode","title":"PandaCode","version":"0.1.0"}}});
                 request["params"]["capabilities"] =
@@ -1636,7 +1638,7 @@ impl Protocol {
     fn approve(&mut self, id: &str, approved: bool) -> Option<Value> {
         let request = self.pending.remove(id)?;
         Some(match self.config.provider.as_str() {
-            "pi" => json!({"type":"extension_ui_response","id":request["id"],"confirmed":approved}),
+            "pi" | "omp" => json!({"type":"extension_ui_response","id":request["id"],"confirmed":approved}),
             "codex" => {
                 let method = string(&request, "method");
                 let result = if method == "item/permissions/requestApproval" {
@@ -1668,7 +1670,7 @@ impl Protocol {
     }
     fn cancel(&self) -> Value {
         match self.config.provider.as_str() {
-            "pi" => json!({"type":"abort"}),
+            "pi" | "omp" => json!({"type":"abort"}),
             "codex" => {
                 json!({"id":900,"method":"turn/interrupt","params":{"threadId":self.remote_id,"turnId":self.turn_id}})
             }
@@ -1700,7 +1702,7 @@ impl Protocol {
         match self.config.provider.as_str() {
             "codex" => self.codex(value),
             "kimi" => self.kimi(value),
-            "pi" => self.pi(value),
+            "pi" | "omp" => self.pi(value),
             "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" => self.acp(value),
             _ => self.claude(value),
         }
@@ -2622,7 +2624,7 @@ fn configure_command(command: &mut Command, config: &RunConfig) {
             // Process-local override: never alter the user's Codex config.
             command.args(["app-server", "--enable", "goals"]);
         }
-        "pi" => pi::configure(command, config),
+        "pi" | "omp" => pi::configure(command, config),
         "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" => acp::configure(command, config),
         "kimi" => {
             if use_model {
@@ -2685,7 +2687,7 @@ async fn run_inner(
     input: UnboundedReceiver<RunInput>,
     host: Option<ToolHost>,
 ) -> Result<(), String> {
-    if !["claude", "codex", "kimi", "opencode", "glm", "antigravity", "grok", "mimo", "pi", "deepseek", "commandcode"]
+    if !["claude", "codex", "kimi", "opencode", "glm", "antigravity", "grok", "mimo", "pi", "deepseek", "commandcode", "omp"]
         .contains(&config.provider.as_str())
     {
         return Err("Unknown provider".into());
@@ -2829,7 +2831,7 @@ async fn run_process_with_tools(
             };
             (host.map(host_tools::HostTools::new).transpose()?, server)
         }
-        ("claude" | "glm" | "mimo" | "kimi" | "opencode" | "antigravity" | "grok" | "pi" | "deepseek" | "commandcode", Some(host)) => (
+        ("claude" | "glm" | "mimo" | "kimi" | "opencode" | "antigravity" | "grok" | "pi" | "deepseek" | "commandcode" | "omp", Some(host)) => (
             None,
             mcp_host::Server::start_for_run(
                 host,
@@ -2842,7 +2844,7 @@ async fn run_process_with_tools(
         (_, None) => (None, None),
         _ => return Err("Host tools are unavailable for this provider".into()),
     };
-    let _pi_bridge = if config.provider == "pi" {
+    let _pi_bridge = if matches!(config.provider.as_str(), "pi" | "omp") {
         Some(pi::Bridge::configure(&mut command, &config.mode, mcp.as_ref())?)
     } else { None };
     let (mut child, mut group) = if let Some(spare) = spare {
@@ -2957,8 +2959,7 @@ async fn run_process_with_tools(
                         if line.iter().all(u8::is_ascii_whitespace){continue;}
                         let value:Value=serde_json::from_slice(line).map_err(|e|format!("Invalid provider JSON: {e}"))?;
                         if stopped {
-                            // Pi stays up after `abort`; settling is the end of the stopped run.
-                            if protocol.config.provider=="pi" && value["type"]=="agent_settled" {return Ok(());}
+                            if pi::stop_settled(&protocol.config.provider, &value) {return Ok(());}
                             continue;
                         }
                         let step=protocol.receive(value)?;

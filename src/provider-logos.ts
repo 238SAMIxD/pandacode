@@ -2,7 +2,8 @@ import type { ProviderId } from './types';
 import { escape } from './dom';
 
 // Original provider assets; see docs/brand-assets.md for provenance.
-const logos: Record<ProviderId, string> = {
+// Harnesses without an asset (omp) show no mark; their name stands alone.
+const logos: Partial<Record<ProviderId, string>> = {
   claude: new URL('./assets/providers/claude.svg', import.meta.url).href,
   codex: new URL('./assets/providers/openai.svg', import.meta.url).href,
   kimi: new URL('./assets/providers/kimi.png', import.meta.url).href,
@@ -19,5 +20,5 @@ const logos: Record<ProviderId, string> = {
 /** Decorative provider mark. The surrounding control supplies its accessible name. */
 export function providerLogo(id: ProviderId, cls = ''): string {
   if (!Object.hasOwn(logos, id)) return '';
-  return `<img class="provider-logo${cls ? ` ${escape(cls)}` : ''}" data-provider="${id}" src="${escape(logos[id])}" width="20" height="20" alt="" aria-hidden="true" draggable="false">`;
+  return `<img class="provider-logo${cls ? ` ${escape(cls)}` : ''}" data-provider="${id}" src="${escape(logos[id]!)}" width="20" height="20" alt="" aria-hidden="true" draggable="false">`;
 }

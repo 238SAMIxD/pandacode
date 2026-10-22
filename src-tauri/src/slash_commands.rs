@@ -315,7 +315,7 @@ pub(crate) fn invalidate_provider(provider: &str) {
 fn validate_provider(provider: &str) -> Result<(), String> {
     if !matches!(
         provider,
-        "claude" | "codex" | "kimi" | "glm" | "opencode" | "antigravity" | "grok" | "mimo" | "pi" | "deepseek" | "commandcode"
+        "claude" | "codex" | "kimi" | "glm" | "opencode" | "antigravity" | "grok" | "mimo" | "pi" | "deepseek" | "commandcode" | "omp"
     ) {
         return Err("Unknown harness.".into());
     }
@@ -342,7 +342,7 @@ async fn discover_catalog(provider: &str, cwd: &Path, key: Key, started: Instant
             "deepseek" => Ok(Catalog::default()),
             "codex" => codex::discover(cwd).await,
             "kimi" => kimi::discover(cwd).await,
-            "pi" => pi::discover(cwd).await,
+            "pi" | "omp" => pi::discover(provider, cwd).await,
             _ => unreachable!(),
         };
         let committed = CACHE

@@ -197,6 +197,7 @@ mark{background:color-mix(in srgb,var(--accent) 45%,transparent);color:inherit;b
 .turn-activity-body .markdown p,.turn-activity-body .markdown ul,.turn-activity-body .markdown ol{margin-bottom:8px}
 .turn-activity-body .tool-activity[data-tool-status="completed"] .tool-activity-status{display:none}
 .tool-group{min-width:0;margin:2px 0;color:var(--muted)}
+.tool-group:not(:has(+ .tool-group)){margin-bottom:8px}
 .tool-group-summary{display:flex;align-items:center;gap:7px;min-height:30px;max-width:100%;width:fit-content;padding:2px 0;list-style:none;cursor:pointer;font-size:.8rem;line-height:1.5;border-radius:2px;user-select:none}
 .tool-group-summary::-webkit-details-marker{display:none}
 .tool-group-summary:hover{color:var(--text)}

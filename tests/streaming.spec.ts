@@ -118,10 +118,10 @@ test.describe('streamed responses', () => {
     await expect(page.locator('.task-item.selected .task-title')).toHaveText('Make search feel instant');
   });
 
-  test('streaming tool activity follows Settings and preserves manual disclosure choices during updates', async ({ page }) => {
+  test('live tool activity stays open regardless of Settings and preserves manual disclosure choices during updates', async ({ page }) => {
     const id = await startTurn(page, 'conversation', false);
     const activity = page.locator('#stream-region .turn-activity');
-    await expect(activity).not.toHaveAttribute('open', '');
+    await expect(activity).toHaveAttribute('open', '');
     await page.evaluate(id => { const fixture = (window as any).__streamFixtures[id]; for (let i = 0; i < 6; i++) fixture.tool(); }, id);
     await expect(liveGroups(page)).toHaveCount(2);
     await page.keyboard.press('Meta+,');
@@ -139,14 +139,13 @@ test.describe('streamed responses', () => {
     await page.keyboard.press('Meta+,');
     await page.getByRole('checkbox', { name: 'Expand tool activity', exact: true }).uncheck();
     await page.getByRole('button', { name: 'Back to the workspace', exact: true }).click();
-    await expect(activity).not.toHaveAttribute('open', '');
+    await expect(activity).toHaveAttribute('open', '');
     await push(page, id, 'Final answer stays visible.');
     await expect(live(page)).toBeVisible();
     await finish(page, id);
     await expect(transcript(page).getByText('Final answer stays visible.', { exact: true })).toBeVisible();
-    await expect(page.locator('details.turn-activity[open]')).toHaveCount(0);
     await startTurn(page, 'conversation', false);
-    await expect(activity).not.toHaveAttribute('open', '');
+    await expect(page.locator('#stream-region .turn-activity')).toHaveAttribute('open', '');
   });
 
   test('keeps the latest streaming narrative before tools when older activity is trimmed', async ({ page }) => {

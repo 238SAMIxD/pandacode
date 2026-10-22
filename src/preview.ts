@@ -88,6 +88,7 @@ const providers: Provider[] = [
   { id: 'pi', name: 'Pi', installed: true, path: '/sample/bin/pi', version: 'Sample provider', models: [] },
   { id: 'deepseek', name: 'DeepSeek', installed: true, path: '/sample/bin/dsh', version: 'Sample provider', models: [] },
   { id: 'commandcode', name: 'Command Code', installed: true, path: '/sample/bin/command-code', version: '1.87.1 (sample)', models: [] },
+  { id: 'omp', name: 'Oh My Pi', installed: false, path: null, version: '', models: [] },
 ];
 // Mirrors providers::mimo::ENDPOINTS; the native side is the authority.
 const previewMimoEndpoints = [
@@ -100,6 +101,7 @@ let previewMimoEndpoint: string | null = null;
 // Representative catalog fixtures only; the native app queries installed harnesses.
 const catalogs: Record<ProviderId, ProviderModel[]> = {
   pi: [{ id: 'anthropic/claude-sonnet-4-5', name: 'Claude Sonnet 4.5', description: 'Sample Pi model.', reasoningEfforts: [{ id: 'low', name: 'Low', description: '' }, { id: 'high', name: 'High', description: '' }], contextWindow: 200000 }],
+  omp: [{ id: 'anthropic/claude-sonnet-4-5', name: 'Claude Sonnet 4.5', description: 'Sample omp model.', reasoningEfforts: [{ id: 'low', name: 'Low', description: '' }, { id: 'high', name: 'High', description: '' }], contextWindow: 200000 }],
   deepseek: [
     { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', description: 'Fast, low-cost default.', reasoningEfforts: [{ id: 'off', name: 'Off', description: 'No extended reasoning.' }, { id: 'low', name: 'Low', description: 'Light reasoning.' }, { id: 'high', name: 'High', description: 'Thorough reasoning. Recommended.' }, { id: 'max', name: 'Max', description: 'Maximum reasoning for the hardest tasks.' }], defaultReasoningEffort: 'high', contextWindow: 1000000 },
     { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', description: 'Strongest DeepSeek model.', reasoningEfforts: [{ id: 'off', name: 'Off', description: 'No extended reasoning.' }, { id: 'low', name: 'Low', description: 'Light reasoning.' }, { id: 'high', name: 'High', description: 'Thorough reasoning. Recommended.' }, { id: 'max', name: 'Max', description: 'Maximum reasoning for the hardest tasks.' }], defaultReasoningEffort: 'high', contextWindow: 1000000 },
