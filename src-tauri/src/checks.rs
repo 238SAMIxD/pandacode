@@ -52,7 +52,9 @@ pub(crate) fn turn_report(root: &Path) -> Value {
     };
     match run(root, &plan) {
         Ok(report) => report,
-        Err(error) => json!({"checked": true, "name": plan.name, "ok": false, "output": tail(&error)}),
+        // A check that cannot start (say, npm is missing) or finish in time is
+        // not the agent's doing: it is skipped, never reported as a failure.
+        Err(error) => json!({"checked": false, "reason": error}),
     }
 }
 
@@ -170,6 +172,18 @@ mod tests {
         fake(&failing, &format!("printf '%s' '{long}'\nexit 1"));
         let report = run(root, &plan).unwrap();
         assert_eq!(report["output"].as_str().unwrap().len(), TAIL_BYTES);
+    }
+
+    #[test]
+    fn a_check_that_cannot_run_is_skipped_not_failed() {
+        let temp = Scratch::new("spawn");
+        let report = turn_report(temp.path());
+        assert_eq!(report["checked"], false);
+        assert!(report["reason"].as_str().unwrap().contains("no fast check"));
+
+        let plan = Plan { name: "npm test".into(), program: "/nonexistent/pandacode-npm".into(), args: vec![] };
+        let report = run(temp.path(), &plan).unwrap_err();
+        assert!(report.contains("Could not start"), "{report}");
     }
 
     #[test]
