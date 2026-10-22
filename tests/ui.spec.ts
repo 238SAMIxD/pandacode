@@ -188,11 +188,10 @@ test('identifies sample data and renders the desktop workspace without runtime e
   await expect(page.locator('#task-heading')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Choose harness and model', exact: true })).toBeVisible();
   await expect(page.getByRole('complementary', { name: 'Projects and tasks' })).toBeVisible();
-  await expect(page.getByRole('complementary', { name: 'Project inspector' })).toBeHidden();
-  await page.locator('#inspector-toggle').click();
   await expect(page.getByRole('complementary', { name: 'Project inspector' })).toBeVisible();
   await expect(page.locator('.markdown pre code')).toContainText('createSearchIndex');
   await expect(prompt(page)).toBeEnabled();
+  await page.locator('.inspector-tabs [data-action="tab-changes"]').click();
   await expect(page.locator('.change-row')).toHaveCount(3);
   await page.screenshot({ path: '/private/tmp/pandacode-activity.png' });
   expect(errors).toEqual([]);
@@ -2503,7 +2502,7 @@ test('removes the old project inspector actions while the new task history loads
     await route.fulfill({ response, body: previewBody(body) });
   });
   await page.reload();
-  await page.locator('#inspector-toggle').click();
+  await page.locator('.inspector-tabs [data-action="tab-changes"]').click();
   await expect(page.locator('.change-row')).toHaveCount(3);
   await page.locator('[data-action="open-diff"]').first().click();
   await expect(page.locator('.diff-viewer')).toBeVisible();
@@ -2511,10 +2510,11 @@ test('removes the old project inspector actions while the new task history loads
   await chooseProjectFilter(page, 'pandacode');
   await page.waitForFunction(() => typeof (window as any).__pandacodeReleaseMessages === 'function');
   await expect(page.locator('.task-item.selected .task-title')).toHaveText('Explore the project');
-  await expect(page.locator('#inspector-content')).toContainText('Loading changes…');
+  await expect(page.locator('#inspector-content')).toContainText('Loading files…');
   await expect(page.getByRole('button', { name: 'Stage file', exact: true })).toHaveCount(0);
   await expect(page.locator('.diff-viewer,.change-row')).toHaveCount(0);
   await page.evaluate(() => { (window as any).__pandacodeReleaseMessages(); delete (window as any).__pandacodeReleaseMessages; });
+  await page.locator('.inspector-tabs [data-action="tab-changes"]').click();
   await expect(page.locator('.change-row')).toHaveCount(3);
   await expect(page.locator('#breadcrumb')).toContainText('pandacode');
 });
@@ -2976,7 +2976,6 @@ test('switches harness after the first message while preserving conversation and
 });
 
 test('browses a file and includes its contents as attached message context', async ({ page }) => {
-  await page.locator('#inspector-toggle').click();
   await page.getByRole('button', { name: 'Files', exact: true }).click();
   await page.locator('[data-action="open-file"][data-path="package.json"]').click();
   await expect(page.locator('.code-preview')).toContainText('"name": "orbit"');
@@ -2991,7 +2990,7 @@ test('browses a file and includes its contents as attached message context', asy
 });
 
 test('reviews a diff, stages changes, and commits within the sample session', async ({ page }) => {
-  await page.locator('#inspector-toggle').click();
+  await page.locator('.inspector-tabs [data-action="tab-changes"]').click();
   await expect(page.getByRole('button', { name: 'Commit', exact: true })).toBeDisabled();
   await page.locator('[data-action="open-diff"]').first().click();
   await expect(page.locator('.diff-viewer')).toContainText('renderResults');

@@ -1188,6 +1188,25 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
         .slice(0, Math.min(100, Math.max(1, Number(args.limit) || 40))) satisfies FileEntry[];
       break;
     }
+    case 'search_text': {
+      // Sample source stands in for every script; Markdown files read as the sample README.
+      const query = String(args.query ?? '');
+      let pattern: RegExp;
+      try {
+        const source = args.regex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        pattern = new RegExp(args.wholeWord ? `\\b(?:${source})\\b` : source, args.matchCase ? 'g' : 'gi');
+      } catch (error) { throw new Error(`Invalid regular expression: ${(error as Error).message}`); }
+      const files = previewWorkspaceFiles.filter(path => /\.(ts|md)$/.test(path)).map(path => {
+        const lines = (path.endsWith('.md') ? sampleReadme : sampleSource).split('\n');
+        const matches = lines.flatMap((line, index) => {
+          const text = line.trimStart(), ranges = [...text.matchAll(pattern)].filter(m => m[0]).map(m => [m.index!, m.index! + m[0].length]);
+          return ranges.length ? [{ line: index + 1, text, ranges }] : [];
+        });
+        return { path, matches };
+      }).filter(file => file.matches.length);
+      result = { files, truncated: false };
+      break;
+    }
     case 'import_prompt_image': {
       // Any picked or pasted image becomes a small PNG id; the thumbnail is a yellow swatch.
       if (!args.path && !args.dataUrl) throw new Error('Choose an image to attach.');

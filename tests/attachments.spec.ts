@@ -72,6 +72,7 @@ test('the attach menu offers files, a folder, project files and a sketch, and at
 test('project files stays reachable from the menu and opens the Files tab', async ({ page }) => {
   await probe(page);
   const filesTab = page.locator('.inspector-tabs [data-action="tab-files"]');
+  await page.locator('.inspector-tabs [data-action="tab-changes"]').click();
   await expect(filesTab).not.toHaveClass(/selected/);
   await attachButton(page).click();
   await attachMenu(page).getByRole('menuitem', { name: 'Project files', exact: true }).click();
