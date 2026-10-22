@@ -2038,6 +2038,18 @@ fn roster_only_team_lets_a_listed_lead_staff_itself() {
     assert_eq!((worker.profile_id.as_str(), worker.reasoning_effort.as_deref()), ("lead", Some("high")));
 }
 #[test]
+fn roster_only_team_keeps_lead_and_worker_efforts_apart() {
+    // Issue #34: the lead runs at its own effort while workers of the same model use the roster's.
+    let (state, sid) = roster_only_state(true);
+    state.store.lock().unwrap().db.execute("UPDATE sessions SET reasoning_effort='xhigh' WHERE id=?1", [&sid]).unwrap();
+    call(&state, &sid, "pandacode_dispatch_workers", json!({"assignments":[auto_assignment("own", json!({}))]})).unwrap();
+    let store = state.store.lock().unwrap();
+    let worker = &load(&store, &sid).unwrap().unwrap().workers[0];
+    assert_eq!(worker.reasoning_effort.as_deref(), Some("high"));
+    assert_eq!(store.session(&worker.session_id).unwrap().reasoning_effort.as_deref(), Some("high"));
+    assert_eq!(store.session(&sid).unwrap().reasoning_effort.as_deref(), Some("xhigh"));
+}
+#[test]
 fn roster_only_config_needs_an_auto_team_with_models() {
     let mut config = config();
     config.roster_only = true;

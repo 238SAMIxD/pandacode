@@ -1,15 +1,8 @@
 import { call } from './bridge';
 import { icon } from './dom';
 import { openChoiceMenu } from './choice-menu';
-import type { ModelSelection, TeamLibrary, TeamProfile, TeamSetup } from './architect-types';
-
-const modelKey = (model: ModelSelection) => [model.provider, model.model, model.reasoningEffort ?? null];
-export function sameTeamSetup(left: TeamSetup, right: TeamSetup): boolean {
-  const key = (setup: TeamSetup) => JSON.stringify([modelKey(setup.architect),
-    setup.config.workers.map(worker => [worker.id, worker.name, ...modelKey(worker)]),
-    setup.config.maxParallel, setup.config.maxRounds, setup.config.maxAssignments, setup.config.workspace, setup.config.summaryLimit]);
-  return key(left) === key(right);
-}
+import type { TeamLibrary, TeamProfile, TeamSetup } from './architect-types';
+import { sameTeamSetup } from './team-mode';
 
 /** Reusable templates stay local until the setup form applies the draft. */
 export function mountTeamProfiles(host: HTMLElement, options: {

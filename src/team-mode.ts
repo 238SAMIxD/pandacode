@@ -1,7 +1,7 @@
 /* How the Team button behaves, and named agent teams built in Settings. A named team is a
  * saved team profile whose lead may only orchestrate the models it lists (`rosterOnly`). */
 import type { ModelSelection, TeamConfig, TeamLibrary, TeamProfile, TeamSetup, WorkerProfile } from './architect-types';
-import type { ProviderId } from './types';
+import type { ProviderId, ProviderModel } from './types';
 
 const CLASSIC_KEY = 'pandacode.teamClassic';
 export const TEAM_MODE_EVENT = 'pandacode:team-mode';
@@ -17,7 +17,7 @@ export function setClassicTeamSetup(on: boolean): void {
   window.dispatchEvent(new CustomEvent(TEAM_MODE_EVENT, { detail: on }));
 }
 
-export type TeamModel = { provider: ProviderId; harness: string; model: string; name: string; reasoningEffort?: string | null };
+export type TeamModel = { provider: ProviderId; harness: string; model: string; name: string; reasoningEffort?: string | null; efforts?: ProviderModel['reasoningEfforts'] };
 export const modelKey = (model: Pick<TeamModel, 'provider' | 'model'>): string => `${model.provider}:${model.model}`;
 
 /** A roster entry ID the native validator accepts: ASCII letters, digits, `_` and `-`. */
@@ -33,11 +33,20 @@ export function namedTeamSetup(name: string, lead: TeamModel, models: readonly T
   const taken = new Set<string>();
   const workers: WorkerProfile[] = models.map(model => {
     const id = rosterId(model, taken); taken.add(id);
-    return { id, name: `${model.name} · ${model.harness}`.slice(0, 80), provider: model.provider, model: model.model, reasoningEffort: model.reasoningEffort ?? null };
+    return { id, name: `${model.name} · ${model.harness}`.slice(0, 80), provider: model.provider, model: model.model, reasoningEffort: model.reasoningEffort || null };
   });
-  const architect: ModelSelection = { provider: lead.provider, model: lead.model, reasoningEffort: lead.reasoningEffort ?? null };
-  const config: TeamConfig = { auto: true, rosterOnly: true, name: name.trim(), workers, maxParallel: limits?.maxParallel ?? 0, maxRounds: limits?.maxRounds ?? 8, maxAssignments: limits?.maxAssignments ?? 24, workspace: 'shared', summaryLimit: limits?.summaryLimit ?? 3072 };
+  const architect: ModelSelection = { provider: lead.provider, model: lead.model, reasoningEffort: lead.reasoningEffort || null };
+  const config: TeamConfig = { auto: true, rosterOnly: true, name: name.trim(), workers, maxParallel: limits?.maxParallel ?? 0, maxRounds: limits?.maxRounds ?? 8, maxAssignments: limits?.maxAssignments ?? 24, workspace: 'shared', summaryLimit: limits?.summaryLimit ?? 3072, ...(limits?.leadGuidance ? { leadGuidance: limits.leadGuidance } : {}) };
   return { architect, config };
+}
+
+/** Whether two setups are the same team, so a saved profile still describes the form. */
+const selectionKey = (model: ModelSelection) => [model.provider, model.model, model.reasoningEffort ?? null];
+export function sameTeamSetup(left: TeamSetup, right: TeamSetup): boolean {
+  const key = (setup: TeamSetup) => JSON.stringify([selectionKey(setup.architect),
+    setup.config.workers.map(worker => [worker.id, worker.name, ...selectionKey(worker)]),
+    setup.config.maxParallel, setup.config.maxRounds, setup.config.maxAssignments, setup.config.workspace, setup.config.summaryLimit, setup.config.leadGuidance?.trim() || null]);
+  return key(left) === key(right);
 }
 
 export const namedTeams = (library: TeamLibrary): TeamProfile[] => library.profiles.filter(profile => profile.setup.config.rosterOnly);

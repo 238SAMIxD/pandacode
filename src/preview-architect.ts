@@ -37,7 +37,7 @@ export function createPreviewArchitect(host: PreviewHost) {
     return Number(value);
   }
   function validateSelection(selection: ModelSelection): ModelSelection {
-    if (!selection || !['claude', 'codex', 'kimi', 'opencode', 'glm', 'antigravity', 'grok', 'mimo', 'pi', 'deepseek', 'commandcode'].includes(selection.provider) || typeof selection.model !== 'string' || selection.model.length > 200) throw new Error('Choose a valid architect harness and model.');
+    if (!selection || !['claude', 'codex', 'kimi', 'opencode', 'glm', 'antigravity', 'grok', 'mimo', 'pi', 'deepseek', 'commandcode', 'omp'].includes(selection.provider) || typeof selection.model !== 'string' || selection.model.length > 200) throw new Error('Choose a valid architect harness and model.');
     const models = host.models(selection.provider);
     const model = selection.model ? models.find(model => model.id === selection.model) : models[0];
     if (selection.reasoningEffort != null && (typeof selection.reasoningEffort !== 'string' || selection.reasoningEffort.length > 32 || model && !model.reasoningEfforts?.some(effort => effort.id === selection.reasoningEffort))) throw new Error('This architect model does not support that reasoning effort.');
@@ -63,7 +63,7 @@ export function createPreviewArchitect(host: PreviewHost) {
       if (!profile || typeof profile.id !== 'string' || !profile.id.trim() || profile.id.length > 100 || ids.has(profile.id)) throw new Error('Worker profile IDs must be unique.');
       ids.add(profile.id);
       if (typeof profile.name !== 'string' || !profile.name.trim() || profile.name.length > 80) throw new Error('Worker names must be 1–80 characters.');
-      if (!['claude', 'codex', 'kimi', 'opencode', 'glm', 'antigravity', 'grok', 'mimo', 'pi', 'deepseek', 'commandcode'].includes(profile.provider) || typeof profile.model !== 'string' || profile.model.length > 200) throw new Error('Choose a valid worker harness and model.');
+      if (!['claude', 'codex', 'kimi', 'opencode', 'glm', 'antigravity', 'grok', 'mimo', 'pi', 'deepseek', 'commandcode', 'omp'].includes(profile.provider) || typeof profile.model !== 'string' || profile.model.length > 200) throw new Error('Choose a valid worker harness and model.');
       const models = host.models(profile.provider);
       const model = profile.model ? models.find(model => model.id === profile.model) : models[0];
       if (profile.reasoningEffort != null && (typeof profile.reasoningEffort !== 'string' || profile.reasoningEffort.length > 32 || model && !model.reasoningEfforts?.some(effort => effort.id === profile.reasoningEffort))) throw new Error('This worker model does not support that reasoning effort.');
@@ -73,7 +73,8 @@ export function createPreviewArchitect(host: PreviewHost) {
     if (config.rosterOnly && (!config.auto || !workers.length)) throw new Error('A named agent team needs at least one model.');
     if (config.name != null && (typeof config.name !== 'string' || !config.name.trim() || config.name.length > 80)) throw new Error('Team names must be 1–80 characters.');
     const guidance = typeof config.leadGuidance === 'string' ? config.leadGuidance.trim() : '';
-    if (guidance.length > 2000) throw new Error('Lead guidance must be under 2000 characters.');
+    // Native counts UTF-8 bytes, so multibyte text reaches the limit sooner than its length.
+    if (new TextEncoder().encode(guidance).length > 2000) throw new Error('Lead guidance must be under 2000 bytes.');
     return { ...(config.auto ? { auto: true } : {}), ...(config.rosterOnly ? { rosterOnly: true } : {}), ...(config.name != null ? { name: config.name } : {}), ...(guidance ? { leadGuidance: guidance } : {}), workers, maxParallel: integer(config.maxParallel, 0, Number.MAX_SAFE_INTEGER, 'Parallel workers'), maxRounds: integer(config.maxRounds, 1, 20, 'Review rounds'), maxAssignments: integer(config.maxAssignments, 1, 50, 'Assignments'), workspace: 'shared', summaryLimit: integer(config.summaryLimit, 512, 6000, 'Summary limit') };
   }
   try {

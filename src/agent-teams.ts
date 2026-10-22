@@ -23,6 +23,7 @@ export function mountAgentTeams(host: HTMLElement, options: AgentTeamsOptions): 
       <label class="agent-team-field"><span>Team name</span><input type="text" maxlength="80" autocomplete="off" spellcheck="false" aria-label="Team name" placeholder="Reviewers"></label>
       <input type="search" class="agent-team-filter" aria-label="Filter models" placeholder="Filter models…" autocomplete="off" spellcheck="false">
       <div class="agent-team-models" role="group" aria-label="Team models"><p class="agent-team-loading" role="status">Loading models…</p></div>
+      <label class="agent-team-field" hidden><span>Lead effort</span><select class="agent-team-lead-effort" aria-label="Lead effort"></select></label>
       <div class="agent-team-actions"><span class="agent-team-count" aria-live="polite"></span><button type="button" class="secondary-button agent-team-cancel">Cancel</button><button type="submit" class="primary-button">Save team</button></div>
     </form>
     <p class="agent-team-error" role="alert" hidden></p>
@@ -35,9 +36,10 @@ export function mountAgentTeams(host: HTMLElement, options: AgentTeamsOptions): 
   const filter = editor.querySelector<HTMLInputElement>('.agent-team-filter')!;
   const models = editor.querySelector<HTMLElement>('.agent-team-models')!;
   const count = editor.querySelector<HTMLElement>('.agent-team-count')!;
+  const leadEffort = editor.querySelector<HTMLSelectElement>('.agent-team-lead-effort')!;
   const error = host.querySelector<HTMLElement>('.agent-team-error')!;
   const harnessName = (id: ProviderId) => options.providers.find(provider => provider.id === id)?.name ?? id;
-  let library: TeamLibrary | null = null, editing: TeamProfile | null = null, catalog: TeamModel[] = [], shown: TeamModel[] = [], disposed = false, busy = false;
+  let library: TeamLibrary | null = null, editing: TeamProfile | null = null, leadSelected = '', catalog: TeamModel[] = [], shown: TeamModel[] = [], disposed = false, busy = false;
 
   const showError = (cause: unknown) => { error.textContent = cause instanceof Error ? cause.message : String(cause); error.hidden = false; };
   function renderList(): void {
@@ -57,22 +59,27 @@ export function mountAgentTeams(host: HTMLElement, options: AgentTeamsOptions): 
     return installed.flatMap((provider, index) => {
       const result = loaded[index];
       return modelChoices(provider.id, result.status === 'fulfilled' ? result.value : provider.models)
-        .map(model => ({ provider: provider.id, harness: provider.name, model: model.id, name: model.name }));
+        .map(model => ({ provider: provider.id, harness: provider.name, model: model.id, name: model.name, efforts: model.reasoningEfforts }));
     });
   }
+  /** Effort choices for a model that advertises them; empty means the harness default. */
+  const effortOptions = (model: TeamModel | undefined, current?: string | null) => `<option value="">Default effort</option>${(model?.efforts ?? []).map(effort => `<option value="${escape(effort.id)}" ${effort.id === current ? 'selected' : ''}>${escape(effort.name)}</option>`).join('')}`;
   const checked = () => [...models.querySelectorAll<HTMLInputElement>('input[type=checkbox]:checked')];
   function renderModels(chosen: ReadonlySet<string>, lead: string): void {
     const saved = editing?.setup.config.workers ?? [];
     const extra = saved.filter(worker => !catalog.some(model => modelKey(model) === modelKey(worker)))
       .map(worker => ({ provider: worker.provider, harness: harnessName(worker.provider), model: worker.model, name: worker.name.split(' · ')[0], reasoningEffort: worker.reasoningEffort }));
-    const all = [...catalog, ...extra];
+    const all: TeamModel[] = [...catalog, ...extra];
     if (!all.length) { models.innerHTML = '<p class="agent-team-loading">No installed agents report models yet.</p>'; return; }
     const groups = [...new Set(all.map(model => model.provider))];
     models.innerHTML = groups.map(provider => `<section aria-label="${escape(harnessName(provider))}"><h4>${providerLogo(provider)}${escape(harnessName(provider))}</h4>${all.filter(model => model.provider === provider).map(model => {
       const key = modelKey(model), label = `${model.name} · ${model.harness}`;
-      return `<div class="agent-team-model" data-key="${escape(key)}" data-search="${escape(`${label} ${model.model}`.toLowerCase())}"><label><input type="checkbox" value="${escape(key)}" aria-label="Include ${escape(label)}" ${chosen.has(key) ? 'checked' : ''}><span>${escape(model.name)}</span></label><label class="agent-team-lead"><input type="radio" name="agent-team-lead" value="${escape(key)}" aria-label="${escape(label)} leads" ${key === lead ? 'checked' : ''}><span>Lead</span></label></div>`;
+      const effort = model.efforts?.length ? `<select class="agent-team-effort" aria-label="Worker effort for ${escape(label)}">${effortOptions(model, saved.find(worker => modelKey(worker) === key)?.reasoningEffort)}</select>` : '';
+      return `<div class="agent-team-model" data-key="${escape(key)}" data-search="${escape(`${label} ${model.model}`.toLowerCase())}"><label><input type="checkbox" value="${escape(key)}" aria-label="Include ${escape(label)}" ${chosen.has(key) ? 'checked' : ''}><span>${escape(model.name)}</span></label><label class="agent-team-lead"><input type="radio" name="agent-team-lead" value="${escape(key)}" aria-label="${escape(label)} leads" ${key === lead ? 'checked' : ''}><span>Lead</span></label>${effort}</div>`;
     }).join('')}</section>`).join('');
     shown = all;
+    leadSelected = lead;
+    leadEffort.innerHTML = effortOptions(all.find(model => modelKey(model) === lead), editing?.setup.architect.reasoningEffort);
     sync();
   }
   /** Only included models can lead; the first one leads until another is chosen. */
@@ -82,8 +89,14 @@ export function mountAgentTeams(host: HTMLElement, options: AgentTeamsOptions): 
       const box = row.querySelector<HTMLInputElement>('input[type=checkbox]')!, radio = row.querySelector<HTMLInputElement>('input[type=radio]')!;
       radio.disabled = !box.checked; if (!box.checked) radio.checked = false;
       box.disabled = !box.checked && included.length >= TEAM_MODELS_MAX;
+      const effort = row.querySelector<HTMLSelectElement>('.agent-team-effort'); if (effort) effort.disabled = !box.checked;
     });
     if (included.length && !models.querySelector('input[type=radio]:checked')) models.querySelector<HTMLInputElement>(`input[type=radio][value="${CSS.escape(included[0].value)}"]`)!.checked = true;
+    // The lead's effort applies to the lead only; its worker entry keeps the row's effort.
+    const lead = models.querySelector<HTMLInputElement>('input[type=radio]:checked')?.value ?? '';
+    const leadModel = shown.find(model => modelKey(model) === lead);
+    if (lead !== leadSelected) { leadEffort.innerHTML = effortOptions(leadModel); leadSelected = lead; }
+    leadEffort.parentElement!.hidden = !leadModel?.efforts?.length;
     count.textContent = included.length ? `${included.length} model${included.length === 1 ? '' : 's'}` : 'Choose models';
   }
   function applyFilter(): void {
@@ -109,9 +122,15 @@ export function mountAgentTeams(host: HTMLElement, options: AgentTeamsOptions): 
     event.preventDefault();
     if (busy) return;
     const teamName = name.value.trim();
-    const included = checked().map(box => shown.find(model => modelKey(model) === box.value)!).filter(Boolean);
+    const included = checked().map((box): TeamModel | undefined => {
+      const model = shown.find(model => modelKey(model) === box.value);
+      const effort = box.closest('.agent-team-model')?.querySelector<HTMLSelectElement>('.agent-team-effort');
+      return model && { ...model, reasoningEffort: effort ? effort.value || null : model.reasoningEffort ?? null };
+    }).filter((model): model is TeamModel => Boolean(model));
     const leadKey = models.querySelector<HTMLInputElement>('input[type=radio]:checked')?.value;
-    const lead = included.find(model => modelKey(model) === leadKey);
+    const leadModel = included.find(model => modelKey(model) === leadKey);
+    const lead = leadModel && { ...leadModel, reasoningEffort: leadModel.efforts?.length ? leadEffort.value || null
+      : editing && modelKey(editing.setup.architect) === leadKey ? editing.setup.architect.reasoningEffort ?? null : null };
     if (!teamName) { showError(new Error('Give this team a name.')); name.focus(); return; }
     if (!included.length || !lead) { showError(new Error('Choose at least one model for this team.')); return; }
     busy = true; error.hidden = true;

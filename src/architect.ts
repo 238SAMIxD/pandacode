@@ -237,6 +237,7 @@ export function mountArchitectSetup(host: HTMLElement, options: SetupOptions): S
     for (const name of ['maxRounds', 'maxAssignments', 'summaryLimit'] as const) config[name] = Number((form.elements.namedItem(name) as HTMLInputElement).value);
     config.leadGuidance = guidanceField.value.trim() || null;
     if (!disable && !unlimited.checked && (!Number.isSafeInteger(config.maxParallel) || config.maxParallel < 1)) { error.textContent = 'Choose a whole worker count or Unlimited.'; error.hidden = false; return; }
+    if (!disable && new TextEncoder().encode(config.leadGuidance ?? '').length > 2000) { error.textContent = 'Lead guidance must be under 2000 bytes.'; error.hidden = false; guidanceField.focus(); return; }
     if (!disable && config.workers.some(p => !p.name.trim())) { error.textContent = 'Give each worker profile a name.'; error.hidden = false; return; }
     const profileId = disable ? null : savedProfiles.selectedId();
     setBusy(true);
