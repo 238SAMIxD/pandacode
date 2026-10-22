@@ -1761,7 +1761,7 @@ mod tests {
     }
     #[test]
     fn glm_explicit_model_remains_a_cli_override_and_default_is_real_glm() {
-        for model in ["default", "glm-5.1"] {
+        for model in ["default", "glm-5.3-flash"] {
             let mut cfg = config("glm");
             cfg.model = model.into();
             let mut command = Command::new("claude");
@@ -1774,7 +1774,7 @@ mod tests {
             let index = args.iter().position(|arg| arg == "--model").unwrap();
             assert_eq!(
                 args[index + 1],
-                if model == "default" { "glm-4.7" } else { model }
+                if model == "default" { "glm-5.3" } else { model }
             );
         }
     }

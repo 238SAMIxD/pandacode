@@ -359,7 +359,7 @@ test('launcher model picker fits the minimum window and Escape only closes the p
   expect(rect!.x + rect!.width).toBeLessThanOrEqual(490);
   expect(rect!.y + rect!.height).toBeLessThanOrEqual(410);
   await page.getByRole('searchbox',{name:'Search harnesses and models'}).fill('GLM Coding Plan');
-  const glm = page.locator('.model-menu-option[data-provider="glm"][data-model="glm-4.7"]');
+  const glm = page.locator('.model-menu-option[data-provider="glm"][data-model="glm-5.3"]');
   await expect(glm).toBeInViewport();
   await expect(glm.locator('.provider-logo')).toHaveCount(1);
   await expect(picker).toHaveAttribute('data-popover-state','open');

@@ -376,8 +376,12 @@ non-read actions; Full access allows actions. The selected built-in `build` or
 OpenCode configuration files are rewritten.
 
 GLM uses Claude Code's existing bidirectional streaming protocol with Z.AI's
-`https://api.z.ai/api/anthropic` endpoint. Its default is `glm-4.7`; the other
-choices are documented Coding Plan model IDs, not fictional Claude aliases. Model
+`https://api.z.ai/api/anthropic` endpoint. Its default is `glm-5.3`; the other
+choices are documented Coding Plan model IDs, not fictional Claude aliases.
+Legacy Coding Plan IDs (`glm-5.2`, `glm-5.1`, `glm-4.7`) are routed server-side
+to current models, so the picker lists the current lineup — `glm-5.3`,
+`glm-5.3-flash`, their `[1m]` variants, and the still-advertised
+`glm-5-turbo`. Model
 availability depends on the user's Z.AI plan; custom IDs remain available. Claude's
 normal model catalog cannot advertise Z.AI plan entitlements, so this picker uses
 the published Coding Plan list and does not claim measured context/effort metadata.

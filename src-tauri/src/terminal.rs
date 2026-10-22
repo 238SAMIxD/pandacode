@@ -402,7 +402,7 @@ fn harness_arguments(context: &HarnessContext<'_>) -> Result<Vec<String>, String
         }
         args.extend(["--model".into(), model.into()]);
     } else if provider == "glm" {
-        args.extend(["--model".into(), "glm-4.7".into()]);
+        args.extend(["--model".into(), "glm-5.3".into()]);
     } else if provider == "mimo" {
         args.extend(["--model".into(), "mimo-v2.6-pro".into()]);
     }
