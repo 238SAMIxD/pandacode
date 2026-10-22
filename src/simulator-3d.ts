@@ -47,6 +47,9 @@ const LONG_PRESS = 450;
 const FRONT = new THREE.Euler(0, 0, 0);
 const INTRO = new THREE.Euler(0.12, -0.55, 0.02);
 const FOLD_MS = 800;
+/** The spinner turns in twelve steps a second and is painted at a quarter of the display's
+ * texture size: repainting the full 2× texture every frame stalled the whole window. */
+const SPIN_STEPS = 12, SPIN_SCALE = 0.5, FRAME_SCALE = 2;
 // ponytail: unverified on Xcode 27.1 — a portrait inner screenshot is turned a quarter turn
 // counterclockwise (its top to the display's left); calibrate against a live Duo.
 const INNER_FRAME_TURN = -Math.PI / 2;
@@ -214,12 +217,13 @@ export function mountDevice3D(host: HTMLElement, options: Options): Device3D {
 
   /* Rendering runs only while visible and stops when nothing moves. */
   let frame = 0, dirty = true, active = false, turning: { from: THREE.Quaternion; to: THREE.Quaternion; start: number; duration: number } | undefined;
-  let touchFade = 0, loading = false;
+  let touchFade = 0, loading = false, spinStep = -1;
   const tick = (now: number) => {
     frame = 0;
     if (!active) return;
     let moving = controls.update();
-    if (loading) { paintSpinner(now); moving = true; }
+    const step = Math.floor((now / 1000) * SPIN_STEPS);
+    if (loading && step !== spinStep) { spinStep = step; paintSpinner(step); dirty = true; }
     if (folding) {
       const t = Math.min(1, (now - folding.start) / FOLD_MS), eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
       fold = THREE.MathUtils.lerp(folding.from, folding.to, eased);
@@ -235,7 +239,8 @@ export function mountDevice3D(host: HTMLElement, options: Options): Device3D {
     }
     if (touchFade && touchMaterial.opacity > 0) { touchMaterial.opacity = Math.max(0, touchMaterial.opacity - 0.06); moving = true; }
     if (moving || dirty) { renderer.render(scene, camera); dirty = false; }
-    frame = requestAnimationFrame(tick);
+    // Idle, nothing is drawn or scheduled; `wake` starts the loop again.
+    if (moving || loading) frame = requestAnimationFrame(tick);
   };
   const wake = () => { dirty = true; if (active && !frame) frame = requestAnimationFrame(tick); };
   controls.addEventListener('change', wake);
@@ -349,16 +354,16 @@ export function mountDevice3D(host: HTMLElement, options: Options): Device3D {
   resize.observe(host);
 
   /** The display texture stays at 2× points; resizing a live texture's canvas leaves the GPU copy at its old size. */
-  function sizeDisplay(display: CanvasDisplay, size: { width: number; height: number }): void {
-    const width = Math.round(size.width * 2), height = Math.round(size.height * 2);
+  function sizeDisplay(display: CanvasDisplay, size: { width: number; height: number }, scale = FRAME_SCALE): void {
+    const width = Math.round(size.width * scale), height = Math.round(size.height * scale);
     if (display.pixels.width === width && display.pixels.height === height) return;
     display.pixels.width = width; display.pixels.height = height;
     display.texture.dispose();
   }
   /** The canvas of the display facing the user, at its size. */
-  function activeDisplay(): CanvasDisplay {
+  function activeDisplay(scale = FRAME_SCALE): CanvasDisplay {
     const display = duo && pose !== 'closed' ? inside : main;
-    sizeDisplay(display, displayPoints());
+    sizeDisplay(display, displayPoints(), scale);
     return display;
   }
   function setMessage(text: string): void {
@@ -373,9 +378,9 @@ export function mountDevice3D(host: HTMLElement, options: Options): Device3D {
     texture.needsUpdate = true; wake();
   }
   /** A looping status spinner: twelve spokes, the brightest one turning once a second. */
-  function paintSpinner(now: number): void {
-    const { pixels, paint, texture } = activeDisplay();
-    const cx = pixels.width / 2, cy = pixels.height / 2, radius = Math.min(pixels.width, pixels.height) / 18, lead = Math.floor((now / 1000) * 12) % 12;
+  function paintSpinner(step: number): void {
+    const { pixels, paint, texture } = activeDisplay(SPIN_SCALE);
+    const cx = pixels.width / 2, cy = pixels.height / 2, radius = Math.min(pixels.width, pixels.height) / 18, lead = step % SPIN_STEPS;
     paint.fillStyle = '#000'; paint.fillRect(0, 0, pixels.width, pixels.height);
     paint.lineWidth = radius / 4; paint.lineCap = 'round';
     for (let i = 0; i < 12; i++) {
@@ -417,7 +422,7 @@ export function mountDevice3D(host: HTMLElement, options: Options): Device3D {
       texture.needsUpdate = true; wake();
     },
     setMessage,
-    setLoading(next) { loading = next; if (next) paintSpinner(performance.now()); wake(); },
+    setLoading(next) { loading = next; spinStep = -1; wake(); },
     setDark() { wake(); },
     setFinish(next) { finish = next; build(); wake(); },
     resetView,

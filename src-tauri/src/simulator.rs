@@ -111,6 +111,9 @@ pub struct Simulators {
     /// Each Duo's displays from `devicectl`, briefly cached: frames ask for them constantly.
     duo_displays: Mutex<HashMap<String, (Instant, Vec<duo::Display>)>>,
     duo_support: Mutex<Option<(Instant, bool)>>,
+    /// Folds run one at a time, newest first; status, frames and input never wait on it.
+    // ponytail: one queue for every Duo; per-device queues if several Duos fold at once.
+    folds: duo::LatestWins,
     pub streams: stream::Streams,
 }
 
@@ -329,15 +332,14 @@ impl Simulators {
         if self.recorded(udid).is_none() {
             return Vec::new();
         }
-        let Ok(mut cache) = self.duo_displays.lock() else { return Vec::new() };
-        match cache.get(udid) {
-            Some((at, list)) if at.elapsed() < Duration::from_secs(1) => list.clone(),
-            _ => {
-                let list = duo::displays(udid).unwrap_or_default();
-                cache.insert(udid.to_string(), (Instant::now(), list.clone()));
-                list
-            }
+        let cached = self.duo_displays.lock().ok().and_then(|cache| cache.get(udid).filter(|(at, _)| at.elapsed() < Duration::from_secs(1)).map(|(_, list)| list.clone()));
+        if let Some(list) = cached {
+            return list;
         }
+        // Asked without the lock held, so status, frames and input never queue behind `devicectl`.
+        let list = duo::displays(udid).unwrap_or_default();
+        if let Ok(mut cache) = self.duo_displays.lock() { cache.insert(udid.to_string(), (Instant::now(), list.clone())); }
+        list
     }
     /// The pose: the active display wins over the recorded pose, which only tells Book from Open.
     pub fn pose(&self, udid: &str) -> duo::Pose {
@@ -360,14 +362,21 @@ impl Simulators {
         })
     }
     /// Move the hinge to the pose, remember it and start the new display's stream at once,
-    /// so its first frame is being captured while the window hears back.
+    /// so its first frame is being captured while the window hears back. Folds queue and
+    /// only the newest waiting one runs; an overtaken fold returns at once.
     pub fn fold(&self, udid: &str, pose: duo::Pose) -> Result<(), String> {
-        let displays = duo::fold(udid, self.pose(udid), pose)?;
-        self.poses.lock().map_err(|e| e.to_string())?.insert(udid.to_string(), pose);
-        self.duo_displays.lock().map_err(|e| e.to_string())?.insert(udid.to_string(), (Instant::now(), displays));
-        self.streams.stop(udid);
-        self.streams.start(udid, Some(duo::display_for(pose)));
-        Ok(())
+        self.folds
+            .run(|overtaken| {
+                // The device's pose, not the record: a sweep from where the hinge is not does not move it.
+                let displays = duo::fold(udid, self.pose(udid), pose, overtaken)?;
+                self.poses.lock().map_err(|e| e.to_string())?.insert(udid.to_string(), pose);
+                let Some(displays) = displays else { return Ok(()) };
+                self.duo_displays.lock().map_err(|e| e.to_string())?.insert(udid.to_string(), (Instant::now(), displays));
+                self.streams.stop(udid);
+                self.streams.start(udid, Some(duo::display_for(pose)));
+                Ok(())
+            })
+            .unwrap_or(Ok(()))
     }
     /// Forget a device's cached screen, e.g. after it boots or shuts down.
     pub fn forget_screen(&self, udid: &str) {
@@ -549,7 +558,12 @@ fn ui_tree(udid: &str, duo: &[duo::Display]) -> Result<serde_json::Value, String
     let Some(shown) = duo::active(duo) else { return Ok(tree) };
     let hidden = duo.iter().find(|d| !d.active).map_or(shown.native, |d| d.native);
     let (rotation, native) = (shown.rotation, shown.native);
-    Ok(tree::for_display(&tree, shown.native, hidden, shown.ui(), &|rect| duo::rect_to_ui(rotation, native, rect)))
+    let tree = tree::for_display(&tree, shown.native, hidden, shown.ui(), &|rect| duo::rect_to_ui(rotation, native, rect));
+    if !shown.inner {
+        return Ok(tree);
+    }
+    // Read right after AXe, which turns accessibility on for the helper's hit tests.
+    Ok(tree::with_frames(&tree, &duo::elements(udid, shown)?))
 }
 /// The accessibility tree as compact lines, or the element at one point.
 pub fn describe(udid: &str, at: Option<(f64, f64)>, duo: &[duo::Display]) -> Result<String, String> {

@@ -1,6 +1,7 @@
 // Vendored from duoctl by Karolina Samorek (https://github.com/skarol/duoctl),
 // skills/duoctl/scripts/duoctl-helper.m, unchanged below this notice except for
-// one PandaCode addition: `home` (consumer Menu key) — not part of duoctl.
+// two PandaCode additions: `home` (consumer Menu key) and `elements` (accessibility
+// elements of one display) — not part of duoctl.
 //
 // MIT License
 //
@@ -304,6 +305,73 @@ static int pressHome(void) {
     return 0;
 }
 
+// PandaCode addition: labeled accessibility elements on one display as JSON
+// [{"label", "frame": [x, y, w, h], "ui": bool}]. AXe's frames for SpringBoard's icon
+// list on the inner display come in the list's own space, so the elements are read here
+// in VoiceOver order, and a frame is kept only when hit-testing its center finds the
+// element again. SpringBoard frames are in the panel's native points (`width`×`height`),
+// app frames in interface points (`ui`), turned by `rotation`; hit tests take native
+// points. Needs accessibility on (AXe turns it on).
+static id axHit(Class element, double x, double y, unsigned display) {
+    return ((id (*)(id, SEL, CGPoint, unsigned))objc_msgSend)(element, @selector(uiElementAtCoordinate:displayId:), (CGPoint){x, y}, display);
+}
+static NSString *axString(id element, long attribute) {
+    return ((id (*)(id, SEL, long))objc_msgSend)(element, @selector(stringWithAXAttribute:), attribute);
+}
+static CGPoint uiToNative(CGPoint p, int rotation, double width, double height) {
+    switch (rotation) {
+        case 90: return (CGPoint){p.y, height - p.x};
+        case 180: return (CGPoint){width - p.x, height - p.y};
+        case 270: return (CGPoint){width - p.y, p.x};
+        default: return p;
+    }
+}
+static int listElements(unsigned display, double width, double height, int rotation) {
+    enum { kLabel = 2001, kFrame = 2003, kLimit = 400 };
+    if (!dlopen("/System/Library/PrivateFrameworks/AXRuntime.framework/AXRuntime", RTLD_NOW)) return 1;
+    Class element = NSClassFromString(@"AXUIElement");
+    if (!element) return 1;
+    // Navigation from one element can stay inside its container, so every hit on a grid
+    // seeds it and the orders are joined.
+    NSMutableOrderedSet *all = [NSMutableOrderedSet orderedSet];
+    // Cell centers, so a dock along an edge is hit too.
+    for (int i = 0; i < 16; i++) {
+        for (int j = 0; j < 16; j++) {
+            id seed = axHit(element, width * (i + 0.5) / 16, height * (j + 0.5) / 16, display);
+            if (!seed || [all containsObject:seed]) continue;
+            NSArray *before = ((id (*)(id, SEL, unsigned long))objc_msgSend)(seed, @selector(previousElementsWithCount:), kLimit);
+            NSArray *after = ((id (*)(id, SEL, unsigned long))objc_msgSend)(seed, @selector(nextElementsWithCount:), kLimit);
+            [all addObjectsFromArray:before.reverseObjectEnumerator.allObjects];
+            [all addObject:seed];
+            [all addObjectsFromArray:after];
+        }
+    }
+    NSMutableArray *found = [NSMutableArray array];
+    for (id item in all) {
+        NSString *label = axString(item, kLabel);
+        CGRect frame = ((CGRect (*)(id, SEL, long))objc_msgSend)(item, @selector(rectWithAXAttribute:), kFrame);
+        if (label.length == 0 || frame.size.width <= 0 || frame.size.height <= 0) continue;
+        // The center and two quarter points: a frame given relative to its container can
+        // still have its center fall inside the element.
+        double probes[3] = {0.5, 0.25, 0.75};
+        for (int ui = 0; ui < 2; ui++) {
+            BOOL same = YES;
+            for (int k = 0; k < 3 && same; k++) {
+                CGPoint at = {frame.origin.x + frame.size.width * probes[k], frame.origin.y + frame.size.height * probes[k]};
+                if (ui) at = uiToNative(at, rotation, width, height);
+                id again = axHit(element, at.x, at.y, display);
+                same = again && ([again isEqual:item] || [axString(again, kLabel) isEqualToString:label]);
+            }
+            if (!same) continue;
+            [found addObject:@{ @"label": label, @"frame": @[ @(frame.origin.x), @(frame.origin.y), @(frame.size.width), @(frame.size.height) ], @"ui": ui ? @YES : @NO }];
+            break;
+        }
+    }
+    NSData *json = [NSJSONSerialization dataWithJSONObject:found options:0 error:nil];
+    fwrite(json.bytes, 1, json.length, stdout);
+    return 0;
+}
+
 static int usage(void) {
     fprintf(stderr,
             "usage: duoctl-helper hinge <degrees>\n"
@@ -312,7 +380,8 @@ static int usage(void) {
             "       duoctl-helper tap <displayUUID> <nx> <ny> [hold-seconds]\n"
             "       duoctl-helper swipe <displayUUID> <nx1> <ny1> <nx2> <ny2> [seconds]\n"
             "       duoctl-helper touchscreens\n"
-            "       duoctl-helper home\n");
+            "       duoctl-helper home\n"
+            "       duoctl-helper elements <displayId> <width> <height> <rotation>\n");
     return 64;
 }
 
@@ -344,6 +413,9 @@ int main(int argc, char **argv) {
                          argc == 8 ? fmax(atof(argv[7]), 0.05) : 0.3);
         }
         if ([command isEqualToString:@"home"] && argc == 2) return pressHome(); // PandaCode addition
+        if ([command isEqualToString:@"elements"] && argc == 6) { // PandaCode addition
+            return listElements((unsigned)atoi(argv[2]), atof(argv[3]), atof(argv[4]), atoi(argv[5]));
+        }
         if ([command isEqualToString:@"touchscreens"] && argc == 2) {
             for (NSDictionary *props in touchscreens()) {
                 printf("%s %s\n", [props[@"displayUUID"] UTF8String], [props[@"Product"] UTF8String]);

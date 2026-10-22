@@ -256,9 +256,8 @@ test('iPhone Duo folds on click and shows a spinner until the new display answer
   await page.getByRole('menuitemradio', { name: /Open/ }).click();
   await expect(pose).toHaveAccessibleName('iPhone Duo pose: Open', { timeout: 200 });
   await expect(screen).toHaveAttribute('aria-busy', 'true');
-  await expect(pose).toBeDisabled();
-  await page.evaluate(() => { const w = window as any; w.__simPoseHold = null; w.__simPoseRelease(); });
   await expect(pose).toBeEnabled();
+  await page.evaluate(() => { const w = window as any; w.__simPoseHold = null; w.__simPoseRelease(); });
   await page.waitForTimeout(300);
   await expect(screen).toHaveAttribute('aria-busy', 'true');
   await page.evaluate(() => { const w = window as any; w.__simFrameHold = null; w.__simFrameRelease(); });
@@ -266,13 +265,44 @@ test('iPhone Duo folds on click and shows a spinner until the new display answer
   expect((await calls(page, 'simulator_pose')).at(-1).args.pose).toBe('open');
 
   // A fold that fails moves back and says why.
-  await page.evaluate(() => { (window as any).__simPoseFail = 'The hinge is stuck.'; });
+  // Held, so the hinge is seen moving before the failure comes back.
+  await page.evaluate(() => { const w = window as any; w.__simPoseFail = 'The hinge is stuck.'; w.__simPoseHold = new Promise(resolve => { w.__simPoseRelease = resolve; }); });
   await pose.click();
   await page.getByRole('menuitemradio', { name: /Closed/ }).click();
   await expect(pose).toHaveAccessibleName('iPhone Duo pose: Closed', { timeout: 200 });
+  await page.evaluate(() => { const w = window as any; w.__simPoseHold = null; w.__simPoseRelease(); });
   await expect(page.locator('#toast')).toContainText('The hinge is stuck.');
   await expect(pose).toHaveAccessibleName('iPhone Duo pose: Open');
   await expect(screen).not.toHaveAttribute('aria-busy');
+});
+
+test('rapid pose changes keep the window responsive and end in the last pose', async ({ page }) => {
+  await open(page);
+  await showSimulator(page);
+  const panel = page.locator('#simulator-panel');
+  const pose = panel.locator('[data-sim="pose"]');
+  await panel.getByRole('button', { name: 'Choose simulator' }).click();
+  await page.getByRole('menuitemradio', { name: /Add iPhone Duo/ }).click();
+  await panel.getByRole('button', { name: 'Boot simulator' }).click();
+  await expect(pose).toHaveAccessibleName('iPhone Duo pose: Closed');
+  // The first fold hangs natively while four more clicks arrive.
+  await page.evaluate(() => { const w = window as any; w.__simPoseHold = new Promise(resolve => { w.__simPoseRelease = resolve; }); });
+  for (const name of ['Open', 'Book', 'Closed', 'Open', 'Book']) {
+    await pose.click();
+    await page.getByRole('menuitemradio', { name: new RegExp(name) }).click();
+    await expect(pose).toHaveAccessibleName(`iPhone Duo pose: ${name}`, { timeout: 200 });
+  }
+  // The main thread stays free: timers keep their schedule while the folds wait.
+  const lag = await page.evaluate(() => new Promise<number>(resolve => {
+    let worst = 0, last = performance.now(), ticks = 0;
+    const timer = setInterval(() => { const now = performance.now(); worst = Math.max(worst, now - last - 20); last = now; if (++ticks === 25) { clearInterval(timer); resolve(worst); } }, 20);
+  }));
+  expect(lag).toBeLessThan(150);
+  await page.evaluate(() => { const w = window as any; w.__simPoseHold = null; w.__simPoseRelease(); });
+  // Only the fold in flight and the newest one reach the simulator.
+  await expect.poll(async () => (await calls(page, 'simulator_pose')).map(entry => entry.args.pose)).toEqual(['open', 'book']);
+  await expect(pose).toHaveAccessibleName('iPhone Duo pose: Book');
+  await expect(panel.locator('.sim-stage')).not.toHaveAttribute('aria-busy');
 });
 
 test('iPhone Duo follows a pose changed outside PandaCode', async ({ page }) => {
@@ -309,6 +339,8 @@ test('Add iPhone Duo is disabled without Xcode 27.1', async ({ page }) => {
   });
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/');
+  // Startup restores the inspector; toggling it before then would close it again.
+  await expect(page.locator('.task-item.selected')).toBeVisible();
   await showSimulator(page);
   await page.locator('#simulator-panel').getByRole('button', { name: 'Choose simulator' }).click();
   const add = page.getByRole('menuitemradio', { name: /Add iPhone Duo/ });

@@ -100,6 +100,35 @@ pub fn for_display(tree: &Value, shown: (f64, f64), hidden: (f64, f64), ui: (f64
     serde_json::json!([{"type": "Application", "AXLabel": label, "frame": {"x": 0, "y": 0, "width": ui.0, "height": ui.1}, "children": children}])
 }
 
+/// A copy of `tree` where an element gets the frame `found` holds for its label, when
+/// that label names exactly one element on each side; labels the tree lacks are added
+/// to its root as plain elements.
+pub fn with_frames(tree: &Value, found: &[(String, [f64; 4])]) -> Value {
+    let labeled = sorted_targets(tree);
+    let once = |label: &str| found.iter().filter(|(l, _)| l == label).count() == 1 && labeled.iter().filter(|(n, ..)| field(n, "AXLabel") == Some(label)).count() == 1;
+    let fixes: Vec<_> = found.iter().filter(|(label, _)| once(label)).collect();
+    fn walk(node: &Value, fixes: &[&(String, [f64; 4])]) -> Value {
+        if let Some(items) = node.as_array() {
+            return items.iter().map(|item| walk(item, fixes)).collect();
+        }
+        let mut copy = node.clone();
+        if let Some((_, [x, y, width, height])) = field(node, "AXLabel").and_then(|label| fixes.iter().find(|(l, _)| l == label)) {
+            copy["frame"] = serde_json::json!({"x": x, "y": y, "width": width, "height": height});
+        }
+        if let Some(children) = node["children"].as_array() {
+            copy["children"] = children.iter().map(|c| walk(c, fixes)).collect();
+        }
+        copy
+    }
+    let mut fixed = walk(tree, &fixes);
+    let missing = found.iter().filter(|(label, _)| !labeled.iter().any(|(n, ..)| field(n, "AXLabel") == Some(label)));
+    let added: Vec<Value> = missing.map(|(label, [x, y, width, height])| serde_json::json!({"type": "Element", "AXLabel": label, "frame": {"x": x, "y": y, "width": width, "height": height}})).collect();
+    if let Some(children) = fixed.get_mut(0).and_then(|root| root.get_mut("children")).and_then(Value::as_array_mut) {
+        children.extend(added);
+    }
+    fixed
+}
+
 /// Labeled elements, smallest first, as (node, center).
 fn targets(node: &Value, found: &mut Vec<(Value, (f64, f64), f64)>) {
     if let Some(items) = node.as_array() {
@@ -184,5 +213,33 @@ mod tests {
         // An app window already in interface points is kept.
         let app = serde_json::json!([{"type":"Application","AXLabel":"Settings","frame":{"x":0,"y":0,"width":669,"height":951},"children":[group(951.0, 669.0, "General", 20.0, 254.0)]}]);
         assert!(summarize(&for_display(&app, (669.0, 951.0), (466.0, 678.0), (951.0, 669.0), &turn)).contains("Button \"General\" center=(63,288)"));
+    }
+
+    #[test]
+    fn inner_icons_take_the_frames_read_inside_the_simulator() {
+        // AXe 1.8 on an open iPhone Duo (Xcode 27.1, live): the inner Settings icon sits in
+        // the icon list's own space, the same frame as on the cover, while the dock is native.
+        let inner = serde_json::json!({"type":"Group","frame":{"x":0,"y":0,"width":669,"height":951},"children":[
+            {"type":"Button","frame":{"x":0,"y":0,"width":0,"height":0},"children":[
+                {"type":"Button","AXLabel":"Settings","frame":{"x":22.7,"y":52,"width":68,"height":86.7}}]},
+            {"type":"Button","AXLabel":"Safari","frame":{"x":347.7,"y":15.8,"width":64,"height":64}}]});
+        let tree = serde_json::json!([{"type":"Application","frame":{"x":0,"y":0,"width":466,"height":678},"children":[inner]}]);
+        let turn = |r: [f64; 4]| super::super::duo::rect_to_ui(90, (669.0, 951.0), r);
+        let open = for_display(&tree, (669.0, 951.0), (466.0, 678.0), (951.0, 669.0), &turn);
+        assert_eq!(find_label(&open, "Settings", (951.0, 669.0)), Some((855.65, 56.7)), "AXe alone lands on the far edge");
+        // `elements` from the helper, already turned to interface points.
+        let found = [("Settings".to_string(), turn([52.0, 417.3, 86.7, 68.0])), ("Safari".to_string(), turn([347.7, 15.8, 64.0, 64.0]))];
+        let fixed = with_frames(&open, &found);
+        let (x, y) = find_label(&fixed, "Settings", (951.0, 669.0)).unwrap();
+        assert!((x - 499.7).abs() < 0.1 && (y - 95.35).abs() < 0.1, "({x}, {y})");
+        assert_eq!(find_label(&fixed, "Safari", (951.0, 669.0)), find_label(&open, "Safari", (951.0, 669.0)));
+        assert!(summarize(&fixed).contains("Button \"Settings\" center=(500,95)"), "{}", summarize(&fixed));
+        // A label shared by two elements is left alone rather than guessed.
+        let twice = with_frames(&open, &[("Settings".into(), [1.0, 1.0, 2.0, 2.0]), ("Settings".into(), [5.0, 5.0, 2.0, 2.0])]);
+        assert_eq!(twice, open);
+        // Elements AXe misses (an app's rows on the inner display) are added.
+        let app = with_frames(&open, &[("About".into(), [340.0, 303.5, 527.0, 52.0])]);
+        assert_eq!(find_label(&app, "About", (951.0, 669.0)), Some((603.5, 329.5)));
+        assert!(summarize(&app).contains("Element \"About\" center=(604,330)"), "{}", summarize(&app));
     }
 }

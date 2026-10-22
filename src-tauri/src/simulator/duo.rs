@@ -8,7 +8,10 @@ use sha2::{Digest, Sha256};
 use std::{
     path::{Path, PathBuf},
     process::Command,
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex, PoisonError,
+    },
     time::{Duration, Instant},
 };
 
@@ -21,12 +24,26 @@ pub const COVER: &str = "primary";
 pub const INNER: &str = "primary-1";
 const UNAVAILABLE: &str = "iPhone Duo needs Xcode 27.1 or later with the iOS 27.1 simulator runtime (Xcode → Settings → Components). Xcode 27.1 requires macOS 26.6.";
 const HELPER: &str = include_str!("duo_helper.m");
-/// The hinge jumps: the window animates the fold itself, and each second of sweep
-/// delayed the new display by as much (measured: 0.8 s sweep 1.4 s, none 0.4 s).
-const SWEEP_SECONDS: &str = "0";
+/// The hinge sweeps briefly: SpringBoard missed closes that jumped or swept faster
+/// (Xcode 27.1, 10 open/close cycles each: jump 5/10, 0.1 s 0/10, 0.2 s 10/10 in 0.8 s,
+/// 0.8 s 10/10 in 1.65 s). The window animates the fold itself meanwhile.
+const SWEEP_SECONDS: &str = "0.2";
+/// A close sent right after the last switch was lost (0/10 at once, 16/16 after 0.3 s).
+const SETTLE: Duration = Duration::from_millis(500);
+/// A lost move is retried after this: switches take about 0.8 s.
+const RETRY_AFTER: Duration = Duration::from_secs(2);
 /// How long the matching display may take to light up, polled at `SWITCH_POLL`.
 const SWITCH: Duration = Duration::from_secs(6);
 const SWITCH_POLL: Duration = Duration::from_millis(50);
+/// When each Duo last switched displays.
+// ponytail: grows by one entry per Duo ever folded; fine for the one or two that exist.
+static SWITCHED: Mutex<Vec<(String, Instant)>> = Mutex::new(Vec::new());
+/// Held for a whole fold; reading elements waits for it, so its accessibility hit tests
+/// never run while the hinge moves and the displays switch.
+static HINGE: Mutex<()> = Mutex::new(());
+/// A lost fold is recovered from here: when a sweep was lost, sweeping again or back did
+/// not move the hinge (Xcode 27.1), but stepping to 90° and then to the pose did.
+const MIDWAY: u32 = 90;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
@@ -61,6 +78,8 @@ pub struct Display {
     pub inner: bool,
     pub active: bool,
     pub uuid: String,
+    /// The display number accessibility hit-tests take.
+    pub id: u32,
     /// Clockwise quarter turns of the interface: 0, 90, 180 or 270.
     pub rotation: u16,
     /// Points in the panel's native (unrotated) axes.
@@ -88,6 +107,7 @@ pub fn parse_displays(value: &Value) -> Vec<Display> {
                 inner: d["primary"].as_bool() == Some(false) || d["name"] != "LCD",
                 active: d["active"].as_bool() == Some(true),
                 uuid: d["uniqueId"].as_str()?.to_string(),
+                id: d["displayId"].as_u64().and_then(|id| u32::try_from(id).ok())?,
                 rotation: d["currentOrientation"].as_str().and_then(|r| r.strip_prefix("rot")).and_then(|r| r.parse().ok()).filter(|r| [0, 90, 180, 270].contains(r)).unwrap_or(0),
                 native: ((size[0].as_f64()? / scale).round(), (size[1].as_f64()? / scale).round()),
             })
@@ -216,31 +236,99 @@ fn build_helper() -> Result<PathBuf, String> {
     let _ = std::fs::remove_file(&built);
     result.map(|_| binary).map_err(|e| format!("Could not build the iPhone Duo helper: {e}"))
 }
-/// Run the helper inside the simulator.
-pub fn helper(udid: &str, args: &[String]) -> Result<(), String> {
+/// Run the helper inside the simulator; returns what it printed.
+pub fn helper(udid: &str, args: &[String]) -> Result<String, String> {
     if !valid_udid(udid) {
         return Err("Unknown simulator.".into());
     }
     let path = helper_path()?.to_string_lossy().into_owned();
     let mut all = vec!["simctl", "spawn", udid, path.as_str()];
     all.extend(args.iter().map(String::as_str));
-    xcrun(&all, QUICK).map(|_| ())
+    xcrun(&all, QUICK).map(|o| String::from_utf8_lossy(&o.bytes).into_owned())
+}
+
+/// Labeled elements on `display` with frames in interface points, read inside the
+/// simulator: AXe frames SpringBoard's icon list on the inner display in the list's own
+/// space (the inner Settings icon came back at the cover's 22.7, 52) and misses most of
+/// an app's elements there.
+pub fn elements(udid: &str, display: &Display) -> Result<Vec<(String, [f64; 4])>, String> {
+    let _hinge = HINGE.lock().unwrap_or_else(PoisonError::into_inner);
+    let (w, h) = display.native;
+    parse_elements(&helper(udid, &["elements".into(), display.id.to_string(), w.to_string(), h.to_string(), display.rotation.to_string()])?, display)
+}
+fn parse_elements(output: &str, display: &Display) -> Result<Vec<(String, [f64; 4])>, String> {
+    Ok(serde_json::from_str::<Vec<Value>>(output.trim())
+        .map_err(|e| format!("The iPhone Duo helper returned unreadable elements: {e}"))?
+        .iter()
+        .filter_map(|e| {
+            let f = e["frame"].as_array()?.iter().map(Value::as_f64).collect::<Option<Vec<_>>>()?;
+            let frame = f.try_into().ok()?;
+            // SpringBoard answers in native points, apps in interface points.
+            Some((e["label"].as_str()?.to_string(), if e["ui"] == true { frame } else { rect_to_ui(display.rotation, display.native, frame) }))
+        })
+        .collect())
+}
+
+/// Runs one request at a time where only the newest matters: a request overtaken by a
+/// newer one while it waited is dropped, and running work can ask whether it was overtaken.
+#[derive(Default)]
+pub struct LatestWins {
+    seq: AtomicU64,
+    turn: Mutex<()>,
+}
+impl LatestWins {
+    pub fn run<T>(&self, work: impl FnOnce(&dyn Fn() -> bool) -> T) -> Option<T> {
+        let ticket = self.seq.fetch_add(1, Ordering::SeqCst) + 1;
+        let _turn = self.turn.lock().unwrap_or_else(PoisonError::into_inner);
+        let overtaken = || self.seq.load(Ordering::SeqCst) != ticket;
+        if overtaken() {
+            return None;
+        }
+        Some(work(&overtaken))
+    }
 }
 
 /// Move the hinge from `from` to `to`, then wait until the matching display is active.
-/// Returns the displays as last read, so callers need not ask `devicectl` again.
-pub fn fold(udid: &str, from: Pose, to: Pose) -> Result<Vec<Display>, String> {
-    helper(udid, &["hinge-sweep".into(), from.degrees().to_string(), to.degrees().to_string(), SWEEP_SECONDS.into()])?;
+/// Returns the displays as last read, so callers need not ask `devicectl` again, or
+/// `None` when `overtaken` says a newer fold is waiting, which then does the waiting.
+pub fn fold(udid: &str, from: Pose, to: Pose, overtaken: &dyn Fn() -> bool) -> Result<Option<Vec<Display>>, String> {
+    let _hinge = HINGE.lock().unwrap_or_else(PoisonError::into_inner);
+    let sweep = |a: u32, b: u32| helper(udid, &["hinge-sweep".into(), a.to_string(), b.to_string(), SWEEP_SECONDS.into()]);
     let wanted = to != Pose::Closed;
-    let deadline = Instant::now() + SWITCH;
+    let last = SWITCHED.lock().unwrap_or_else(PoisonError::into_inner).iter().find(|(u, _)| u == udid).map(|(_, at)| *at);
+    std::thread::sleep(last.map_or(Duration::ZERO, |at| SETTLE.saturating_sub(at.elapsed())));
+    sweep(from.degrees(), to.degrees())?;
+    let switched = match wait(udid, wanted, RETRY_AFTER, overtaken) {
+        Some(done) => done,
+        None => {
+            helper(udid, &["hinge".into(), MIDWAY.to_string()])?;
+            std::thread::sleep(SETTLE * 2);
+            sweep(MIDWAY, to.degrees())?;
+            wait(udid, wanted, SWITCH - RETRY_AFTER, overtaken)
+                .ok_or_else(|| format!("iPhone Duo did not switch to its {} display within {} seconds.", if wanted { "inner" } else { "cover" }, SWITCH.as_secs()))?
+        }
+    };
+    if switched.is_some() {
+        let mut times = SWITCHED.lock().unwrap_or_else(PoisonError::into_inner);
+        times.retain(|(u, _)| u != udid);
+        times.push((udid.to_string(), Instant::now()));
+    }
+    Ok(switched)
+}
+/// The displays once the wanted one is active, `Some(None)` when overtaken, `None` after `limit`.
+fn wait(udid: &str, inner: bool, limit: Duration, overtaken: &dyn Fn() -> bool) -> Option<Option<Vec<Display>>> {
+    let deadline = Instant::now() + limit;
     loop {
+        if overtaken() {
+            return Some(None);
+        }
         if let Ok(list) = displays(udid) {
-            if active(&list).map(|d| d.inner) == Some(wanted) {
-                return Ok(list);
+            if active(&list).map(|d| d.inner) == Some(inner) {
+                return Some(Some(list));
             }
         }
         if Instant::now() > deadline {
-            return Err(format!("iPhone Duo did not switch to its {} display within {} seconds.", if wanted { "inner" } else { "cover" }, SWITCH.as_secs()));
+            return None;
         }
         std::thread::sleep(SWITCH_POLL);
     }
@@ -313,7 +401,7 @@ mod tests {
         assert_eq!(open.len(), 2);
         let inner = active(&open).unwrap();
         assert_eq!((inner.inner, inner.rotation, inner.native, inner.ui(), inner.name()), (true, 90, (669.0, 951.0), (951.0, 669.0), "inner"));
-        assert_eq!(inner.uuid, "FC3D60D2-2B24-4468-98B0-0F3DA0D3B779");
+        assert_eq!((inner.uuid.as_str(), inner.id), ("FC3D60D2-2B24-4468-98B0-0F3DA0D3B779", 3));
         let closed = parse_displays(&devicectl(false, "rot90"));
         let cover = active(&closed).unwrap();
         assert_eq!((cover.inner, cover.ui(), cover.name()), (false, (466.0, 678.0), "cover"));
@@ -338,6 +426,10 @@ mod tests {
             assert!((cx * native.0 - 95.0).abs() < 1e-9 && (cy * native.1 - 451.0).abs() < 1e-9, "rot{rotation}");
         }
         assert_eq!(rect_to_ui(90, (669.0, 951.0), [52.0, 417.0, 86.0, 68.0]), [466.0, 52.0, 68.0, 86.0]);
+        // The helper's `elements` output (live, open home screen) lands in interface points.
+        let found = parse_elements(r#"[{"label":"Settings","frame":[52,417,86,68],"ui":false},{"label":"About","frame":[340,303.5,527,52],"ui":true},{"label":"x","frame":[1,2]}]"#, &inner).unwrap();
+        assert_eq!(found, [("Settings".to_string(), [466.0, 52.0, 68.0, 86.0]), ("About".to_string(), [340.0, 303.5, 527.0, 52.0])]);
+        assert!(parse_elements("duoctl-helper: oops", &inner).is_err());
     }
     #[test]
     fn inner_display_is_read_landscape_from_capabilities() {
@@ -352,10 +444,75 @@ mod tests {
         assert_eq!(parse_inner(&json!({"capabilities":{"displays":[{"deviceName":"primary-1"}]}})), None);
     }
     #[test]
+    fn folds_run_one_at_a_time_and_only_the_newest_waiting_one_runs() {
+        use std::{sync::Arc, thread};
+        let latest = Arc::new(LatestWins::default());
+        let (first, ran) = (latest.clone(), Arc::new(Mutex::new(Vec::new())));
+        let log = ran.clone();
+        let result = first.run(|overtaken| {
+            assert!(!overtaken());
+            // Two more arrive while the first holds the hinge.
+            let waiting: Vec<_> = (2..=3)
+                .map(|n| {
+                    let (worker, log) = (latest.clone(), log.clone());
+                    let handle = thread::spawn(move || worker.run(|_| log.lock().unwrap().push(n)));
+                    while latest.seq.load(Ordering::SeqCst) < n {
+                        thread::yield_now();
+                    }
+                    handle
+                })
+                .collect();
+            assert!(overtaken(), "the running fold hears of the newer one");
+            waiting
+        });
+        let outcomes: Vec<_> = result.unwrap().into_iter().map(|h| h.join().unwrap()).collect();
+        assert_eq!(outcomes, [None, Some(())], "the overtaken second request never runs");
+        assert_eq!(*ran.lock().unwrap(), [3]);
+    }
+    #[test]
     fn the_helper_builds_for_the_simulator() {
         let args = build_args(Path::new("/c/h.m"), Path::new("/c/h.tmp"));
         assert_eq!(args.join(" "), "-sdk iphonesimulator clang -fobjc-arc -O2 -arch arm64 -mios-simulator-version-min=17.0 -framework Foundation -framework IOKit /c/h.m -o /c/h.tmp");
-        assert!(HELPER.contains("Copyright (c) 2026 Karolina Samorek") && HELPER.contains("Permission is hereby granted") && HELPER.contains("hinge-sweep") && HELPER.contains("PandaCode addition: `home`"));
+        assert!(HELPER.contains("Copyright (c) 2026 Karolina Samorek") && HELPER.contains("Permission is hereby granted") && HELPER.contains("hinge-sweep") && HELPER.contains("PandaCode additions: `home`"));
+    }
+
+    /// Needs Xcode 27.1, AXe and a booted iPhone Duo: `cargo test -- --ignored live_duo_taps`
+    #[test]
+    #[ignore]
+    fn live_duo_taps_by_label_and_point_on_the_inner_display() {
+        use super::super::{describe, input, screenshot, Input, Simulators};
+        let sims = Simulators::default();
+        let device = sims.resolve(None, true).unwrap();
+        assert!(device.duo, "boot the iPhone Duo first");
+        let udid = device.udid.as_str();
+        if active(&sims.duo(udid)).map(|d| d.inner) != Some(true) {
+            sims.fold(udid, Pose::Open).unwrap();
+        }
+        let shot = || screenshot(udid, None, Some(INNER)).unwrap();
+        let settings_center = || {
+            let tree = describe(udid, None, &sims.duo(udid)).unwrap();
+            let line = tree.lines().find(|l| l.contains("Button \"Settings\"")).unwrap_or_else(|| panic!("{tree}")).to_string();
+            let center = line.split("center=(").nth(1).and_then(|r| r.split(')').next()).unwrap().to_string();
+            let (x, y) = center.split_once(',').unwrap();
+            (x.parse::<f64>().unwrap(), y.parse::<f64>().unwrap())
+        };
+        for by_label in [true, false] {
+            xcrun(&["simctl", "terminate", udid, "com.apple.Preferences"], QUICK).ok();
+            std::thread::sleep(Duration::from_secs(2));
+            let (x, y) = settings_center();
+            eprintln!("Settings on the inner display at ({x}, {y})");
+            // The icon sits in the top half of the 951×669 landscape home screen, not at its far edge.
+            assert!((300.0..700.0).contains(&x) && y < 200.0, "({x}, {y})");
+            let before = shot();
+            let action = if by_label { Input::TapLabel { label: "Settings".into() } } else { Input::Tap { x, y } };
+            eprintln!("{}", input(udid, sims.shown(&device).unwrap(), &sims.duo(udid), &action).unwrap());
+            std::thread::sleep(Duration::from_secs(2));
+            assert_ne!(shot(), before, "the inner display changed");
+            // Settings takes a moment to fill in its rows.
+            let opened = (0..5).any(|_| describe(udid, None, &sims.duo(udid)).is_ok_and(|t| t.contains("\"General\"")) || { std::thread::sleep(Duration::from_secs(1)); false });
+            assert!(opened, "Settings opened (by_label {by_label})");
+        }
+        xcrun(&["simctl", "terminate", udid, "com.apple.Preferences"], QUICK).ok();
     }
 
     /// Needs Xcode 27.1, AXe and a booted iPhone Duo: `cargo test -- --ignored duo`
@@ -369,7 +526,23 @@ mod tests {
         let udid = device.udid.as_str();
         let shot = |sims: &Simulators| screenshot(udid, None, sims.display(udid)).unwrap();
 
-        sims.fold(udid, Pose::Closed).unwrap();
+        // Rapid cycles, as fast as the panel can ask: every close reaches the cover.
+        for cycle in 0..10 {
+            for pose in [Pose::Open, Pose::Closed] {
+                let started = Instant::now();
+                sims.fold(udid, pose).unwrap_or_else(|e| panic!("cycle {cycle} {pose:?}: {e}"));
+                eprintln!("cycle {cycle} {pose:?}: {:?}", started.elapsed());
+            }
+        }
+        // Fold to first frame, both ways, as the panel sees it.
+        for pose in [Pose::Open, Pose::Closed] {
+            let started = Instant::now();
+            sims.fold(udid, pose).unwrap();
+            let folded = started.elapsed();
+            sims.streams.next(udid, sims.display(udid), 0, Duration::from_secs(10)).unwrap().expect("a frame of the new display");
+            eprintln!("{pose:?}: folded in {folded:?}, first frame after {:?}", started.elapsed());
+            assert!(started.elapsed() < Duration::from_secs(4), "{pose:?} took {:?}", started.elapsed());
+        }
         assert_eq!((sims.pose(udid), sims.display(udid)), (Pose::Closed, Some(COVER)));
         let cover = shot(&sims);
         assert_eq!(&cover[1..4], b"PNG");
@@ -406,6 +579,7 @@ mod tests {
         std::thread::sleep(Duration::from_secs(2));
         assert_ne!(shot(&sims), in_app, "home changed the inner display");
         let home = describe(udid, None, &sims.duo(udid)).unwrap();
-        assert!(home.contains("Button \"Settings\"") && home.contains("Button \"Safari\""), "the home screen is back: {home}");
+        // Not the dock's Safari: after a SpringBoard restart the dock is drawn but not in the accessibility tree.
+        assert!(home.contains("Button \"Settings\"") && home.contains("id=Home screen icons") && !home.contains("\"General\""), "the home screen is back: {home}");
     }
 }

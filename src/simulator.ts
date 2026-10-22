@@ -68,7 +68,7 @@ export function mountSimulator(root: HTMLElement, host: SimulatorHost) {
   const button = (name: string) => root.querySelector<HTMLButtonElement>(`[data-sim="${name}"]`)!;
 
   let status: SimStatus | undefined, device: Device3D | undefined, flat: HTMLImageElement | undefined, settingUp = false;
-  let visible = false, disposed = false, pumpGeneration = 0, seq = 0, busy = false, poseBusy = false, poll = 0, polling = false, appearance: 'light' | 'dark' = 'light', warnedAxe = false;
+  let visible = false, disposed = false, pumpGeneration = 0, seq = 0, busy = false, poseBusy = false, poseWanted: DuoPose | undefined, poseEpoch = 0, poll = 0, polling = false, appearance: 'light' | 'dark' = 'light', warnedAxe = false;
   let typed = '', typeTimer = 0, scroll = { dx: 0, dy: 0, at: { x: 0, y: 0 } }, scrollTimer = 0;
 
   const call = async (command: string, args?: Record<string, unknown>) => forPlatform(await host.call<SimStatus>(command, args));
@@ -128,7 +128,7 @@ export function mountSimulator(root: HTMLElement, host: SimulatorHost) {
     button('back').hidden = !android; button('recents').hidden = !android;
     button('appearance').innerHTML = icon(appearance === 'dark' ? 'sun' : 'moon');
     const pose = button('pose'), shown = poseName(status?.pose);
-    pose.hidden = !chosen?.duo; pose.setAttribute('aria-label', `iPhone Duo pose: ${shown}`); pose.title = shown; pose.disabled = !booted() || busy || poseBusy;
+    pose.hidden = !chosen?.duo; pose.setAttribute('aria-label', `iPhone Duo pose: ${shown}`); pose.title = shown; pose.disabled = !booted() || busy;
     const look = chosenFinish(spec());
     button('finish').style.setProperty('--finish', look.color);
     button('finish').setAttribute('aria-label', `Device finish: ${look.name}`); button('finish').title = look.name;
@@ -273,23 +273,33 @@ export function mountSimulator(root: HTMLElement, host: SimulatorHost) {
     try { status = await call('simulator_create_duo'); seq = 0; say(''); render(); pump(); }
     catch (error) { say(''); host.notify(error instanceof Error ? error.message : String(error)); }
   }
-  /** The hinge moves on click; the simulator follows in the background, and the new
-   * display shows a spinner until its first frame. A failed fold moves back. */
+  /** The hinge moves on click; the simulator follows in the background one fold at a
+   * time, always to the newest pose asked for, and the new display shows a spinner until
+   * its first frame. A failed fold moves back to the pose the simulator holds. */
   async function setPose(pose: DuoPose): Promise<void> {
-    const udid = status?.selected, before = status?.pose ?? 'closed';
-    if (!udid || !status || poseBusy || pose === before) return;
-    poseBusy = true; pumpGeneration++;
+    const udid = status?.selected, shown = status?.pose ?? 'closed';
+    if (!udid || !status || pose === shown) return;
+    poseEpoch++; poseWanted = pose; pumpGeneration++;
     status = { ...status, pose };
     device?.setPose(pose, true); render(); loading();
+    if (poseBusy) return;
+    poseBusy = true;
+    let held = shown;
     try {
-      const next = await call('simulator_pose', { udid, pose });
-      if (disposed || next.selected !== status?.selected) return;
-      status = next; device?.setPose(next.pose ?? pose, true);
-    } catch (error) {
-      // The old display's newest frame replaces the spinner.
-      if (status?.selected === udid) { status = { ...status, pose: before }; device?.setPose(before, true); seq = 0; }
-      host.notify(error instanceof Error ? error.message : String(error));
-    } finally { poseBusy = false; render(); pump(); }
+      while (poseWanted && !disposed && status?.selected === udid) {
+        const target: DuoPose = poseWanted; poseWanted = undefined;
+        try {
+          const next = await call('simulator_pose', { udid, pose: target });
+          held = next.pose ?? target;
+          if (!poseWanted && !disposed && next.selected === status?.selected) { status = next; device?.setPose(held, true); }
+        } catch (error) {
+          if (poseWanted) continue;
+          // The old display's newest frame replaces the spinner.
+          if (status?.selected === udid) { status = { ...status, pose: held }; device?.setPose(held, true); seq = 0; }
+          host.notify(error instanceof Error ? error.message : String(error));
+        }
+      }
+    } finally { poseBusy = false; poseWanted = undefined; render(); pump(); }
   }
   /** The Duo's hinge can move outside PandaCode (Xcode's Device Hub), so follow the real pose while it is on screen. */
   function watchPose(): void {
@@ -298,9 +308,10 @@ export function mountSimulator(root: HTMLElement, host: SimulatorHost) {
     poll = window.setInterval(async () => {
       if (polling || poseBusy || !visible || disposed || !current()?.duo || !booted()) return;
       polling = true;
+      const epoch = poseEpoch;
       try {
         const next = await call('simulator_status');
-        if (disposed || poseBusy || next.selected !== status?.selected || !next.pose || next.pose === device?.getPose()) return;
+        if (disposed || poseBusy || epoch !== poseEpoch || next.selected !== status?.selected || !next.pose || next.pose === device?.getPose()) return;
         status = next; device?.setPose(next.pose, true); render(); loading(); pump();
       } catch { /* the next tick tries again */ } finally { polling = false; }
     }, 3000);
