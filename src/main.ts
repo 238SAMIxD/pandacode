@@ -86,7 +86,7 @@ const state = {
   git: null as GitStatus | null, files: [] as FileEntry[], filePath: '', gitError: '', filesError: '', inspectorLoading: false,
   selectedFile: '', selectedContent: '', selectedKind: '' as '' | 'diff' | 'file', selectedStaged: false, filePreviewLoading: false,
   browserUrl: '',
-  attachments: [] as string[], drafts: new Map<string, string>(), defaultProvider: (localStorage.getItem('pandacode.provider') ?? 'claude') as ProviderId,
+  attachments: [] as string[], drafts: new Map<string, string>(), defaultProvider: (localStorage.getItem('pandacode.defaultProvider') ?? localStorage.getItem('pandacode.provider') ?? 'claude') as ProviderId,
   browserAttachments: new Map<string, BrowserAttachment[]>(),
   moodboardAttachments: new Map<string, { id: string; projectId: string; name: string }[]>(),
   generation: 0, hasOlder: false,
@@ -791,7 +791,7 @@ function beginMenuOpen(anchor: HTMLElement): { epoch: number; release: () => voi
   return { epoch, release };
 }
 function rememberedModel(id: ProviderId): string {
-  const model = localStorage.getItem('pandacode.model.' + id) || state.sessions.find(s => s.provider === id && s.model)?.model || 'default';
+  const model = localStorage.getItem('pandacode.defaultModel.' + id) || localStorage.getItem('pandacode.model.' + id) || state.sessions.find(s => s.provider === id && s.model)?.model || 'default';
   return model.length <= 200 ? model : 'default';
 }
 let openCodeSaved = false;
@@ -841,8 +841,10 @@ function renderNavigation(): void {
   const row = (s: Session, inFolder = false, inProject = false): string => {
     const p = state.projects.find(p => p.id === s.projectId);
     const activityAt = lastActivity(s);
-    const age = activityAt == null ? '' : responseAge(activityAt, now);
     const live = state.streams.get(s.id);
+    const startedAt = live?.startedAt ?? s.lastPromptAt;
+    const elapsed = isRunning(s.id) && startedAt != null ? formatDuration(now - startedAt) : '';
+    const age = elapsed || (activityAt == null ? '' : responseAge(activityAt, now));
     const status = live && (live.approvals.size || live.inputs.size) ? 'attention' : isRunning(s.id) ? 'running' : limitActive(s, now) ? 'limited' : '';
     const statusLabel = status === 'attention' ? live?.inputs.size ? 'Needs your answer' : 'Needs approval' : status === 'limited' ? `Usage limit · ${resetLabel(s.limitedUntil, now)}` : 'Running';
     // Three lines, like a card: where (app icon, checkout, age), what (title), and the branch,
@@ -853,7 +855,7 @@ function renderNavigation(): void {
     // Worktree tasks show their branch; the worktree mark keeps its accessible name either way.
     const worktreeMark = s.worktreePath ? `<span class="task-worktree" role="img" aria-label="Worktree" title="${escape(s.worktreePath)}">${icon('worktree')}</span>` : '';
     const branch = s.worktreePath ? `<span class="task-branch">${worktreeMark}${s.worktreeBranch ? `<span>${escape(s.worktreeBranch)}</span>` : ''}</span>` : '';
-    const signals = `${status ? `<span class="task-indicator ${status}" role="img" aria-label="${statusLabel}" title="${statusLabel}"></span>` : ''}${age ? `<span class="task-age" title="Last message: ${escape(new Date(activityAt!).toLocaleString())}">${age}</span>` : ''}`;
+    const signals = `${status ? `<span class="task-indicator ${status}" role="img" aria-label="${statusLabel}" title="${statusLabel}"></span>` : ''}${age ? `<span class="task-age${elapsed ? ' task-runtime' : ''}"${elapsed ? ` data-started-at="${startedAt}"` : ''} title="${elapsed ? `Working for ${elapsed}` : `Last message: ${escape(new Date(activityAt!).toLocaleString())}`}">${age}</span>` : ''}`;
     const button = `<button class="task-item${inFolder ? ' task-oneline' : ''} ${s.id === state.sessionId ? 'selected' : ''}" data-action="select-task" data-id="${escape(s.id)}" data-activity="${activeTask(s, now) ? 'active' : 'inactive'}" draggable="true" data-pinned="${Boolean(s.pinned)}" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" ${s.id === state.sessionId ? 'aria-current="page"' : ''} aria-description="${shortProvider(s.provider)}" title="${escape(s.worktreeBranch ? `${s.title}\n${s.worktreeBranch}` : s.title)}">`;
     const pin = s.pinned ? `<span class="task-pin" role="img" aria-label="Pinned">${icon('pin')}</span>` : '';
     const projectName = `<span class="task-project">${escape(p?.name ?? 'Project')}</span>`;
@@ -912,6 +914,7 @@ function renderNavigation(): void {
   }
   if (focusSelector) nav.querySelector<HTMLElement>(focusSelector)?.focus({ preventScroll: true });
   renderBoardView();
+  updateWorkTimer();
   window.clearTimeout(activityTimer);
   if (!document.hidden) {
     const expiry = state.sessions.reduce((next, s) => activeTask(s, now) ? Math.min(next, lastActivity(s)! + ACTIVITY_WINDOW) : next, Infinity);
@@ -1048,15 +1051,16 @@ function renderTranscript(preservePosition = false): void {
 function savedActivityHtml(messages: Message[]): string {
   return groupToolRuns(messages, message => message.role === 'tool' ? savedToolKey(message) : undefined)
     .map(run => run.kind === 'tools'
-      ? renderToolGroup(run.items.map(message => ({ key: savedToolKey(message), content: message.content })))
+      ? renderToolGroup(run.items.map(message => ({ key: savedToolKey(message), content: message.content })), activityExpanded())
       : messageHtml(run.item)).join('');
 }
 function savedToolKey(message: Message): string {
   const tool = decodeToolActivity(message.content);
   return tool ? 'tool:' + tool.id : 'message:' + message.id;
 }
+function activityExpanded(): boolean { return localStorage.getItem('pandacode.activityExpanded') === 'true'; }
 function activityHtml(key: string, label: string, body: string, live = false): string {
-  return `<details class="turn-activity${live ? ' live-activity' : ''}" data-turn-key="${escape(key)}"${live || state.view === 'board' ? ' open' : ''}><summary class="turn-activity-summary"><span class="turn-activity-label">${escape(label)}</span>${icon('chevron')}</summary><div class="turn-activity-body">${body}</div></details>`;
+  return `<details class="turn-activity${live ? ' live-activity' : ''}" data-turn-key="${escape(key)}"${activityExpanded() ? ' open' : ''}><summary class="turn-activity-summary"><span class="turn-activity-label">${escape(label)}</span>${icon('chevron')}</summary><div class="turn-activity-body">${body}</div></details>`;
 }
 type ToolGroupView = { key: string; toolKeys: string[]; open: boolean; focused: boolean };
 function captureToolGroups(root: ParentNode): ToolGroupView[] {
@@ -1223,11 +1227,11 @@ function paintLiveActivity(region: HTMLElement, current: Stream, transcript: HTM
       let node = previous.get(key);
       const previousEntries = node ? liveGroupEntries.get(node) : undefined;
       if (!node) {
-        const html = renderToolGroup(run.items);
+        const html = renderToolGroup(run.items, activityExpanded());
         const template = document.createElement('template'); template.innerHTML = html;
         node = template.content.firstElementChild as HTMLElement; node.dataset.streamKey = key;
       } else if (!previousEntries || previousEntries.length !== run.items.length || run.items.some((entry, index) => entry !== previousEntries[index])) {
-        const html = renderToolGroup(run.items);
+        const html = renderToolGroup(run.items, activityExpanded());
         const views = captureTools(node);
         const template = document.createElement('template'); template.innerHTML = html;
         const fresh = template.content.firstElementChild!;
@@ -1259,12 +1263,18 @@ function workingLabel(current: Stream): string {
   return `${label} · ${formatDuration(Date.now() - current.startedAt)}`;
 }
 function updateWorkTimer(): void {
-  if (!transcriptVisible() || !state.streams.has(state.sessionId)) { clearTimeout(workTimer); workTimer = 0; return; }
+  if (document.hidden || ((!transcriptVisible() || !state.streams.has(state.sessionId)) && !document.querySelector('.task-runtime'))) { clearTimeout(workTimer); workTimer = 0; return; }
   if (workTimer) return;
   workTimer = window.setTimeout(() => {
     workTimer = 0;
     const current = state.streams.get(state.sessionId), label = document.querySelector<HTMLElement>('#stream-region .turn-activity-label');
     if (current && label) label.textContent = workingLabel(current);
+    const now = Date.now();
+    for (const timer of document.querySelectorAll<HTMLElement>('.task-runtime')) {
+      const elapsed = formatDuration(now - Number(timer.dataset.startedAt));
+      timer.textContent = elapsed;
+      timer.title = `Working for ${elapsed}`;
+    }
     updateWorkTimer();
   }, 1000);
 }
@@ -2767,7 +2777,7 @@ async function showModel(anchor: HTMLElement): Promise<void> {
         }
         const updated = await call<Session>('configure_session', { sessionId: selected.id, provider: providerId, model });
         const index = state.sessions.findIndex(s => s.id === selected.id); if (index >= 0) state.sessions[index] = updated;
-        state.defaultProvider = providerId;
+        if (!localStorage.getItem('pandacode.defaultProvider')) state.defaultProvider = providerId;
         localStorage.setItem('pandacode.provider', providerId); localStorage.setItem('pandacode.model.' + providerId, model);
         if (selected.id === state.sessionId && generation === state.generation) {
           if (providerId !== selected.provider) {
@@ -2948,8 +2958,36 @@ async function showProjectFilter(anchor: HTMLElement): Promise<void> {
 async function showDefaultProvider(anchor: HTMLElement): Promise<void> {
   await showChoices(anchor, { title: 'Default agent', items: state.providers.map(p => ({ id: p.id, label: p.name, provider: p.id, selected: state.defaultProvider === p.id })), onSelect: id => {
     state.defaultProvider = id as ProviderId; localStorage.setItem('pandacode.provider', id);
-    anchor.innerHTML = `${providerLogo(state.defaultProvider)}<span>${escape(provider(state.defaultProvider)?.name ?? shortProvider(state.defaultProvider))}</span>${icon('down')}`;
+    localStorage.setItem('pandacode.defaultProvider', id);
+    refreshDefaultAgent();
   } });
+}
+function defaultModelLabel(): string {
+  const id = state.defaultProvider, model = rememberedModel(id);
+  return (provider(id)?.models.find(entry => entry.id === model) ?? fallbackModel(id, model)).name;
+}
+function refreshDefaultAgent(): void {
+  const agent = document.getElementById('default-provider'), model = document.querySelector('#default-model span');
+  if (agent) agent.innerHTML = `${providerLogo(state.defaultProvider)}<span>${escape(provider(state.defaultProvider)?.name ?? shortProvider(state.defaultProvider))}</span>${icon('down')}`;
+  if (model) model.textContent = defaultModelLabel();
+}
+async function showDefaultModel(anchor: HTMLElement): Promise<void> {
+  if (pendingMenuOpen?.anchor === anchor) { cancelPendingMenu(); return; }
+  if (modelPickerCleanup) { closeModelPicker(); return; }
+  closeMenus();
+  const { epoch, release } = beginMenuOpen(anchor);
+  const { openModelPicker } = await import('./model-picker').finally(release);
+  if (epoch !== menuEpoch || !anchor.isConnected) return;
+  modelPickerCleanup = openModelPicker({
+    anchor, providers: state.providers, current: { provider: state.defaultProvider, model: rememberedModel(state.defaultProvider) },
+    canSwitchProvider: true, loadModels, placement: 'below', onClose: () => { modelPickerCleanup = undefined; },
+    onSelect: async (providerId, model) => {
+      state.defaultProvider = providerId;
+      localStorage.setItem('pandacode.provider', providerId); localStorage.setItem('pandacode.model.' + providerId, model);
+      localStorage.setItem('pandacode.defaultProvider', providerId); localStorage.setItem('pandacode.defaultModel.' + providerId, model);
+      refreshDefaultAgent();
+    },
+  });
 }
 function showDeleteTask(): void {
   const task = session(); if (!task || isRunning(task.id) || configuringSessions.has(task.id)) return;
@@ -3008,7 +3046,7 @@ async function showSettings(section?: import('./settings').SettingsSection): Pro
   settingsOpening = import('./settings').then(({ mountSettings }) => {
     if (host.hidden) return;
     settingsView = mountSettings(host, {
-      providers: state.providers, defaultProvider: state.defaultProvider,
+      providers: state.providers, defaultProvider: state.defaultProvider, defaultModel: defaultModelLabel(), activityExpanded: activityExpanded(),
       compact: document.body.classList.contains('compact'), wallpapers: wallpapers.enabled,
       theme: currentTheme(), preview, section, discover: discoverSettingsProviders,
       projects: { list: userProjects, remove: removeProject },
@@ -3456,6 +3494,7 @@ async function action(name: string, element: HTMLElement): Promise<void> {
     case 'mode': await showMode(element); break;
     case 'filter-projects': await showProjectFilter(element); break;
     case 'default-provider': await showDefaultProvider(element); break;
+    case 'default-model': await showDefaultModel(element); break;
     case 'close-dialog': closeModal(); break;
     case 'copy-file': await navigator.clipboard.writeText(state.selectedContent); notify('File copied'); break;
     case 'copy-path': await navigator.clipboard.writeText(workspacePath()); notify(session()?.worktreePath ? 'Worktree path copied' : 'Project path copied'); break;
@@ -3538,6 +3577,10 @@ document.addEventListener('change', event => {
   // A switch toggles natively (the data-action click path cancels the default), then saves.
   if (input.classList.contains('limit-resume-switch')) run(limitAction('limit-resume-at-reset', input));
   if (input.id === 'compact-mode') { document.body.classList.toggle('compact', input.checked); localStorage.setItem('pandacode.compact', String(input.checked)); }
+  if (input.id === 'expand-tool-activity') {
+    localStorage.setItem('pandacode.activityExpanded', String(input.checked));
+    document.querySelectorAll<HTMLDetailsElement>('.turn-activity, .tool-group').forEach(group => { group.open = input.checked; });
+  }
 });
 document.addEventListener('keydown', event => {
   if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey || event.isComposing || event.defaultPrevented || event.key.toLowerCase() !== 'b' || state.view !== 'conversation' || document.querySelector<HTMLDialogElement>('#dialog')!.open) return;

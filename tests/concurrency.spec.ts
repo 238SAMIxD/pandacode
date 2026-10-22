@@ -464,3 +464,54 @@ test('concurrency ignores a rejected old selection request after the completed r
   await expect(transcript(page)).not.toContainText('Unable to load this task');
   await expect(page.getByRole('button', { name: 'Stop task', exact: true })).toBeHidden();
 });
+
+test('concurrency sidebar timers update for background and pinned tasks and reset on a new run', async ({ page }) => {
+  await installConcurrency(page, 3);
+  await page.clock.install();
+  await startTask(page, 1, 'conversation');
+  await startTask(page, 2, 'conversation');
+  const row = (index: number) => page.locator(`.task-item[data-id="${taskId(index)}"]`);
+  const timer = (index: number) => row(index).locator('.task-runtime');
+  await row(2).click({ button: 'right' });
+  await page.getByRole('dialog', { name: 'Task actions', exact: true }).getByRole('menuitem', { name: 'Pin task', exact: true }).click();
+  await expect(row(2)).toHaveAttribute('data-pinned', 'true');
+  await selectTask(page, 3, 'conversation');
+  await prompt(page).fill('Keep this draft while clocks update.');
+  await expect(timer(1)).toBeVisible();
+  await expect(timer(2)).toBeVisible();
+  await expect(timer(3)).toHaveCount(0);
+  await page.clock.fastForward(125000);
+  await expect(timer(1)).toHaveText(/^2m \d+s$/);
+  await expect(timer(2)).toHaveText(/^2m \d+s$/);
+  const elapsed = await timer(1).textContent();
+  await page.clock.fastForward(1000);
+  await expect(timer(1)).not.toHaveText(elapsed!);
+  await expect(prompt(page)).toBeFocused();
+  await expect(prompt(page)).toHaveValue('Keep this draft while clocks update.');
+  await row(1).click({ button: 'right' });
+  await page.clock.fastForward(1000);
+  await expect(page.getByRole('dialog', { name: 'Task actions', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => { const task = (window as any).__concurrent.tasks['session-1']; task.push('Finished.'); task.done(); });
+  await expect(timer(1)).toHaveCount(0);
+  await expect(row(1).locator('.task-age')).toBeVisible();
+  await startTask(page, 1, 'conversation');
+  await expect(timer(1)).toHaveText(/^\d+s$/);
+});
+
+test('concurrency sidebar timer restores a running task from its saved prompt timestamp', async ({ page }) => {
+  await page.clock.install();
+  await page.route('**/src/preview.ts*', async route => {
+    const response = await route.fetch();
+    const source = await response.text();
+    const marker = /const providers\s*=/;
+    expect(source).toMatch(marker);
+    await route.fulfill({ response, body: source.replace(marker, "sessions[0].status = 'running'; sessions[0].lastPromptAt = now - 125000; const providers =") });
+  });
+  await page.goto('/');
+  const timer = page.locator('.task-item[data-id="session-1"] .task-runtime');
+  await expect(timer).toHaveText(/^2m \d+s$/);
+  const elapsed = await timer.textContent();
+  await page.clock.fastForward(1000);
+  await expect(timer).not.toHaveText(elapsed!);
+});

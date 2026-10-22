@@ -93,7 +93,7 @@ export function groupToolRuns<T>(entries: T[], toolKey: (entry: T) => string | u
   return runs;
 }
 
-export function renderToolGroup(entries: { key: string; content: string | ToolActivity }[]): string {
+export function renderToolGroup(entries: { key: string; content: string | ToolActivity }[], expanded = false): string {
   if (!entries.length) return '';
   const tools = entries.map(entry => typeof entry.content === 'string' ? decodeToolActivity(entry.content) : entry.content);
   const running = tools.filter(tool => tool?.status === 'running').length;
@@ -110,5 +110,5 @@ export function renderToolGroup(entries: { key: string; content: string | ToolAc
   const label = `${entries.length} ${entries.length === 1 ? 'tool' : 'tools'}`;
   const status = [running ? `${running} running` : '', failed ? `${failed} failed` : ''].filter(Boolean).join(' · ');
   const hint = categories.size ? `<span class="tool-group-hint"> · ${escape([...categories].join(', '))}</span>` : '';
-  return `<details class="tool-group" data-tool-group-key="${escape('group:' + entries[0].key)}"><summary class="tool-group-summary">${icon(failed ? 'alert' : 'terminal')}<span class="tool-group-label">${label}</span>${hint}${status ? `<span class="tool-group-status${failed ? ' has-failure' : ''}"> · ${status}</span>` : ''}${icon('chevron')}</summary><div class="tool-group-body">${entries.map(entry => renderToolActivity(entry.content, entry.key)).join('')}</div></details>`;
+  return `<details class="tool-group" data-tool-group-key="${escape('group:' + entries[0].key)}"${expanded ? ' open' : ''}><summary class="tool-group-summary">${icon(failed ? 'alert' : 'terminal')}<span class="tool-group-label">${label}</span>${hint}${status ? `<span class="tool-group-status${failed ? ' has-failure' : ''}"> · ${status}</span>` : ''}${icon('chevron')}</summary><div class="tool-group-body">${entries.map(entry => renderToolActivity(entry.content, entry.key)).join('')}</div></details>`;
 }
