@@ -75,7 +75,7 @@ async function installControlledStreaming(page: Page): Promise<void> {
   });
 }
 
-async function startTurn(page: Page, view: View): Promise<string> {
+async function startTurn(page: Page, view: View, expandActivity = true): Promise<string> {
   if (view === 'board') {
     await page.getByRole('button', { name: 'Board view', exact: true }).click();
     const board = page.getByRole('region', { name: 'Project board', exact: true });
@@ -93,6 +93,11 @@ async function startTurn(page: Page, view: View): Promise<string> {
   }
   await expect.poll(() => page.evaluate(() => (window as any).__latestStreamId ?? '')).not.toBe('');
   await expect(page.getByRole('button', { name: 'Stop task', exact: true })).toBeVisible();
+  if (expandActivity) {
+    const activity = page.locator('#stream-region .turn-activity');
+    await expect(activity).toHaveCount(1);
+    if (!await activity.evaluate((node: HTMLDetailsElement) => node.open)) await activity.locator('.turn-activity-summary').click();
+  }
   return page.evaluate(() => (window as any).__latestStreamId);
 }
 
@@ -111,6 +116,36 @@ test.describe('streamed responses', () => {
     await installControlledStreaming(page);
     await page.goto('/');
     await expect(page.locator('.task-item.selected .task-title')).toHaveText('Make search feel instant');
+  });
+
+  test('live tool activity stays open regardless of Settings and preserves manual disclosure choices during updates', async ({ page }) => {
+    const id = await startTurn(page, 'conversation', false);
+    const activity = page.locator('#stream-region .turn-activity');
+    await expect(activity).toHaveAttribute('open', '');
+    await page.evaluate(id => { const fixture = (window as any).__streamFixtures[id]; for (let i = 0; i < 6; i++) fixture.tool(); }, id);
+    await expect(liveGroups(page)).toHaveCount(2);
+    await page.keyboard.press('Meta+,');
+    await page.getByRole('checkbox', { name: 'Expand tool activity', exact: true }).check();
+    await page.getByRole('button', { name: 'Back to the workspace', exact: true }).click();
+    await expect(activity).toHaveAttribute('open', '');
+    await expect(activity.locator('.tool-group[open]')).toHaveCount(2);
+    const first = liveGroups(page).first();
+    await first.locator('.tool-group-summary').click();
+    await push(page, id, 'Another response.');
+    await page.evaluate(id => (window as any).__streamFixtures[id].tool(), id);
+    await expect(liveGroups(page)).toHaveCount(3);
+    await expect(first).not.toHaveAttribute('open', '');
+    await expect(liveGroups(page).last()).toHaveAttribute('open', '');
+    await page.keyboard.press('Meta+,');
+    await page.getByRole('checkbox', { name: 'Expand tool activity', exact: true }).uncheck();
+    await page.getByRole('button', { name: 'Back to the workspace', exact: true }).click();
+    await expect(activity).toHaveAttribute('open', '');
+    await push(page, id, 'Final answer stays visible.');
+    await expect(live(page)).toBeVisible();
+    await finish(page, id);
+    await expect(transcript(page).getByText('Final answer stays visible.', { exact: true })).toBeVisible();
+    await startTurn(page, 'conversation', false);
+    await expect(page.locator('#stream-region .turn-activity')).toHaveAttribute('open', '');
   });
 
   test('keeps the latest streaming narrative before tools when older activity is trimmed', async ({ page }) => {

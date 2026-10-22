@@ -1,6 +1,7 @@
 /* Browser-preview data for the GitHub view: a few repositories, their open pull requests
- * and issues. `orbit-labs/orbit` is checked out as the sample `orbit` project; the others
+ * and issues, workflow runs and one run's jobs. `orbit-labs/orbit` is checked out as the sample `orbit` project; the others
  * are only on GitHub until cloned. */
+import type { RunDetails } from './github-actions';
 import type { HubIssue, HubPull, HubRepo, HubRun } from './github-hub';
 
 const day = 86_400_000;
@@ -42,20 +43,34 @@ const issues: Record<string, HubIssue[]> = {
   ],
 };
 
-const run = (id: number, workflow: string, title: string, branch: string, state: string, ago: number): HubRun =>
-  ({ id, workflow, title, branch, event: 'pull_request', state, createdAt: at(ago), url: `https://github.com/orbit-labs/orbit/actions/runs/${id}` });
+const minute = 60_000;
+/** `pulls` empty with a pull_request event stands for a fork's run, matched by head branch. */
+const run = (id: number, workflow: string, title: string, branch: string, state: string, ago: number, more: Partial<HubRun> = {}): HubRun =>
+  ({ id, workflow, title, branch, event: 'pull_request', state, createdAt: at(ago), startedAt: at(ago - 10_000), updatedAt: at(Math.max(0, ago - 4 * minute - 40_000)), url: `https://github.com/orbit-labs/orbit/actions/runs/${id}`, attempt: 1, pulls: [], ...more });
 const runs: Record<string, HubRun[]> = {
   'orbit-labs/orbit': [
-    run(9120, 'CI', 'Offline sync for the reading list', 'mara/offline-sync', 'in_progress', 4 * 60_000),
-    run(9118, 'Deploy preview', 'Offline sync for the reading list', 'mara/offline-sync', 'queued', 5 * 60_000),
-    run(9105, 'CI', 'Debounce library search and cache the index', 'feat/instant-search', 'passed', 30 * 60_000),
-    run(9087, 'CI', 'Fix dark mode contrast for muted text', 'devon/contrast', 'failed', day),
-    run(9050, 'Release', 'chore: release 1.4.0', 'main', 'cancelled', 2 * day),
+    run(9120, 'CI', 'Offline sync for the reading list', 'mara/offline-sync', 'in_progress', 4 * minute, { pulls: [127] }),
+    run(9118, 'Deploy preview', 'Offline sync for the reading list', 'mara/offline-sync', 'queued', 5 * minute),
+    run(9105, 'CI', 'Debounce library search and cache the index', 'feat/instant-search', 'passed', 30 * minute, { pulls: [130] }),
+    run(9098, 'CI', 'Debounce library search and cache the index', 'feat/instant-search', 'failed', 3 * 3600_000, { pulls: [130] }),
+    run(9087, 'CI', 'Fix dark mode contrast for muted text', 'devon/contrast', 'failed', day, { pulls: [124], attempt: 2 }),
+    run(9060, '.github/workflows/nightly.yml', 'Nightly', 'main', 'not_started', day + 3600_000, { event: 'schedule' }),
+    run(9050, 'Release', 'chore: release 1.4.0', 'main', 'cancelled', 2 * day, { event: 'push' }),
   ],
+};
+const runDetails: Record<number, RunDetails> = {
+  9087: {
+    jobs: [
+      { name: 'lint', state: 'passed', startedAt: at(day), completedAt: at(day - 45_000), url: 'https://github.com/orbit-labs/orbit/actions/runs/9087/job/1' },
+      { name: 'test (ubuntu-latest)', state: 'failed', startedAt: at(day), completedAt: at(day - 4 * minute - 30_000), url: 'https://github.com/orbit-labs/orbit/actions/runs/9087/job/2' },
+    ],
+    artifacts: [{ name: 'playwright-report', size: 2_400_000, expired: false }, { name: 'coverage', size: 18_432, expired: true }],
+  },
 };
 
 export const previewHub = {
   runs: (repo: string): HubRun[] => structuredClone(runs[repo] ?? []),
+  runDetails: (repo: string, id: number): RunDetails => structuredClone(repo in runs ? runDetails[id] ?? { jobs: [], artifacts: [] } : { jobs: [], artifacts: [] }),
   pulls: (repo: string): HubPull[] => structuredClone(pulls[repo] ?? []),
   issues: (repo: string): HubIssue[] => structuredClone(issues[repo] ?? []),
 };

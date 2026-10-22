@@ -8,14 +8,14 @@ test('release versions cannot become paths, prereleases, or shell commands', () 
   assert.match(releaseDirectory('1.2.3'), /release[\\/]1\.2\.3$/);
 });
 
-test('only the three published targets are accepted', () => {
-  assert.deepEqual(Object.keys(targets), ['darwin-aarch64', 'windows-x86_64', 'linux-x86_64']);
-  for (const target of ['linux-aarch64', 'windows-arm64', '../mac', 'toString', '__proto__', null]) assert.throws(() => targetConfig(target));
+test('only the published targets are accepted', () => {
+  assert.deepEqual(Object.keys(targets), ['darwin-aarch64', 'windows-x86_64', 'linux-x86_64', 'linux-aarch64']);
+  for (const target of ['windows-arm64', '../mac', 'toString', '__proto__', null]) assert.throws(() => targetConfig(target));
 });
 
 test('release asset names are stable across versions', () => {
   const assets = Object.values(targets).map(config => config.asset);
-  assert.equal(new Set(assets).size, 3);
+  assert.equal(new Set(assets).size, 4);
   for (const asset of assets) assert.doesNotMatch(asset, /\d+\.\d+\.\d+/);
 });
 
@@ -23,7 +23,8 @@ test('the host maps to its native target', () => {
   assert.equal(hostTarget('darwin', 'arm64'), 'darwin-aarch64');
   assert.equal(hostTarget('win32', 'x64'), 'windows-x86_64');
   assert.equal(hostTarget('linux', 'x64'), 'linux-x86_64');
-  assert.throws(() => hostTarget('linux', 'arm64'), /No release target/);
+  assert.equal(hostTarget('linux', 'arm64'), 'linux-aarch64');
+  assert.throws(() => hostTarget('darwin', 'x64'), /No release target/);
 });
 
 test('missing variables fail without revealing other values', () => {
@@ -41,12 +42,13 @@ test('the Cargo.lock version is set with either line ending', () => {
 
 test('the updater manifest points every signed platform at its release asset', async () => {
   const { updaterManifest } = await import('./common.mjs');
-  const manifest = updaterManifest('0.3.1', ' Notes \n', { 'darwin-aarch64': 'sig-mac\n', 'linux-x86_64': 'sig-linux' }, '2026-10-18T00:00:00Z', 'aicodeking/pandacode');
+  const manifest = updaterManifest('0.3.1', ' Notes \n', { 'darwin-aarch64': 'sig-mac\n', 'linux-x86_64': 'sig-linux', 'linux-aarch64': 'sig-arm' }, '2026-10-18T00:00:00Z', 'aicodeking/pandacode');
   assert.deepEqual(manifest, {
     version: '0.3.1', notes: 'Notes', pub_date: '2026-10-18T00:00:00Z',
     platforms: {
       'darwin-aarch64': { signature: 'sig-mac', url: 'https://github.com/aicodeking/pandacode/releases/download/v0.3.1/PandaCode-macOS-arm64.app.tar.gz' },
       'linux-x86_64': { signature: 'sig-linux', url: 'https://github.com/aicodeking/pandacode/releases/download/v0.3.1/PandaCode-Linux-x86_64.AppImage' },
+      'linux-aarch64': { signature: 'sig-arm', url: 'https://github.com/aicodeking/pandacode/releases/download/v0.3.1/PandaCode-Linux-aarch64.AppImage' },
     },
   });
   assert.throws(() => updaterManifest('0.3.1', '', {}), /No signed updater files/);

@@ -31,6 +31,8 @@ export default async function (pi) {
     pi.registerTool({
       name: tool.name,
       label: tool.name,
+      // omp hides extension tools behind discovery unless they are essential; Pi ignores this.
+      loadMode: 'essential',
       description: tool.description,
       parameters: tool.inputSchema,
       async execute(_id, args, signal) {

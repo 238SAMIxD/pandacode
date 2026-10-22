@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createPreviewArchitect } from '../src/preview-architect.ts';
 import { workerQueueReason } from '../src/worker-scheduling.ts';
+import { namedTeamSetup, sameTeamSetup } from '../src/team-mode.ts';
 
 function fixture(t) {
   let time = 1_000_000, timerId = 0, messageId = 0;
@@ -419,4 +420,30 @@ test('active team profile changes keep the latest pending setup and can cancel i
   assert.equal(continued.workers.at(-1).name, 'Future builder');
   assert.equal(continued.workers.at(-1).provider, 'claude');
   assert.equal(history.filter(message => message.role === 'user').length, 2);
+});
+
+test('architect preview carries lead guidance and rejects oversized guidance', t => {
+  const { api } = fixture(t);
+  assert.equal(api.configure('parent', { ...config(), leadGuidance: '  You only lead.  ' }).config.leadGuidance, 'You only lead.');
+  assert.equal(api.configure('parent', { ...config(), leadGuidance: '   ' }).config.leadGuidance, undefined);
+  assert.throws(() => api.configure('parent', { ...config(), leadGuidance: 'x'.repeat(2001) }), /Lead guidance/);
+  // Native counts UTF-8 bytes: 700 three-byte characters are 2100 bytes but 700 UTF-16 units.
+  assert.throws(() => api.configure('parent', { ...config(), leadGuidance: '界'.repeat(700) }), /Lead guidance/);
+  assert.equal(api.configure('parent', { ...config(), leadGuidance: '界'.repeat(666) }).config.leadGuidance.length, 666);
+});
+
+test('a guidance-only edit is a different team setup', () => {
+  const setup = { architect: { provider: 'codex', model: 'm', reasoningEffort: null }, config: { ...config(), leadGuidance: 'Lead only.' } };
+  assert.equal(sameTeamSetup(setup, structuredClone(setup)), true);
+  assert.equal(sameTeamSetup(setup, { ...setup, config: { ...setup.config, leadGuidance: 'Review everything.' } }), false);
+  assert.equal(sameTeamSetup({ ...setup, config: { ...setup.config, leadGuidance: null } }, { ...setup, config: { ...setup.config, leadGuidance: undefined } }), true);
+});
+
+test('named teams keep lead guidance and a separate effort per role', () => {
+  const sol = { provider: 'codex', harness: 'Codex', model: 'sol-6.1', name: 'Sol 6.1' };
+  const setup = namedTeamSetup(' Sol ', { ...sol, reasoningEffort: 'high' }, [{ ...sol, reasoningEffort: 'medium' }, { ...sol, model: 'mini', name: 'Mini', reasoningEffort: '' }], { ...config(), leadGuidance: 'Lead only.' });
+  assert.deepEqual(setup.architect, { provider: 'codex', model: 'sol-6.1', reasoningEffort: 'high' });
+  assert.deepEqual(setup.config.workers.map(worker => worker.reasoningEffort), ['medium', null]);
+  assert.equal(setup.config.leadGuidance, 'Lead only.');
+  assert.equal('leadGuidance' in namedTeamSetup('Sol', sol, [sol]).config, false);
 });

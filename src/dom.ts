@@ -78,6 +78,22 @@ const paths: Record<string, string> = {
   widget: '<rect x="3" y="5" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="10" height="5" rx="1.5"/><path d="M16 16.5h5"/>',
 };
 export function icon(name: string, cls = ''): string { return `<svg class="icon ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] ?? paths.file}</svg>`; }
+// Material file icons load in their own chunk to keep the startup bundle small; plain glyphs show until then.
+let fileIcons: typeof import('./file-icons.ts') | undefined;
+let loadFileIcons: () => void = () => {};
+// Resolves once the icon chunk has loaded; the chunk is fetched on the first fileIcon() call, not at startup.
+export const fileIconsReady = new Promise<void>(resolve => {
+  let started = false;
+  loadFileIcons = () => {
+    if (started) return;
+    started = true;
+    import('./file-icons.ts').then(module => { fileIcons = module; }, error => console.warn('File icons unavailable', error)).then(() => resolve());
+  };
+});
+export function fileIcon(name: string, isDir: boolean): string {
+  if (!fileIcons) loadFileIcons();
+  return fileIcons?.fileIcon(name, isDir, document.documentElement.dataset.theme === 'light') ?? icon(isDir ? 'folder' : 'file');
+}
 export function button(action: string, label: string, symbol: string, cls = '', extra = ''): string { return `<button class="icon-button ${cls}" data-action="${action}" title="${escape(label)}" aria-label="${escape(label)}" ${extra}>${icon(symbol)}</button>`; }
 export function $(selector: string): HTMLElement { const el = document.querySelector<HTMLElement>(selector); if (!el) throw new Error(`Missing element ${selector}`); return el; }
 // Local file URLs become inert workspace candidates before the sanitizer strips their

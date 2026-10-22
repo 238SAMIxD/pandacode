@@ -50,7 +50,7 @@ async function delayedConnections(page: Page): Promise<void> {
   await expect(page.locator('.task-item.selected .task-title')).toHaveText('Make search feel instant');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('tab', { name: 'Providers', exact: true }).click();
-  await expect(page.locator('#settings-panel-providers details summary')).toHaveCount(5);
+  await expect(page.locator('#settings-panel-providers details summary')).toHaveCount(7);
   for (const summary of await page.locator('#settings-panel-providers details summary').all()) await summary.click();
 }
 
@@ -164,7 +164,7 @@ test('provider connections expose all new harnesses and real GLM model names', a
   await expect(page.getByText('GLM-4.7', { exact: true }).first()).toBeVisible();
 });
 
-for (const providerId of ['claude', 'codex', 'kimi', 'opencode', 'glm', 'antigravity', 'grok', 'mimo', 'pi', 'deepseek']) {
+for (const providerId of ['claude', 'codex', 'kimi', 'opencode', 'glm', 'antigravity', 'grok', 'mimo', 'pi', 'deepseek', 'commandcode']) {
   test(`provider connections start ${providerId} tasks with Full access and retain explicit restrictions when switching`, async ({ page }) => {
     await page.addInitScript(provider => localStorage.setItem('pandacode.provider', provider), providerId);
     await page.route('**/src/preview.ts*', async route => {
@@ -247,4 +247,22 @@ test('DeepSeek has a key card, four approval modes and effort levels', async ({ 
   await expect(card.getByLabel('DeepSeek API key', { exact: true })).toHaveAttribute('type', 'password');
   await card.locator('summary').click();
   await expect(card.getByLabel('DeepSeek executable', { exact: true })).toBeVisible();
+});
+
+test('Command Code has a key card, four approval modes and its own model list', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('pandacode.provider', 'commandcode'));
+  await page.goto('/');
+  await page.locator('.new-task-button').click();
+  await page.locator('#mode-picker-trigger').click();
+  const items = page.getByRole('dialog', { name: 'Permissions', exact: true }).getByRole('menuitemradio');
+  await expect(items).toHaveCount(4);
+  await expect(items.filter({ hasText: 'Accept edits' })).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('tab', { name: 'Providers', exact: true }).click();
+  const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Command Code', exact: false }) });
+  await expect(card.getByRole('link', { name: 'Command Code docs' })).toHaveAttribute('href', 'https://commandcode.ai/docs/acp');
+  await expect(card.getByLabel('Command Code API key', { exact: true })).toHaveAttribute('type', 'password');
+  await card.locator('summary').click();
+  await expect(card.getByLabel('Command Code executable', { exact: true })).toBeVisible();
 });

@@ -14,6 +14,8 @@ interface Configuration {
   glmKeyFromEnvironment: boolean;
   deepseekKeySaved: boolean;
   deepseekKeyFromEnvironment: boolean;
+  commandcodeKeySaved: boolean;
+  commandcodeKeyFromEnvironment: boolean;
   mimoKeySaved: boolean;
   mimoKeyFromEnvironment: boolean;
   mimoEndpoint: string | null;
@@ -28,6 +30,7 @@ const keyed = {
   glm: { env: 'ZAI_API_KEY', save: 'provider_save_glm_key', remove: 'provider_remove_glm_key', saved: 'GLM key saved. Choose GLM Coding Plan in the model selector.', savedFlag: 'glmKeySaved', envFlag: 'glmKeyFromEnvironment' },
   mimo: { env: 'MIMO_API_KEY', save: 'provider_save_mimo_key', remove: 'provider_remove_mimo_key', saved: 'MiMo key saved. Choose MiMo Token Plan in the model selector.', savedFlag: 'mimoKeySaved', envFlag: 'mimoKeyFromEnvironment' },
   deepseek: { env: 'DEEPSEEK_API_KEY', save: 'provider_save_deepseek_key', remove: 'provider_remove_deepseek_key', saved: 'DeepSeek key saved. Choose DeepSeek in the model selector.', savedFlag: 'deepseekKeySaved', envFlag: 'deepseekKeyFromEnvironment' },
+  commandcode: { env: 'COMMAND_CODE_API_KEY', save: 'provider_save_commandcode_key', remove: 'provider_remove_commandcode_key', saved: 'Command Code key saved. Choose Command Code in the model selector.', savedFlag: 'commandcodeKeySaved', envFlag: 'commandcodeKeyFromEnvironment' },
 } as const;
 type KeyedProvider = keyof typeof keyed;
 
@@ -65,9 +68,13 @@ export function mountProviderSettings(host: HTMLElement, saved: () => Promise<un
     <section class="connection-card"><h3>${providerLogo('antigravity')}Antigravity</h3><p>Connect the official Google Antigravity ACP server. The standalone <code>agy</code> terminal CLI is a different executable.</p><a href="https://antigravity.google/docs/ide/extensions" target="_blank" rel="noopener noreferrer">Get the official ACP server ${icon('forward')}</a>${pathForm('antigravity', 'Antigravity ACP executable', '/path/to/agy_acp_server.par')}</section>
     <section class="connection-card"><h3>${providerLogo('grok')}Grok Build<small>xAI, via ACP</small></h3><p>Uses your Grok sign-in and models. Install with <code>curl -fsSL https://x.ai/cli/install.sh | bash</code>, then run <code>grok login</code> once; PandaCode talks to <code>grok agent stdio</code>.</p><a href="https://docs.x.ai/build/overview" target="_blank" rel="noopener noreferrer">Grok Build docs ${icon('forward')}</a>${pathForm('grok', 'Grok executable', '/path/to/grok')}</section>
     <section class="connection-card"><h3>${providerLogo('pi')}Pi</h3><p>Uses the accounts, models and extensions configured in Pi. Install Pi and sign in from its CLI before starting a task.</p><a href="https://github.com/earendil-works/pi" target="_blank" rel="noopener noreferrer">Install Pi ${icon('forward')}</a>${pathForm('pi', 'Pi executable', '/path/to/pi')}</section>
+    <section class="connection-card"><h3>Oh My Pi<small>omp</small></h3><p>A Pi fork with its own accounts and models. Install it with <code>bun install -g @oh-my-pi/pi-coding-agent</code>, then sign in from the <code>omp</code> CLI before starting a task.</p><a href="https://github.com/can1357/oh-my-pi" target="_blank" rel="noopener noreferrer">Install omp ${icon('forward')}</a>${pathForm('omp', 'omp executable', '/path/to/omp')}</section>
     <section class="connection-card"><h3>${providerLogo('deepseek')}DeepSeek<small>DeepSeek Harness, via ACP</small></h3><p>Install with <code>npm i -g @deepseek-ai/dsh</code>. A key is optional: DeepSeek can use its own stored credentials.</p>
       ${keyForm('deepseek', 'DeepSeek API key')}
       <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener noreferrer">Get an API key ${icon('forward')}</a>${pathForm('deepseek', 'DeepSeek executable', '/path/to/dsh')}</section>
+    <section class="connection-card"><h3>${providerLogo('commandcode')}Command Code<small>via ACP</small></h3><p>Install with <code>npm i -g command-code</code>, then sign in once with <code>command-code login</code>. A key is optional: either one authenticates the same account.</p>
+      ${keyForm('commandcode', 'Command Code API key')}
+      <a href="https://commandcode.ai/docs/acp" target="_blank" rel="noopener noreferrer">Command Code docs ${icon('forward')}</a>${pathForm('commandcode', 'Command Code executable', '/path/to/command-code')}</section>
     <p class="connection-feedback" role="status" hidden></p>${preview ? '<p class="settings-preview-note">Browser preview · keys are never saved here.</p>' : ''}`;
   const feedback = host.querySelector<HTMLElement>('.connection-feedback')!;
   const keyInput = (provider: KeyedProvider) => host.querySelector<HTMLInputElement>(`#${provider}-key`)!;

@@ -2,9 +2,10 @@
 
 A small, native desktop workspace for coding agents. PandaCode runs the coding
 CLIs you already use — **Claude Code, Codex, Kimi Code, OpenCode, GLM Coding
-Plan and Xiaomi MiMo** (through Claude Code), **Antigravity and xAI's Grok
-Build** (through ACP) **Pi** (through its RPC mode) and **DeepSeek** (through ACP) — side by side, with
-your projects, Git, a terminal and a browser in one window.
+Plan and Xiaomi MiMo** (through Claude Code), **Antigravity, xAI's Grok Build,
+DeepSeek and Command Code** (through ACP) and **Pi** and its fork **omp** (through
+Pi's RPC mode) —
+side by side, with your projects, Git, a terminal and a browser in one window.
 
 PandaCode is free and open source under the [PandaCode License](LICENSE), the MIT
 License with one addition: forks that are used commercially or released publicly
@@ -20,6 +21,7 @@ embedded editor engine.
   <a href="https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-macOS-arm64.dmg">macOS (Apple silicon)</a> ·
   <a href="https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-Windows-x64-setup.exe">Windows x64</a> ·
   <a href="https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-Linux-x86_64.AppImage">Linux x64</a> ·
+  <a href="https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-Linux-aarch64.AppImage">Linux arm64</a> ·
   <a href="https://github.com/aicodeking/pandacode/releases">All releases</a>
 </p>
 
@@ -114,7 +116,7 @@ Discord, WhatsApp or a browser too.
 - **Your code stays on your machine.** Projects, conversations and settings are
   stored locally in SQLite. Prompts go only to the coding CLI or service you
   pick, under that provider's own terms.
-- **It only talks to services you choose.** Provider keys (GLM, MiMo, DeepSeek, cloud
+- **It only talks to services you choose.** Provider keys (GLM, MiMo, DeepSeek, Command Code, cloud
   sandboxes, bot channels) live in the system keychain and are sent only to
   that provider.
 
@@ -138,6 +140,7 @@ Download the latest build from
 | macOS (Apple silicon) | [`PandaCode-macOS-arm64.dmg`](https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-macOS-arm64.dmg) | macOS 12+ |
 | Windows x64 | [`PandaCode-Windows-x64-setup.exe`](https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-Windows-x64-setup.exe) | Windows 10 1809+ or Windows 11 |
 | Linux x64 | [`PandaCode-Linux-x86_64.AppImage`](https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-Linux-x86_64.AppImage) | Ubuntu 22.04+ or compatible, X11 or XWayland |
+| Linux arm64 | [`PandaCode-Linux-aarch64.AppImage`](https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-Linux-aarch64.AppImage) | Ubuntu 24.04+ aarch64 or compatible, X11 or XWayland |
 
 Or from a terminal: `npx pandacode` downloads the latest build, verifies its
 signature and installs it (on macOS it is signed locally for you, so no
@@ -148,7 +151,7 @@ Release builds are not code-signed, so your OS will warn the first time:
 - **macOS:** if macOS says it cannot verify PandaCode, open **System Settings →
   Privacy & Security** and click **Open Anyway**.
 - **Windows:** if SmartScreen appears, click **More info → Run anyway**.
-- **Linux:** `chmod +x PandaCode-Linux-x86_64.AppImage`, then run it. Some
+- **Linux:** `chmod +x PandaCode-Linux-x86_64.AppImage` (or `-aarch64`), then run it. Some
   distributions need FUSE 2 (`libfuse2`), or set `APPIMAGE_EXTRACT_AND_RUN=1`.
 
 Each file has a `.sha256` checksum beside it. Once installed, PandaCode updates
@@ -162,7 +165,11 @@ PandaCode does not include provider plans or usage.
 
 [Pi](https://github.com/earendil-works/pi) installs with `npm i -g @earendil-works/pi-coding-agent`; sign in through Pi's own CLI. PandaCode drives it over Pi's RPC mode and gives it PandaCode's app tools through a local loopback bridge extension. Pi has no approval system of its own, so PandaCode's extension enforces the permission modes; the integrated console needs Full access.
 
+[omp (Oh My Pi)](https://github.com/can1357/oh-my-pi), a Pi fork that runs on Bun, installs with `bun install -g @oh-my-pi/pi-coding-agent`; sign in through `omp` itself. PandaCode drives it with the same RPC bridge as Pi and passes `--approval-mode yolo` so the bridge stays the only approval gate.
+
 [DeepSeek](https://platform.deepseek.com/api_keys) installs with `npm i -g @deepseek-ai/dsh`; PandaCode launches `dsh --profile acp`. An API key is optional (Settings → Providers, or `DEEPSEEK_API_KEY`); dsh can use its own stored credentials. Usage limits are not shown in PandaCode; check platform.deepseek.com.
+
+[Command Code](https://commandcode.ai/docs/acp) installs with `npm i -g command-code` (Node 22 or newer); PandaCode launches `command-code acp`. Sign in once with `command-code login`, or save an API key in Settings → Providers (or set `COMMAND_CODE_API_KEY`); either one authenticates the same account. Usage limits are not shown in PandaCode; check Command Code Studio.
 
 ## Build from source
 

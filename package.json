@@ -42,6 +42,7 @@
     "dompurify": "^3.3.0",
     "katex": "^0.16.47",
     "marked": "^17.0.0",
+    "material-icon-theme": "5.39.0",
     "three": "^0.186.1"
   },
   "devDependencies": {

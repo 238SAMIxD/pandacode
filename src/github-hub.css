@@ -96,9 +96,29 @@ button.gh-row:active{background:color-mix(in srgb,var(--text) 8%,transparent)}
 .gh-status[data-status=running]{color:var(--accent-ink)}
 .gh-status[data-status=running]::before{background:var(--accent)}
 .gh-status[data-status=queued]::before{background:none;box-shadow:inset 0 0 0 1.5px currentColor}
-.gh-run>.gh-status{width:6.6em}
 .gh-workflow{flex:none;max-width:14ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:550}
 .gh-run .gh-ref{max-width:22ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* A run that never started: the workflow file, not the code, is at fault. */
+.gh-status[data-status=blocked]{color:var(--danger)}
+.gh-status[data-status=blocked]::before{background:none;box-shadow:inset 0 0 0 1.5px currentColor;border-radius:2px}
+.gh-run>.gh-status{width:7.4em}
+.gh-event{padding:1px 7px;border-radius:999px;box-shadow:inset 0 0 0 1px var(--gh-line);font-size:.68rem;white-space:nowrap}
+button.gh-run-pull{border-radius:3px;padding:2px 3px}
+button.gh-run-pull:hover{color:var(--text);background:var(--gh-hover)}
+.gh-attempt,.gh-duration{font-variant-numeric:tabular-nums;white-space:nowrap}
+.gh-run-filters{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0 8px;font-size:.76rem;color:var(--muted)}
+.gh-run-filters select{min-height:26px;max-width:24ch;padding:0 6px;border-radius:3px;background:var(--gh-card);box-shadow:inset 0 0 0 1px var(--gh-line);color:var(--text);font:inherit}
+.gh-run-latest{display:inline-flex;align-items:center;gap:5px}
+[data-gh-run-toggle] .icon{transition:rotate 120ms}
+[data-gh-run-toggle][aria-expanded=true] .icon{rotate:90deg}
+.gh-run-details{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:4px 24px;margin:0 12px 10px 12px;padding:8px 12px;border-radius:4px;background:var(--gh-inset);font-size:.78rem}
+.gh-run-details ul{margin:4px 0 0;padding:0;list-style:none}
+.gh-run-details li{display:flex;align-items:center;gap:8px;min-height:26px}
+.gh-run-details li .icon{width:13px;height:13px;flex:none;color:var(--muted)}
+.gh-run-details .gh-duration{color:var(--muted)}
+.gh-run-details .gh-act{min-height:22px;padding:0 6px}
+.gh-run-blocked{grid-column:1/-1;display:flex;gap:6px;align-items:flex-start;color:var(--danger)}
+.gh-run-blocked .icon{width:14px;height:14px;flex:none}
 .gh-diff{display:inline-flex;gap:5px;font:500 .72rem/1 var(--mono,ui-monospace,monospace);font-variant-numeric:tabular-nums}
 .gh-diff ins{color:var(--success);text-decoration:none}
 .gh-diff del{color:var(--danger);text-decoration:none}
@@ -168,3 +188,4 @@ button.gh-row:active{background:color-mix(in srgb,var(--text) 8%,transparent)}
 @media (prefers-contrast:more){.gh-row:is(:hover,:focus-within){box-shadow:inset 0 0 0 1px var(--border)}.gh-label{box-shadow:inset 0 0 0 1px var(--border)}}
 @media (max-width:900px){.gh-row .gh-label,.gh-author,.gh-diff{display:none}.gh-head,.gh-bar{padding-inline:18px}}
 .gh-error-detail{display:block;max-width:100%;margin-top:8px;padding:6px 9px;border-radius:3px;background:var(--gh-inset);font:500 .72rem/1.45 var(--mono,ui-monospace,monospace);color:var(--muted);overflow-wrap:anywhere;text-align:left}
+.gh-run-details .gh-note{margin:4px 0;font-size:.78rem}

@@ -33,11 +33,13 @@ export function issuePrompt(action: IssueAction, issue: IssueRef): string {
     : `Let's work on issue ${ref}: `;
 }
 
-/** A failed workflow run: the agent reads the failing logs, reproduces and fixes it. */
-export function runPrompt(run: { id: number; workflow: string; branch: string }): string {
+/** A failed workflow run: the agent reads the failing logs, reproduces and fixes it. A run GitHub
+ * couldn't start (`not_started`, a startup failure) has no logs: its workflow file is at fault. */
+export function runPrompt(run: { id: number; workflow: string; branch: string; state?: string }): string {
+  if (run.state === 'not_started') return `The "${run.workflow}" workflow run ${run.id} on ${run.branch} didn't start: GitHub reported a startup failure, so no job ran and there are no logs. The workflow file is likely invalid: a YAML or schema error, an action or reusable workflow that doesn't exist, or a \`runs-on\` label no runner has. Find the file under .github/workflows (\`gh run view ${run.id}\` names it), validate it (use \`actionlint\` if it's installed), fix it and explain what was wrong. Don't push unless I ask.`;
   return `The "${run.workflow}" workflow run ${run.id} on ${run.branch} failed. See what failed with \`gh run view ${run.id} --log-failed\`, check out ${run.branch}, reproduce the failure locally, fix it and run the tests. Summarize what was wrong and what you changed; don't push unless I ask.`;
 }
-export const runTitle = (run: { workflow: string; branch: string }) => `Fix ${run.workflow} on ${run.branch}`.slice(0, 120);
+export const runTitle = (run: { workflow: string; branch: string; state?: string }) => (run.state === 'not_started' ? `Fix ${run.workflow} workflow file` : `Fix ${run.workflow} on ${run.branch}`).slice(0, 120);
 
 /** Thread titles say what the thread is for, short enough for the sidebar. */
 export function threadTitle(kind: 'pull' | 'issue', action: PullAction | IssueAction, item: { number: number; title: string }): string {

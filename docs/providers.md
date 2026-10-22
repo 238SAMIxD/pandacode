@@ -480,3 +480,68 @@ Verified against `grok` 1.0.30/1.0.40 on 2026-09-21 by driving `grok agent stdio
 directly; the recorded frames back the unit tests in `providers/acp.rs`, and an
 ignored smoke test (`installed_grok_negotiates_settings_without_prompt`) replays the
 real handshake up to the prompt boundary without spending tokens.
+
+## Command Code
+
+Command Code (`command-code`, installed with `npm i -g command-code`, Node 22 or
+newer) exposes ACP v1 on `command-code acp` — the transport OpenCode also uses — so
+PandaCode drives it with the shared ACP adapter. The launch line is
+`command-code acp`. Its npm package also ships the aliases `cmd`, `commandcode` and,
+on Windows, `cmdc`; PandaCode looks for `command-code`.
+
+**Sign-in.** Command Code keeps its own login (`command-code login`, stored in
+`~/.commandcode/auth.json`). A key saved in Settings → Agents, or
+`COMMAND_CODE_API_KEY`, authenticates the same account and is injected into the ACP
+process; the CLI reads the environment variable ahead of its own file, so a key-only
+setup never needs the CLI login. The same key also authenticates Command Code's
+Provider API. With neither, `session/new` fails with ACP `-32000` and the turn stops
+with “Command Code is not signed in. Run `command-code login` in a terminal, or save
+an API key in Settings → Agents, then send again.”
+
+**Models and effort.** `session/new` returns `configOptions` (`model`, and `effort`
+in the `thought_level` category) with display names and descriptions, so discovery
+opens an empty session and never prompts. The adapter applies the mode, then the
+model, then the advertised reasoning effort, waiting for each acknowledgement before
+sending the prompt. ACP reports reasoning efforts for the model the session currently
+holds, so they are attached to that model only, and the catalog is whatever the
+account's plan can reach (Command Code's own models plus any BYOK providers).
+
+**Approvals.** Command Code's ACP modes are its permission modes, so each PandaCode
+choice maps onto one directly: Standard → `default`, Accept edits → `auto-accept`,
+Plan → `plan` (read-only: no edits or commands), Full access → `bypass`. A mode the
+server stops advertising fails the turn instead of silently running in a different
+one; plan mode needs no prompt prefix, because the harness enforces it.
+
+**Turn data.** Streaming text, tool calls, context usage (`usage_update`), slash
+commands (`available_commands_update`, including installed skills), cancel, resume
+(`session/resume`) and HTTP MCP for PandaCode tools all use the common ACP paths.
+`loadSession` is advertised, so a task keeps its native session across turns.
+
+**Not yet.** The harness console is not offered for Command Code, and a mid-turn
+message stays queued: its ACP server refuses a second prompt while a turn is running,
+so there is no steering path to hook into.
+
+Verified against `command-code` 1.87.1 on 2026-10-22 by driving `command-code acp`
+directly; the recorded frames back the unit tests in `providers/commandcode.rs`, and
+an ignored smoke test (`live_command_code_lists_models`) reads the real catalog
+without spending tokens.
+
+## omp (Oh My Pi)
+
+omp (`omp`, from `@oh-my-pi/pi-coding-agent`, a Bun program) is a fork of Pi and
+speaks the same JSONL RPC (`--mode rpc`), so `providers/pi.rs` drives both. The
+differences, read from omp 18.12's `modes/rpc/rpc-types.ts` and CLI flag table:
+
+- A run ends with `prompt_result` (`status` completed/aborted/error) once the
+  session is settled, or with a later `session_settled` when `sessionSettled` is
+  false. Pi's `agent_settled` is never sent.
+- Resume uses `--resume <id>` (omp has no `--session-id`); it looks in the task
+  folder first and fails rather than prompting when stdin is not a terminal.
+- `--approval-mode yolo` turns omp's own approvals off: the same bridge extension
+  as Pi enforces PandaCode's modes, and registers app tools as `essential` so
+  omp does not hide them behind tool discovery.
+- Model discovery skips Pi-only flags (`--offline`, `--no-mcp`, …); slash
+  commands come from `get_available_commands`.
+
+Accounts, models and thinking levels are omp's own. Live check:
+`cargo test installed_omp -- --ignored`.

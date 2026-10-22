@@ -1,5 +1,6 @@
 import './overlay.css';
 import { escape, icon } from './dom';
+import { mountExternalLinks } from './external-links';
 import { providerLogo } from './provider-logos';
 import { nativeOverlay, overlayCall, type OverlaySnapshot, type OverlayTask, type LaunchContext } from './overlay-client';
 import type { FileEntry, ProviderId, ProviderModel } from './types';
@@ -118,7 +119,7 @@ function render(): void {
   start.disabled = busy || modelSaving || !snapshot.projects.length || !prompt.value.trim();
   agentButton.disabled = busy || modelSaving || pickerLoading;
   agentButton.setAttribute('aria-busy',String(modelSaving || pickerLoading));
-  const name = {codex:'Codex',claude:'Claude Code',kimi:'Kimi Code',opencode:'OpenCode',glm:'GLM',antigravity:'Antigravity',grok:'Grok Build',mimo:'MiMo Token Plan',pi:'Pi',deepseek:'DeepSeek'}[snapshot.context.provider] || snapshot.context.provider;
+  const name = {codex:'Codex',claude:'Claude Code',kimi:'Kimi Code',opencode:'OpenCode',glm:'GLM',antigravity:'Antigravity',grok:'Grok Build',mimo:'MiMo Token Plan',pi:'Pi',deepseek:'DeepSeek',commandcode:'Command Code',omp:'Oh My Pi'}[snapshot.context.provider] || snapshot.context.provider;
   const modelName = modelNames.get(`${snapshot.context.provider}:${snapshot.context.model}`) || fallbackModel(snapshot.context.provider as ProviderId,snapshot.context.model).name;
   const teamCount = snapshot.teamWorkerCount ?? 0;
   const teamLabel = teamCount > 0 ? `+${teamCount} ${teamCount === 1 ? 'model' : 'models'}` : '';
@@ -194,6 +195,7 @@ window.addEventListener('keydown',event => {
   if (event.key === 'ArrowDown' && event.target === search) { event.preventDefault(); list.querySelector<HTMLButtonElement>('[data-task]')?.focus(); }
 });
 window.addEventListener('pagehide',() => { setVisible(false); fileMentions.dispose(); });
+mountExternalLinks(document, url => overlayCall('open_external_url', { url }), error => showFeedback(error instanceof Error ? error.message : String(error), true));
 if (nativeOverlay) {
   void import('@tauri-apps/api/event').then(({listen}) => listen<boolean>('overlay-visibility',event => setVisible(event.payload)));
   void import('@tauri-apps/api/event').then(({listen}) => listen<{sessionIds: string[]}>('sessions-deleted', event => removeDeletedSessions(event.payload.sessionIds)));

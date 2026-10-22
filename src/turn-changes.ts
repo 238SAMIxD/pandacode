@@ -1,5 +1,5 @@
 import type { TurnChangeFile, TurnChanges } from './types.ts';
-import { escape, icon } from './dom.ts';
+import { escape, fileIcon, icon } from './dom.ts';
 import { infoMark } from './tooltip.ts';
 
 export function changeCounts(additions: number | null, deletions: number | null): string {
@@ -25,8 +25,8 @@ function fileTree(changes: TurnChanges): string {
     folder.files.push(file);
   }
   function render(folder: Folder): string {
-    return [...folder.folders.values()].map(child => `<details class="turn-change-folder" data-change-key="${escape(changes.id + ':' + child.path)}"><summary>${icon('chevron')}${icon('folder')}<span class="change-path">${escape(child.name)}</span><span class="change-counts">${changeCounts(child.additions, child.deletions)}</span></summary><div class="turn-change-children">${render(child)}</div></details>`).join('')
-      + folder.files.map(file => `<button type="button" class="turn-change-file" data-action="open-turn-diff" data-path="${escape(file.path)}" title="${escape(file.oldPath ? file.oldPath + ' → ' + file.path : file.path)}" aria-label="View diff for ${escape(file.path)}">${icon('file')}<span class="change-path">${escape(file.path.split('/').pop())}</span><span class="change-file-status" title="${file.status}">${file.status === 'renamed' ? 'R' : file.status === 'added' ? 'A' : file.status === 'deleted' ? 'D' : 'M'}</span><span class="change-counts">${file.binary ? '<span class="change-count-unknown">Binary</span>' : changeCounts(file.additions, file.deletions)}</span></button>`).join('');
+    return [...folder.folders.values()].map(child => `<details class="turn-change-folder" data-change-key="${escape(changes.id + ':' + child.path)}"><summary>${icon('chevron')}${fileIcon(child.name, true)}<span class="change-path">${escape(child.name)}</span><span class="change-counts">${changeCounts(child.additions, child.deletions)}</span></summary><div class="turn-change-children">${render(child)}</div></details>`).join('')
+      + folder.files.map(file => `<button type="button" class="turn-change-file" data-action="open-turn-diff" data-path="${escape(file.path)}" title="${escape(file.oldPath ? file.oldPath + ' → ' + file.path : file.path)}" aria-label="View diff for ${escape(file.path)}">${fileIcon(file.path.split('/').pop() ?? file.path, false)}<span class="change-path">${escape(file.path.split('/').pop())}</span><span class="change-file-status" title="${file.status}">${file.status === 'renamed' ? 'R' : file.status === 'added' ? 'A' : file.status === 'deleted' ? 'D' : 'M'}</span><span class="change-counts">${file.binary ? '<span class="change-count-unknown">Binary</span>' : changeCounts(file.additions, file.deletions)}</span></button>`).join('');
   }
   return render(root);
 }

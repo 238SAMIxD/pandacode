@@ -6,6 +6,7 @@ mod appearance;
 mod architect;
 mod bots;
 mod browser;
+mod child_env;
 mod command_operations;
 mod context_recovery;
 mod conversation_fork;
@@ -2088,6 +2089,8 @@ async fn open_external_url(url: String) -> Result<()> {
     };
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let mut command = tokio::process::Command::new("xdg-open");
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    child_env::sanitize(&mut command);
     command
         .arg(parsed.as_str())
         .stdin(std::process::Stdio::null())
@@ -2398,6 +2401,10 @@ async fn github_repo_issues(repo: String) -> Result<Vec<github_hub::HubIssue>> {
 #[tauri::command]
 async fn github_repo_runs(repo: String) -> Result<Vec<github_hub::HubRun>> {
     blocking(move || github_hub::runs(&repo)).await
+}
+#[tauri::command]
+async fn github_run_details(repo: String, id: i64) -> Result<github_hub::RunDetails> {
+    blocking(move || github_hub::run_details(&repo, id)).await
 }
 /// Which local projects check out which GitHub repositories, by their `origin` remote.
 #[tauri::command]
@@ -2970,6 +2977,7 @@ pub fn run() {
                     list_providers,
                     list_provider_models,
                     search_files,
+                    open_external_url,
                 ];
                 return handler(invoke);
             }
@@ -3073,6 +3081,8 @@ pub fn run() {
                 provider_settings::provider_remove_mimo_key,
                 provider_settings::provider_save_deepseek_key,
                 provider_settings::provider_remove_deepseek_key,
+                provider_settings::provider_save_commandcode_key,
+                provider_settings::provider_remove_commandcode_key,
                 provider_settings::provider_set_mimo_endpoint,
                 architect::profiles::architect_profiles,
                 architect::profiles::architect_save_profile,
@@ -3149,6 +3159,7 @@ pub fn run() {
                 github_repo_pulls,
                 github_repo_issues,
                 github_repo_runs,
+                github_run_details,
                 github_project_repos,
                 github_clone_repo,
                 github_search,

@@ -1413,7 +1413,7 @@ test('chooses the default agent inside Settings without closing the Settings pag
   await trigger.click();
   await expect(menu.getByRole('menuitemradio', { name: 'Claude Code', exact: true })).toBeFocused();
   await page.keyboard.press('End');
-  await expect(menu.getByRole('menuitemradio', { name: 'DeepSeek', exact: true })).toBeFocused();
+  await expect(menu.getByRole('menuitemradio', { name: 'Oh My Pi', exact: true })).toBeFocused();
   await page.keyboard.press('Home');
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowDown');
@@ -1427,7 +1427,7 @@ test('chooses the default agent inside Settings without closing the Settings pag
   await expect(menu.getByRole('menuitemradio', { name: 'Kimi Code', exact: true })).toHaveAttribute('aria-checked', 'true');
   await page.keyboard.press('Tab');
   await expect(menu).toHaveCount(0);
-  await expect(settings.getByRole('button', { name: 'Check updates', exact: true })).toBeFocused();
+  await expect(settings.getByRole('button', { name: 'Default model for new tasks', exact: true })).toBeFocused();
   await closeSettings(page);
   await page.locator('.new-task-button').click();
   await expect(newTaskHeading(page)).toBeVisible();
@@ -1447,7 +1447,7 @@ test('keeps the Settings agent menu clickable at the minimum desktop window size
     return { inViewport: rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight,
       reachable: element.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)) };
   }));
-  expect(hitTargets).toHaveLength(10);
+  expect(hitTargets).toHaveLength(12);
   expect(hitTargets.every(target => target.inViewport && target.reachable)).toBe(true);
   await menu.getByRole('menuitemradio', { name: 'Kimi Code', exact: true }).click();
   await expect(settings.getByRole('button', { name: 'Default agent for new tasks', exact: true })).toHaveText('Kimi Code');
@@ -1900,6 +1900,48 @@ async function showTurnFixture(page: Page, entries: Array<{ role: string; conten
 }
 
 const turnTool = (id: string, name: string, status = 'completed') => JSON.stringify({ type: 'tool_activity', version: 1, id, name, status, input: `${name} input`, output: `${name} output` });
+
+test('tool activity settings persist expanded and collapsed groups with compact spacing', async ({ page }) => {
+  await showTurnFixture(page, [
+    { role: 'user', content: 'Inspect these files.', at: 0 },
+    ...Array.from({ length: 12 }, (_, index) => ({ role: 'tool', content: turnTool(`compact-${index}`, 'Read'), at: (index + 1) * 1000 })),
+    { role: 'assistant', content: 'Inspection complete.', at: 15000 },
+  ]);
+  const turn = page.locator('details.turn-activity');
+  const groups = turn.locator('.tool-group');
+  await expect(turn).not.toHaveAttribute('open', '');
+  await turn.locator('.turn-activity-summary').click();
+  await expect(groups).toHaveCount(3);
+  const first = (await groups.nth(0).boundingBox())!;
+  const second = (await groups.nth(1).boundingBox())!;
+  expect(second.y - first.y - first.height).toBeLessThanOrEqual(4);
+  expect(first.height).toBeGreaterThanOrEqual(30);
+  await prompt(page).fill('Keep my draft while changing activity.');
+  await page.keyboard.press('Meta+,');
+  const expand = page.getByRole('checkbox', { name: 'Expand tool activity', exact: true });
+  await expect(expand).not.toBeChecked();
+  await expand.check();
+  await page.getByRole('button', { name: 'Back to the workspace', exact: true }).click();
+  await expect(turn).toHaveAttribute('open', '');
+  await expect(turn.locator('.tool-group[open]')).toHaveCount(3);
+  await expect(prompt(page)).toHaveValue('Keep my draft while changing activity.');
+  await page.reload();
+  await expect(turn).toHaveAttribute('open', '');
+  await expect(turn.locator('.tool-group[open]')).toHaveCount(3);
+  await page.keyboard.press('Meta+,');
+  await expand.uncheck();
+  await page.getByRole('button', { name: 'Back to the workspace', exact: true }).click();
+  await expect(turn).not.toHaveAttribute('open', '');
+  await turn.locator('.turn-activity-summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(turn).toHaveAttribute('open', '');
+  await expect(turn.locator('.tool-group[open]')).toHaveCount(0);
+  await groups.first().locator('.tool-group-summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(groups.first()).toHaveAttribute('open', '');
+  await page.reload();
+  await expect(turn).not.toHaveAttribute('open', '');
+});
 
 test('times each tool turn independently using saved durations and labels older estimates', async ({ page }) => {
   await showTurnFixture(page, [
@@ -2421,7 +2463,10 @@ test('keeps an observed streaming response active when metadata reloads before p
   });
   expect(observedResponseAt).toBeGreaterThan(0);
   await page.getByRole('button', { name: 'Task actions', exact: true }).click();
-  const renameAction = page.getByRole('dialog', { name: 'Task actions', exact: true }).getByRole('menuitem', { name: 'Rename task', exact: true });
+  const actions = page.getByRole('dialog', { name: 'Task actions', exact: true });
+  await expect(actions.getByRole('menuitem', { name: 'Pin task', exact: true })).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  const renameAction = actions.getByRole('menuitem', { name: 'Rename task', exact: true });
   await expect(renameAction).toBeFocused();
   await renameAction.press('Enter');
   const dialog = page.getByRole('dialog');

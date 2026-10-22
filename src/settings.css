@@ -44,6 +44,8 @@ html[data-native-platform=macos] .settings-nav-head{padding-left:72px}
 .settings-page-root .secondary-button>.icon{width:.7rem;height:.7rem}
 .settings-page-root .settings-select{width:auto;max-width:100%;min-width:10.5rem;font-size:.83rem;padding:.6rem .75rem;background:var(--bg);box-shadow:none}
 .settings-page-root .settings-select>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.settings-page-root .settings-default-row{grid-template-columns:minmax(0,1fr) minmax(10.5rem,20rem)}
+.settings-page-root .settings-default-row .settings-select{justify-self:end}
 .settings-page-root .settings-switch{appearance:none;-webkit-appearance:none;display:block;position:relative;flex-shrink:0;width:2.35rem;height:1.4rem;padding:0;margin:0;border:1px solid color-mix(in srgb,var(--text) 15%,transparent);border-radius:.4rem;background:var(--raised);box-shadow:none;cursor:pointer;transition:background-color 220ms,border-color 220ms,box-shadow 220ms}
 /* The knob carries momentum: it stretches while held and lands with a spring. */
 .settings-page-root .settings-switch::before{content:"";position:absolute;left:.13rem;top:.13rem;width:1rem;height:1rem;border-radius:.2rem;background:#fff;box-shadow:0 1px 3px rgb(0 0 0 / .2);transition:transform var(--spring-bounce-duration,380ms) var(--spring-bounce,cubic-bezier(.34,1.4,.64,1)),width var(--spring-fast-duration,240ms) var(--spring-fast,ease)}
@@ -102,3 +104,5 @@ html[data-native-platform=macos] .settings-nav-head{padding-left:72px}
 /* Embedded panels were dialogs; their rows stretch to the column here. */
 .settings-page-root .vsix-row{width:100%}
 .settings-page-root .vsix-choice{flex:1;justify-content:flex-start;text-align:left}
+.settings-page-root .project-path{overflow-wrap:anywhere}
+.settings-page-root .project-row-actions{display:flex;gap:.5rem}

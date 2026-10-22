@@ -3,7 +3,7 @@ import { mountProviderReadiness } from './provider-readiness';
 import { escape, icon } from './dom';
 import { providerLogo } from './provider-logos';
 import { uiSizeControls } from './ui-size';
-import type { Provider, ProviderId } from './types';
+import type { Project, Provider, ProviderId } from './types';
 import { mountOverlaySettings } from './overlay-settings';
 import { mountSupportDetails } from './support-settings';
 import { aboutSettingsHtml, mountAboutSettings } from './about-settings';
@@ -22,6 +22,8 @@ export type SettingsSection = 'general' | 'appearance' | 'agents' | 'providers' 
 interface SettingsOptions {
   providers: Provider[];
   defaultProvider: ProviderId;
+  defaultModel: string;
+  activityExpanded: boolean;
   compact: boolean;
   wallpapers: boolean;
   theme: 'light' | 'dark';
@@ -30,6 +32,8 @@ interface SettingsOptions {
   discover(): Promise<Provider[]>;
   /** Mounts the optional GitHub row; returns its cleanup. */
   github?(host: HTMLElement): () => void;
+  /** Projects listed under General; remove() rejects with the native refusal text. */
+  projects?: { list(): Project[]; remove(id: string): Promise<void> };
   /** Named agent teams and the classic Team setup switch. */
   teams?: Omit<AgentTeamsOptions, 'providers'>;
   /** Cloud sandbox connections (Daytona, Cloudflare, AWS). */
@@ -62,8 +66,8 @@ const switchRow = (id: string, title: string, detail: string, checked: boolean) 
 function sectionHtml(id: SettingsSection, options: SettingsOptions): string {
   const defaultName = options.providers.find(provider => provider.id === options.defaultProvider)?.name ?? options.defaultProvider;
   switch (id) {
-    case 'general': return `<div class="settings-group">${uiSizeControls()}${switchRow('compact-mode', 'Compact conversation', 'Less space between messages.', options.compact)}</div>
-      <h3 class="settings-heading">Quick launcher</h3><div id="launcher-settings"></div>`;
+    case 'general': return `<div class="settings-group">${uiSizeControls()}${switchRow('compact-mode', 'Compact conversation', 'Less space between messages.', options.compact)}${switchRow('expand-tool-activity', 'Expand tool activity', 'Show grouped activity expanded by default.', options.activityExpanded)}</div>
+      <h3 class="settings-heading">Quick launcher</h3><div id="launcher-settings"></div>${options.projects ? '<h3 class="settings-heading">Projects</h3><div id="projects-settings" class="settings-group"></div>' : ''}`;
     case 'appearance': return `<div class="settings-group">
         <div class="setting-row"><div><strong>Theme</strong><small>${options.theme === 'dark' ? 'Dark' : 'Light'}. Imported VS Code themes keep their own.</small></div><button type="button" class="secondary-button" data-action="toggle-theme">${icon(options.theme === 'dark' ? 'sun' : 'moon')}Use ${options.theme === 'dark' ? 'light' : 'dark'}</button></div>
         <div class="setting-row"><div><strong>Daily wallpapers</strong><small>A new scene for each part of the day.</small></div><input type="checkbox" class="settings-switch" id="daily-wallpapers" aria-label="Daily wallpapers" ${options.wallpapers ? 'checked' : ''}></div>
@@ -72,6 +76,7 @@ function sectionHtml(id: SettingsSection, options: SettingsOptions): string {
       <h3 class="settings-heading">Wallpapers</h3><div class="settings-embed" data-embed="wallpapers"></div>`;
     case 'agents': return `<div class="settings-group">
         <div class="setting-row settings-default-row"><div><strong>Default agent</strong><small>Used for new tasks.</small></div><button type="button" id="default-provider" class="settings-select" data-action="default-provider" aria-label="Default agent for new tasks" aria-haspopup="dialog" aria-expanded="false">${providerLogo(options.defaultProvider)}<span>${escape(defaultName)}</span>${icon('down')}</button></div>
+        <div class="setting-row settings-default-row"><div><strong>Default model</strong><small>Used for new tasks.</small></div><button type="button" id="default-model" class="settings-select" data-action="default-model" aria-label="Default model for new tasks" aria-haspopup="dialog" aria-expanded="false"><span>${escape(options.defaultModel)}</span>${icon('down')}</button></div>
         <div class="setting-row"><div><strong>Agent updates</strong><small>Keep installed agents up to date.</small></div><button type="button" class="secondary-button" data-action="agent-updates" aria-haspopup="dialog">Check updates</button></div>
       </div>
       <div class="settings-heading settings-agents-heading"><h3>Installed agents</h3><button type="button" class="settings-refresh">${icon('refresh')}Refresh agents</button></div>
@@ -154,6 +159,34 @@ export function mountSettings(host: HTMLElement, options: SettingsOptions): Sett
     } finally { pending = false; if (live()) refreshButton.disabled = false; }
   }
 
+  /** Projects: each row removes its project after an inline confirmation; the folder stays on disk. */
+  function mountProjects(slot: HTMLElement, projects: NonNullable<SettingsOptions['projects']>): () => void {
+    let confirming = '', error = '';
+    const draw = () => {
+      const rows = projects.list();
+      slot.innerHTML = rows.length ? rows.map(project => confirming === project.id
+        ? `<div class="setting-row project-row" data-project="${escape(project.id)}"><div><strong>Remove ${escape(project.name)}?</strong><small>Its tasks are removed from PandaCode. The folder stays on disk.</small>${error ? `<small class="settings-embed-error" role="alert">${escape(error)}</small>` : ''}</div><div class="project-row-actions"><button type="button" class="secondary-button" data-project-cancel>Cancel</button><button type="button" class="secondary-button" data-project-confirm>Remove project</button></div></div>`
+        : `<div class="setting-row project-row" data-project="${escape(project.id)}"><div><strong>${escape(project.name)}</strong><small class="project-path">${escape(project.path)}</small></div><button type="button" class="secondary-button" data-project-remove aria-label="Remove ${escape(project.name)}">Remove</button></div>`).join('')
+        : '<div class="setting-row"><div><small>No projects yet.</small></div></div>';
+    };
+    const onClick = async (event: MouseEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const id = target?.closest<HTMLElement>('[data-project]')?.dataset.project;
+      if (!target || !id) return;
+      if (target.closest('[data-project-remove]')) { confirming = id; error = ''; draw(); }
+      else if (target.closest('[data-project-cancel]')) { confirming = ''; error = ''; draw(); }
+      else if (target.closest('[data-project-confirm]')) {
+        const button = target.closest<HTMLButtonElement>('button')!;
+        button.disabled = true;
+        try { await projects.remove(id); confirming = ''; error = ''; }
+        catch (failure) { error = failure instanceof Error ? failure.message : String(failure); }
+        if (live()) draw();
+      }
+    };
+    slot.addEventListener('click', onClick); draw();
+    return () => slot.removeEventListener('click', onClick);
+  }
+
   /** A group's live parts mount the first time it opens, and stay mounted while Settings is open. */
   function mountSection(id: SettingsSection): void {
     if (mounted.has(id)) return;
@@ -161,6 +194,7 @@ export function mountSettings(host: HTMLElement, options: SettingsOptions): Sett
     const panel = panels.get(id)!;
     if (id === 'general') cleanups.push(mountOverlaySettings(panel.querySelector<HTMLElement>('#launcher-settings')!));
     if (id === 'remote' && options.remote) cleanups.push(mountRemoteSettings(panel.querySelector<HTMLElement>('#remote-settings')!, options.remote));
+    if (id === 'general' && options.projects) cleanups.push(mountProjects(panel.querySelector<HTMLElement>('#projects-settings')!, options.projects));
     if (id === 'github' && options.github) cleanups.push(options.github(panel.querySelector<HTMLElement>('#github-settings')!));
     if (id === 'teams' && options.teams) cleanups.push(mountAgentTeams(panel.querySelector<HTMLElement>('#agent-teams-settings')!, { ...options.teams, providers: options.providers }));
     if (id === 'cloud' && options.cloud) cleanups.push(mountCloudSettings(panel.querySelector<HTMLElement>('#cloud-settings')!, options.cloud));

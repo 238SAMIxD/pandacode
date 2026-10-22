@@ -51,6 +51,11 @@ pub const DEEPSEEK_KEY: Credential = Credential {
     label: "DeepSeek",
     env: "DEEPSEEK_API_KEY",
 };
+pub const COMMANDCODE_KEY: Credential = Credential {
+    account: "command-code-api",
+    label: "Command Code",
+    env: "COMMAND_CODE_API_KEY",
+};
 
 pub fn setup(dir: &Path) -> Result<()> {
     let path = dir.join("provider-settings.json");
@@ -127,6 +132,10 @@ pub fn mimo_key() -> Result<Option<String>> {
 
 pub fn deepseek_key() -> Result<Option<String>> {
     stored_key(DEEPSEEK_KEY)
+}
+
+pub fn commandcode_key() -> Result<Option<String>> {
+    stored_key(COMMANDCODE_KEY)
 }
 
 #[cfg(target_os = "macos")]
@@ -270,6 +279,8 @@ pub struct Configuration {
     mimo_key_from_environment: bool,
     deepseek_key_saved: bool,
     deepseek_key_from_environment: bool,
+    commandcode_key_saved: bool,
+    commandcode_key_from_environment: bool,
     mimo_endpoint: Option<String>,
     /// The clusters the app knows; the UI offers exactly these.
     mimo_endpoints: Vec<MimoEndpoint>,
@@ -288,14 +299,20 @@ fn configuration() -> Result<Configuration> {
         (runtime.settings.executable_paths.clone(), runtime.settings.mimo_endpoint.clone(), runtime.settings.claude_connection_mode)
     };
     #[cfg(target_os = "macos")]
-    let (glm_key_saved, mimo_key_saved, deepseek_key_saved, credential_storage_error) =
-        (glm_key()?.is_some(), mimo_key()?.is_some(), deepseek_key()?.is_some(), None);
+    let (glm_key_saved, mimo_key_saved, deepseek_key_saved, commandcode_key_saved, credential_storage_error) = (
+        glm_key()?.is_some(),
+        mimo_key()?.is_some(),
+        deepseek_key()?.is_some(),
+        commandcode_key()?.is_some(),
+        None,
+    );
     #[cfg(not(target_os = "macos"))]
-    let (glm_key_saved, mimo_key_saved, deepseek_key_saved, credential_storage_error) = {
+    let (glm_key_saved, mimo_key_saved, deepseek_key_saved, commandcode_key_saved, credential_storage_error) = {
         let (glm, glm_error) = credential_status(glm_key());
         let (mimo, mimo_error) = credential_status(mimo_key());
         let (deepseek, deepseek_error) = credential_status(deepseek_key());
-        (glm, mimo, deepseek, glm_error.or(mimo_error).or(deepseek_error))
+        let (commandcode, commandcode_error) = credential_status(commandcode_key());
+        (glm, mimo, deepseek, commandcode, glm_error.or(mimo_error).or(deepseek_error).or(commandcode_error))
     };
     let from_environment = |name: &str| std::env::var(name).is_ok_and(|key| validate_key(&key).is_ok());
     Ok(Configuration {
@@ -306,6 +323,8 @@ fn configuration() -> Result<Configuration> {
         mimo_key_from_environment: from_environment(MIMO_KEY.env),
         deepseek_key_saved,
         deepseek_key_from_environment: from_environment(DEEPSEEK_KEY.env),
+        commandcode_key_saved,
+        commandcode_key_from_environment: from_environment(COMMANDCODE_KEY.env),
         mimo_endpoint,
         mimo_endpoints: mimo_endpoints(),
         claude_connection_mode,
@@ -331,7 +350,7 @@ pub async fn provider_configuration() -> Result<Configuration> {
 }
 
 fn validated_executable(provider: &str, path: &str) -> Result<Option<String>> {
-    if !matches!(provider, "opencode" | "antigravity" | "glm" | "grok" | "mimo" | "pi" | "deepseek") {
+    if !matches!(provider, "opencode" | "antigravity" | "glm" | "grok" | "mimo" | "pi" | "deepseek" | "commandcode" | "omp") {
         return Err("This provider does not support an executable override.".into());
     }
     if path.trim().is_empty() {
@@ -551,6 +570,24 @@ pub async fn provider_remove_deepseek_key() -> Result<Configuration> {
     })
     .await
 }
+#[tauri::command]
+pub async fn provider_save_commandcode_key(key: String) -> Result<Configuration> {
+    crate::blocking(move || {
+        save_key(COMMANDCODE_KEY, &key)?;
+        crate::providers::acp_catalog::invalidate("commandcode");
+        configuration()
+    })
+    .await
+}
+#[tauri::command]
+pub async fn provider_remove_commandcode_key() -> Result<Configuration> {
+    crate::blocking(|| {
+        remove_key(COMMANDCODE_KEY)?;
+        crate::providers::acp_catalog::invalidate("commandcode");
+        configuration()
+    })
+    .await
+}
 
 pub(crate) fn mimo_endpoint() -> Option<String> {
     CONFIG.get()?.lock().ok()?.settings.mimo_endpoint.clone()
@@ -631,6 +668,8 @@ mod tests {
             mimo_key_from_environment: false,
             deepseek_key_saved: false,
             deepseek_key_from_environment: false,
+            commandcode_key_saved: false,
+            commandcode_key_from_environment: false,
             mimo_endpoint: None,
             mimo_endpoints: mimo_endpoints(),
             claude_connection_mode: Default::default(),
@@ -652,6 +691,8 @@ mod tests {
             mimo_key_from_environment: false,
             deepseek_key_saved: false,
             deepseek_key_from_environment: false,
+            commandcode_key_saved: false,
+            commandcode_key_from_environment: false,
             mimo_endpoint: Some("token-plan-sgp".into()),
             mimo_endpoints: mimo_endpoints(),
             claude_connection_mode: Default::default(),

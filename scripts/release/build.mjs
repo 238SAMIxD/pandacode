@@ -2,7 +2,7 @@
 // release/<version>/ under its stable GitHub Release asset name, with a
 // SHA-256 sidecar. Nothing is uploaded; .github/workflows/release.yml does that.
 //
-//   node scripts/release/build.mjs [darwin-aarch64|windows-x86_64|linux-x86_64]
+//   node scripts/release/build.mjs [darwin-aarch64|windows-x86_64|linux-x86_64|linux-aarch64]
 //
 // Signing is optional. Without Apple credentials the macOS app gets an ad-hoc
 // signature; Windows and Linux builds are unsigned. With TAURI_SIGNING_PRIVATE_KEY
@@ -144,7 +144,7 @@ async function main() {
     await verifyMacApp(app, build.signing.mode);
     await verifyDmg(source, app, releaseVersion);
   }
-  if (releaseTarget === 'linux-x86_64') {
+  if (releaseTarget.startsWith('linux-')) {
     // Drop the build host's Wayland libraries (see appimage.mjs) and sign the
     // final bytes again, since Tauri signed the image before this rebuild.
     await repackAppImage(source, { log: message => console.log(message) });
@@ -154,7 +154,7 @@ async function main() {
   await mkdir(output, { recursive: true });
   const destination = resolve(output, config.asset);
   await copyFile(source, destination);
-  if (releaseTarget === 'linux-x86_64') await chmod(destination, 0o755);
+  if (releaseTarget.startsWith('linux-')) await chmod(destination, 0o755);
   await writeFile(`${destination}.sha256`, checksumLine(await digest(destination), config.asset));
   if (build.updater) {
     const updater = resolve(bundleRoot, config.updater(releaseVersion));

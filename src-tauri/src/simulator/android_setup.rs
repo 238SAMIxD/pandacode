@@ -18,6 +18,8 @@ static RUNNING: AtomicBool = AtomicBool::new(false);
 const LONG: Duration = Duration::from_secs(60 * 60);
 pub const API: u32 = 35;
 pub const AVD: &str = "Pixel_9_API_35";
+/// Windows has no one-click setup; Android Studio's default SDK folder is found automatically.
+pub const WINDOWS_SETUP: &str = "Install Android Studio (or the Android command-line tools) into %LOCALAPPDATA%\\Android\\Sdk, create an emulator in Device Manager, then reopen this tab.";
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -75,6 +77,9 @@ pub fn system_image() -> String {
 }
 
 fn run(app: &AppHandle) -> Result<String, String> {
+    if cfg!(windows) {
+        return Err(WINDOWS_SETUP.into());
+    }
     if !cfg!(target_os = "macos") {
         return Err("One-click setup is for macOS. Install Android Studio to get the emulator.".into());
     }

@@ -60,7 +60,32 @@ pub(super) fn take(session_id: &str, key: &str) -> Option<Spare> {
     launched(session_id);
     let mut spare = spares().remove(session_id)?;
     let alive = matches!(spare.child.try_wait(), Ok(None));
-    (alive && spare.key == key && spare.born.elapsed() < IDLE).then_some(spare)
+    match miss(alive, &spare.key, key, spare.born.elapsed()) {
+        None => Some(spare),
+        Some(reason) => {
+            // A miss costs the CLI's whole startup; say why so slow turns can be traced.
+            eprintln!("Warm Claude agent not used ({reason}); starting cold.");
+            None
+        }
+    }
+}
+
+/// Why a warm agent cannot take this launch, if it cannot.
+fn miss(alive: bool, spare_key: &str, key: &str, age: Duration) -> Option<String> {
+    if !alive {
+        return Some("its process exited".into());
+    }
+    if age >= IDLE {
+        return Some("it expired".into());
+    }
+    if spare_key == key {
+        return None;
+    }
+    let (Ok(Value::Object(spare)), Ok(Value::Object(next))) = (serde_json::from_str::<Value>(spare_key), serde_json::from_str::<Value>(key)) else {
+        return Some("its launch changed".into());
+    };
+    let changed: Vec<&str> = next.iter().filter(|(field, value)| spare.get(*field) != Some(value)).map(|(field, _)| field.as_str()).collect();
+    Some(format!("changed: {}", changed.join(", ")))
 }
 
 /// Drop a task's warm agent (its settings changed, or it was deleted).
@@ -70,7 +95,15 @@ pub fn discard(session_id: &str) {
 
 /// Start the next turn's agent for a task. `tools` is the catalog its last turn used; the
 /// placeholder server answers the agent's startup listing and is rebound on adoption.
-pub async fn prewarm(mut config: RunConfig, tools: Vec<Value>, approval_tools: HashSet<String>, launch: u64) -> Result<(), String> {
+pub async fn prewarm(config: RunConfig, tools: Vec<Value>, approval_tools: HashSet<String>, launch: u64) -> Result<(), String> {
+    let result = start(config, tools, approval_tools, launch).await;
+    if let Err(error) = &result {
+        eprintln!("Could not prepare a warm Claude agent: {error}");
+    }
+    result
+}
+
+async fn start(mut config: RunConfig, tools: Vec<Value>, approval_tools: HashSet<String>, launch: u64) -> Result<(), String> {
     if !supported(&config) {
         return Ok(());
     }
@@ -158,6 +191,18 @@ mod tests {
         assert!(supported(&base));
         assert!(!supported(&crate::providers::tests::config("glm")));
         assert!(!supported(&RunConfig { skill: Some(("review".into(), PathBuf::from("/skills/review"))), ..base.clone() }));
+    }
+
+    #[test]
+    fn a_missed_warm_agent_names_what_changed() {
+        let base = crate::providers::tests::config("claude");
+        let original = key(&base, &[]);
+        let fresh = Duration::from_secs(1);
+        assert_eq!(miss(true, &original, &original, fresh), None);
+        assert_eq!(miss(false, &original, &original, fresh).as_deref(), Some("its process exited"));
+        assert_eq!(miss(true, &original, &original, IDLE).as_deref(), Some("it expired"));
+        let next = key(&RunConfig { resume_id: Some("another".into()), model: "claude-sonnet-5-5".into(), ..base.clone() }, &[]);
+        assert_eq!(miss(true, &original, &next, fresh).as_deref(), Some("changed: model, resume"));
     }
 
     #[cfg(unix)]

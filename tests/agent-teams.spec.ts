@@ -135,3 +135,28 @@ test('agent teams can be renamed, rechosen and deleted, and need a name and a mo
   await modelButton(page).click();
   await expect(picker(page).getByRole('button', { name: /^Agent team/ })).toHaveCount(0);
 });
+
+test('an agent team sets the lead effort apart from its workers', async ({ page }) => {
+  await install(page);
+  await openAgents(page);
+  await settings(page).getByRole('button', { name: 'New team' }).click();
+  await settings(page).getByRole('textbox', { name: 'Team name', exact: true }).fill('Deep');
+  const models = settings(page).getByRole('group', { name: 'Team models' });
+  const leadEffort = settings(page).getByRole('combobox', { name: 'Lead effort', exact: true });
+  await models.getByRole('checkbox', { name: 'Include DeepSeek V4 Pro · DeepSeek', exact: true }).check();
+  await models.getByRole('radio', { name: 'DeepSeek V4 Pro · DeepSeek leads', exact: true }).check();
+  await expect(leadEffort).toBeVisible();
+  await leadEffort.selectOption('max');
+  await models.getByRole('combobox', { name: 'Worker effort for DeepSeek V4 Pro · DeepSeek', exact: true }).selectOption('low');
+  // Models that advertise no efforts get no effort choice.
+  await expect(models.locator('.agent-team-model').filter({ hasNot: page.locator('select') }).first()).toBeAttached();
+  await settings(page).getByRole('button', { name: 'Save team', exact: true }).click();
+  await expect(settings(page).getByRole('listitem').filter({ hasText: 'Deep' })).toBeVisible();
+  const { setup } = (await calls(page, 'architect_save_profile')).at(-1).args;
+  expect(setup.architect).toMatchObject({ provider: 'deepseek', model: 'deepseek-v4-pro', reasoningEffort: 'max' });
+  expect(setup.config.workers).toEqual([expect.objectContaining({ model: 'deepseek-v4-pro', reasoningEffort: 'low' })]);
+  // Editing shows the saved efforts again.
+  await settings(page).getByRole('button', { name: 'Edit Deep', exact: true }).click();
+  await expect(leadEffort).toHaveValue('max');
+  await expect(models.getByRole('combobox', { name: 'Worker effort for DeepSeek V4 Pro · DeepSeek', exact: true })).toHaveValue('low');
+});

@@ -46,10 +46,17 @@ pub(super) fn configure(command: &mut Command, config: &RunConfig) {
     if let Some(effort) = &config.reasoning_effort {
         command.args(["--thinking", effort]);
     }
+    let omp = config.provider == "omp";
     if let Some(id) = &config.resume_id {
         // `--session` may print and read a fork prompt on the RPC pipes when the
         // ID matches another folder; `--session-id` only opens this folder's session.
-        command.args(["--session-id", id]);
+        // omp has no `--session-id`; its `--resume` looks in this folder first and
+        // fails instead of prompting when stdin is not a terminal.
+        command.args([if omp { "--resume" } else { "--session-id" }, id]);
+    }
+    if omp {
+        // The bridge extension is the only approval gate, as with Pi.
+        command.args(["--approval-mode", "yolo"]);
     }
     if !config.instructions.is_empty() {
         command.args(["--append-system-prompt", &config.instructions]);
@@ -97,20 +104,15 @@ pub(super) fn parse_models(data: &Value) -> Result<Vec<ModelInfo>, String> {
     Ok(models)
 }
 
-pub(super) async fn models(path: &Path) -> Result<Vec<ModelInfo>, String> {
+pub(super) async fn models(path: &Path, provider: &str) -> Result<Vec<ModelInfo>, String> {
     let mut command = super::command(path)?;
+    command.args(["--mode", "rpc", "--no-session", "--no-extensions", "--no-skills"]);
+    if provider == "omp" {
+        command.args(["--no-rules", "--no-lsp", "--no-title"]);
+    } else {
+        command.args(["--no-prompt-templates", "--no-mcp", "--no-context-files", "--offline"]);
+    }
     command
-        .args([
-            "--mode",
-            "rpc",
-            "--no-session",
-            "--no-extensions",
-            "--no-skills",
-            "--no-prompt-templates",
-            "--no-mcp",
-            "--no-context-files",
-            "--offline",
-        ])
         .current_dir(std::env::temp_dir())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -166,6 +168,16 @@ pub(super) async fn models(path: &Path) -> Result<Vec<ModelInfo>, String> {
     result
 }
 
+/// Whether a stopped run's output has reached its end.
+pub(super) fn stop_settled(provider: &str, value: &Value) -> bool {
+    match provider {
+        // Pi stays up after `abort`; settling is the end of the stopped run.
+        "pi" => value["type"] == "agent_settled",
+        "omp" => value["type"] == "prompt_result" || value["type"] == "session_settled",
+        _ => false,
+    }
+}
+
 /// Pi run state. `agent_settled`, not `agent_end`, finishes a run: retries,
 /// compaction recovery and steering can follow an `agent_end`.
 #[derive(Default)]
@@ -176,6 +188,8 @@ pub(super) struct State {
     /// Latest assistant failure. A successful retry or answer clears it.
     error: Option<String>,
     settled: bool,
+    /// omp's `prompt_result` outcome, held until the session settles.
+    prompt_result: Option<Value>,
     steers: HashMap<String, RpcReply>,
     steer_sequence: u64,
 }
@@ -298,16 +312,18 @@ impl Protocol {
                         .push(self.event("status", "Context compacted", None));
                 }
             }
-            "agent_settled" => {
-                self.pi.settled = true;
-                if value["aborted"] == true {
-                    return Err("Pi response was aborted".into());
+            "agent_settled" => self.pi_settled(value["aborted"] == true, &mut step)?,
+            // omp reports each prompt's outcome once its work settles; background
+            // work it started may keep the session busy until `session_settled`.
+            "prompt_result" if value["id"] == "pandacode-prompt" => {
+                let settled = value["sessionSettled"] == true;
+                self.pi.prompt_result = Some(value);
+                if settled {
+                    self.omp_settled(&mut step)?;
                 }
-                if let Some(error) = self.pi.error.take() {
-                    return Err(error);
-                }
-                step.write
-                    .push(json!({"type":"get_session_stats","id":"pandacode-usage"}));
+            }
+            "session_settled" if self.pi.prompt_result.is_some() && !self.pi.settled => {
+                self.omp_settled(&mut step)?
             }
             "extension_ui_request" => self.pi_ui(value, &mut step)?,
             // Only the permission bridge is required; other extensions fail on their own.
@@ -327,6 +343,28 @@ impl Protocol {
             _ => {}
         }
         Ok(step)
+    }
+
+    fn pi_settled(&mut self, aborted: bool, step: &mut Step) -> Result<(), String> {
+        self.pi.settled = true;
+        if aborted {
+            return Err("Pi response was aborted".into());
+        }
+        if let Some(error) = self.pi.error.take() {
+            return Err(error);
+        }
+        step.write
+            .push(json!({"type":"get_session_stats","id":"pandacode-usage"}));
+        Ok(())
+    }
+
+    fn omp_settled(&mut self, step: &mut Step) -> Result<(), String> {
+        let result = self.pi.prompt_result.take().unwrap_or_default();
+        if result["status"] == "error" {
+            let error = result["error"]["message"].as_str().unwrap_or("omp could not finish the response");
+            self.pi.error = Some(short(error));
+        }
+        self.pi_settled(result["status"] == "aborted", step)
     }
 
     fn pi_response(&mut self, value: Value, step: &mut Step) -> Result<(), String> {
@@ -632,6 +670,67 @@ mod tests {
     #[ignore]
     async fn installed_pi_lists_models_without_prompting() {
         let path = executable("pi").expect("Pi is installed");
-        assert!(!models(&path).await.unwrap().is_empty());
+        assert!(!models(&path, "pi").await.unwrap().is_empty());
+    }
+
+    fn omp_ready() -> Protocol {
+        let mut p = Protocol::new(super::super::tests::config("omp"));
+        p.receive(json!({"type":"ready","protocolVersion":1,"supportedProtocolVersions":[1,2]})).unwrap();
+        p.receive(json!({"type":"extension_ui_request","id":"s","method":"setStatus","statusKey":"pandacode-bridge","statusText":"ready"})).unwrap();
+        let step = p.receive(state()).unwrap();
+        assert_eq!(step.write[0]["type"], "prompt");
+        p
+    }
+
+    #[test]
+    fn omp_resumes_with_its_own_flag_and_owns_no_approvals() {
+        let mut command = Command::new("omp");
+        let mut config = super::super::tests::config("omp");
+        config.resume_id = Some("01a15ba3-9096-76db-bd69-35168c0ecfa9".into());
+        configure(&mut command, &config);
+        let args: Vec<_> = command.as_std().get_args().map(|a| a.to_str().unwrap()).collect();
+        assert!(args.windows(2).any(|a| a == ["--resume", "01a15ba3-9096-76db-bd69-35168c0ecfa9"]));
+        assert!(args.windows(2).any(|a| a == ["--approval-mode", "yolo"]));
+        assert!(!args.contains(&"--session-id"));
+    }
+
+    #[test]
+    fn omp_finishes_on_prompt_result_once_the_session_settles() {
+        // Frame shapes from omp 18.12 `modes/rpc/rpc-types.ts`.
+        let mut p = omp_ready();
+        p.receive(json!({"type":"response","command":"prompt","id":"pandacode-prompt","success":true,"data":{"agentInvoked":true}})).unwrap();
+        p.receive(json!({"type":"message_start","message":{"role":"assistant"}})).unwrap();
+        p.receive(json!({"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Hi"}})).unwrap();
+        p.receive(json!({"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Hi"}],"stopReason":"stop"}})).unwrap();
+        assert!(p.receive(json!({"type":"agent_end","messages":[]})).unwrap().write.is_empty());
+        assert!(p.receive(json!({"type":"session_settled"})).unwrap().write.is_empty(), "no prompt_result yet");
+        let pending = p.receive(json!({"type":"prompt_result","id":"pandacode-prompt","agentInvoked":true,"status":"completed","sessionSettled":false})).unwrap();
+        assert!(pending.write.is_empty(), "background work still runs");
+        let settled = p.receive(json!({"type":"session_settled"})).unwrap();
+        assert_eq!(settled.write[0]["type"], "get_session_stats");
+        assert!(p.receive(json!({"type":"session_settled"})).unwrap().write.is_empty());
+
+        let mut p = omp_ready();
+        let settled = p.receive(json!({"type":"prompt_result","id":"pandacode-prompt","agentInvoked":false,"status":"completed","sessionSettled":true})).unwrap();
+        assert_eq!(settled.write[0]["type"], "get_session_stats");
+    }
+
+    #[test]
+    fn omp_failures_and_aborts_fail_the_run() {
+        let mut p = omp_ready();
+        let error = p.receive(json!({"type":"prompt_result","id":"pandacode-prompt","agentInvoked":true,"status":"error","error":{"message":"429 rate limited","retryable":true},"sessionSettled":true}));
+        assert!(error.err().unwrap().contains("429"));
+        let mut p = omp_ready();
+        assert!(p.receive(json!({"type":"prompt_result","id":"pandacode-prompt","agentInvoked":true,"status":"aborted","sessionSettled":true})).is_err());
+        assert!(stop_settled("omp", &json!({"type":"prompt_result"})));
+        assert!(stop_settled("pi", &json!({"type":"agent_settled"})));
+        assert!(!stop_settled("pi", &json!({"type":"session_settled"})));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn installed_omp_lists_models_without_prompting() {
+        let path = executable("omp").expect("omp is installed");
+        assert!(!models(&path, "omp").await.unwrap().is_empty());
     }
 }

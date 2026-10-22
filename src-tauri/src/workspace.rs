@@ -216,6 +216,7 @@ fn run_bounded(
     timeout: Duration,
     input: Option<&[u8]>,
 ) -> Result<GitOutput, String> {
+    crate::child_env::sanitize(&mut command);
     #[cfg(unix)]
     command.process_group(0);
     #[cfg(windows)]
