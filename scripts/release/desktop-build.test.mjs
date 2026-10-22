@@ -20,6 +20,8 @@ test('builds require the native host and never forward old license keys or Apple
     assert.throws(() => buildPlan(target, env, 'darwin', 'arm64'), /native/);
   }
   assert.throws(() => buildPlan('darwin-aarch64', env, 'darwin', 'x64'), /native/);
+  assert.throws(() => buildPlan('darwin-x86_64', env, 'darwin', 'arm64'), /native/);
+  assert.ok(buildPlan('darwin-x86_64', { PATH: 'p' }, 'darwin', 'x64').args.includes('x86_64-apple-darwin'));
   assert.equal(env.APPLE_ID, 'someone', 'the caller environment is unchanged');
 });
 
@@ -60,7 +62,7 @@ test('Developer ID signing requires a real identity and notarization credentials
 });
 
 test('the build selects the exact versioned bundle Tauri produced', () => {
-  for (const [target, file] of [['windows-x86_64', 'PandaCode_1.2.3_x64-setup.exe'], ['linux-x86_64', 'PandaCode_1.2.3_amd64.AppImage'], ['darwin-aarch64', 'PandaCode_1.2.3_aarch64.dmg']]) {
+  for (const [target, file] of [['windows-x86_64', 'PandaCode_1.2.3_x64-setup.exe'], ['linux-x86_64', 'PandaCode_1.2.3_amd64.AppImage'], ['darwin-aarch64', 'PandaCode_1.2.3_aarch64.dmg'], ['darwin-x86_64', 'PandaCode_1.2.3_x64.dmg']]) {
     assert.equal(builtArtifact([file, file.replace('1.2.3', '1.2.2')], '1.2.3', target), file);
     assert.throws(() => builtArtifact([file], '1.2.4', target), /did not produce/);
   }

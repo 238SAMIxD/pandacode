@@ -10,6 +10,10 @@ import { createPreviewTurnChanges } from './preview-turn-changes';
 // Bundled with the preview, not lazily imported: a late module load during a paused test clock stalled startup.
 import { invokeBots } from './preview-bots';
 import { invokeRemote } from './preview-remote';
+import { createPreviewDesign } from './preview-design';
+import { createPreviewSkills } from './preview-skills';
+import { previewCapabilities } from './preview-capabilities';
+import { recipesCommand } from './preview-recipes';
 import { openCodePreviewKey, openCodePreviewModels, previewOpenCodeChoices, previewOpenCodeSelection } from './preview-opencode';
 const turnChanges = createPreviewTurnChanges();
 const now = Date.now();
@@ -115,6 +119,7 @@ const providers: Provider[] = [
   { id: 'deepseek', name: 'DeepSeek', installed: true, path: '/sample/bin/dsh', version: 'Sample provider', models: [] },
   { id: 'commandcode', name: 'Command Code', installed: true, path: '/sample/bin/command-code', version: '1.87.1 (sample)', models: [] },
   { id: 'omp', name: 'Oh My Pi', installed: false, path: null, version: '', models: [] },
+  { id: 'github-copilot', name: 'GitHub Copilot CLI', installed: true, path: '/sample/bin/copilot', version: 'GitHub Copilot CLI 1.0.82 (sample)', models: [] },
 ];
 // Mirrors providers::mimo::ENDPOINTS; the native side is the authority.
 const previewMimoEndpoints = [
@@ -124,6 +129,20 @@ const previewMimoEndpoints = [
   { id: 'api', url: 'https://api.xiaomimimo.com/anthropic', label: 'Pay-as-you-go API' },
 ];
 let previewMimoEndpoint: string | null = null;
+/** Named connections; secret values are dropped, only their names are kept, as on the native side. */
+let previewConnections: import('./connections').ConnectionSnapshot = { connections: [], tasks: {} };
+function previewSaveConnection(input: { id?: string | null; provider: ProviderId; name: string; executable?: string | null; args?: string[]; env?: { name: string; value: string | null; secret: boolean }[]; configDir?: string | null }): import('./connections').ConnectionSnapshot {
+  const name = String(input.name ?? '').trim();
+  if (!name || name.length > 60) throw new Error('Give the connection a name of up to 60 characters.');
+  if ((input.args ?? []).length > 32 || (input.args ?? []).some(arg => arg.includes('\0'))) throw new Error('Launch arguments must be non-empty, under 1024 characters and contain no NUL.');
+  const existing = previewConnections.connections.find(c => c.id === input.id);
+  if (input.id && !existing) throw new Error('This connection no longer exists.');
+  const env = input.env ?? [];
+  const next = { id: existing?.id ?? `connection-${Date.now().toString(36)}`, provider: existing?.provider ?? input.provider, name, executable: input.executable || null, args: input.args ?? [], env: Object.fromEntries(env.filter(v => !v.secret).map(v => [v.name, v.value ?? ''])), secretEnv: env.filter(v => v.secret).map(v => v.name), configDir: input.configDir || null, revision: (existing?.revision ?? 0) + 1 };
+  const connections = existing ? previewConnections.connections.map(c => c.id === next.id ? next : c) : [...previewConnections.connections, next];
+  previewConnections = { ...previewConnections, connections };
+  return previewConnections;
+}
 // Representative catalog fixtures only; the native app queries installed harnesses.
 /** Another computer's smaller catalog (PandaCode Connect). */
 const remoteProviders = (): Provider[] => ['claude', 'codex'].map(id => providers.find(p => p.id === id)!).map(p => ({ ...p, models: remoteCatalog(p.id) }));
@@ -146,6 +165,7 @@ const catalogs: Record<ProviderId, ProviderModel[]> = {
     { id: 'gpt-6-luna', name: 'GPT-6 Luna', description: 'most efficient OpenAI model for focused, high-volume tasks' },
     { id: 'moonshotai/Kimi-K3', name: 'Kimi K3', description: 'long-horizon coding & knowledge work with 1M context' },
   ],
+  'github-copilot': [{ id: 'default', name: 'Default', description: 'Use the model configured in GitHub Copilot CLI.' }],
   opencode: openCodePreviewModels,
   glm: [{ id: 'glm-4.7', name: 'GLM-4.7', description: 'Z.ai Coding Plan via Claude Code.' }],
   mimo: [
@@ -258,6 +278,8 @@ const previewGithub = (() => {
 })();
 /** A pretend iOS Simulator: two devices and a drawn home screen that answers taps. */
 const previewVm = createPreviewVm();
+const previewDesign = createPreviewDesign();
+const previewSkills = createPreviewSkills();
 const previewCloud = createPreviewCloud();
 const previewSimulator = (() => {
   const devices: { udid: string; name: string; runtime: string; state: string; family: string; deviceType: string; platform?: string; duo?: boolean }[] = [
@@ -594,6 +616,7 @@ const architect = createPreviewArchitect({
 });
 
 export async function invoke<T>(command: string, args: Record<string, any>): Promise<T> {
+  if (command.startsWith('jj_')) return (await import('./preview-jj')).invokeJj<T>(command, args);
   if (command.includes('moodboard')) return (await import('./preview-moodboards')).invokeMoodboards<T>(command, args);
   if (command === 'bots_list' || command.startsWith('bot_')) return invokeBots<T>(command, args, {
     invoke, emit,
@@ -617,6 +640,8 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     return { sessionId: s.id } as T;
   }
   if (command.startsWith('remote_')) return invokeRemote<T>(command, args, emit);
+  if (command === 'capabilities_inventory' || command === 'cache_alignment') return previewCapabilities(command) as T;
+  if (command.startsWith('recipes_')) { const r = recipesCommand(command, args); if (r.handled) return r.result as T; }
   let result: unknown;
   switch (command) {
     case 'check_agent_updates': result = providers.filter(provider => provider.installed && !['glm', 'mimo'].includes(provider.id)).map(provider => {
@@ -639,6 +664,17 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'provider_set_claude_connection_mode': {
       if (!['inherit', 'subscription'].includes(args.mode)) throw new Error('Choose a Claude connection mode.');
       previewClaudeMode = args.mode; return invoke<T>('provider_configuration', {});
+    }
+    case 'connections_list': result = previewConnections; break;
+    case 'connection_save': result = previewSaveConnection(args.connection); break;
+    case 'connection_delete': {
+      const tasks = Object.fromEntries(Object.entries(previewConnections.tasks).filter(([, id]) => id !== args.id));
+      previewConnections = { connections: previewConnections.connections.filter(c => c.id !== args.id), tasks }; result = previewConnections; break;
+    }
+    case 'connection_assign': {
+      if (args.connectionId && !previewConnections.connections.some(c => c.id === args.connectionId)) throw new Error('This connection no longer exists.');
+      const { [args.sessionId]: _previous, ...tasks } = previewConnections.tasks;
+      previewConnections = { ...previewConnections, tasks: args.connectionId ? { ...tasks, [args.sessionId]: args.connectionId } : tasks }; result = previewConnections; break;
     }
     case 'provider_claude_status': result = {mode: previewClaudeMode, source: 'Saved Claude login', environmentVariables: [], endpoint: null, savedLogin: 'signedIn', conflict: false}; break;
     case 'usage_ledger': result = sampleUsageLedger(); break;
@@ -876,7 +912,8 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'list_slash_commands': result = slashCatalog(session(args.sessionId).provider); break;
     case 'resolve_slash_command': result = resolveSlash(session(args.sessionId).provider, String(args.text)); break;
     case 'list_agent_integrations': result = { servers: [{ name: 'Preview documentation', description: 'Sample MCP integration', status: 'ready', authStatus: 'not required', tools: [{ name: 'search_docs', description: 'Search sample documentation.' }] }], skills: [{ name: 'Project guidelines', description: 'Sample skill', status: 'enabled' }], apps: [], warnings: [] }; break;
-    case 'list_app_tools': result = [{ name: 'pandacode_list_tasks', description: 'List project tasks.' }, { name: 'pandacode_open_browser', description: 'Open a URL in the app browser.' }]; break;
+    case 'list_app_tools': result = [{ name: 'pandacode_list_tasks', description: 'List project tasks.' }, { name: 'pandacode_code_search', description: 'Search the checkout with the local codedb index.' }, { name: 'pandacode_open_browser', description: 'Open a URL in the app browser.' }]; break;
+    case 'run_turn_checks': result = { checked: false, reason: 'Browser preview has no project checks.' }; break;
     case 'agent_ui_request_active': result = true; break;
     case 'resolve_agent_ui_action': break;
     case 'open_external_url': { const url = new URL(args.url); if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Use an HTTP or HTTPS URL.'); window.open(url.href, '_blank', 'noopener,noreferrer'); break; }
@@ -911,6 +948,15 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       result = { deletedSessionIds }; break;
     }
     case 'create_session': { const s: Session = { id: crypto.randomUUID(), ...args, pinned: false, sidebarOrder: null, draft: Boolean(args.draft), mode: args.mode ?? 'full', title: 'New conversation', status: 'idle', createdAt: Date.now(), updatedAt: Date.now(), archived: false, worktreePath: null, resumeId: null, lastResponseAt: null, lastPromptAt: null, reasoningEffort: null, contextUsage: null, taskStage: 'pending', taskDescription: '', completedAt: null } as Session; sessions.unshift(s); messages[s.id] = []; architect.inherit(s.id); result = s; break; }
+    case 'chat_create': {
+      const project = { id: crypto.randomUUID(), name: 'Chat', path: `/Users/you/PandaCode Chats/chat-${crypto.randomUUID().slice(0, 8)}` }; projects.push(project);
+      result = await invoke<Session>('create_session', { projectId: project.id, provider: args.provider, model: args.model, mode: args.mode }); break;
+    }
+    case 'chat_cleanup': {
+      const chat = projects.some(p => p.id === args.projectId && p.path.includes('/PandaCode Chats/')) && !sessions.some(s => s.projectId === args.projectId);
+      if (chat) projects = projects.filter(p => p.id !== args.projectId);
+      result = chat; break;
+    }
     case 'create_board_task': {
       const details = taskDetails(args.title, args.description);
       if (!projects.some(p => p.id === args.projectId)) throw new Error('Project not found.');
@@ -1192,6 +1238,13 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'vm_frame': result = await previewVm.frame(args.name); break;
     case 'vm_input': result = previewVm.input(args.name, args.input); break;
     case 'vm_desktop': result = previewVm.desktop(args.name); break;
+    case 'design_list': result = previewDesign.list(); break;
+    case 'design_read': result = previewDesign.read(args.name); break;
+    case 'design_comments': result = previewDesign.comments(); break;
+    case 'design_save_comments': result = previewDesign.saveComments(args.comments); break;
+    case 'skills_list': case 'skills_import_folder': case 'skills_import_github': case 'skills_activate':
+    case 'skills_deactivate': case 'skills_matrix': case 'skills_scan': case 'skills_remove':
+      result = previewSkills.call(command, args); break;
     case 'simulator_status': result = previewSimulator.status(); break;
     case 'simulator_pose': result = await previewSimulator.pose(args.udid, args.pose); break;
     case 'simulator_create_duo': result = previewSimulator.createDuo(); break;
@@ -1212,6 +1265,25 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
         .map(entry => ({ name: entry.path.split('/').pop()!, ...entry }))
         .sort((a, b) => Number(b.name.toLocaleLowerCase().startsWith(query)) - Number(a.name.toLocaleLowerCase().startsWith(query)) || Number(a.isDir) - Number(b.isDir) || a.path.localeCompare(b.path))
         .slice(0, Math.min(100, Math.max(1, Number(args.limit) || 40))) satisfies FileEntry[];
+      break;
+    }
+    case 'search_text': {
+      // Sample source stands in for every script; Markdown files read as the sample README.
+      const query = String(args.query ?? '');
+      let pattern: RegExp;
+      try {
+        const source = args.regex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        pattern = new RegExp(args.wholeWord ? `\\b(?:${source})\\b` : source, args.matchCase ? 'g' : 'gi');
+      } catch (error) { throw new Error(`Invalid regular expression: ${(error as Error).message}`); }
+      const files = previewWorkspaceFiles.filter(path => /\.(ts|md)$/.test(path)).map(path => {
+        const lines = (path.endsWith('.md') ? sampleReadme : sampleSource).split('\n');
+        const matches = lines.flatMap((line, index) => {
+          const text = line.trimStart(), ranges = [...text.matchAll(pattern)].filter(m => m[0]).map(m => [m.index!, m.index! + m[0].length]);
+          return ranges.length ? [{ line: index + 1, text, ranges }] : [];
+        });
+        return { path, matches };
+      }).filter(file => file.matches.length);
+      result = { files, truncated: false };
       break;
     }
     case 'import_prompt_image': {

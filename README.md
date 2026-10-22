@@ -2,10 +2,10 @@
 
 A small, native desktop workspace for coding agents. PandaCode runs the coding
 CLIs you already use — **Claude Code, Codex, Kimi Code, OpenCode, GLM Coding
-Plan and Xiaomi MiMo** (through Claude Code), **Antigravity, xAI's Grok Build,
-DeepSeek and Command Code** (through ACP) and **Pi** and its fork **omp** (through
-Pi's RPC mode) —
-side by side, with your projects, Git, a terminal and a browser in one window.
+Plan and Xiaomi MiMo** (through Claude Code), **GitHub Copilot CLI, Antigravity,
+xAI's Grok Build, DeepSeek and Command Code** (through ACP), and **Pi** and its
+fork **omp** (through Pi's RPC mode) — side by side, with your projects, Git, a
+terminal and a browser in one window.
 
 PandaCode is free and open source under the [PandaCode License](LICENSE), the MIT
 License with one addition: forks that are used commercially or released publicly
@@ -138,6 +138,7 @@ Download the latest build from
 | Platform | File | Requirements |
 | --- | --- | --- |
 | macOS (Apple silicon) | [`PandaCode-macOS-arm64.dmg`](https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-macOS-arm64.dmg) | macOS 12+ |
+| macOS (Intel) | [`PandaCode-macOS-x64.dmg`](https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-macOS-x64.dmg) | macOS 12+ |
 | Windows x64 | [`PandaCode-Windows-x64-setup.exe`](https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-Windows-x64-setup.exe) | Windows 10 1809+ or Windows 11 |
 | Linux x64 | [`PandaCode-Linux-x86_64.AppImage`](https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-Linux-x86_64.AppImage) | Ubuntu 22.04+ or compatible, X11 or XWayland |
 | Linux arm64 | [`PandaCode-Linux-aarch64.AppImage`](https://github.com/aicodeking/pandacode/releases/latest/download/PandaCode-Linux-aarch64.AppImage) | Ubuntu 24.04+ aarch64 or compatible, X11 or XWayland |
@@ -170,6 +171,7 @@ PandaCode does not include provider plans or usage.
 [DeepSeek](https://platform.deepseek.com/api_keys) installs with `npm i -g @deepseek-ai/dsh`; PandaCode launches `dsh --profile acp`. An API key is optional (Settings → Providers, or `DEEPSEEK_API_KEY`); dsh can use its own stored credentials. Usage limits are not shown in PandaCode; check platform.deepseek.com.
 
 [Command Code](https://commandcode.ai/docs/acp) installs with `npm i -g command-code` (Node 22 or newer); PandaCode launches `command-code acp`. Sign in once with `command-code login`, or save an API key in Settings → Providers (or set `COMMAND_CODE_API_KEY`); either one authenticates the same account. Usage limits are not shown in PandaCode; check Command Code Studio.
+[GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli) installs with `npm install -g @github/copilot`; run `copilot login` in a terminal, then select **GitHub Copilot CLI** in PandaCode. PandaCode launches the local `copilot` executable over ACP. The CLI manages its own sign-in. See [provider details](docs/providers.md#github-copilot-cli).
 
 ## Build from source
 
