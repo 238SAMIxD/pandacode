@@ -25,8 +25,9 @@ inspect the local PNG returned by `pandacode_capture_browser`.
 third-party `codedb` CLI when it is installed and on the app's PATH: a text
 query by default, or symbol search with `symbols: true`. It is read-only and
 runs as one bounded process per query (64 KiB of output, a 30-second deadline)
-with `CODEDB_NO_TELEMETRY=1`; there is no daemon, index service or written
-index file. Results are untrusted data. When codedb is absent the tool says so,
+with `CODEDB_NO_TELEMETRY=1`; there is no daemon or resident index service, and
+nothing is written inside the project (codedb keeps its own index data in its
+home directory). Results are untrusted data. When codedb is absent the tool says so,
 and agents keep their harness's own search tools. The tool runs without an
 approval prompt, like the other read-only app tools.
 
