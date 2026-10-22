@@ -113,6 +113,23 @@ test('a thread starts from the Threads tab', async ({ page }) => {
   await expect(page.locator('#breadcrumb')).toContainText('orbit');
 });
 
+test('typing survives the view re-rendering while it refreshes (#47)', async ({ page }) => {
+  await openHub(page);
+  const compose = hub(page).getByRole('textbox', { name: 'New thread' });
+  await compose.click();
+  await compose.pressSequentially('Add a reading');
+  await compose.press('ArrowLeft');
+  await compose.press('ArrowLeft');
+  // A background refresh (without moving focus) redraws the body, as the workspace's updates do.
+  await hub(page).locator('[data-gh="refresh"]').first().dispatchEvent('click');
+  await expect(hub(page).locator('.gh-thread')).toHaveCount(3);
+  await expect(compose).toHaveValue('Add a reading');
+  await expect(compose).toBeFocused();
+  expect(await compose.evaluate((field: HTMLInputElement) => field.selectionStart)).toBe(11);
+  await compose.pressSequentially('x');
+  await expect(compose).toHaveValue('Add a readixng');
+});
+
 test('a repository that is only on GitHub can be cloned, then worked on', async ({ page }) => {
   await openHub(page);
   await repoList(page).getByRole('option', { name: /meadow/ }).click();
@@ -196,15 +213,91 @@ test('pull requests show their CI status, and Actions lists runs with a fix for 
   await expect(row(page, 124).locator('.gh-status')).toHaveAttribute('data-status', 'failed');
 
   await tab(page, /Actions/).click();
-  await expect(tab(page, /Actions/)).toHaveText('Actions5');
+  await expect(tab(page, /Actions/)).toHaveText('Actions7');
   const run = (id: number) => hub(page).locator(`.gh-run[data-gh-run="${id}"]`);
   await expect(run(9120).locator('.gh-status')).toHaveText('In progress');
   await expect(run(9118).locator('.gh-status')).toHaveText('Queued');
-  await expect(run(9105)).toContainText('feat/instant-search');
+  await expect(run(9105).locator('.gh-run-pull')).toHaveAttribute('title', /feat\/instant-search/);
+  await expect(run(9050)).toContainText('main');
   await expect(run(9105).getByRole('button', { name: 'Fix' })).toHaveCount(0);
   await run(9087).hover();
   await run(9087).getByRole('button', { name: 'Fix' }).click();
   await expectSideThread(page);
   await expect(page.locator('#transcript .user-message').last()).toContainText('gh run view 9087 --log-failed');
   await expect(page.locator('#navigation .task-item.selected')).toContainText('Fix CI on devon/contrast');
+});
+
+test('Actions show each run’s event, pull request, attempts and duration, filtered by event and pull request', async ({ page }) => {
+  await openHub(page);
+  await tab(page, /Actions/).click();
+  const run = (id: number) => hub(page).locator(`.gh-run[data-gh-run="${id}"]`);
+  await expect(run(9087).locator('.gh-event')).toHaveText('Pull request');
+  await expect(run(9050).locator('.gh-event')).toHaveText('Push');
+  await expect(run(9087).locator('.gh-run-pull')).toHaveText('#124');
+  // A fork's run has no pull request link from GitHub; its head branch finds it.
+  await expect(run(9118).locator('.gh-run-pull')).toHaveText('#127');
+  await expect(run(9087).locator('.gh-attempt')).toHaveText('×2');
+  await expect(run(9105).locator('.gh-duration')).toHaveText('4m 30s');
+
+  const event = hub(page).getByRole('combobox', { name: 'Filter runs by event' });
+  const pull = hub(page).getByRole('combobox', { name: 'Filter runs by pull request' });
+  await event.selectOption('push');
+  await expect(hub(page).locator('.gh-run')).toHaveCount(1);
+  await hub(page).getByRole('button', { name: 'Clear' }).click();
+  await expect(event).toHaveValue('');
+  await expect(hub(page).locator('.gh-run')).toHaveCount(7);
+  await pull.selectOption('130');
+  await expect(hub(page).locator('.gh-run')).toHaveCount(2);
+  await hub(page).getByRole('checkbox', { name: 'Latest per pull request' }).check();
+  await expect(hub(page).locator('.gh-run')).toHaveCount(1);
+  await expect(run(9105)).toBeVisible();
+  await hub(page).getByRole('button', { name: 'Clear' }).click();
+
+  // A run's pull request chip filters to that pull request, and so does a pull request's Runs action.
+  await run(9087).locator('.gh-run-pull').click();
+  await expect(pull).toHaveValue('124');
+  await expect(hub(page).locator('.gh-run')).toHaveCount(1);
+  await tab(page, /Pull requests/).click();
+  await row(page, 127).hover();
+  await row(page, 127).getByRole('button', { name: 'Runs' }).click();
+  await expect(tab(page, /Actions/)).toHaveAttribute('aria-selected', 'true');
+  await expect(pull).toHaveValue('127');
+  await expect(hub(page).locator('.gh-run')).toHaveCount(2);
+});
+
+test('a run expands to its jobs with durations and its artifacts', async ({ page }) => {
+  await openHub(page);
+  await tab(page, /Actions/).click();
+  const run = hub(page).locator('.gh-run[data-gh-run="9087"]');
+  await run.hover();
+  await run.getByRole('button', { name: 'Details' }).click();
+  await expect(run.getByRole('button', { name: 'Details' })).toHaveAttribute('aria-expanded', 'true');
+  const details = hub(page).locator('#gh-run-9087');
+  await expect(details.locator('.gh-job')).toHaveCount(2);
+  await expect(details.locator('.gh-job').nth(0)).toContainText('lint');
+  await expect(details.locator('.gh-job').nth(0).locator('.gh-duration')).toHaveText('45s');
+  await expect(details.locator('.gh-job').nth(1).locator('.gh-status')).toHaveText('Failed');
+  await expect(details).toContainText('attempt 2');
+  await expect(details.locator('.gh-artifact').nth(0)).toContainText('playwright-report');
+  await expect(details.locator('.gh-artifact').nth(0)).toContainText('2.3 MB');
+  await expect(details.locator('.gh-artifact').nth(1)).toContainText('Expired');
+  await run.getByRole('button', { name: 'Details' }).click();
+  await expect(details).toHaveCount(0);
+});
+
+test('a run GitHub couldn’t start reads “Didn’t start”, and Fix looks at the workflow file', async ({ page }) => {
+  await openHub(page);
+  await tab(page, /Actions/).click();
+  const run = hub(page).locator('.gh-run[data-gh-run="9060"]');
+  await expect(run.locator('.gh-status')).toHaveText('Didn’t start');
+  await expect(run.locator('.gh-status')).toHaveAttribute('data-status', 'blocked');
+  await expect(run.locator('.gh-duration')).toHaveCount(0);
+  await run.hover();
+  await run.getByRole('button', { name: 'Details' }).click();
+  await expect(hub(page).locator('#gh-run-9060 .gh-run-blocked')).toContainText('workflow file is likely invalid');
+  await run.hover();
+  await run.getByRole('button', { name: 'Fix' }).click();
+  await expectSideThread(page);
+  await expect(page.locator('#transcript .user-message').last()).toContainText('startup failure');
+  await expect(page.locator('#navigation .task-item.selected')).toContainText('Fix .github/workflows/nightly.yml workflow file');
 });

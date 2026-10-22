@@ -652,6 +652,7 @@ fn start_command(
     harness_session: Option<String>,
     run_script: bool,
 ) -> Result<String, String> {
+    crate::child_env::sanitize(&mut cmd);
     let mut registry = terms.lock().map_err(|e| e.to_string())?;
     check_start(
         registry.values().map(|terminal| {
