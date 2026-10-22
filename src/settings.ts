@@ -3,7 +3,7 @@ import { mountProviderReadiness } from './provider-readiness';
 import { escape, icon } from './dom';
 import { providerLogo } from './provider-logos';
 import { uiSizeControls } from './ui-size';
-import type { Provider, ProviderId } from './types';
+import type { Project, Provider, ProviderId } from './types';
 import { mountOverlaySettings } from './overlay-settings';
 import { mountSupportDetails } from './support-settings';
 import { aboutSettingsHtml, mountAboutSettings } from './about-settings';
@@ -30,6 +30,8 @@ interface SettingsOptions {
   discover(): Promise<Provider[]>;
   /** Mounts the optional GitHub row; returns its cleanup. */
   github?(host: HTMLElement): () => void;
+  /** Projects listed under General; remove() rejects with the native refusal text. */
+  projects?: { list(): Project[]; remove(id: string): Promise<void> };
   /** Named agent teams and the classic Team setup switch. */
   teams?: Omit<AgentTeamsOptions, 'providers'>;
   /** Cloud sandbox connections (Daytona, Cloudflare, AWS). */
@@ -63,7 +65,7 @@ function sectionHtml(id: SettingsSection, options: SettingsOptions): string {
   const defaultName = options.providers.find(provider => provider.id === options.defaultProvider)?.name ?? options.defaultProvider;
   switch (id) {
     case 'general': return `<div class="settings-group">${uiSizeControls()}${switchRow('compact-mode', 'Compact conversation', 'Less space between messages.', options.compact)}</div>
-      <h3 class="settings-heading">Quick launcher</h3><div id="launcher-settings"></div>`;
+      <h3 class="settings-heading">Quick launcher</h3><div id="launcher-settings"></div>${options.projects ? '<h3 class="settings-heading">Projects</h3><div id="projects-settings" class="settings-group"></div>' : ''}`;
     case 'appearance': return `<div class="settings-group">
         <div class="setting-row"><div><strong>Theme</strong><small>${options.theme === 'dark' ? 'Dark' : 'Light'}. Imported VS Code themes keep their own.</small></div><button type="button" class="secondary-button" data-action="toggle-theme">${icon(options.theme === 'dark' ? 'sun' : 'moon')}Use ${options.theme === 'dark' ? 'light' : 'dark'}</button></div>
         <div class="setting-row"><div><strong>Daily wallpapers</strong><small>A new scene for each part of the day.</small></div><input type="checkbox" class="settings-switch" id="daily-wallpapers" aria-label="Daily wallpapers" ${options.wallpapers ? 'checked' : ''}></div>
@@ -154,6 +156,34 @@ export function mountSettings(host: HTMLElement, options: SettingsOptions): Sett
     } finally { pending = false; if (live()) refreshButton.disabled = false; }
   }
 
+  /** Projects: each row removes its project after an inline confirmation; the folder stays on disk. */
+  function mountProjects(slot: HTMLElement, projects: NonNullable<SettingsOptions['projects']>): () => void {
+    let confirming = '', error = '';
+    const draw = () => {
+      const rows = projects.list();
+      slot.innerHTML = rows.length ? rows.map(project => confirming === project.id
+        ? `<div class="setting-row project-row" data-project="${escape(project.id)}"><div><strong>Remove ${escape(project.name)}?</strong><small>Its tasks are removed from PandaCode. The folder stays on disk.</small>${error ? `<small class="settings-embed-error" role="alert">${escape(error)}</small>` : ''}</div><div class="project-row-actions"><button type="button" class="secondary-button" data-project-cancel>Cancel</button><button type="button" class="secondary-button" data-project-confirm>Remove project</button></div></div>`
+        : `<div class="setting-row project-row" data-project="${escape(project.id)}"><div><strong>${escape(project.name)}</strong><small class="project-path">${escape(project.path)}</small></div><button type="button" class="secondary-button" data-project-remove aria-label="Remove ${escape(project.name)}">Remove</button></div>`).join('')
+        : '<div class="setting-row"><div><small>No projects yet.</small></div></div>';
+    };
+    const onClick = async (event: MouseEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const id = target?.closest<HTMLElement>('[data-project]')?.dataset.project;
+      if (!target || !id) return;
+      if (target.closest('[data-project-remove]')) { confirming = id; error = ''; draw(); }
+      else if (target.closest('[data-project-cancel]')) { confirming = ''; error = ''; draw(); }
+      else if (target.closest('[data-project-confirm]')) {
+        const button = target.closest<HTMLButtonElement>('button')!;
+        button.disabled = true;
+        try { await projects.remove(id); confirming = ''; error = ''; }
+        catch (failure) { error = failure instanceof Error ? failure.message : String(failure); }
+        if (live()) draw();
+      }
+    };
+    slot.addEventListener('click', onClick); draw();
+    return () => slot.removeEventListener('click', onClick);
+  }
+
   /** A group's live parts mount the first time it opens, and stay mounted while Settings is open. */
   function mountSection(id: SettingsSection): void {
     if (mounted.has(id)) return;
@@ -161,6 +191,7 @@ export function mountSettings(host: HTMLElement, options: SettingsOptions): Sett
     const panel = panels.get(id)!;
     if (id === 'general') cleanups.push(mountOverlaySettings(panel.querySelector<HTMLElement>('#launcher-settings')!));
     if (id === 'remote' && options.remote) cleanups.push(mountRemoteSettings(panel.querySelector<HTMLElement>('#remote-settings')!, options.remote));
+    if (id === 'general' && options.projects) cleanups.push(mountProjects(panel.querySelector<HTMLElement>('#projects-settings')!, options.projects));
     if (id === 'github' && options.github) cleanups.push(options.github(panel.querySelector<HTMLElement>('#github-settings')!));
     if (id === 'teams' && options.teams) cleanups.push(mountAgentTeams(panel.querySelector<HTMLElement>('#agent-teams-settings')!, { ...options.teams, providers: options.providers }));
     if (id === 'cloud' && options.cloud) cleanups.push(mountCloudSettings(panel.querySelector<HTMLElement>('#cloud-settings')!, options.cloud));

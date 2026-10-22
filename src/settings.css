@@ -102,3 +102,5 @@ html[data-native-platform=macos] .settings-nav-head{padding-left:72px}
 /* Embedded panels were dialogs; their rows stretch to the column here. */
 .settings-page-root .vsix-row{width:100%}
 .settings-page-root .vsix-choice{flex:1;justify-content:flex-start;text-align:left}
+.settings-page-root .project-path{overflow-wrap:anywhere}
+.settings-page-root .project-row-actions{display:flex;gap:.5rem}

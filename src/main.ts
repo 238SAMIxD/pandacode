@@ -1816,6 +1816,15 @@ function removeDeletedSessions(ids: string[]): void {
     render(); run(refreshInspector());
   } else { renderNavigation(); renderHeader(); }
 }
+async function removeProject(id: string): Promise<void> {
+  await call('remove_project', { projectId: id });
+  removeDeletedSessions(state.sessions.filter(s => s.projectId === id).map(s => s.id));
+  state.projects = await call<Project[]>('list_projects');
+  if (state.projectFilter === id) setProjectFilter('');
+  if (state.projectId === id) activateProject(userProjects()[0]?.id ?? '');
+  renderNavigation(); renderHeader();
+}
+
 async function addProject(path: string): Promise<void> {
   const target = openingProjectForTask;
   const added = await call<Project>('add_project', { path });
@@ -3002,6 +3011,7 @@ async function showSettings(section?: import('./settings').SettingsSection): Pro
       providers: state.providers, defaultProvider: state.defaultProvider,
       compact: document.body.classList.contains('compact'), wallpapers: wallpapers.enabled,
       theme: currentTheme(), preview, section, discover: discoverSettingsProviders,
+      projects: { list: userProjects, remove: removeProject },
       github: target => github.mountSettings(target, project()?.id ?? state.projects[0]?.id ?? ''),
       teams: { loadModels, call },
       cloud: { call, listen: (name, callback) => subscribe(name, callback) },
