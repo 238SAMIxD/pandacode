@@ -17,7 +17,7 @@ const previewCatalogs: Record<ProviderId, ProviderModel[]> = {
   claude:[{id:'sonnet',name:'Claude Sonnet 5',description:'Sample Claude Code model metadata.',contextWindow:200000},{id:'opus',name:'Claude Opus 5',description:'Sample Claude Code model metadata.'}],
   kimi:[{id:'kimi-code/k3',name:'K3',description:'Sample configured Kimi model.'}],
   opencode:[{id:'opencode/big-pickle',name:'Big Pickle',description:'Sample OpenCode model metadata.'}],
-  glm:[{id:'glm-4.7',name:'GLM-4.7',description:'Sample Z.ai model metadata.'}],
+  glm:[{id:'glm-5.3',name:'GLM-5.3',description:'Sample Z.ai model metadata.'}],
   antigravity:[],
   grok:[{id:'grok-4.7',name:'Grok 4.7',description:'Sample Grok Build model.'}],
   mimo:[{id:'mimo-v2.6-pro',name:'MiMo-V2.6-Pro',description:'Sample MiMo Token Plan model.'}],

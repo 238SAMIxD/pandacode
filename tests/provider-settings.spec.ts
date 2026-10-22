@@ -161,7 +161,7 @@ test('provider connections expose all new harnesses and real GLM model names', a
   await expect(page.getByText('Grok Build', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('MiMo Token Plan', { exact: true }).first()).toBeVisible();
   await page.getByText('GLM Coding Plan', { exact: true }).first().click();
-  await expect(page.getByText('GLM-4.7', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('GLM-5.3', { exact: true }).first()).toBeVisible();
 });
 
 for (const providerId of ['claude', 'codex', 'kimi', 'opencode', 'glm', 'antigravity', 'grok', 'mimo', 'pi', 'deepseek', 'commandcode']) {
