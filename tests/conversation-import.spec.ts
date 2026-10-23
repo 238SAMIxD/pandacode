@@ -13,6 +13,7 @@ test.beforeEach(async ({ page }) => {
   });
   await page.goto('/');
   await expect(page.getByRole('textbox', { name: 'Message your coding agent' })).toBeEnabled();
+  await page.evaluate(async () => { await import('/src/conversation-import.ts'); });
 });
 
 test('imports selected Claude Code conversations into their projects and marks them as imported', async ({ page }) => {
