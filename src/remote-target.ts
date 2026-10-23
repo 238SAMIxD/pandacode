@@ -1,6 +1,7 @@
 import { escape, icon } from './dom';
 import type { RemoteRepoCheck, RemoteTarget } from './remote-types';
 import type { Session } from './types';
+import { cloudChip, cloudItems, cloudProvider, type CloudTarget } from './cloud-agents';
 
 /* The context bar's computer choice (PandaCode Connect). A new task can start on another
  * signed-in computer; a task that runs there shows that computer, locked. */
@@ -8,20 +9,24 @@ import type { Session } from './types';
 export const LOCAL = 'local';
 
 /** The control beside Local / Worktree; empty when there is nothing to choose. */
-export function computerControl(session: Session, fresh: boolean, targets: RemoteTarget[], chosen: string): string {
+export function computerControl(session: Session, fresh: boolean, targets: RemoteTarget[], chosen: string, clouds: CloudTarget[] = []): string {
+  if (session.cloud) return cloudChip(session);
   if (session.remoteDevice) {
     const name = escape(session.remoteDevice.name);
     return `<span class="composer-computer composer-computer-fixed" aria-label="Computer: ${name} (fixed for this task)" title="This task runs on ${name}. Start a new task to use another computer.">${icon('monitor')}<span>on ${name}</span></span>`;
   }
-  if (!fresh || !targets.length) return '';
-  const name = targets.find(target => target.deviceId === chosen)?.name ?? 'This computer';
+  // Cloud targets alone are enough, once one is connected; Settings → Cloud lists the rest.
+  if (!fresh || (!targets.length && !clouds.some(cloud => cloud.ready))) return '';
+  const cloud = clouds.find(item => item.provider === cloudProvider(chosen));
+  const name = cloud ? `Cloud · ${cloud.label}` : targets.find(target => target.deviceId === chosen)?.name ?? 'This computer';
   return `<button type="button" id="composer-computer" class="composer-computer" data-action="computer-menu" aria-label="Computer: ${escape(name)}" aria-haspopup="dialog" aria-expanded="false" title="Where this task runs">${icon('monitor')}<span>${escape(name)}</span>${icon('down')}</button>`;
 }
 
-export function computerItems(targets: RemoteTarget[], chosen: string) {
+export function computerItems(targets: RemoteTarget[], chosen: string, clouds: CloudTarget[] = []) {
   return [
     { id: LOCAL, label: 'This computer', icon: 'monitor', selected: chosen === LOCAL },
     ...targets.map(target => ({ id: target.deviceId, label: target.name, description: target.online ? target.platform : 'Offline', icon: 'monitor', selected: target.deviceId === chosen, disabled: !target.online })),
+    ...cloudItems(clouds, chosen),
   ];
 }
 

@@ -45,6 +45,12 @@ embedded editor engine.
   every bot with its latest message. See [bots](docs/bots.md).
 - **Local VMs and cloud sandboxes.** Headless macOS/Linux VMs on Apple silicon
   (Tart), and Daytona, Cloudflare and AWS sandboxes that agents can drive.
+- **Cloud agents.** Pick a cloud provider in a New task's **Run on** menu and the
+  agent runs on a machine in your own account (Daytona, Cloudflare, AWS, Google Cloud,
+  E2B, Modal, Vercel Sandbox, CodeSandbox, Runloop, Blaxel, Tensorlake, Freestyle,
+  boat). PandaCode installs the harness there, copies your login, and keeps the run
+  going while your laptop sleeps; changes come back to a local worktree. See
+  [cloud agents](docs/cloud-agents.md).
 - **Simulators.** iOS Simulator and Android emulator tools for agents.
 - **Deploys.** Start a deploy task for Vercel, Cloudflare, Railway, AWS or Google
   Cloud from the header, with approval-gated CLI runs (AWS and Google Cloud use
@@ -129,6 +135,7 @@ information:
 | Latest versions of installed coding CLIs | `formulae.brew.sh`, `downloads.claude.ai`, `api.github.com`, `cdn.kimi.com` | About every 6 hours |
 | Public model price list (for cost estimates) | `raw.githubusercontent.com` | Daily |
 | PandaCode's own updates (`latest.json` on this repository's latest release) | `github.com` | At launch and about every 6 hours; turn off in Settings → About |
+| Cloud agents (optional): the task's checkout, prompt and harness login go to the machine you chose; PandaCode checks on its active runs | The cloud provider you connected | Only for tasks you start on a cloud provider; while a run is active and at launch to re-attach |
 | PandaCode Connect (optional): GitHub sign-in, then the relay that forwards your devices' end-to-end encrypted messages | `github.com`, the PandaCode relay | Only after you sign in under Settings → Remote access; nothing before |
 
 ## Install

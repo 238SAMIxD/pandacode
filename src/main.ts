@@ -52,6 +52,8 @@ import { approvalBarHtml } from './approval-bar';
 import { createThreadFind } from './thread-find';
 import type { RemoteHost, RemoteRepoCheck, RemoteStatus, RemoteTarget } from './remote-types';
 import { LOCAL, behindDialog, behindText, computerControl, computerItems } from './remote-target';
+import './cloud-agents.css';
+import { SETUP_CHOICE, cloudActionItems, cloudIcon, cloudProvider, cloudStrip, deleteMachineDialog, harnessRefusal, type CloudStage, type CloudTarget } from './cloud-agents';
 import { botAvatar, botsBarHtml, botsListHtml, botsPanelHeadHtml, storedSidebarView, storeSidebarView, syncSeen, type SidebarView } from './sidebar-bots';
 import { connectAgentUiActions, type AgentUiAction } from './agent-ui-actions';
 import { createAgentInput, type AgentInput } from './agent-input';
@@ -369,7 +371,7 @@ const worktrees = createWorktrees({
   git: () => state.git, gitError: () => state.gitError,
   draft: () => document.querySelector<HTMLTextAreaElement>('#prompt')?.value ?? '',
   attachable: () => newTaskView(),
-  computer: (task, fresh) => computerControl(task, fresh, remoteTargets, remoteChoice),
+  computer: (task, fresh) => computerControl(task, fresh, remoteTargets, remoteChoice, cloudTargets),
   running: () => isRunning(),
   afterAttach: async (saved, live) => {
     const index = state.sessions.findIndex(s => s.id === saved.id); if (index >= 0) state.sessions[index] = saved;
@@ -861,7 +863,7 @@ function onNamedConnections(snapshot: import('./connections').ConnectionSnapshot
 /** The computer the composer's picker lists: a mirror task's, a new task's chosen one, else undefined (local). */
 function composerDevice(): string | undefined {
   const s = session();
-  return s?.remoteDevice?.id ?? (s && newTaskView() && remoteChoice !== LOCAL ? remoteChoice : undefined);
+  return s?.remoteDevice?.id ?? (s && newTaskView() && remoteChoice !== LOCAL && !cloudProvider(remoteChoice) ? remoteChoice : undefined);
 }
 function cachedFor<T>(cache: Map<string, Promise<T>>, key: string, load: () => Promise<T>): Promise<T> {
   let pending = cache.get(key);
@@ -934,8 +936,9 @@ function renderNavigation(): void {
     const link = s.pullRequest ?? s.issue;
     const linkMark = link ? `<span class="task-link ${link.kind === 'pull' ? 'pull' : 'issue'}" title="${escape(`${link.kind === 'pull' ? 'Pull request' : 'Issue'} #${link.number}: ${link.title}`)}">#${link.number}</span>` : '';
     // Worktree tasks show their branch; the worktree mark keeps its accessible name either way.
-    const worktreeMark = s.worktreePath ? `<span class="task-worktree" role="img" aria-label="Worktree" title="${escape(s.worktreePath)}">${icon('worktree')}</span>` : '';
-    const branch = s.worktreePath ? `<span class="task-branch">${worktreeMark}${s.worktreeBranch ? `<span>${escape(s.worktreeBranch)}</span>` : ''}</span>` : '';
+    const worktreeMark = (s.worktreePath ? `<span class="task-worktree" role="img" aria-label="Worktree" title="${escape(s.worktreePath)}">${icon('worktree')}</span>` : '')
+      + (s.cloud ? `<span class="task-cloud" role="img" aria-label="Runs on ${escape(s.cloud.label)}" title="Runs on a ${escape(s.cloud.label)} cloud machine">${cloudIcon()}</span>` : '');
+    const branch = s.worktreePath || s.cloud ? `<span class="task-branch">${worktreeMark}${s.worktreeBranch ? `<span>${escape(s.worktreeBranch)}</span>` : ''}</span>` : '';
     const signals = `${status ? `<span class="task-indicator ${status}" role="img" aria-label="${statusLabel}" title="${statusLabel}"></span>` : ''}${age ? `<span class="task-age${elapsed ? ' task-runtime' : ''}"${elapsed ? ` data-started-at="${startedAt}"` : ''} title="${elapsed ? `Working for ${elapsed}` : `Last message: ${escape(new Date(activityAt!).toLocaleString())}`}">${age}</span>` : ''}`;
     const button = `<button class="task-item${inFolder ? ' task-oneline' : ''} ${s.id === state.sessionId ? 'selected' : ''}" data-action="select-task" data-id="${escape(s.id)}" data-activity="${activeTask(s, now) ? 'active' : 'inactive'}" draggable="true" data-pinned="${Boolean(s.pinned)}" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" ${s.id === state.sessionId ? 'aria-current="page"' : ''} aria-description="${shortProvider(s.provider)}" title="${escape(s.worktreeBranch ? `${s.title}\n${s.worktreeBranch}` : s.title)}">`;
     const pin = s.pinned ? `<span class="task-pin" role="img" aria-label="Pinned">${icon('pin')}</span>` : '';
@@ -1427,7 +1430,7 @@ function renderComposer(): void {
   $('#composer-area').insertAdjacentHTML('afterbegin', worktrees.contextBar(s, newTaskView()));
   // Approvals sit above everything that rides on the prompt, the context bar included.
   $('#composer-area').insertAdjacentHTML('afterbegin', '<div id="approval-bar"></div>');
-  $('#composer').insertAdjacentHTML('beforebegin', (running ? '' : limitBanner(s)) + queuePanel({ entries: state.queues.get(s.id) ?? [], hold: state.queueHolds.get(s.id) ?? null, running, steerable: canSteer(s.provider) && !team, sendable: !botProjects.has(s.projectId) && !s.archived, editingId: state.queueEditing || null, busy: state.queueBusy.has(s.id) }));
+  $('#composer').insertAdjacentHTML('beforebegin', cloudStrip(s) + (running ? '' : limitBanner(s)) + queuePanel({ entries: state.queues.get(s.id) ?? [], hold: state.queueHolds.get(s.id) ?? null, running, steerable: canSteer(s.provider) && !team, sendable: !botProjects.has(s.projectId) && !s.archived, editingId: state.queueEditing || null, busy: state.queueBusy.has(s.id) }));
   renderApprovalBar(); resizePrompt();
   void github.status(s.projectId);
   const prompt = document.querySelector<HTMLTextAreaElement>('#prompt');
@@ -1893,7 +1896,7 @@ async function reloadSessions(): Promise<void> {
     const context = state.streams.get(s.id)?.contextUsage;
     if (context) s.contextUsage = context;
   }
-  renderNavigation(); renderHeader(); refreshModelLabels();
+  renderNavigation(); renderHeader(); refreshModelLabels(); syncCloudStrip();
 }
 function removeDeletedSessions(ids: string[]): void {
   terminalPanel.forget(ids);
@@ -2221,6 +2224,8 @@ async function send(): Promise<void> {
   if (!text || !s || s.archived || taskStage(s) === 'completed' || isRunning() || finishingStreams.has(s.id) || state.messagesLoading || state.messagesError || configuringSessions.has(s.id)) return;
   const target = !s.remoteDevice && newTaskView() ? remoteTargets.find(item => item.deviceId === remoteChoice) : undefined;
   if (target) return sendRemote(s, target, draft, text);
+  const cloud = !s.remoteDevice && !s.cloud && newTaskView() ? cloudTargets.find(item => item.ready && item.provider === cloudProvider(remoteChoice)) : undefined;
+  if (cloud) return sendCloud(s, cloud, draft, text);
   // Preparing attachments or awaiting admission blocks only this task.
   configuringSessions.add(s.id);
   noteManualSend(s.id);
@@ -3254,6 +3259,7 @@ async function showSettings(section?: import('./settings').SettingsSection): Pro
 }
 function closeSettings(): void {
   settingsView?.dispose(); settingsView = undefined;
+  run(refreshCloudTargets());
   const host = $('#settings-page');
   host.hidden = true; host.replaceChildren();
   $('.workspace').classList.remove('settings-open');
@@ -3483,8 +3489,82 @@ const remoteHost: RemoteHost = { call, listen: (name, callback) => subscribe(nam
 let remoteTargets: RemoteTarget[] = [], remoteChoice = LOCAL;
 async function refreshRemoteTargets(signedIn: boolean): Promise<void> {
   remoteTargets = signedIn ? await call<RemoteTarget[]>('remote_targets').catch(() => remoteTargets) : [];
-  if (!remoteTargets.some(target => target.deviceId === remoteChoice && target.online)) remoteChoice = LOCAL;
+  if (!cloudProvider(remoteChoice) && !remoteTargets.some(target => target.deviceId === remoteChoice && target.online)) remoteChoice = LOCAL;
   renderHeader();
+}
+/* Cloud agents (docs/cloud-agents.md): connected cloud providers are "Run on" targets too,
+ * whether or not Connect is signed in. A cloud task is an ordinary session with `cloud`. */
+let cloudTargets: CloudTarget[] = [];
+async function refreshCloudTargets(): Promise<void> {
+  cloudTargets = await call<CloudTarget[]>('cloud_agent_targets').catch(() => cloudTargets);
+  const chosen = cloudProvider(remoteChoice);
+  if (chosen && !cloudTargets.some(target => target.ready && target.provider === chosen)) remoteChoice = LOCAL;
+  renderHeader();
+}
+/** Redraws the strip in place, so progress never re-renders the prompt someone is typing in. */
+function syncCloudStrip(): void {
+  const s = session(), old = document.querySelector<HTMLElement>('#composer-area .cloud-strip'), composer = document.querySelector('#composer');
+  if (!s || !composer || old?.querySelector('[aria-expanded="true"]')) return;
+  const markup = cloudStrip(s);
+  if (old) { if (old.outerHTML !== markup) { if (markup) old.outerHTML = markup; else old.remove(); } }
+  else if (markup) composer.insertAdjacentHTML('beforebegin', markup);
+}
+function onCloudProgress(event: { sessionId: string; stage: CloudStage; detail?: string | null }): void {
+  const task = state.sessions.find(item => item.id === event.sessionId);
+  // A task that just turned into a cloud task may not be listed as one yet.
+  if (!task?.cloud) { run(reloadSessions()); return; }
+  task.cloud = { ...task.cloud, stage: event.stage, detail: event.detail ?? null };
+  if (task.id === state.sessionId) { syncCloudStrip(); renderHeader(); }
+  renderNavigation();
+}
+async function initCloudAgents(): Promise<void> {
+  // bridge.ts has no typed overload for this event yet.
+  await (subscribe as unknown as (name: string, callback: typeof onCloudProgress) => Promise<() => void>)('cloud-agent://progress', onCloudProgress);
+  await refreshCloudTargets();
+}
+async function showCloudMenu(anchor: HTMLElement): Promise<void> {
+  const s = session(); if (!s?.cloud) return;
+  await showChoices(anchor, { title: 'Cloud machine', width: 240, items: cloudActionItems(s), onSelect: async id => {
+    closeChoiceMenu();
+    if (id === 'delete' && !await confirmDeleteMachine(s)) return;
+    try { await call('cloud_agent_action', { sessionId: s.id, action: id }); }
+    catch (error) { notify(errorText(error)); return; }
+    if (id === 'open') openVm();
+    else if (id === 'delete') notify('Deleted the cloud machine. Your next message creates a new one.');
+  } });
+}
+function confirmDeleteMachine(s: Session): Promise<boolean> {
+  const dialog = modal('Delete cloud machine?', deleteMachineDialog(s));
+  const form = dialog.querySelector<HTMLFormElement>('#cloud-delete-form')!;
+  return new Promise(resolve => {
+    dialog.addEventListener('close', () => resolve(false), { once: true });
+    form.addEventListener('submit', event => { event.preventDefault(); event.stopPropagation(); resolve(true); closeModal(); }, { once: true });
+  });
+}
+/** A New task sent with a cloud provider chosen: the same message content as a Connect start, on a cloud machine. */
+async function sendCloud(s: Session, target: CloudTarget, draft: string, text: string): Promise<void> {
+  const filePaths = [...state.attachments], promptItems = attachments.list(s.id);
+  const refusal = harnessRefusal(s.provider, provider(s.provider)?.name ?? s.provider);
+  if (refusal) throw new Error(refusal);
+  if ((state.browserAttachments.get(s.id) ?? []).length || (state.moodboardAttachments.get(s.id) ?? []).length || attachments.imageIds(promptItems).length) throw new Error(`Images and browser captures can’t be sent to a cloud machine yet. Remove them, or run on this computer.`);
+  configuringSessions.add(s.id);
+  try {
+    const contexts = await Promise.all(filePaths.map(path => fileContext(s, path)));
+    const content = text + contexts.join('') + attachments.contextFor(promptItems) + await github.contextFor(s.projectId, s.id, text) + tokenSaver.contextFor(s.id);
+    const prompt = () => document.querySelector<HTMLTextAreaElement>('#prompt');
+    if (state.sessionId !== s.id || prompt()?.value !== draft) throw new Error('Your task or message changed. Send it again.');
+    const started = await call<Session>('cloud_agent_start', {
+      // The empty New task draft becomes the cloud task, so no stray draft is left behind.
+      sessionId: s.id, projectId: s.projectId, provider: target.provider, prompt: content, harness: s.provider, model: s.model, mode: s.mode, effort: s.reasoningEffort ?? null,
+    });
+    attachments.consume(s.id, promptItems);
+    state.attachments = state.attachments.filter(path => !filePaths.includes(path));
+    const field = prompt(); if (field?.dataset.sessionId === s.id) field.value = '';
+    state.drafts.delete(s.id);
+    remoteChoice = LOCAL;
+    await reloadSessions();
+    state.query = ''; await selectSession(started.id, true);
+  } finally { configuringSessions.delete(s.id); }
 }
 async function initRemote(): Promise<void> {
   let signedIn = false;
@@ -3495,9 +3575,12 @@ async function initRemote(): Promise<void> {
   if (status) { signedIn = status.signedIn; await refreshRemoteTargets(signedIn); }
 }
 async function showComputerMenu(anchor: HTMLElement): Promise<void> {
-  await showChoices(anchor, { title: 'Run on', width: 280, items: computerItems(remoteTargets, remoteChoice), onSelect: id => {
-    closeChoiceMenu(); remoteChoice = id; renderHeader();
+  await showChoices(anchor, { title: 'Run on', width: 280, items: computerItems(remoteTargets, remoteChoice, cloudTargets), onSelect: id => {
+    closeChoiceMenu();
+    if (id === SETUP_CHOICE) { run(showSettings('cloud')); return; }
+    remoteChoice = id; renderHeader();
     const task = session();
+    if (cloudProvider(id)) { if (task && newTaskView()) { const refusal = harnessRefusal(task.provider, provider(task.provider)?.name ?? task.provider); if (refusal) notify(refusal); } return; }
     if (task && newTaskView()) run(adaptPickerToComputer(task, id, remoteTargets.find(item => item.deviceId === id)?.name ?? 'That computer'));
   } });
 }
@@ -3666,6 +3749,7 @@ async function action(name: string, element: HTMLElement): Promise<void> {
     case 'bot-pause': if (element.dataset.bot) { const bot = sidebarBots.find(item => item.id === element.dataset.bot); if (bot) { await call('bot_set_paused', { botId: bot.id, paused: !bot.paused }); notify(bot.paused ? `${bot.name} resumed` : `${bot.name} paused`); await reloadBotProjects(false); } } break;
     case 'open-bot': if (element.dataset.bot) await openBot(element.dataset.bot); break;
     case 'computer-menu': await showComputerMenu(element); break;
+    case 'cloud-menu': await showCloudMenu(element); break;
     case 'toggle-bots-view': setSidebarView(sidebarView === 'bots' ? 'tasks' : 'bots'); break;
     case 'import-conversations': await showConversationImport(); break;
     case 'agent-updates': await agentUpdates.show(); break;
@@ -3851,6 +3935,7 @@ async function boot(): Promise<void> {
   run(subscribe('simulator-changed', event => { if (event?.show) openSimulator(); void simulatorPanel?.refresh(); }).then(() => undefined));
   run(subscribe('bots-changed', () => run((async () => { botProjectsLoad = reloadBotProjects(); await botProjectsLoad; botsView?.refresh(); })())).then(() => undefined));
   run(initRemote());
+  run(initCloudAgents());
   run(subscribe('bot-notification', event => { if (event?.text) notify(String(event.text).replace(/\s+/g, ' ').slice(0, 160)); }).then(() => undefined));
   // Bots appear in the sidebar once loaded; startup does not wait for them.
   botProjectsLoad = reloadBotProjects(false); run(botProjectsLoad);

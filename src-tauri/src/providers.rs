@@ -2721,6 +2721,11 @@ async fn run_inner(
         return Err("Unknown permission mode".into());
     }
     validate_reasoning_effort(&config.provider, config.reasoning_effort.as_deref())?;
+    // A cloud task runs the same pipeline through a bridge to its machine; local MCP host
+    // tools stay on this computer (docs/cloud-agents.md, step 5).
+    if let Some(command) = crate::cloud_agents::transport::command(&config, |command| configure_command(command, &config)).await? {
+        return run_process_with_tools(config, sink, input, command, Vec::new(), None).await;
+    }
     let connection = crate::connections::for_task(&config.session_id, &config.provider)
         .map(|connection| crate::connections::launch(&connection))
         .transpose()?;

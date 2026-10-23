@@ -287,6 +287,14 @@ const previewVm = createPreviewVm();
 const previewDesign = createPreviewDesign();
 const previewSkills = createPreviewSkills();
 const previewCloud = createPreviewCloud();
+/** Each preview cloud preparation step takes this long; tests can watch the stages go by. */
+const CLOUD_STEP_MS = 400;
+function cloudStage(s: Session, stage: NonNullable<Session['cloud']>['stage'], detail: string | null = null): void {
+  if (!s.cloud) return;
+  s.cloud = { ...s.cloud, stage, detail };
+  emit('cloud-agent://progress', { sessionId: s.id, stage, detail });
+  emit('sessions-changed', {});
+}
 const previewSimulator = (() => {
   const devices: { udid: string; name: string; runtime: string; state: string; family: string; deviceType: string; platform?: string; duo?: boolean }[] = [
     { udid: '3720D4A0-B8C5-4DAC-9425-6A4685BC533E', name: 'iPhone 17 Pro', runtime: 'iOS 26.2', state: 'Booted', family: 'phone', deviceType: 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro' },
@@ -646,6 +654,36 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     return { sessionId: s.id } as T;
   }
   if (command.startsWith('remote_')) return invokeRemote<T>(command, args, emit);
+  if (command === 'cloud_agent_targets') return previewCloud.agentTargets() as T;
+  if (command === 'cloud_agent_set_claude_token') { if (!String(args.token ?? '').trim()) throw new Error('Paste the token from claude setup-token.'); return null as T; }
+  if (command === 'cloud_agent_start') {
+    // The agent runs on a cloud machine; here the machine is prepared on a timer, then the prompt is sent.
+    const target = previewCloud.agentTargets().find(item => item.provider === args.provider && item.ready);
+    if (!target) throw new Error('Connect this provider in Settings → Cloud first.');
+    ((window as any).__cloudStarts ??= []).push(args);
+    const s = args.sessionId ? session(args.sessionId) : await invoke<Session>('create_session', { projectId: args.projectId, provider: args.harness, model: args.model, mode: args.mode });
+    Object.assign(s, { provider: args.harness, model: args.model, mode: args.mode, reasoningEffort: args.effort, draft: false, worktreeBranch: `pandacode/cloud-${s.id.slice(0, 8)}`, cloud: { provider: target.provider, label: target.label, machine: `${target.provider}:pc-${s.id.slice(0, 8)}`, stage: 'creating', detail: null } });
+    const stages = ['installing', 'credentials', 'uploading', 'running'] as const;
+    stages.forEach((stage, index) => setTimeout(async () => {
+      cloudStage(s, stage);
+      if (stage === 'running') { await invoke('send_message', { sessionId: s.id, text: args.prompt }); cloudStage(s, 'ready'); }
+    }, (index + 1) * CLOUD_STEP_MS));
+    emit('sessions-changed', {});
+    return structuredClone(s) as T;
+  }
+  if (command === 'cloud_agent_action') {
+    const s = session(args.sessionId);
+    if (!s.cloud) throw new Error('This task does not run on a cloud machine.');
+    ((window as any).__cloudActions ??= []).push(args.action);
+    // `window.__cloudActionFail` lets tests make one action fail like the provider would.
+    if ((window as any).__cloudActionFail === args.action) throw new Error(`${s.cloud.label} could not ${args.action} the machine (HTTP 503).`);
+    if (args.action === 'sync') { cloudStage(s, 'syncing'); setTimeout(() => cloudStage(s, 'ready'), CLOUD_STEP_MS); }
+    else if (args.action === 'retry') cloudStage(s, 'ready');
+    else if (args.action === 'stop') cloudStage(s, 'stopped');
+    else if (args.action === 'delete') { s.cloud = { ...s.cloud, machine: null }; cloudStage(s, 'stopped', 'Machine deleted'); }
+    else if (args.action !== 'open') throw new Error('Unknown cloud action.');
+    return null as T;
+  }
   if (command === 'capabilities_inventory' || command === 'cache_alignment') return previewCapabilities(command) as T;
   if (command.startsWith('recipes_')) { const r = recipesCommand(command, args); if (r.handled) return r.result as T; }
   let result: unknown;
