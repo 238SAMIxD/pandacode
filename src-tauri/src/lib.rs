@@ -1202,6 +1202,7 @@ async fn send_message(
     let (is_team, project_id) = {
         let store = state.store.lock().map_err(|e| e.to_string())?;
         let task = store.session(&session_id)?;
+        store.ensure_writable(&session_id)?;
         if let Some(ids) = moodboard_ids.as_deref().filter(|ids| !ids.is_empty()) {
             text.push_str(&moodboards::resolve_refs(&store, &task.project_id, ids)?);
         }
@@ -1251,6 +1252,7 @@ async fn start_task(
 ) -> Result<()> {
     let team_prompt = {
         let store = state.store.lock().map_err(|e| e.to_string())?;
+        store.ensure_writable(&session_id)?;
         if architect::load(&store, &session_id)?.is_some() {
             let task = store.session(&session_id)?;
             Some(if task.task_description.trim().is_empty() {
