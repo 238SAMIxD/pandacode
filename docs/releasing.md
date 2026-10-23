@@ -61,6 +61,15 @@ the repository secret `NPM_TOKEN` (an npm automation token); without it the job 
 and skips. If the update key is ever rotated, update `PUBKEY` in
 `packages/npx/installer.mjs` (a test compares it with `tauri.conf.json`).
 
+## Homebrew
+
+The tap [aicodeking/homebrew-pandacode](https://github.com/aicodeking/homebrew-pandacode)
+updates itself: every 3 hours it reads the latest release and its `.sha256` files and
+commits the new version, so a release needs no step here and no secret in this
+repository. To pick up a release sooner, run its `update` workflow by hand. Asset names
+are part of the cask and formula, so renaming a macOS or Linux asset breaks the tap. See
+[homebrew.md](homebrew.md).
+
 ## 1. Prepare the version
 
 Work on `main` (or land your branch there first) with a clean, reviewed tree.

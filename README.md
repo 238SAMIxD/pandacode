@@ -149,6 +149,10 @@ Or from a terminal: `npx pandacode` downloads the latest build, verifies its
 signature and installs it (on macOS it is signed locally for you, so no
 Gatekeeper prompt). `npx pandacode --dry-run` only downloads and verifies.
 
+With [Homebrew](https://brew.sh): `brew install --cask aicodeking/pandacode/pandacode`
+on macOS, or `brew install aicodeking/pandacode/pandacode` on Linux
+([details](docs/homebrew.md)).
+
 Release builds are not code-signed, so your OS will warn the first time:
 
 - **macOS:** if macOS says it cannot verify PandaCode, open **System Settings →
