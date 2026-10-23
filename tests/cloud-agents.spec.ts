@@ -24,7 +24,6 @@ async function newTask(page: Page) {
 }
 async function startOnE2b(page: Page, text: string) {
   await newTask(page);
-  await expect(page.locator('#composer-computer')).toHaveCount(0);
   await connectE2b(page);
   const computer = page.locator('#composer-computer');
   await expect(computer).toHaveAccessibleName('Computer: This computer');

@@ -52,7 +52,7 @@ import { changeUiScale, initializeUiSizing, setUiScale } from './ui-size';
 import { approvalBarHtml } from './approval-bar';
 import { createThreadFind } from './thread-find';
 import type { RemoteHost, RemoteRepoCheck, RemoteStatus, RemoteTarget } from './remote-types';
-import { LOCAL, behindDialog, behindText, computerControl, computerItems } from './remote-target';
+import { CONNECT_SETUP, LOCAL, behindDialog, behindText, computerControl, computerItems } from './remote-target';
 import './cloud-agents.css';
 import { SETUP_CHOICE, cloudActionItems, cloudIcon, cloudProvider, cloudStrip, deleteMachineDialog, harnessRefusal, type CloudStage, type CloudTarget } from './cloud-agents';
 import { botsBarHtml, botsListHtml, botsPanelHeadHtml, storedSidebarView, storeSidebarView, syncSeen, type SidebarView } from './sidebar-bots';
@@ -3626,6 +3626,7 @@ async function showComputerMenu(anchor: HTMLElement): Promise<void> {
   await showChoices(anchor, { title: 'Run on', width: 280, items: computerItems(remoteTargets, remoteChoice, cloudTargets), onSelect: id => {
     closeChoiceMenu();
     if (id === SETUP_CHOICE) { run(showSettings('cloud')); return; }
+    if (id === CONNECT_SETUP) { run(showSettings('remote')); return; }
     remoteChoice = id; renderHeader();
     const task = session();
     if (cloudProvider(id)) { if (task && newTaskView()) { const refusal = harnessRefusal(task.provider, provider(task.provider)?.name ?? task.provider); if (refusal) notify(refusal); } return; }
