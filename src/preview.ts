@@ -121,6 +121,7 @@ const providers: Provider[] = [
   { id: 'cline', name: 'Cline', installed: true, path: '/sample/bin/cline', version: '3.0.73 (sample)', models: [] },
   { id: 'omp', name: 'Oh My Pi', installed: false, path: null, version: '', models: [] },
   { id: 'github-copilot', name: 'GitHub Copilot CLI', installed: true, path: '/sample/bin/copilot', version: 'GitHub Copilot CLI 1.0.82 (sample)', models: [] },
+  { id: 'muse', name: 'Muse Code', installed: true, path: '/sample/bin/muse', version: 'Muse Code 1.4.7 (sample)', models: [] },
 ];
 // Mirrors providers::mimo::ENDPOINTS; the native side is the authority.
 const previewMimoEndpoints = [
@@ -169,6 +170,7 @@ const catalogs: Record<ProviderId, ProviderModel[]> = {
   // Recorded from `cline --acp` 3.0.73; efforts are its --thinking levels.
   cline: ['anthropic/claude-sonnet-5.5', 'anthropic/claude-opus-5.5', 'openai/gpt-6-sol'].map((id, index) => ({ id, name: ['Claude Sonnet 5.5', 'Claude Opus 5.5', 'GPT-6 Sol'][index], description: '', reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh'].map(effort => ({ id: effort, name: effort === 'xhigh' ? 'Extra high' : effort[0].toUpperCase() + effort.slice(1), description: '' })) })),
   'github-copilot': [{ id: 'default', name: 'Default', description: 'Use the model configured in GitHub Copilot CLI.' }],
+  muse: ['muse-wonder-1.0', 'muse-spark-1.3'].map(id => ({ id, name: id, description: '', reasoningEfforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map(effort => ({ id: effort, name: effort === 'xhigh' ? 'Extra high' : effort[0].toUpperCase() + effort.slice(1), description: '' })), defaultReasoningEffort: 'high', contextWindow: 1007997 })),
   opencode: openCodePreviewModels,
   glm: [
     { id: 'glm-5.3', name: 'GLM-5.3', description: 'Current flagship. Availability depends on your plan.' },
@@ -858,9 +860,9 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'steer_task': {
       const s = session(args.sessionId);
       if (!timers.has(s.id) && s.status !== 'running') throw new Error('The agent is not running; the message stays queued.');
-      // Claude-family, Codex and Pi take it live; others hold it for the next turn of the same run.
+      // Claude-family, Codex, Pi and Muse take it live; others hold it for the next turn of the same run.
       const text = String(args.text).trim(), steerId = `steer-${++id}`;
-      const mode = ['claude', 'glm', 'mimo', 'codex', 'pi'].includes(s.provider) ? 'live' : 'next-turn';
+      const mode = ['claude', 'glm', 'mimo', 'codex', 'pi', 'muse'].includes(s.provider) ? 'live' : 'next-turn';
       const report = (status: string) => agent({ sessionId: s.id, kind: 'steer' as AgentEvent['kind'], text, data: { id: steerId, status, mode } });
       window.setTimeout(() => report('pending'));
       window.setTimeout(() => {
