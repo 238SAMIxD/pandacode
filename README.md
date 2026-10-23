@@ -134,6 +134,7 @@ information:
 | What | Where | How often |
 | --- | --- | --- |
 | Latest versions of installed coding CLIs | `formulae.brew.sh`, `downloads.claude.ai`, `api.github.com`, `cdn.kimi.com` | About every 6 hours |
+| Plan usage checks for your signed-in agents | That agent's provider | When you open the menu bar item or the Usage dialog |
 | Public model price list (for cost estimates) | `raw.githubusercontent.com` | Daily |
 | PandaCode's own updates (`latest.json` on this repository's latest release) | `github.com` | At launch and about every 6 hours; turn off in Settings → About |
 | Cloud agents (optional): the task's checkout, prompt and harness login go to the machine you chose; PandaCode checks on its active runs | The cloud provider you connected | Only for tasks you start on a cloud provider; while a run is active and at launch to re-attach |

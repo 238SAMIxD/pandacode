@@ -1805,6 +1805,8 @@ function rememberThread(id: string): void {
 }
 const pageSignature = (messages: Message[]): string => messages.filter(message => message.id > 0).map(message => `${message.id}:${message.content.length}`).join(',');
 
+// The menu bar item lists finished tasks until they are viewed.
+function markTraySeen(sessionId: string): void { void call('tray_seen', { sessionId }).catch(() => undefined); }
 async function selectSession(id: string, focusComposer = false): Promise<void> {
   if (deletedSessions.has(id)) return;
   const s = state.sessions.find(s => s.id === id); if (!s) return;
@@ -1820,7 +1822,7 @@ async function selectSession(id: string, focusComposer = false): Promise<void> {
   // A bot's conversation lives in the Bots section; it never re-points the project filter.
   if (state.projectFilter && state.projectFilter !== s.projectId && !botProjects.has(s.projectId) && !chatTask(s)) setProjectFilter(s.projectId);
   if (state.collapsedFolders.delete(s.projectId)) saveCollapsedFolders();
-  state.sessionId = s.id; activateProject(s.projectId, false); if (changingTask) restoreThreadPanel(s); state.archived = s.archived; state.attachments = [];
+  state.sessionId = s.id; markTraySeen(s.id); activateProject(s.projectId, false); if (changingTask) restoreThreadPanel(s); state.archived = s.archived; state.attachments = [];
   const remembered = changingTask ? threadPages.get(id) : undefined;
   state.messages = remembered ? [...remembered.messages] : []; state.messagesLoading = !remembered; state.messagesError = ''; state.hasOlder = remembered?.hasOlder ?? false;
   const generation = ++state.generation;
@@ -3981,7 +3983,17 @@ async function boot(): Promise<void> {
   run(subscribe('vm-changed', event => { if (event && !Array.isArray(event) && event.show) openVm(); void vmPanel?.refresh(); }).then(() => undefined));
   // bridge.ts has no typed overload for this event yet.
   run((subscribe as (name: string, callback: () => void) => Promise<() => void>)('design-changed', () => void designPanel?.refresh()).then(() => undefined));
-  run(subscribe('agent-event', (event: AgentEvent) => { if (event.kind === 'done' && event.sessionId === state.sessionId) void designPanel?.refresh(); }).then(() => undefined));
+  run(subscribe('agent-event', (event: AgentEvent) => {
+    if (event.kind !== 'done' || event.sessionId !== state.sessionId) return;
+    void designPanel?.refresh();
+    if (document.hasFocus()) markTraySeen(event.sessionId);
+  }).then(() => undefined));
+  run((subscribe as (name: string, callback: (event: unknown) => void) => Promise<() => void>)('tray-open-session', sessionId => run((async () => {
+    if (typeof sessionId !== 'string') return;
+    if (!state.sessions.some(s => s.id === sessionId)) await reloadSessions();
+    if (state.view !== 'conversation') state.boardPanel = true;
+    await selectSession(sessionId, true);
+  })())).then(() => undefined));
   run(subscribe('simulator-changed', event => { if (event?.show) openSimulator(); void simulatorPanel?.refresh(); }).then(() => undefined));
   run(subscribe('bots-changed', () => run((async () => { botProjectsLoad = reloadBotProjects(); await botProjectsLoad; botsView?.refresh(); })())).then(() => undefined));
   run(initRemote());

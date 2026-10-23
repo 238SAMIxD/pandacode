@@ -61,6 +61,7 @@ mod usage_keychain;
 mod usage_ledger;
 mod workspace;
 mod jj;
+mod tray;
 
 pub use usage_keychain::handle_usage_keychain_helper;
 pub use cloud_agents::handle_cloud_bridge;
@@ -521,6 +522,10 @@ async fn remove_project(state: State<'_, AppState>, project_id: String) -> Resul
 }
 #[tauri::command]
 async fn list_sessions(state: State<'_, AppState>) -> Result<Vec<Session>> {
+    listed_sessions(&state)
+}
+/// Tasks as the sidebar shows them, with stale running states settled.
+pub(crate) fn listed_sessions(state: &AppState) -> Result<Vec<Session>> {
     let agents = state.agents.lock().map_err(|e| e.to_string())?;
     let store = state.store.lock().map_err(|e| e.to_string())?;
     Ok(store
@@ -1648,6 +1653,7 @@ async fn launch_operation_admitted(
     // leave that run alone, so this run neither stops it nor records an end while closing.
     let cloud = cloud_agents::transport::is_cloud(&session_id);
     let _ = app.emit("agent-event", event(&session_id, "status", "running"));
+    tray::refresh(&app);
     let store = state.store.clone();
     let agents = state.agents.clone();
     // Optional metadata must never block a conversation when its storage cannot
@@ -1779,6 +1785,7 @@ async fn launch_operation_admitted(
                         if let Some(request_id) = &e.request_id {
                             bots::approval_requested(&app_sink, &e.session_id, request_id, &e.text);
                         }
+                        tray::refresh(&app_sink);
                     }
                     saved
                 } else {
@@ -2060,6 +2067,8 @@ async fn launch_operation_admitted(
         } else {
             "Turn failed"
         };
+        // Before `done`, so the window's tray_seen for the open task lands after it.
+        tray::finished(&app, &session_id, was_stopped);
         let _ = app.emit("agent-event", event(&session_id, "done", done));
         remote::run_finished(&app, &session_id, successful, was_stopped, done);
         // Bot conversations reply on their channel and send their next queued message.
@@ -3167,6 +3176,9 @@ pub fn run() {
             app.manage(architect::Runtime::default());
             architect::watchdog::watch(app.handle().clone());
             bots::start(app.handle());
+            if let Err(error) = tray::setup(app.handle()) {
+                eprintln!("Menu bar item is unavailable: {error}");
+            }
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 loop {
@@ -3269,6 +3281,7 @@ pub fn run() {
                 connections::connection_delete,
                 connections::connection_assign,
                 agent_usage::agent_usage,
+                tray::tray_seen,
                 usage_ledger::usage_ledger,
                 capabilities::capabilities_inventory,
                 capabilities::cache_alignment,
