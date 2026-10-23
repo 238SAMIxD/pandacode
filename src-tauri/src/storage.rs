@@ -426,7 +426,10 @@ impl Store {
                 }
                 migration.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS sessions_remote ON sessions(remote_device,remote_session) WHERE remote_session IS NOT NULL; PRAGMA user_version=26;").map_err(|e| e.to_string())?;
             }
-            if version < 27 {
+            if version < 28 {
+                // Both 0.3.31 builds stamped 27, each with only half of this union:
+                // upstream's cloud-agents column, or the import-identity columns. The
+                // adds below are exists-checked, so any partial 27 heals to 28.
                 // Cloud agents: the machine and run behind a task (docs/cloud-agents.md).
                 let cloud: bool = migration.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name='cloud')", [], |r| r.get(0)).map_err(|e| e.to_string())?;
                 if !cloud {
@@ -444,7 +447,7 @@ impl Store {
                         migration.execute_batch(&format!("ALTER TABLE sessions ADD COLUMN {name} {definition};")).map_err(|e| e.to_string())?;
                     }
                 }
-                migration.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS sessions_import_identity ON sessions(import_source,import_id) WHERE import_id IS NOT NULL; PRAGMA user_version=27;").map_err(|e| e.to_string())?;
+                migration.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS sessions_import_identity ON sessions(import_source,import_id) WHERE import_id IS NOT NULL; PRAGMA user_version=28;").map_err(|e| e.to_string())?;
             }
             if version < 28 {
                 // Bots: an optional personality (soul.md) kept apart from instructions (docs/bots.md).
@@ -3025,13 +3028,37 @@ mod tests {
             store.db.execute_batch("DROP INDEX sessions_import_identity; ALTER TABLE sessions DROP COLUMN import_source; ALTER TABLE sessions DROP COLUMN import_id; ALTER TABLE sessions DROP COLUMN transcript_only; PRAGMA user_version=26;").unwrap();
         }
         let migrated = Store::open(&path).unwrap();
-        assert_eq!(migrated.db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0)).unwrap(), 27);
+        assert_eq!(migrated.db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0)).unwrap(), SCHEMA_VERSION);
         assert!(!migrated.session(&task_id).unwrap().transcript_only);
         assert!(migrated.ensure_writable(&task_id).is_ok());
         let columns: Vec<String> = migrated.db.prepare("SELECT name FROM pragma_table_info('sessions')").unwrap().query_map([], |row| row.get(0)).unwrap().collect::<std::result::Result<_, _>>().unwrap();
         assert!(columns.contains(&"import_source".into()) && columns.contains(&"import_id".into()) && columns.contains(&"transcript_only".into()));
         drop(migrated);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_partial_schema_27_database_heals_to_the_union() {
+        // Both 0.3.31 builds stamped 27 with half of the union: this branch's earlier
+        // bundle wrote the import identity without `cloud`; upstream's release wrote
+        // `cloud` without the import identity. Either partial has to heal on open.
+        for drop_command in [
+            "ALTER TABLE sessions DROP COLUMN cloud;",
+            "DROP INDEX sessions_import_identity; ALTER TABLE sessions DROP COLUMN import_source; ALTER TABLE sessions DROP COLUMN import_id; ALTER TABLE sessions DROP COLUMN transcript_only;",
+        ] {
+            let dir = std::env::temp_dir().join(format!("pandacode-partial-27-{}", id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("legacy.db");
+            {
+                let store = Store::open(&path).unwrap();
+                store.db.execute_batch(&format!("{drop_command} PRAGMA user_version=27;")).unwrap();
+            }
+            let healed = Store::open(&path).unwrap();
+            assert_eq!(healed.db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0)).unwrap(), SCHEMA_VERSION);
+            assert!(healed.sessions().is_ok(), "the listing query runs on any partial 27");
+            drop(healed);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     #[test]
