@@ -34,11 +34,13 @@ mod claude_stream_tests;
 mod codex_stream_tests;
 #[cfg(all(test, unix))]
 pub(crate) mod concurrent_process_tests;
+mod cline;
 mod commandcode;
 mod extra_models;
 mod github_copilot;
 mod glm;
 mod mimo;
+mod muse;
 mod deepseek;
 mod kimi_models;
 mod launch;
@@ -65,7 +67,7 @@ const TOOL_INPUT_LIMIT: usize = 4096;
 const TOOL_OUTPUT_LIMIT: usize = 8192;
 const TOOL_CACHE_LIMIT: usize = 64;
 const PREVIEW_TRUNCATED: &str = "\n[Preview truncated]";
-const PROVIDERS: [(&str, &str); 13] = [
+const PROVIDERS: [(&str, &str); 15] = [
     ("claude", "Claude Code"),
     ("codex", "Codex"),
     ("kimi", "Kimi Code"),
@@ -77,8 +79,10 @@ const PROVIDERS: [(&str, &str); 13] = [
     ("pi", "Pi"),
     ("deepseek", "DeepSeek"),
     ("commandcode", "Command Code"),
+    ("cline", "Cline"),
     ("omp", "Oh My Pi"),
     ("github-copilot", "GitHub Copilot CLI"),
+    ("muse", "Muse Code"),
 ];
 
 /// Claude Code tools that only report back to a session that stays open after its turn.
@@ -390,7 +394,9 @@ struct PartialTool {
 pub enum RunInput {
     Stop,
     /// A message for the agent while it works: injected mid-turn where the harness supports it.
+    /// The reply is `{"steered":true,"id","mode":"live"|"next-turn"}`; `steer` events follow its delivery.
     Steer {
+        id: String,
         text: String,
         reply: tokio::sync::oneshot::Sender<Result<Value, String>>,
     },
@@ -449,14 +455,14 @@ pub fn validate_reasoning_effort(provider: &str, effort: Option<&str>) -> Result
     let valid = match (provider, effort) {
         (
             "claude" | "codex" | "kimi" | "glm" | "opencode" | "antigravity" | "grok" | "mimo"
-            | "pi" | "deepseek" | "commandcode" | "omp" | "github-copilot",
+            | "pi" | "deepseek" | "commandcode" | "cline" | "omp" | "github-copilot" | "muse",
             None,
         ) => true,
         ("claude" | "glm" | "mimo", Some(value)) => {
             ["low", "medium", "high", "xhigh", "max"].contains(&value)
         }
         // The current app-server schema deliberately permits catalog-defined effort IDs.
-        ("codex" | "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode", Some(value)) => {
+        ("codex" | "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline", Some(value)) => {
             !value.is_empty()
                 && value.len() <= 64
                 && value
@@ -465,6 +471,7 @@ pub fn validate_reasoning_effort(provider: &str, effort: Option<&str>) -> Result
         }
         ("pi" | "omp", Some(value)) => ["off", "minimal", "low", "medium", "high", "xhigh"].contains(&value),
         ("kimi", Some(value)) => ["on", "off"].contains(&value),
+        ("muse", Some(value)) => muse::valid_effort(value),
         _ => false,
     };
     if valid {
@@ -533,6 +540,11 @@ pub(crate) fn opencode_configuration(mode: &str) -> String {
 /// The saved Command Code key for discovery paths that build their own process.
 pub(crate) fn commandcode_key_environment(command: &mut Command) -> Option<String> {
     commandcode::key_environment(command)
+}
+
+/// Muse Code's process sandbox flags for a PandaCode mode, shared with its console.
+pub(crate) fn muse_sandbox_args(mode: &str) -> &'static [&'static str] {
+    muse::sandbox_args(mode)
 }
 
 pub(crate) fn grok_permission_mode(mode: &str) -> &'static str {
@@ -679,7 +691,7 @@ pub(crate) async fn list_model_catalog(provider: &str) -> Result<Vec<ModelInfo>,
     let semaphore = &model_discovery_semaphores()[index];
     let _permit = if matches!(
         provider,
-        "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "github-copilot"
+        "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "github-copilot" | "muse"
     ) {
         // Saving models refreshes both windows. Queue their bounded metadata
         // queries so one window does not cache incomplete ID-only fallbacks.
@@ -705,7 +717,9 @@ pub(crate) async fn list_model_catalog(provider: &str) -> Result<Vec<ModelInfo>,
         "pi" | "omp" => pi::models(&path, provider).await,
         "deepseek" => deepseek::models(&path).await,
         "commandcode" => commandcode::models(&path).await,
+        "cline" => cline::models(&path).await,
         "github-copilot" => github_copilot::models(&path).await,
+        "muse" => muse::models(&path).await,
         _ => unreachable!(),
     }
 }
@@ -1026,8 +1040,9 @@ struct Protocol {
     remote_id: String,
     turn_id: String,
     phase: u8,
-    /// Steering messages written to Claude Code that it has not yet echoed back as consumed.
-    steers_pending: usize,
+    /// Steering messages this run has accepted but not yet delivered.
+    steers: steering::Steers,
+    acp_steers: acp::Steers,
     /// Latest Codex rate-limit snapshot, for the reset time of a usage-limit error.
     codex_limits: Value,
     /// Claude echoes the opening prompt first; later echoes are steering messages.
@@ -1045,6 +1060,7 @@ struct Protocol {
     kimi_message_id: String,
     kimi_resume: bool,
     pi: pi::State,
+    muse: muse::State,
     // ACP may publish commands before session/new responds. Keep at most one
     // small frame until the response confirms which session owns it.
     early_kimi_commands: Option<Vec<u8>>,
@@ -1156,7 +1172,8 @@ impl Protocol {
             config,
             turn_id: String::new(),
             phase: 0,
-            steers_pending: 0,
+            steers: Default::default(),
+            acp_steers: Default::default(),
             codex_limits: Value::Null,
             prompt_replayed: false,
             pending: HashMap::new(),
@@ -1172,6 +1189,7 @@ impl Protocol {
             kimi_message_id: String::new(),
             kimi_resume: false,
             pi: pi::State::default(),
+            muse: muse::State::default(),
             early_kimi_commands: None,
             tools: HashMap::new(),
             file_write_tools: HashSet::new(),
@@ -1251,7 +1269,7 @@ impl Protocol {
         // not retain a second copy for the rest of a potentially long turn.
         let mut content = std::mem::take(&mut self.image_blocks);
         let mut text = std::mem::take(&mut self.config.prompt);
-        if matches!(self.config.provider.as_str(), "grok" | "deepseek") && self.config.mode == "plan" && !text.trim().is_empty() {
+        if matches!(self.config.provider.as_str(), "grok" | "deepseek" | "muse") && self.config.mode == "plan" && !text.trim().is_empty() {
             text = format!("{}\n\n{text}", acp::GROK_PLAN_PREFIX);
         }
         if !text.trim().is_empty() {
@@ -1620,13 +1638,14 @@ impl Protocol {
     fn initial(&self) -> Value {
         match self.config.provider.as_str() {
             "pi" | "omp" => json!({"type":"get_state","id":"pandacode-init"}),
+            "muse" => self.muse_initial(),
             "codex" => {
                 let mut request = json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"pandacode","title":"PandaCode","version":"0.1.0"}}});
                 request["params"]["capabilities"] =
                     json!({"experimentalApi":true,"requestAttestation":false});
                 request
             }
-            "kimi" | "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "github-copilot" => {
+            "kimi" | "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "github-copilot" => {
                 json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"pandacode","version":"0.1.0"}}})
             }
             _ => {
@@ -1646,6 +1665,13 @@ impl Protocol {
         Ok(())
     }
     fn approve(&mut self, id: &str, approved: bool) -> Option<Value> {
+        if self.config.provider == "muse" {
+            // Muse decides only with a choice it offered; keep the prompt when none fits.
+            let request = self.pending.get(id)?.clone();
+            let decision = self.muse_decide(&request, approved)?;
+            self.pending.remove(id);
+            return Some(decision);
+        }
         let request = self.pending.remove(id)?;
         Some(match self.config.provider.as_str() {
             "pi" | "omp" => json!({"type":"extension_ui_response","id":request["id"],"confirmed":approved}),
@@ -1658,7 +1684,7 @@ impl Protocol {
                 };
                 json!({"id":request["id"],"result":result})
             }
-            "kimi" | "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "github-copilot" => {
+            "kimi" | "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "github-copilot" => {
                 let options = request["params"]["options"].as_array();
                 let kinds = if approved {
                     ["allow_once", "allow_always"]
@@ -1681,10 +1707,11 @@ impl Protocol {
     fn cancel(&self) -> Value {
         match self.config.provider.as_str() {
             "pi" | "omp" => json!({"type":"abort"}),
+            "muse" => self.muse_cancel(),
             "codex" => {
                 json!({"id":900,"method":"turn/interrupt","params":{"threadId":self.remote_id,"turnId":self.turn_id}})
             }
-            "kimi" | "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "github-copilot" => {
+            "kimi" | "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "github-copilot" => {
                 json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":self.remote_id}})
             }
             _ => {
@@ -1710,15 +1737,23 @@ impl Protocol {
     }
     fn receive_inner(&mut self, value: Value) -> Result<Step, String> {
         match self.config.provider.as_str() {
-            "codex" => self.codex(value),
-            "kimi" => self.kimi(value),
-            "pi" | "omp" => self.pi(value),
-            "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "github-copilot" => self.acp(value),
+            "codex" => self.codex(value).map(|step| self.steered(step)),
+            "kimi" => self.kimi_steered(value),
+            "pi" | "omp" => self.pi(value).map(|step| self.steered(step)),
+            "muse" => self.muse(value),
+            "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "github-copilot" => self.acp(value),
             _ => self.claude(value),
         }
     }
+    fn steered(&mut self, mut step: Step) -> Step {
+        self.steer_turn_end(&mut step);
+        step
+    }
     fn codex(&mut self, value: Value) -> Result<Step, String> {
         let mut step = Step::default();
+        if self.codex_steer_response(&value, &mut step) {
+            return Ok(step);
+        }
         let method = string(&value, "method");
         let params = &value["params"];
         if !method.is_empty() {
@@ -1861,7 +1896,10 @@ impl Protocol {
                     } else {
                         self.remember_text_phase(field(item,"id"),item["phase"].as_str());
                     }
-                } else if kind!="userMessage" && kind!="reasoning" {
+                } else if kind=="userMessage" {
+                    // Codex echoes a steer as a user message when the turn takes it.
+                    if method=="item/started" { self.steers_consumed(&item["content"],&mut step); }
+                } else if kind!="reasoning" {
                     self.codex_tool(item,method=="item/completed",&mut step);
                 }
             },
@@ -2190,6 +2228,7 @@ impl Protocol {
                     request["message"]["content"] = content;
                     step.write.push(request);
                     self.phase = 1;
+                    self.claude_send_held(&mut step);
                 }
             }
             "system" if value["subtype"] == "init" => {
@@ -2360,7 +2399,7 @@ impl Protocol {
             }
             "user" => {
                 if value["isReplay"] == true {
-                    self.claude_replay();
+                    self.claude_replay(&value["message"]["content"], &mut step);
                 }
                 if let Some(content) = value["message"]["content"].as_array() {
                     for block in content {
@@ -2460,9 +2499,9 @@ impl Protocol {
                     let id = self.claude_text_id(&Value::Null);
                     self.text_snapshot(&id, None, text, &mut step);
                 }
-                // A steering message that arrived as the turn ended starts another turn;
-                // keep the run open for that turn's result unless this one failed.
-                step.done = self.steers_pending == 0 || value["is_error"] == true;
+                // A steer Claude has not echoed yet arrived as the turn ended: Claude
+                // starts another turn for it in this process, so keep the run open.
+                step.done = !self.claude_steers_open();
             }
             _ => {}
         }
@@ -2635,7 +2674,8 @@ fn configure_command(command: &mut Command, config: &RunConfig) {
             command.args(["app-server", "--enable", "goals"]);
         }
         "pi" | "omp" => pi::configure(command, config),
-        "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" => acp::configure(command, config),
+        "muse" => muse::configure(command, config),
+        "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" => acp::configure(command, config),
         "github-copilot" => acp::configure(command, config),
         "kimi" => {
             if use_model {
@@ -2710,8 +2750,10 @@ async fn run_inner(
         "pi",
         "deepseek",
         "commandcode",
+        "cline",
         "omp",
         "github-copilot",
+        "muse",
     ]
     .contains(&config.provider.as_str())
     {
@@ -2875,7 +2917,7 @@ async fn run_process_with_tools(
         }
         (
             "claude" | "glm" | "mimo" | "kimi" | "opencode" | "antigravity" | "grok" | "pi"
-            | "deepseek" | "commandcode" | "omp" | "github-copilot",
+            | "deepseek" | "commandcode" | "cline" | "omp" | "github-copilot" | "muse",
             Some(host),
         ) => (
             None,
@@ -2949,10 +2991,10 @@ async fn run_process_with_tools(
                     match action {
                         Some(RunInput::Goal{request,reply})=>{let step=protocol.goal_control(request,reply);if apply_step(&mut protocol,step,&sink,&mut stdin,&mut jobs,&mut queued).await? {return Ok(());}},
                         Some(RunInput::CodexRequest{method,params,reply})=>{let step=protocol.codex_control(method,params,reply);apply_step(&mut protocol,step,&sink,&mut stdin,&mut jobs,&mut queued).await?;},
-                        Some(RunInput::Steer{text,reply})=>{let step=protocol.steer(text,reply);apply_step(&mut protocol,step,&sink,&mut stdin,&mut jobs,&mut queued).await?;},
+                        Some(RunInput::Steer{id,text,reply})=>{let step=protocol.steer(id,text,reply);apply_step(&mut protocol,step,&sink,&mut stdin,&mut jobs,&mut queued).await?;},
                         Some(RunInput::Approval{request_id,approved})=>{if !mcp.as_ref().is_some_and(|server|server.approve(&request_id,approved)) {let step=protocol.approval_step(&request_id,approved); apply_step(&mut protocol,step,&sink,&mut stdin,&mut jobs,&mut queued).await?;}},
                         Some(RunInput::UserInput{request_id,response,reply})=>{
-                            match protocol.user_input(&request_id,response) {
+                            match if protocol.config.provider=="muse" {protocol.muse_user_input(&request_id,response)} else {protocol.user_input(&request_id,response)} {
                                 Ok(step)=>{let result=apply_step(&mut protocol,step,&sink,&mut stdin,&mut jobs,&mut queued).await.map(|_|());if let Some(reply)=reply {let _=reply.send(result.clone());}result?;},
                                 Err(error)=>{if let Some(reply)=reply {let _=reply.send(Err(error));}},
                             }
@@ -3023,6 +3065,9 @@ async fn run_process_with_tools(
     jobs.abort_all();
     queued.clear();
     protocol.goals.cancel_pending();
+    for event in protocol.steers_ended(result.is_ok() && !stopped) {
+        sink(event);
+    }
     for event in protocol.cancel_requests().events {
         sink(event);
     }
@@ -4303,9 +4348,9 @@ mod tests {
     async fn smoke_provider_from_env() {
         use std::sync::Mutex;
         let provider = std::env::var("PANDACODE_SMOKE_PROVIDER")
-            .expect("Set PANDACODE_SMOKE_PROVIDER to claude, codex, or kimi");
+            .expect("Set PANDACODE_SMOKE_PROVIDER to claude, codex, kimi or muse");
         let model = std::env::var("PANDACODE_SMOKE_MODEL").unwrap_or_else(|_| "default".into());
-        assert!(["claude", "codex", "kimi"].contains(&provider.as_str()));
+        assert!(["claude", "codex", "kimi", "muse"].contains(&provider.as_str()));
         let root =
             std::env::temp_dir().join(format!("pandacode-provider-smoke-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();

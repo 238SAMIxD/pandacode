@@ -223,9 +223,10 @@ fn validate(input: &BotInput) -> Result<BotInput> {
             | "mimo"
             | "pi"
             | "deepseek"
-            | "commandcode"
+            | "commandcode" | "cline"
             | "omp"
             | "github-copilot"
+            | "muse"
     );
     if input.model.len() > 200 || !known {
         return Err("Choose a harness and model for the bot.".into());

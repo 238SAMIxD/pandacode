@@ -339,8 +339,10 @@ fn cache() -> &'static HashMap<&'static str, CacheSlot> {
             "pi",
             "deepseek",
             "commandcode",
+            "cline",
             "omp",
             "github-copilot",
+            "muse",
         ]
         .into_iter()
         .map(|id| (id, CacheSlot::default()))
@@ -563,7 +565,9 @@ async fn fetch_provider(provider: &str) -> Usage {
         "pi" => Usage::empty(provider, "unsupported", "Pi uses the model provider you configured for it. Check that provider's dashboard for limits."),
         "deepseek" => Usage::empty(provider, "unsupported", "DeepSeek does not expose balance or limits through this agent. Check the DeepSeek platform."),
         "commandcode" => Usage::empty(provider, "unsupported", "Command Code does not expose credits or limits through this agent. Check Command Code Studio."),
+        "cline" => Usage::empty(provider, "unsupported", "Cline does not expose credits or limits through this agent. Check your Cline account."),
         "github-copilot" => Usage::empty(provider, "unsupported", "GitHub Copilot CLI does not expose usage limits through this agent. Check your GitHub Copilot settings."),
+        "muse" => Usage::empty(provider, "unsupported", "Muse Code reports its usage windows only inside a running session. Check them with /usage in Muse Code."),
         _ => Usage::empty(provider, "unsupported", "Usage limits are not available for this agent."),
     };
     if result.dashboard_url.is_none() {
@@ -574,6 +578,7 @@ async fn fetch_provider(provider: &str) -> Usage {
             "mimo" => Some("https://platform.xiaomimimo.com/token-plan"),
             "deepseek" => Some("https://platform.deepseek.com/usage"),
             "commandcode" => Some("https://commandcode.ai/studio"),
+            "cline" => Some("https://app.cline.bot"),
             _ => None,
         }
         .map(str::to_owned);

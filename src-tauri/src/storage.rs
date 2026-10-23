@@ -1005,8 +1005,10 @@ impl Store {
             "pi",
             "deepseek",
             "commandcode",
+            "cline",
             "omp",
             "github-copilot",
+            "muse",
         ]
         .contains(&provider)
         {
@@ -1187,8 +1189,10 @@ impl Store {
             "pi",
             "deepseek",
             "commandcode",
+            "cline",
             "omp",
             "github-copilot",
+            "muse",
         ]
         .contains(&provider)
         {
@@ -1703,9 +1707,10 @@ fn handoff_from_provider(content: &str) -> Option<String> {
                 | "mimo"
                 | "pi"
                 | "deepseek"
-                | "commandcode"
+                | "commandcode" | "cline"
                 | "omp"
                 | "github-copilot"
+                | "muse"
         )
     };
     (known(from) && known(to)).then(|| from.to_owned())
@@ -3466,8 +3471,10 @@ mod tests {
                 "pi",
                 "deepseek",
                 "commandcode",
+                "cline",
                 "omp",
                 "github-copilot",
+                "muse",
             ] {
                 for mode in ["ask", "auto", "plan", "full"] {
                     let session = store
