@@ -11,8 +11,6 @@ pub(crate) struct CloudSession {
     pub updated_at: i64,
     pub created_at: i64,
     pub is_remote: bool,
-    pub events: Vec<Value>,
-    pub transcript_error: Option<String>,
 }
 
 pub(crate) const MAX_ENTRIES: usize = 1000;
@@ -332,58 +330,82 @@ pub(crate) async fn cloud_sessions(
         )
     });
     cloud.truncate(50);
-    let mut result = Vec::with_capacity(cloud.len());
-    for metadata in cloud {
-        let id = metadata.session_id.as_str().to_owned();
-        if !valid_id(&id) {
-            continue;
-        }
-        let (events, transcript_error) = match client
+    let result = cloud.into_iter().filter_map(cloud_session).collect();
+    let _ = client.stop().await;
+    Ok(result)
+}
+
+fn cloud_session(metadata: github_copilot_sdk::types::SessionMetadata) -> Option<CloudSession> {
+    let id = metadata.session_id.as_str().to_owned();
+    if !valid_id(&id) {
+        return None;
+    }
+    let updated_at = chrono::DateTime::parse_from_rfc3339(&metadata.modified_time)
+        .ok()
+        .map(|time| time.timestamp_millis())
+        .unwrap_or(0);
+    let created_at = chrono::DateTime::parse_from_rfc3339(&metadata.start_time)
+        .ok()
+        .map(|time| time.timestamp_millis())
+        .unwrap_or(updated_at);
+    Some(CloudSession {
+        id,
+        title: metadata
+            .summary
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or_else(|| "Untitled Copilot conversation".into()),
+        updated_at,
+        created_at,
+        is_remote: metadata.is_remote,
+    })
+}
+
+/// Fetch a transcript only for a session the user selected for import.
+pub(crate) async fn cloud_session_with_transcript(
+    home: &Path,
+    program: &Path,
+    id: &str,
+) -> Result<(CloudSession, Vec<Value>), String> {
+    use github_copilot_sdk::{types::SessionId, CliProgram, Client, ClientOptions};
+
+    let options = ClientOptions::new()
+        .with_program(CliProgram::Path(program.to_path_buf()))
+        .with_base_directory(home.to_path_buf());
+    let client = Client::start(options).await.map_err(|_| {
+        "Copilot cloud sessions are unavailable. Check that Copilot CLI is installed and signed in."
+            .to_owned()
+    })?;
+    let result = async {
+        let metadata = client
+            .get_session_metadata(&SessionId::new(id))
+            .await
+            .map_err(|_| "Copilot cloud session metadata is unavailable.".to_owned())?
+            .ok_or_else(|| {
+                "This Copilot cloud conversation was not found. Refresh the list.".to_owned()
+            })?;
+        let session = cloud_session(metadata)
+            .ok_or_else(|| "Copilot returned an invalid session identifier.".to_owned())?;
+        let response = client
             .call(
                 "session.getMessages",
                 Some(serde_json::json!({"sessionId": id})),
             )
             .await
-        {
-            Ok(value) => {
-                let events = value["events"].as_array().cloned().unwrap_or_default();
-                if events.len() > 100_000 {
-                    (
-                        Vec::new(),
-                        Some("Copilot returned too many events to import.".into()),
-                    )
-                } else {
-                    (events.into_iter().filter(Value::is_object).collect(), None)
-                }
-            }
-            Err(_) => (
-                Vec::new(),
-                Some("Copilot did not make this session transcript available.".into()),
-            ),
-        };
-        let updated_at = chrono::DateTime::parse_from_rfc3339(&metadata.modified_time)
-            .ok()
-            .map(|time| time.timestamp_millis())
-            .unwrap_or(0);
-        let created_at = chrono::DateTime::parse_from_rfc3339(&metadata.start_time)
-            .ok()
-            .map(|time| time.timestamp_millis())
-            .unwrap_or(updated_at);
-        result.push(CloudSession {
-            id,
-            title: metadata
-                .summary
-                .filter(|title| !title.trim().is_empty())
-                .unwrap_or_else(|| "Untitled Copilot conversation".into()),
-            updated_at,
-            created_at,
-            is_remote: metadata.is_remote,
-            events,
-            transcript_error,
-        });
+            .map_err(|_| "Copilot did not make this session transcript available.".to_owned())?;
+        let events = transcript_events(response)?;
+        Ok((session, events))
     }
+    .await;
     let _ = client.stop().await;
-    Ok(result)
+    result
+}
+
+fn transcript_events(response: Value) -> Result<Vec<Value>, String> {
+    let events = response["events"].as_array().cloned().unwrap_or_default();
+    if events.len() > 100_000 {
+        return Err("Copilot returned too many events to import.".into());
+    }
+    Ok(events.into_iter().filter(Value::is_object).collect())
 }
 
 /// Repository hints are taken only from structured session context.
@@ -507,6 +529,45 @@ mod tests {
         );
         assert_eq!(cloud_source_kind(false), "synced");
         assert_eq!(cloud_source_kind(true), "hosted");
+    }
+
+    #[test]
+    fn cloud_metadata_is_listable_without_fetching_transcript_events() {
+        use github_copilot_sdk::types::{SessionId, SessionMetadata};
+
+        let session = cloud_session(SessionMetadata {
+            session_id: SessionId::new("copilot-cloud-1"),
+            start_time: "2026-10-20T10:00:00Z".into(),
+            modified_time: "2026-10-20T10:05:00Z".into(),
+            summary: Some("Review the search changes".into()),
+            is_remote: false,
+        })
+        .unwrap();
+        assert_eq!(session.id, "copilot-cloud-1");
+        assert_eq!(session.title, "Review the search changes");
+        assert_eq!(
+            session.created_at,
+            chrono::DateTime::parse_from_rfc3339("2026-10-20T10:00:00Z")
+                .unwrap()
+                .timestamp_millis()
+        );
+        assert_eq!(
+            session.updated_at,
+            chrono::DateTime::parse_from_rfc3339("2026-10-20T10:05:00Z")
+                .unwrap()
+                .timestamp_millis()
+        );
+        assert_eq!(cloud_source_kind(session.is_remote), "synced");
+
+        let events = transcript_events(json!({
+            "events": [
+                {"type":"user.message","data":{"content":"hello"}},
+                "malformed event payload"
+            ]
+        }))
+        .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["type"], "user.message");
     }
 
     #[test]

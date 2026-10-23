@@ -247,27 +247,21 @@ async fn copilot_page(state: &AppState, search: &Option<String>, include_cloud: 
                 Ok(sessions) => {
                     let store = state.store.lock().map_err(|e| e.to_string())?;
                     for cloud in sessions {
-                        let repo = copilot::repository(&cloud.events);
-                        let project = match repo.as_deref() { Some(repo) => project_for_repository(&store, repo)?, None => None };
-                        let history = copilot::history(&cloud.events);
-                        let kind = copilot::cloud_source_kind(cloud.is_remote);
-                        let unavailable = cloud.transcript_error.clone()
-                            .or_else(|| history.is_empty().then(|| "Copilot did not provide a readable transcript for this session.".into()))
-                            .or_else(|| repo.is_none().then(|| "Copilot did not provide a repository for this cloud session.".into()))
-                            .or_else(|| project.is_none().then(|| "Open this repository as a project before importing.".into()));
-                        if !matches(search, &[&cloud.title, repo.as_deref().unwrap_or("")]) {
+                        if !matches(search, &[&cloud.title]) {
                             continue;
                         }
                         items.push(Importable {
                             imported_task_id: store.imported_task("github-copilot", &cloud.id)?,
                             id: cloud.id,
                             title: cloud.title,
-                            folder: repo.unwrap_or_else(|| "Cloud session".into()),
+                            // Session metadata omits repository context. Resolve it from
+                            // the transcript only after the user selects the session.
+                            folder: "Repository checked on import".into(),
                             updated_at: cloud.updated_at,
-                            messages: (!history.is_empty()).then_some(history.len() as u32),
+                            messages: None,
                             model: None,
-                            unavailable,
-                            source_kind: kind.into(),
+                            unavailable: None,
+                            source_kind: copilot::cloud_source_kind(cloud.is_remote).into(),
                             transcript_only: cloud.is_remote,
                         });
                     }
@@ -368,18 +362,14 @@ async fn import_copilot(state: &AppState, id: &str, include_cloud: bool, fallbac
         return Err("Cloud sessions are hidden until Include cloud sessions is enabled.".into());
     }
     let program = crate::providers::executable("github-copilot").ok_or("GitHub Copilot CLI is not installed or its executable is not configured.")?;
-    let local_ids = copilot::logs(&root, COPILOT_SCAN_LIMIT).into_iter().map(|(id, _)| id).collect();
-    let cloud = copilot::cloud_sessions(&root, &program, &local_ids).await?.into_iter().find(|session| session.id == id).ok_or("This Copilot cloud conversation was not found. Refresh the list.")?;
-    if let Some(error) = cloud.transcript_error {
-        return Err(error);
-    }
-    let entries = copilot::history(&cloud.events);
+    let (cloud, events) = copilot::cloud_session_with_transcript(&root, &program, id).await?;
+    let entries = copilot::history(&events);
     if entries.is_empty() {
         return Err("Copilot did not provide a readable transcript for this session.".into());
     }
-    let repository = copilot::repository(&cloud.events).ok_or("Copilot did not provide a repository for this cloud session.")?;
+    let repository = copilot::repository(&events).ok_or("Copilot did not provide a repository for this cloud session. Open its repository as a project, then import again.")?;
     let store = state.store.lock().map_err(|e| e.to_string())?;
-    let project = project_for_repository(&store, &repository)?.ok_or("Open this repository as a project before importing.")?;
+    let project = project_for_repository(&store, &repository)?.ok_or_else(|| format!("Open {repository} as a project before importing this cloud session."))?;
     let transcript_only = cloud.is_remote;
     store.import_copilot_task(
         &project,
