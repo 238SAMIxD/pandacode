@@ -3,8 +3,9 @@ import { useMemo } from 'react';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { build } from '../connect/config.ts';
-import type { Account, Device, Message, Provider, ProviderModel, TasksList } from '../connect/types.ts';
+import type { Account, Bot, Device, Message, Provider, ProviderModel, PullDetail, TasksList } from '../connect/types.ts';
 import { idleLive, type Live } from './reduce.ts';
+import { unmatched, type Sent } from './sent.ts';
 
 export type { Live, LiveItem } from './reduce.ts';
 
@@ -26,10 +27,18 @@ export interface ConnectState {
   messages: Record<string, Message[]>;
   /** A message copy in flight (null) or the error of the last one, per taskKey; absent once copied. */
   history: Record<string, string | null>;
+  /** Prompts sent from this phone per taskKey, until their stored copy arrives (src/store/sent.ts). */
+  sent: Record<string, Sent[]>;
   /** Live run per taskKey. */
   live: Record<string, Live>;
   providers: Record<string, Provider[]>;
   models: Record<string, ProviderModel[]>;
+  /** bots.list per host ([] for a host too old to have bots). */
+  bots: Record<string, Bot[]>;
+  /** The linked pull request per taskKey once checked (null: none). */
+  pulls: Record<string, PullDetail | null>;
+  /** Hosts that answered 'Unknown method.' to the pull request, changes or bot methods. */
+  outdated: Record<string, boolean>;
   /** The last user-facing connection error (sign-out, relay). */
   error: string | null;
   /** Demo mode (src/demo.ts): fake data, no network. */
@@ -38,7 +47,7 @@ export interface ConnectState {
 
 export const initialState = (): ConnectState => ({
   configured: !!build, ready: false, signedIn: false, connected: false, account: null, deviceId: '',
-  devices: [], tasks: {}, messages: {}, history: {}, live: {}, providers: {}, models: {}, error: null, demo: false,
+  devices: [], tasks: {}, messages: {}, history: {}, sent: {}, live: {}, providers: {}, models: {}, bots: {}, pulls: {}, outdated: {}, error: null, demo: false,
 });
 
 export const useConnect = create<ConnectState>(() => initialState());
@@ -64,6 +73,12 @@ export const useTasks = (deviceId: string) => useConnect(s => s.tasks[deviceId])
 /** null while copying, the last copy's error, or undefined. */
 export const useHistory = (deviceId: string, sessionId: string) => useConnect(s => s.history[taskKey(deviceId, sessionId)]);
 export const useMessages = (deviceId: string, sessionId: string) => useConnect(s => s.messages[taskKey(deviceId, sessionId)] ?? EMPTY);
+/** This phone's sent prompts the transcript doesn't hold yet. */
+export const useSent = (deviceId: string, sessionId: string) => {
+  const key = taskKey(deviceId, sessionId);
+  const { sent, messages } = useConnect(useShallow(s => ({ sent: s.sent[key] ?? EMPTY, messages: s.messages[key] ?? EMPTY })));
+  return useMemo(() => unmatched(sent, messages), [sent, messages]);
+};
 const IDLE = idleLive();
 export const useLive = (deviceId: string, sessionId: string) => useConnect(s => s.live[taskKey(deviceId, sessionId)] ?? IDLE);
 export const useProviders = (deviceId: string) => useConnect(s => s.providers[deviceId]);

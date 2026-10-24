@@ -13,6 +13,8 @@ export interface TaskSummary {
   sessionId: string; title: string; status: TaskStatus; projectId: string; projectName: string;
   provider: string; model: string; effort: string | null; mode: string; pinned: boolean;
   updatedAt: number; lastPromptAt: number | null; branch?: string; chat?: boolean;
+  /** A bot's conversation: listed under Bots, not its project. */
+  botId?: string; botName?: string;
   /** Approvals and questions waiting on the host now. */
   pending?: PendingRequest[];
 }
@@ -44,3 +46,23 @@ export interface StartParams {
 }
 
 export interface ConfigureParams { sessionId: string; provider?: string; model?: string; effort?: string | null; mode?: string }
+
+// ---- Pull requests, changes and bots (newer hosts; older ones answer 'Unknown method.') ----
+
+export interface PullCheck { name: string; state: 'success' | 'failure' | 'pending' | 'skipped' | 'neutral' | (string & {}); url: string }
+export interface PullFile { path: string; additions: number; deletions: number }
+export interface PullCommit { oid: string; headline: string; author: string; date: string }
+export interface PullComment { kind: 'comment' | 'review' | (string & {}); author: string; body: string; state: string; createdAt: string }
+export interface PullDetail {
+  number: number; title: string; body: string; bodyTruncated: boolean; state: string; url: string; author: string;
+  base: string; head: string; additions: number; deletions: number; changedFiles: number;
+  createdAt: string; updatedAt: string; mergedAt: string; mergeable: string; reviewDecision: string;
+  labels: string[]; checks: PullCheck[]; files: PullFile[]; commits: PullCommit[]; timeline: PullComment[]; truncated?: boolean;
+}
+export type MergeMethod = 'merge' | 'squash' | 'rebase';
+
+export interface ChangedFile { path: string; status: string; staged: boolean }
+export interface Changes { branch: string; ahead: number; behind: number; files: ChangedFile[] }
+export interface Diff { text: string; truncated: boolean }
+
+export interface Bot { id: string; name: string; avatar: string | null; state: 'paused' | 'working' | 'ready' | (string & {}); paused: boolean; desktopSession: string | null; projectId: string }

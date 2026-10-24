@@ -20,3 +20,10 @@ test('every root guard names its redirect', () => {
   assert.equal(guards.length, 2);
   for (const guard of guards) assert.match(guard, /redirectTo=\{(HOME|SIGN_IN)\}/);
 });
+
+test('every root screen the layout names has a route file', () => {
+  const layout = readFileSync(new URL('_layout.tsx', app), 'utf8');
+  const names = [...layout.matchAll(/<Stack\.Screen name="([^"]+)"/g)].map(m => m[1]);
+  for (const name of ['pull', 'changes', 'diff']) assert.ok(names.includes(name), name);
+  for (const name of names) assert.ok(existsSync(new URL(`${name}.tsx`, app)) || existsSync(new URL(`${name}/_layout.tsx`, app)), name);
+});

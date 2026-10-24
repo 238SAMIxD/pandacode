@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { OFFLINE } from '../src/connect/rpc.ts';
 import type { TaskSummary } from '../src/connect/types.ts';
-import { DEMO_REPLY, demoCall, REPLY_MS, type DemoHost } from '../src/demo-host.ts';
+import { DEMO_PULL_TASK, DEMO_REPLY, demoCall, REPLY_MS, type DemoHost } from '../src/demo-host.ts';
+import type { Changes, PullDetail } from '../src/connect/types.ts';
+import { diffLines } from '../src/store/diff.ts';
 import type { ConnectState } from '../src/store/index.ts';
 import { idleLive } from '../src/store/reduce.ts';
 
@@ -22,7 +24,8 @@ function host() {
     ],
     tasks: { mac: { tasks: [task('a'), task('w', { status: 'waiting' })], projects: [{ id: 'p', name: 'Project', repo: null }], loadedAt: 0 } },
     messages: { 'mac/a': [{ id: 7, role: 'user', content: 'hi', createdAt: 0, turnDurationMs: null }] },
-    history: {}, live: {}, providers: {}, models: {},
+    history: {}, sent: {}, live: {}, providers: {}, models: {}, pulls: {}, outdated: {},
+    bots: { mac: [{ id: 'b', name: 'Leo', avatar: null, state: 'ready', paused: false, desktopSession: 'bs', projectId: 'bp' }, { id: 'n', name: 'New', avatar: null, state: 'ready', paused: false, desktopSession: null, projectId: 'np' }] },
   } as ConnectState;
   let timers: { run: () => void; ms: number }[] = [];
   let now = 1000;
@@ -91,4 +94,43 @@ test('demo mode starts from the build flag or the saved switch only', async () =
   assert.equal(demoAtStart(false, '1'), true);
   assert.equal(demoAtStart(false, null), false); // left the demo, or never entered it
   assert.equal(demoAtStart(false, '0'), false);
+});
+
+test('the demo pull request: detail, per-file patch, merge', async () => {
+  const { h, state } = host();
+  const { pull } = await demoCall(h, 'mac', 'task.pull', { sessionId: DEMO_PULL_TASK }) as { pull: PullDetail };
+  assert.equal(pull.state, 'open');
+  assert.equal(pull.files.length, pull.changedFiles);
+  assert.deepEqual(await demoCall(h, 'mac', 'task.pull', { sessionId: 'a' }), { pull: null });
+  assert.deepEqual(await demoCall(h, 'mac', 'task.pullDetect', { sessionId: 'a' }), { pull: null });
+  const { patch } = await demoCall(h, 'mac', 'task.pullDiff', { sessionId: DEMO_PULL_TASK, path: pull.files[1].path }) as { patch: string };
+  const lines = diffLines(patch);
+  assert.equal(lines.filter(l => l.kind === 'add').length, pull.files[1].additions);
+  assert.equal(lines.filter(l => l.kind === 'del').length, pull.files[1].deletions);
+  await demoCall(h, 'mac', 'task.pullMerge', { sessionId: DEMO_PULL_TASK, method: 'squash' });
+  assert.equal(state().pulls[`mac/${DEMO_PULL_TASK}`]!.state, 'merged');
+  assert.equal(((await demoCall(h, 'mac', 'task.pull', { sessionId: DEMO_PULL_TASK })) as { pull: PullDetail }).pull.state, 'merged');
+});
+
+test('the demo checkout: changes and diffs with file headers', async () => {
+  const { h } = host();
+  const changes = await demoCall(h, 'mac', 'task.changes', { sessionId: 'a' }) as Changes;
+  assert.ok(changes.files.length > 0 && changes.branch);
+  const { diff } = await demoCall(h, 'mac', 'task.diff', { sessionId: 'a', path: changes.files[0].path }) as { diff: string };
+  assert.match(diff, new RegExp(`^diff --git a/${changes.files[0].path} `));
+  assert.ok(!diff.includes(changes.files[1].path));
+});
+
+test('demo bots: list, thread, message through the bot, pause', async () => {
+  const { h, tick, state } = host();
+  assert.equal(((await demoCall(h, 'mac', 'bots.list', {})) as { bots: unknown[] }).bots.length, 2);
+  assert.deepEqual(await demoCall(h, 'mac', 'bot.thread', { botId: 'b' }), { sessionId: 'bs' });
+  assert.deepEqual(await demoCall(h, 'mac', 'bot.thread', { botId: 'n' }), { sessionId: 'bot-n' });
+  assert.deepEqual(await demoCall(h, 'mac', 'bot.message', { botId: 'b', text: 'Brief me' }), { sessionId: 'bs' });
+  assert.equal(state().messages['mac/bs'].at(-1)!.content, 'Brief me');
+  tick();
+  assert.equal(state().messages['mac/bs'].at(-1)!.content, DEMO_REPLY);
+  await demoCall(h, 'mac', 'bot.pause', { botId: 'b', paused: true });
+  assert.deepEqual([state().bots.mac[0].paused, state().bots.mac[0].state], [true, 'paused']);
+  await assert.rejects(demoCall(h, 'mac', 'bot.thread', { botId: 'gone' }), /no longer exists/);
 });

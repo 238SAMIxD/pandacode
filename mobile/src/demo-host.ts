@@ -2,7 +2,8 @@
 // of the relay, so sends, steers, approvals, answers and stops act on the local demo data and
 // nothing touches the network. Pure apart from the injected timer (tested in node).
 import { OFFLINE, type Method } from './connect/rpc.ts';
-import type { ConfigureParams, Message, StartParams, TaskSummary } from './connect/types.ts';
+import type { Bot, ConfigureParams, Message, StartParams, TaskSummary } from './connect/types.ts';
+import { DEMO_CHANGES, demoDiff, demoPull, demoPullPatch } from './demo-pull.ts';
 import type { ConnectState } from './store/index.ts';
 import { idleLive, lastId } from './store/reduce.ts';
 
@@ -70,6 +71,13 @@ export function started(s: ConnectState, deviceId: string, sessionId: string, pa
   };
 }
 
+/** The demo's one pull request is on the passkeys task. */
+export const DEMO_PULL_TASK = 'auth';
+
+function withBot(s: ConnectState, deviceId: string, botId: string, change: Partial<Bot>): Patch {
+  return { bots: { ...s.bots, [deviceId]: (s.bots[deviceId] ?? []).map(b => (b.id === botId ? { ...b, ...change } : b)) } };
+}
+
 /** Answers one host call from the demo data, as the real host would. */
 export async function demoCall(host: DemoHost, deviceId: string, method: Method, params: any): Promise<unknown> {
   const s = host.get();
@@ -108,6 +116,38 @@ export async function demoCall(host: DemoHost, deviceId: string, method: Method,
       reply(sessionId);
       return { sessionId };
     }
+    case 'task.pull':
+    case 'task.pullDetect': {
+      // pullDetect finds only newly linked pull requests; the demo's is linked already.
+      if (method === 'task.pullDetect' || params.sessionId !== DEMO_PULL_TASK) return { pull: null };
+      return { pull: s.pulls[key(deviceId, DEMO_PULL_TASK)] ?? demoPull() };
+    }
+    case 'task.pullDiff':
+      return params.path ? { patch: demoPullPatch(String(params.path)), truncated: false } : { files: demoPull().files, truncated: false };
+    case 'task.pullMerge': {
+      const k = key(deviceId, DEMO_PULL_TASK);
+      host.set(next => ({ pulls: { ...next.pulls, [k]: { ...(next.pulls[k] ?? demoPull()), state: 'merged', mergedAt: new Date(host.now()).toISOString() } } }));
+      return {};
+    }
+    case 'task.changes': return DEMO_CHANGES;
+    case 'task.diff': return { diff: demoDiff(params.path), truncated: false };
+    case 'bots.list': return { bots: s.bots[deviceId] ?? [] };
+    case 'bot.thread': {
+      const bot = s.bots[deviceId]?.find(b => b.id === params.botId);
+      if (!bot) throw new Error('That bot no longer exists.');
+      return { sessionId: bot.desktopSession ?? `bot-${bot.id}` };
+    }
+    case 'bot.message': {
+      const bot = s.bots[deviceId]?.find(b => b.id === params.botId);
+      if (!bot) throw new Error('That bot no longer exists.');
+      const sessionId = bot.desktopSession ?? `bot-${bot.id}`;
+      host.set(next => sent(next, deviceId, sessionId, String(params.text ?? ''), host.now()));
+      reply(sessionId);
+      return { sessionId };
+    }
+    case 'bot.pause':
+      host.set(next => withBot(next, deviceId, params.botId, { paused: !!params.paused, state: params.paused ? 'paused' : 'ready' }));
+      return {};
     default:
       throw new Error('Unknown method.'); // projects.icons: the demo's one icon is seeded
   }

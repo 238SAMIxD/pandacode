@@ -30,6 +30,8 @@ controls their tasks. Screens read state with hooks from `src/store` and act wit
 - Open a task: `watch(deviceId, [sessionId])` subscribes (renewed every 9 min and on presence), copies missed messages and streams events into `useLive`; `unwatch` when the screen goes. `loadMessages(deviceId, sessionId)` copies new messages on demand (follows `hasMore`).
 - In a task: `sendMessage(…, text)` → `{ queued }`, `steerTask(…, text)`, `stopTask(…)`, `configureTask(deviceId, { sessionId, provider?, model?, effort?, mode? })`, `respondApproval(…, requestId, approve)`, `respondInput(…, requestId, response)`.
 - Model pickers: `listProviders(deviceId, force?)`, `listModels(deviceId, provider, force?)`.
+- Pull requests and changes (newer hosts): `loadPull(deviceId, sessionId, force?)` → the linked or newly detected PR (cached in `pulls`), `pullDiff(…, path)`, `mergePull(…, method)`, `taskChanges(…)`, `taskDiff(…, path?, staged?)` → `{ text, truncated }`.
+- Bots: `listBots(deviceId)` (also after every `listTasks`), `botThread(deviceId, botId)` → sessionId, `botMessage(deviceId, botId, sessionId, text)`, `pauseBot(deviceId, botId, paused)`. An older host's `Unknown method.` becomes "Update PandaCode on <computer> to use this." and sets `outdated[deviceId]`.
 
 At a run end the host's messages are copied, then the live view goes idle (`stopped`/`failed` when the run was).
 

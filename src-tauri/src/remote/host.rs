@@ -7,11 +7,12 @@ use crate::{message_queue, providers::AgentEvent, AppState, Result};
 use rusqlite::OptionalExtension;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
+use std::process::Command;
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
 
-pub(crate) const METHODS: [&str; 13] = ["subscribe", "tasks.list", "projects.icons", "providers.list", "providers.models", "task.start", "task.messages", "task.send", "task.stop", "task.steer", "task.configure", "approval.respond", "input.respond"];
+pub(crate) const METHODS: [&str; 23] = ["subscribe", "tasks.list", "projects.icons", "providers.list", "providers.models", "task.start", "task.messages", "task.send", "task.stop", "task.steer", "task.configure", "approval.respond", "input.respond", "task.pull", "task.pullDiff", "task.pullMerge", "task.pullDetect", "task.changes", "task.diff", "bots.list", "bot.thread", "bot.message", "bot.pause"];
 pub(crate) const OFF: &str = "Remote control is off on this computer";
 pub(crate) const MAX_TEXT: usize = 100 * 1024;
 const SUBSCRIPTION: Duration = Duration::from_secs(10 * 60);
@@ -27,6 +28,9 @@ const MAX_SEEN: usize = 20_000;
 pub(crate) const PAGE_BUDGET: usize = 180 * 1024;
 const MAX_PROJECT_ICON_IDS: usize = 50;
 const MAX_PROJECT_ICON_BYTES: usize = 64 * 1024;
+const MAX_BOT_AVATAR_BYTES: usize = 32 * 1024;
+const DIFF_BUDGET: usize = 120 * 1024;
+const MAX_PATH: usize = 4096;
 /// A single message or event larger than this is cut, with [`CUT`] marking the cut.
 const MAX_MESSAGE: usize = 120 * 1024;
 /// Messages read per `task.messages` page before the budget trims it.
@@ -94,6 +98,16 @@ pub(crate) enum Call {
     Configure { session_id: String, model: Option<(String, String)>, effort: Option<Option<String>>, mode: Option<String> },
     Approve { session_id: String, request_id: String, approve: bool },
     Answer { session_id: String, request_id: String, response: Value },
+    Pull { session_id: String },
+    PullDiff { session_id: String, path: Option<String> },
+    PullMerge { session_id: String, method: String },
+    PullDetect { session_id: String },
+    Changes { session_id: String },
+    Diff { session_id: String, path: Option<String>, staged: bool },
+    BotsList,
+    BotThread { bot_id: String },
+    BotMessage { bot_id: String, text: String },
+    BotPause { bot_id: String, paused: bool },
 }
 
 pub(crate) fn id_param(params: &Value, key: &str) -> Result<String> {
@@ -136,6 +150,30 @@ fn task_limit(params: &Value) -> Result<usize> {
             .and_then(|limit| usize::try_from(limit).ok())
             .filter(|limit| *limit <= TASKS_MAX)
             .ok_or_else(|| format!("Limit must be between 0 and {TASKS_MAX}.")),
+    }
+}
+
+fn path_param(params: &Value, key: &str) -> Result<Option<String>> {
+    match params.get(key).filter(|value| !value.is_null()) {
+        None => Ok(None),
+        Some(value) => {
+            let path = value.as_str().filter(|path| !path.is_empty() && path.len() <= MAX_PATH && !path.contains('\0')).ok_or_else(|| format!("Invalid {key}."))?;
+            if !Path::new(path).components().all(|part| match part {
+                Component::Normal(name) => name != ".git",
+                Component::CurDir => true,
+                _ => false,
+            }) {
+                return Err(format!("Invalid {key}."));
+            }
+            Ok(Some(path.to_owned()))
+        }
+    }
+}
+
+fn staged_param(params: &Value) -> Result<bool> {
+    match params.get("staged").filter(|value| !value.is_null()) {
+        None => Ok(false),
+        Some(value) => value.as_bool().ok_or_else(|| "Invalid staged.".into()),
     }
 }
 
@@ -191,6 +229,20 @@ pub(crate) fn parse(host_enabled: bool, method: &str, params: &Value) -> Result<
         "task.configure" => configure(params)?,
         "approval.respond" => Call::Approve { session_id: id_param(params, "sessionId")?, request_id: id_param(params, "requestId")?, approve: params["approve"].as_bool().ok_or("Missing approve.")? },
         "input.respond" => Call::Answer { session_id: id_param(params, "sessionId")?, request_id: id_param(params, "requestId")?, response: params.get("response").cloned().ok_or("Missing response.")? },
+        "task.pull" => Call::Pull { session_id: id_param(params, "sessionId")? },
+        "task.pullDiff" => Call::PullDiff { session_id: id_param(params, "sessionId")?, path: path_param(params, "path")? },
+        "task.pullMerge" => {
+            let method = name_param(params, "method")?.ok_or("Missing method.")?;
+            crate::github_pull::merge_flag(&method)?;
+            Call::PullMerge { session_id: id_param(params, "sessionId")?, method }
+        }
+        "task.pullDetect" => Call::PullDetect { session_id: id_param(params, "sessionId")? },
+        "task.changes" => Call::Changes { session_id: id_param(params, "sessionId")? },
+        "task.diff" => Call::Diff { session_id: id_param(params, "sessionId")?, path: path_param(params, "path")?, staged: staged_param(params)? },
+        "bots.list" => Call::BotsList,
+        "bot.thread" => Call::BotThread { bot_id: id_param(params, "botId")? },
+        "bot.message" => Call::BotMessage { bot_id: id_param(params, "botId")?, text: text_param(params, "text")? },
+        "bot.pause" => Call::BotPause { bot_id: id_param(params, "botId")?, paused: params.get("paused").and_then(Value::as_bool).ok_or("Missing paused.")? },
         _ => return Err("Unknown method.".into()),
     })
 }
@@ -217,11 +269,35 @@ pub(crate) async fn handle(app: &tauri::AppHandle, from: &str, message: &Value) 
 
 /// The task must exist here; a mirror never forwards a second hop.
 fn local_task(state: &AppState, session_id: &str) -> Result<()> {
+    let _task = local_session(state, session_id)?;
+    Ok(())
+}
+
+fn local_session(state: &AppState, session_id: &str) -> Result<crate::storage::Session> {
     let task = state.store.lock().map_err(|e| e.to_string())?.session(session_id)?;
     if task.remote_device.is_some() {
         return Err("That task runs on another computer.".into());
     }
-    Ok(())
+    Ok(task)
+}
+
+fn task_root(state: &AppState, session_id: &str) -> Result<PathBuf> {
+    let task = local_session(state, session_id)?;
+    state.store.lock().map_err(|e| e.to_string())?.workspace_root(&task.project_id, Some(session_id))
+}
+
+fn linked_pull(state: &AppState, session_id: &str) -> Result<(PathBuf, i64)> {
+    let task = local_session(state, session_id)?;
+    let number = task.pull_request.as_ref().map(|link| link.number).ok_or("This task has no linked pull request.")?;
+    let root = state.store.lock().map_err(|e| e.to_string())?.workspace_root(&task.project_id, Some(session_id))?;
+    Ok((root, number))
+}
+
+fn optional_pull(state: &AppState, session_id: &str) -> Result<Option<(PathBuf, i64)>> {
+    let task = local_session(state, session_id)?;
+    let Some(number) = task.pull_request.map(|link| link.number) else { return Ok(None) };
+    let root = state.store.lock().map_err(|e| e.to_string())?.workspace_root(&task.project_id, Some(session_id))?;
+    Ok(Some((root, number)))
 }
 
 async fn run(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
@@ -332,11 +408,377 @@ async fn run(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
             crate::respond_user_input(app.clone(), state, session_id, request_id, response).await?;
             Ok(json!({}))
         }
+        Call::Pull { session_id } => {
+            let Some((root, number)) = optional_pull(&state, &session_id)? else { return Ok(json!({"pull": null })) };
+            let pull = crate::blocking(move || crate::github_pull::detail(&root, number)).await?;
+            let mut pull = serde_json::to_value(pull).map_err(|e| e.to_string())?;
+            fit_pull_detail(&mut pull);
+            Ok(json!({"pull": pull}))
+        }
+        Call::PullDiff { session_id, path } => {
+            let (root, number) = linked_pull(&state, &session_id)?;
+            if let Some(path) = path {
+                let patch = crate::blocking(move || {
+                    let diff = crate::github_pull::diff(&root, number)?;
+                    let (patch, truncated) = pull_file_patch(&diff.patch, &path, diff.truncated);
+                    Ok::<_, String>(bounded_diff(patch, truncated))
+                }).await?;
+                Ok(json!({"patch": patch.0, "truncated": patch.1}))
+            } else {
+                let files = crate::blocking(move || crate::github_pull::detail(&root, number).map(|detail| detail.files)).await?;
+                Ok(fit_pull_files(serde_json::to_value(files).map_err(|e| e.to_string())?))
+            }
+        }
+        Call::PullMerge { session_id, method } => {
+            let (root, number) = linked_pull(&state, &session_id)?;
+            crate::github_pull::merge_flag(&method)?;
+            let store = state.store.clone();
+            crate::blocking(move || {
+                let link = crate::github_pull::merge(&root, number, &method)?;
+                store.lock().map_err(|e| e.to_string())?.set_task_link(&session_id, "pull", Some(&link)).map(|_| ())
+            })
+            .await?;
+            let _ = app.emit("sessions-changed", ());
+            Ok(json!({}))
+        }
+        Call::PullDetect { session_id } => detect_pull(app, &state, &session_id).await,
+        Call::Changes { session_id } => {
+            let root = task_root(&state, &session_id)?;
+            crate::blocking(move || {
+                let status = crate::workspace::git_status(&root)?;
+                let (ahead, behind) = if status.is_repo { ahead_behind(&root)? } else { (0, 0) };
+                Ok(changes_reply(status, ahead, behind))
+            })
+            .await
+        }
+        Call::Diff { session_id, path, staged } => {
+            let root = task_root(&state, &session_id)?;
+            crate::blocking(move || {
+                let diff = crate::workspace::git_diff(&root, path, staged)?;
+                let underlying_truncated = diff.contains("[Preview truncated at 256 KiB]");
+                let (diff, truncated) = bounded_diff(diff, underlying_truncated);
+                Ok(json!({"diff": diff, "truncated": truncated}))
+            })
+            .await
+        }
+        Call::BotsList => {
+            let handle = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let state = handle.state::<AppState>();
+                bots_list(&state)
+            })
+            .await
+            .map_err(|e| e.to_string())?
+        }
+        Call::BotThread { bot_id } => {
+            let store = state.store.clone();
+            let (session_id, created) = tauri::async_runtime::spawn_blocking(move || {
+                let store = store.lock().map_err(|e| e.to_string())?;
+                let bot = crate::bots::get(&store, &bot_id)?;
+                crate::bots::thread_session(&store, &bot, crate::bots::DESKTOP, crate::bots::DESKTOP, &format!("{} · You", bot.name))
+            })
+            .await
+            .map_err(|e| e.to_string())??;
+            if created {
+                let _ = app.emit("sessions-changed", ());
+                let _ = app.emit("bots-changed", ());
+            }
+            Ok(json!({"sessionId": session_id}))
+        }
+        Call::BotMessage { bot_id, text } => {
+            let session_id = crate::bots::bot_message(app.clone(), bot_id, text).await?;
+            Ok(json!({"sessionId": session_id}))
+        }
+        Call::BotPause { bot_id, paused } => {
+            if paused {
+                crate::bots::gateway::stop_bot(app, &bot_id).await;
+            }
+            let store = state.store.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                crate::bots::set_paused(&*store.lock().map_err(|e| e.to_string())?, &bot_id, paused).map(|_| ())
+            })
+            .await
+            .map_err(|e| e.to_string())??;
+            let _ = app.emit("bots-changed", ());
+            Ok(json!({}))
+        }
     }
 }
 
+async fn detect_pull(app: &tauri::AppHandle, state: &AppState, session_id: &str) -> Result<Value> {
+    local_task(state, session_id)?;
+    let (root, turn, started, existing_number) = {
+        let store = state.store.lock().map_err(|e| e.to_string())?;
+        let task = store.session(session_id)?;
+        if task.pull_request.as_ref().is_some_and(|link| ["open", "draft"].contains(&link.state.as_str())) {
+            return Ok(json!({"pull": null}));
+        }
+        let mut turn = Vec::new();
+        let mut started = 0;
+        for message in store.messages(session_id, None)? {
+            if message.role == "user" {
+                started = message.created_at;
+                break;
+            }
+            turn.push(message.content);
+        }
+        if !turn.iter().any(|text| text.contains("/pull/")) {
+            return Ok(json!({"pull": null}));
+        }
+        (
+            store.workspace_root(&task.project_id, Some(session_id))?,
+            turn,
+            started,
+            task.pull_request.map(|link| link.number),
+        )
+    };
+    let store = state.store.clone();
+    let session_id = session_id.to_owned();
+    let pull = crate::blocking(move || {
+        let repo = match crate::github::repository(&root) {
+            Ok(repo) => repo,
+            Err(error) if error.is_empty() => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let branch = crate::workspace::git_status(&root).map(|status| status.branch).unwrap_or_default();
+        let Some(link) = crate::github_pull::detect(&root, &repo, &turn, &branch, started)? else { return Ok(None) };
+        if existing_number == Some(link.number) {
+            return Ok(None);
+        }
+        let mut pull = serde_json::to_value(crate::github_pull::detail(&root, link.number)?).map_err(|e| e.to_string())?;
+        fit_pull_detail(&mut pull);
+        let store = store.lock().map_err(|e| e.to_string())?;
+        if store.session(&session_id)?.pull_request.is_some_and(|current| current.number == link.number) {
+            return Ok(None);
+        }
+        store.set_task_link(&session_id, "pull", Some(&link))?;
+        Ok(Some(pull))
+    })
+    .await?;
+    if pull.is_some() {
+        let _ = app.emit("sessions-changed", ());
+    }
+    Ok(json!({"pull": pull}))
+}
+
+fn bots_list(state: &AppState) -> Result<Value> {
+    let active: HashSet<String> = state.agents.lock().map_err(|e| e.to_string())?.keys().cloned().collect();
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    let active_projects: HashSet<String> = store
+        .sessions()?
+        .into_iter()
+        .filter(|task| active.contains(&task.id))
+        .map(|task| task.project_id)
+        .collect();
+    let mut items = Vec::new();
+    for bot in crate::bots::list(&store)? {
+        let desktop_session: Option<String> = store
+            .db
+            .query_row("SELECT session_id FROM bot_threads WHERE bot_id=?1 AND channel_id=?2", rusqlite::params![bot.id, crate::bots::DESKTOP], |row| row.get(0))
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let avatar = (bot.avatar.len() <= MAX_BOT_AVATAR_BYTES).then_some(bot.avatar);
+        let state = if bot.paused { "paused" } else if active_projects.contains(&bot.project_id) { "working" } else { "ready" };
+        items.push(json!({
+            "id": bot.id,
+            "name": bot.name,
+            "avatar": avatar,
+            "state": state,
+            "paused": bot.paused,
+            "desktopSession": desktop_session,
+            "projectId": bot.project_id,
+        }));
+    }
+    fit_list(&mut items, PAGE_BUDGET.saturating_sub(json!({"bots": []}).to_string().len()));
+    Ok(json!({"bots": items}))
+}
+
+fn ahead_behind(root: &Path) -> Result<(usize, usize)> {
+    let mut command = Command::new("git");
+    command.args(["rev-list", "--left-right", "--count", "HEAD...@{upstream}"]).current_dir(root);
+    let output = crate::workspace::run_process(command, "Git", 8192, Duration::from_secs(10))?;
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr.bytes).to_ascii_lowercase();
+        if error.contains("upstream") || error.contains("unknown revision") || error.contains("ambiguous argument") {
+            return Ok((0, 0));
+        }
+        return match crate::workspace::checked(output) {
+            Err(error) => Err(error),
+            Ok(_) => Err("Git operation failed".into()),
+        };
+    }
+    let capture = crate::workspace::checked(output)?;
+    let counts = std::str::from_utf8(&capture.bytes).map_err(|_| "Git returned invalid ahead/behind counts")?;
+    let mut parts = counts.split_whitespace();
+    let ahead = parts.next().and_then(|value| value.parse::<usize>().ok()).ok_or("Git returned invalid ahead/behind counts")?;
+    let behind = parts.next().and_then(|value| value.parse::<usize>().ok()).ok_or("Git returned invalid ahead/behind counts")?;
+    if parts.next().is_some() {
+        return Err("Git returned invalid ahead/behind counts".into());
+    }
+    Ok((ahead, behind))
+}
+
+fn changes_reply(status: crate::workspace::GitStatus, ahead: usize, behind: usize) -> Value {
+    let mut files: Vec<Value> = status
+        .files
+        .into_iter()
+        .map(|file| {
+            let staged = file.index != " " && file.index != "?";
+            let status = if file.index == "?" { "??".to_owned() } else if file.index == " " { file.working } else if file.working == " " { file.index } else { format!("{}{}", file.index, file.working) };
+            json!({"path": file.path, "status": status, "staged": staged})
+        })
+        .collect();
+    fit_list(&mut files, PAGE_BUDGET.saturating_sub(json!({"branch": status.branch, "ahead": ahead, "behind": behind, "files": []}).to_string().len()));
+    let mut reply = json!({"branch": status.branch, "ahead": ahead, "behind": behind, "files": files});
+    shrink(&mut reply, PAGE_BUDGET);
+    reply
+}
+
+fn bounded_diff(mut diff: String, truncated: bool) -> (String, bool) {
+    const MARKER: &str = "\n…[cut on the host to fit a remote diff]";
+    if diff.len() <= DIFF_BUDGET && !truncated {
+        return (diff, false);
+    }
+    let end = (DIFF_BUDGET - MARKER.len()).min(diff.len());
+    diff.truncate(head(&diff, end).len());
+    diff.push_str(MARKER);
+    (diff, true)
+}
+
+fn unquote_git_path(path: &str) -> Option<String> {
+    if !path.starts_with('"') {
+        return Some(path.to_owned());
+    }
+    let bytes = path.as_bytes();
+    let (mut index, mut decoded) = (1, Vec::new());
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' => return String::from_utf8(decoded).ok(),
+            b'\\' => {
+                index += 1;
+                let escape = *bytes.get(index)?;
+                match escape {
+                    b'"' | b'\\' => decoded.push(escape),
+                    b'a' => decoded.push(7),
+                    b'b' => decoded.push(8),
+                    b't' => decoded.push(b'\t'),
+                    b'n' => decoded.push(b'\n'),
+                    b'v' => decoded.push(11),
+                    b'f' => decoded.push(12),
+                    b'r' => decoded.push(b'\r'),
+                    b'0'..=b'7' => {
+                        let mut value = (escape - b'0') as u16;
+                        for _ in 0..2 {
+                            if bytes.get(index + 1).is_some_and(|byte| (b'0'..=b'7').contains(byte)) {
+                                index += 1;
+                                value = value * 8 + (bytes[index] - b'0') as u16;
+                            } else {
+                                break;
+                            }
+                        }
+                        decoded.push(u8::try_from(value).ok()?);
+                    }
+                    _ => return None,
+                }
+            }
+            byte => decoded.push(byte),
+        }
+        index += 1;
+    }
+    None
+}
+
+fn path_from_diff_header(line: &str) -> Option<String> {
+    let line = line.strip_prefix("--- ").or_else(|| line.strip_prefix("+++ "))?;
+    let path = line.split('\t').next()?;
+    let decoded = unquote_git_path(path)?;
+    decoded.strip_prefix("a/").or_else(|| decoded.strip_prefix("b/")).map(str::to_owned)
+}
+
+fn pull_file_patch(diff: &str, path: &str, source_truncated: bool) -> (String, bool) {
+    let starts: Vec<usize> = diff
+        .match_indices("diff --git ")
+        .filter_map(|(index, _)| (index == 0 || diff.as_bytes().get(index - 1) == Some(&b'\n')).then_some(index))
+        .collect();
+    for (position, start) in starts.iter().copied().enumerate() {
+        let end = starts.get(position + 1).copied().unwrap_or(diff.len());
+        let section = &diff[start..end];
+        let header = section.lines().take_while(|line| !line.starts_with("@@") && *line != "GIT binary patch");
+        let matches_headers = header
+            .clone()
+            .filter_map(path_from_diff_header)
+            .any(|candidate| candidate == path)
+            || header
+                .clone()
+                .filter_map(|line| line.strip_prefix("rename from ").or_else(|| line.strip_prefix("rename to ")))
+                .filter_map(unquote_git_path)
+                .any(|candidate| candidate == path)
+            || header.filter_map(|line| line.strip_prefix("Binary files ")).any(|paths| {
+                paths
+                    .strip_suffix(" differ")
+                    .and_then(|paths| paths.split_once(" and "))
+                    .is_some_and(|(left, right)| {
+                        [left, right].into_iter().filter_map(unquote_git_path).filter_map(|file| file.strip_prefix("a/").or_else(|| file.strip_prefix("b/")).map(str::to_owned)).any(|file| file == path)
+                    })
+            });
+        let matches = matches_headers;
+        if matches {
+            return (section.to_owned(), source_truncated && end == diff.len());
+        }
+    }
+    (String::new(), source_truncated)
+}
+
+fn fit_pull_files(mut files: Value) -> Value {
+    let Some(list) = files.as_array_mut() else { return json!({"files": [], "truncated": false}) };
+    let count = list.len();
+    fit_list(list, PAGE_BUDGET.saturating_sub(json!({"files": [], "truncated": true}).to_string().len()));
+    let truncated = list.len() < count;
+    json!({"files": files, "truncated": truncated})
+}
+
+fn fit_pull_detail(pull: &mut Value) {
+    let budget = PAGE_BUDGET.saturating_sub(16);
+    let mut truncated = pull["bodyTruncated"].as_bool().unwrap_or(false);
+    pull["truncated"] = json!(truncated);
+    const ARRAYS: [&str; 5] = ["timeline", "files", "commits", "checks", "labels"];
+    while pull.to_string().len() > budget {
+        let largest = ARRAYS
+            .iter()
+            .filter_map(|key| pull.get(*key).and_then(Value::as_array).filter(|items| !items.is_empty()).map(|items| (*key, json!(items).to_string().len())))
+            .max_by_key(|(_, size)| *size);
+        let body_len = pull["body"].as_str().map(str::len).unwrap_or_default();
+        if let Some((key, _)) = largest.filter(|(_, size)| *size >= body_len || body_len <= 2 * CUT.len()) {
+            if let Some(items) = pull.get_mut(key).and_then(Value::as_array_mut) {
+                let budget = json!(items).to_string().len() / 2;
+                fit_list(items, budget);
+            }
+            truncated = true;
+        } else if body_len > 2 * CUT.len() {
+            let size = pull.to_string().len();
+            let target = body_len.saturating_sub(size.saturating_sub(budget)).saturating_sub(CUT.len());
+            let text = pull["body"].as_str().unwrap_or_default();
+            pull["body"] = json!(format!("{}{}", head(text, target), CUT));
+            pull["bodyTruncated"] = json!(true);
+            truncated = true;
+        } else if let Some((key, _)) = largest {
+            if let Some(items) = pull.get_mut(key).and_then(Value::as_array_mut) {
+                let budget = json!(items).to_string().len() / 2;
+                fit_list(items, budget);
+            }
+            truncated = true;
+        } else {
+            shrink(pull, budget);
+            truncated = true;
+            break;
+        }
+        pull["truncated"] = json!(truncated);
+    }
+    pull["truncated"] = json!(truncated);
+}
+
 /// Returns local tasks and their projects for a viewer's task picker. Store::sessions
-/// already omits drafts and architect workers; mirrors and bot workspaces are filtered here.
+/// already omits drafts and architect workers; mirrors are filtered and bot workspaces tagged here.
 fn tasks_list(state: &AppState, limit: usize) -> Result<Value> {
     let (active, pending_by_session) = {
         let agents = state.agents.lock().map_err(|e| e.to_string())?;
@@ -350,10 +792,12 @@ fn tasks_list(state: &AppState, limit: usize) -> Result<Value> {
         }
         (agents.keys().cloned().collect::<HashSet<_>>(), pending)
     };
-    let (sessions, project_rows, bot_projects) = {
+    let (sessions, project_rows, bots_by_project) = {
         let store = state.store.lock().map_err(|e| e.to_string())?;
-        (store.sessions()?, store.projects()?, crate::bots::project_ids(&store)?.into_iter().collect::<HashSet<_>>())
+        let bots = crate::bots::list(&store)?.into_iter().map(|bot| (bot.project_id, (bot.id, bot.name))).collect::<HashMap<_, _>>();
+        (store.sessions()?, store.projects()?, bots)
     };
+    let bot_projects: HashSet<String> = bots_by_project.keys().cloned().collect();
 
     let project_chats: HashSet<String> = project_rows
         .iter()
@@ -374,7 +818,7 @@ fn tasks_list(state: &AppState, limit: usize) -> Result<Value> {
         .collect();
     let mut sessions: Vec<_> = sessions
         .into_iter()
-        .filter(|task| task.remote_device.is_none() && !bot_projects.contains(&task.project_id) && project_names.contains_key(&task.project_id))
+        .filter(|task| task.remote_device.is_none() && (project_names.contains_key(&task.project_id) || bot_projects.contains(&task.project_id)))
         .collect();
     sessions.sort_by(|a, b| activity_at(b).cmp(&activity_at(a)).then_with(|| a.id.cmp(&b.id)));
     let tasks: Vec<Value> = sessions
@@ -382,12 +826,13 @@ fn tasks_list(state: &AppState, limit: usize) -> Result<Value> {
         .take(limit)
         .map(|task| {
             let status = if matches!(task.status.as_str(), "running" | "waiting") && !active.contains(&task.id) { "interrupted" } else { task.status.as_str() };
+            let project_name = project_names.get(&task.project_id).or_else(|| bots_by_project.get(&task.project_id).map(|(_, name)| name)).cloned().unwrap_or_default();
             let mut item = json!({
                 "sessionId": task.id,
                 "title": task.title,
                 "status": status,
                 "projectId": task.project_id,
-                "projectName": project_names[&task.project_id],
+                "projectName": project_name,
                 "provider": task.provider,
                 "model": task.model,
                 "effort": task.reasoning_effort,
@@ -397,6 +842,10 @@ fn tasks_list(state: &AppState, limit: usize) -> Result<Value> {
                 "lastPromptAt": task.last_prompt_at,
                 "pending": pending_by_session.get(&task.id).cloned().unwrap_or_default(),
             });
+            if let Some((bot_id, bot_name)) = bots_by_project.get(&task.project_id) {
+                item["botId"] = json!(bot_id);
+                item["botName"] = json!(bot_name);
+            }
             if let Some(branch) = task.worktree_branch {
                 item["branch"] = json!(branch);
             }
@@ -754,6 +1203,90 @@ mod tests {
             assert!(parse(true, gone, &json!({})).is_err(), "{gone}");
         }
         assert!(valid_id(&"a".repeat(201)).is_err());
+    }
+
+    #[test]
+    fn task_pull_changes_and_bot_requests_are_validated() {
+        for (method, params) in [
+            ("task.pull", json!({"sessionId": "s1"})),
+            ("task.pullDiff", json!({"sessionId": "s1"})),
+            ("task.pullDiff", json!({"sessionId": "s1", "path": "src/main.rs"})),
+            ("task.pullMerge", json!({"sessionId": "s1", "method": "squash"})),
+            ("task.pullDetect", json!({"sessionId": "s1"})),
+            ("task.changes", json!({"sessionId": "s1"})),
+            ("task.diff", json!({"sessionId": "s1"})),
+            ("task.diff", json!({"sessionId": "s1", "path": "src/main.rs", "staged": true})),
+            ("bots.list", json!({})),
+            ("bot.thread", json!({"botId": "b1"})),
+            ("bot.message", json!({"botId": "b1", "text": "hello"})),
+            ("bot.pause", json!({"botId": "b1", "paused": true})),
+        ] {
+            assert!(parse(true, method, &params).is_ok(), "{method} {params}");
+        }
+
+        for (method, params) in [
+            ("task.pull", json!({})),
+            ("task.pullMerge", json!({"sessionId": "s1", "method": "--admin"})),
+            ("task.changes", json!({"sessionId": "bad id"})),
+            ("task.diff", json!({"sessionId": "s1", "path": "../secret"})),
+            ("task.diff", json!({"sessionId": "s1", "staged": "yes"})),
+            ("bot.thread", json!({"botId": "bad id"})),
+            ("bot.message", json!({"botId": "b1", "text": "  "})),
+            ("bot.pause", json!({"botId": "b1", "paused": "yes"})),
+        ] {
+            assert!(parse(true, method, &params).is_err(), "{method} {params}");
+        }
+    }
+
+    #[test]
+    fn pull_diff_and_detail_replies_fit_the_remote_budget() {
+        let mut pull = json!({
+            "number": 42,
+            "title": "A pull request",
+            "body": "b".repeat(64 * 1024),
+            "bodyTruncated": false,
+            "timeline": vec![json!({"body": "c".repeat(16 * 1024)}); 60],
+            "files": vec![json!({"path": "src/".to_owned() + &"f".repeat(2048), "additions": 1, "deletions": 0}); 200],
+            "commits": [],
+            "checks": [],
+            "labels": [],
+        });
+        fit_pull_detail(&mut pull);
+        assert_eq!(pull["truncated"], true);
+        assert!(pull.to_string().len() <= PAGE_BUDGET);
+        assert!(json!({"pull": &pull}).to_string().len() <= PAGE_BUDGET);
+
+        let files = fit_pull_files(json!(vec![json!({"path": "p".repeat(1024), "additions": 3, "deletions": 1}); 300]));
+        assert_eq!(files["truncated"], true);
+        assert!(files.to_string().len() <= PAGE_BUDGET);
+
+        let mut bots = vec![json!({"avatar": "data:image/png;base64,{}", "id": "bot".repeat(100) }); 12];
+        fit_list(&mut bots, PAGE_BUDGET.saturating_sub(json!({"bots": []}).to_string().len()));
+        let bots = json!({"bots": bots});
+        assert!(bots.to_string().len() <= PAGE_BUDGET);
+
+        let (patch, truncated) = bounded_diff("λ".repeat(DIFF_BUDGET), false);
+        assert!(truncated);
+        assert!(patch.len() <= DIFF_BUDGET);
+        assert!(patch.ends_with("[cut on the host to fit a remote diff]"));
+
+        let source = "diff --git a/first.rs b/first.rs\n--- a/first.rs\n+++ b/first.rs\n@@ -1 +1 @@\n+first\ndiff --git \"a/space name.rs\" \"b/space name.rs\"\n--- \"a/space name.rs\"\n+++ \"b/space name.rs\"\n@@ -1 +1 @@\n+second\n";
+        let (selected, truncated) = pull_file_patch(source, "space name.rs", false);
+        assert!(selected.contains("+second"));
+        assert!(!selected.contains("+first"));
+        assert!(!truncated);
+        assert_eq!(pull_file_patch(source, "missing.rs", true), (String::new(), true));
+
+        let changes = changes_reply(
+            crate::workspace::GitStatus {
+                branch: "b".repeat(PAGE_BUDGET),
+                files: (0..500).map(|n| crate::workspace::GitFile { path: format!("src/{}-{n}", "f".repeat(512)), index: " ".into(), working: "M".into() }).collect(),
+                is_repo: true,
+            },
+            2,
+            1,
+        );
+        assert!(changes.to_string().len() <= PAGE_BUDGET);
     }
 
     #[test]

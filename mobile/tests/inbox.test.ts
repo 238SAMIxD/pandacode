@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { TaskSummary } from '../src/connect/types.ts';
-import { activeSnoozes, elapsedLabel, filterRows, inboxSections, SETTLED_MS, tomorrowMorning, type InboxInput } from '../src/store/inbox.ts';
+import { activeSnoozes, botOf, botRows, elapsedLabel, filterBots, filterRows, inboxSections, SETTLED_MS, tomorrowMorning, type InboxInput } from '../src/store/inbox.ts';
 import { idleLive } from '../src/store/reduce.ts';
 
 const NOW = 1_800_000_000_000;
@@ -78,4 +78,23 @@ test('search filters rows by title, project, branch or computer', () => {
   assert.deepEqual(ids(filterRows(rows, 'site')), ['docs']);
   assert.equal(filterRows(rows, '').length, 2);
   assert.equal(filterRows(rows, 'studio').length, 2);
+});
+
+test('bot conversations leave the project sections and date their bot under Bots', () => {
+  const bot = (id: string, name: string, desktopSession: string | null = null) => ({ id, name, avatar: null, state: 'ready', paused: false, desktopSession, projectId: `${id}-ws` });
+  const tasks = [
+    task('t'),
+    task('b1', { botId: 'leo', botName: 'Leo', status: 'waiting', pending: [{ kind: 'approval', requestId: 'r', text: '?' }], updatedAt: NOW - 5000 }),
+    task('b2', { botId: 'leo', botName: 'Leo', updatedAt: NOW - 9000 }),
+  ];
+  const inbox = inboxSections(input(tasks));
+  assert.deepEqual([...inbox.needs, ...inbox.working, ...inbox.recent, ...inbox.settled].map(r => r.task.sessionId), ['t']);
+  const hosts = [{ id: 'mac', name: 'Studio' }, { id: 'old', name: 'Laptop' }];
+  const rows = botRows(hosts, { mac: [bot('ada', 'Ada'), bot('zed', 'Zed'), bot('leo', 'Leo', 'b1')], old: [] }, { mac: { tasks, projects: [] } });
+  assert.deepEqual(rows.map(r => [r.bot.name, r.at, r.computer]), [['Leo', NOW - 5000, 'Studio'], ['Ada', 0, 'Studio'], ['Zed', 0, 'Studio']]);
+  assert.equal(botOf(rows.map(r => r.bot), tasks[2], 'b2')?.id, 'leo');
+  assert.equal(botOf(rows.map(r => r.bot), undefined, 'b1')?.id, 'leo');
+  assert.equal(botOf(rows.map(r => r.bot), tasks[0], 't'), undefined);
+  assert.deepEqual(filterBots(rows, 'ze').map(r => r.bot.id), ['zed']);
+  assert.equal(filterBots(rows, 'studio').length, 3);
 });

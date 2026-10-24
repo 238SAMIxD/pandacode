@@ -1,5 +1,5 @@
 // Fake computers, tasks and messages for demo mode (src/demo.ts): screenshots and App Review.
-import type { Device, Message, Project, TaskSummary, ToolActivity } from './connect/types.ts';
+import type { Bot, Device, Message, Project, TaskSummary, ToolActivity } from './connect/types.ts';
 import { useConnect } from './store/index.ts';
 import { iconKey } from './store/icon-cache.ts';
 import { useIcons } from './store/icons.ts';
@@ -32,6 +32,13 @@ export function seedDemo() {
     t('lint', 'Turn on the stricter lint rules', 'relay', 'codex', 'chore/lint', 5 * 1440),
     t('snooze', 'Review the dependency upgrade PR', 'pandacode-web', 'deepseek', 'deps/october', 30),
   ];
+  // Bot conversations are listed with their bot (tasks.list's botId), under Bots.
+  studio.push(t('bot-leo', 'Morning briefing', 'Leo', 'claude', '', 12, { botId: 'leo', botName: 'Leo', projectId: 'bot-leo-workspace' }));
+  const leoFace = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="16" fill="#f4efe6"/><circle cx="9" cy="8" r="5" fill="#222"/><circle cx="23" cy="8" r="5" fill="#222"/><ellipse cx="11" cy="16" rx="4" ry="5" fill="#222"/><ellipse cx="21" cy="16" rx="4" ry="5" fill="#222"/><circle cx="11" cy="16" r="1.6" fill="#fff"/><circle cx="21" cy="16" r="1.6" fill="#fff"/><ellipse cx="16" cy="22" rx="2.4" ry="1.6" fill="#222"/></svg>';
+  const bots: Bot[] = [
+    { id: 'leo', name: 'Leo', avatar: `data:image/svg+xml;base64,${btoa(leoFace)}`, state: 'ready', paused: false, desktopSession: 'bot-leo', projectId: 'bot-leo-workspace' },
+    { id: 'watcher', name: 'Watcher', avatar: null, state: 'paused', paused: true, desktopSession: null, projectId: 'bot-watcher-workspace' },
+  ];
   const laptop: TaskSummary[] = [t('offline', 'Polish the onboarding copy', 'marketing-site', 'antigravity', 'copy/onboarding', 25)];
   const tool = (id: string, name: string, input: string, output: string, status: ToolActivity['status'] = 'completed'): ToolActivity => ({ id, name, status, input, output });
   let id = 0;
@@ -63,8 +70,12 @@ export function seedDemo() {
     toolMessage(tool('a1', 'Read', 'app/account/page.tsx', ''), 3.8),
     m('assistant', 'I need the `@simplewebauthn/server` package for the registration and assertion checks.', 2.5, 90_000),
   ];
+  const leo: Message[] = [
+    m('user', 'What should I look at first today?', 13),
+    m('assistant', 'Good morning. Three things:\n\n1. **Passkeys PR #482** is approved and its checks are green, so it can merge.\n2. The upload test is still flaky on CI; Codex is on it.\n3. The billing webhook migration failed overnight.', 12, 18_000),
+  ];
   const flaky: Message[] = [m('user', 'The upload test fails about one run in ten on CI. Find out why and fix it.', 6)];
-  const projects = (list: TaskSummary[]): Project[] => [...new Set(list.map(x => x.projectId))].map(id => ({ id, name: id, repo: null }));
+  const projects = (list: TaskSummary[]): Project[] => [...new Set(list.filter(x => !x.botId).map(x => x.projectId))].map(id => ({ id, name: id, repo: null }));
   const tasks = { studio: { tasks: studio, projects: projects(studio), loadedAt: now }, laptop: { tasks: laptop, projects: projects(laptop), loadedAt: now } };
   const live: Record<string, Live> = {
     'studio/auth': { ...idleLive(), status: 'waiting', activity: 'Waiting for approval', approvals: [{ kind: 'approval', requestId: 'r1', text: 'Run `npm install @simplewebauthn/server` in **pandacode-web**?', tool: tool('b1', 'Bash', 'npm install @simplewebauthn/server', '', 'running') }] },
@@ -85,7 +96,8 @@ export function seedDemo() {
     ready: true, signedIn: true, connected: true, configured: true, deviceId: 'phone', demo: true, error: null,
     account: { id: '1', login: 'pandadev', avatarUrl: '' },
     devices, tasks,
-    messages: { 'studio/docs': docs, 'studio/auth': auth, 'studio/flaky': flaky },
+    bots: { studio: bots, laptop: [] }, pulls: {}, outdated: {},
+    messages: { 'studio/bot-leo': leo, 'studio/docs': docs, 'studio/auth': auth, 'studio/flaky': flaky },
     live,
     providers: { studio: [
       { id: 'claude', name: 'Claude Code', installed: true, models: [] },

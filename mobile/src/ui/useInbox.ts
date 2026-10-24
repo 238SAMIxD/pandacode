@@ -1,10 +1,10 @@
 // Inbox data for the inbox screen and the iPhone Duo sidebar: sections from src/store/inbox.ts
 // over the store, a minute clock for relative times, and `load`, which lists every online
-// computer's tasks now (client.ts also refreshes lists on presence, foreground, run ends and a timer).
+// computer's tasks (and with them its bots) now (client.ts also refreshes lists on presence, foreground, run ends and a timer).
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { connect, NOT_SIGNED_IN } from '../connect/client.ts';
-import { inboxSections } from '../store/inbox.ts';
+import { botRows, inboxSections } from '../store/inbox.ts';
 import { useConnect, useHosts } from '../store/index.ts';
 import { useLocal } from '../store/local.ts';
 import type { Live } from '../store/reduce.ts';
@@ -41,6 +41,7 @@ function useMinute() {
 export function useInbox() {
   const hosts = useHosts();
   const tasks = useConnect(s => s.tasks);
+  const allBots = useConnect(s => s.bots);
   const live = useLiteLive();
   const { snoozed, pins, outbox } = useLocal(useShallow(s => ({ snoozed: s.snoozed, pins: s.pins, outbox: s.outbox })));
   const minute = useMinute();
@@ -54,5 +55,6 @@ export function useInbox() {
   }, [onlineKey]);
 
   const inbox = useMemo(() => inboxSections({ hosts, tasks, live, snoozed, pins, outbox, now: minute * 60_000 + 59_999 }), [hosts, tasks, live, snoozed, pins, outbox, minute]);
-  return { hosts, inbox, minute, errors, load };
+  const bots = useMemo(() => botRows(hosts, allBots, tasks), [hosts, allBots, tasks]);
+  return { hosts, inbox, bots, minute, errors, load };
 }

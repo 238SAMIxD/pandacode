@@ -1,6 +1,6 @@
 // The inbox: every computer's tasks in one list, grouped by what they need from you.
 // Pure (tested in node): screens pass store slices in and render the result.
-import type { TaskSummary, TasksList } from '../connect/types.ts';
+import type { Bot, TaskSummary, TasksList } from '../connect/types.ts';
 import type { Live } from './reduce.ts';
 
 export const SETTLED_MS = 24 * 3600_000;
@@ -59,6 +59,7 @@ export function inboxSections({ hosts, tasks, live, snoozed, pins, outbox, now }
   const index = new Map<string, InboxRow>();
   for (const host of hosts) {
     for (const task of tasks[host.id]?.tasks ?? []) {
+      if (task.botId) continue; // under Bots (botRows)
       const key = `${host.id}/${task.sessionId}`;
       const badge = badgeOf(task, live[key]);
       const at = Math.max(task.lastPromptAt ?? 0, task.updatedAt);
@@ -106,4 +107,29 @@ export function filterRows(rows: readonly InboxRow[], query: string): InboxRow[]
   const q = query.trim().toLowerCase();
   if (!q) return [...rows];
   return rows.filter(r => [r.task.title, r.task.chat ? 'Chat' : r.task.projectName, r.task.branch, r.computer].some(v => v?.toLowerCase().includes(q)));
+}
+
+/** A bot in the inbox's Bots section: `at` is its conversations' latest activity (0 if none listed). */
+export interface BotRow { key: string; deviceId: string; computer: string; bot: Bot; at: number }
+
+/** Every computer's bots, most recently active first, then by name. */
+export function botRows(hosts: readonly { id: string; name: string }[], bots: Readonly<Record<string, readonly Bot[] | undefined>>, tasks: InboxInput['tasks']): BotRow[] {
+  const rows: BotRow[] = [];
+  for (const host of hosts) {
+    const latest = new Map<string, number>();
+    for (const t of tasks[host.id]?.tasks ?? []) if (t.botId) latest.set(t.botId, Math.max(latest.get(t.botId) ?? 0, t.lastPromptAt ?? 0, t.updatedAt));
+    for (const bot of bots[host.id] ?? []) rows.push({ key: `${host.id}/bot/${bot.id}`, deviceId: host.id, computer: host.name, bot, at: latest.get(bot.id) ?? 0 });
+  }
+  return rows.sort((a, b) => b.at - a.at || a.bot.name.localeCompare(b.bot.name));
+}
+
+/** The bot whose conversation this task is: its listed botId, or the bot's desktop conversation. */
+export function botOf(bots: readonly Bot[] | undefined, task: Pick<TaskSummary, 'botId'> | undefined, sessionId: string): Bot | undefined {
+  return bots?.find(b => b.id === task?.botId || b.desktopSession === sessionId);
+}
+
+/** Bot rows whose name or computer contains `query`. */
+export function filterBots(rows: readonly BotRow[], query: string): BotRow[] {
+  const q = query.trim().toLowerCase();
+  return q ? rows.filter(r => [r.bot.name, r.computer].some(v => v.toLowerCase().includes(q))) : [...rows];
 }

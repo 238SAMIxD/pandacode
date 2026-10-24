@@ -1,11 +1,13 @@
 // The inbox (home): every computer's tasks in one list. Needs you, Working, Recent,
-// Unsent (the outbox), then Snoozed and Settled folded away. Logic in src/store/inbox.ts.
+// Unsent (the outbox), Bots (every computer's bots; their conversations stay out of the other
+// sections), then Snoozed and Settled folded away. Logic in src/store/inbox.ts.
 import { Image } from 'expo-image';
 import { router, Stack, useFocusEffect } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import type { InboxRow as Row, Section } from '../../../store/inbox.ts';
+import type { BotRow as BotItem, InboxRow as Row, Section } from '../../../store/inbox.ts';
+import { BotRow } from '../../../ui/BotRow.tsx';
 import { useStatus } from '../../../store/index.ts';
 import { Icon } from '../../../ui/Icon.tsx';
 import { InboxRow } from '../../../ui/InboxRow.tsx';
@@ -16,10 +18,10 @@ import { useBackdrop } from '../../../ui/Backdrop.tsx';
 import { useColors } from '../../../ui/theme.ts';
 import { useInbox } from '../../../ui/useInbox.ts';
 
-const TITLES: Record<Section, string> = { needs: 'Needs you', working: 'Working', recent: 'Recent', unsent: 'Unsent', snoozed: 'Snoozed', settled: 'Settled' };
-const FOLDED: Section[] = ['snoozed', 'settled'];
+const TITLES: Record<Section | 'bots', string> = { bots: 'Bots', needs: 'Needs you', working: 'Working', recent: 'Recent', unsent: 'Unsent', snoozed: 'Snoozed', settled: 'Settled' };
+const FOLDED: (Section | 'bots')[] = ['snoozed', 'settled'];
 
-type Item = { type: 'header'; section: Section; count: number; open?: boolean } | { type: 'row'; section: Section; row: Row; last: boolean };
+type Item = { type: 'header'; section: Section | 'bots'; count: number; open?: boolean } | { type: 'row'; section: Section; row: Row; last: boolean } | { type: 'bot'; row: BotItem; last: boolean };
 
 /** On the iPhone Duo the sidebar is the inbox, so this route is the New thread pane. */
 export default function InboxRoute() {
@@ -31,7 +33,7 @@ function Inbox() {
   const backdrop = useBackdrop();
   const { connected } = useStatus();
   const insets = useSafeAreaInsets();
-  const { hosts, inbox, minute, errors, load } = useInbox();
+  const { hosts, inbox, bots, minute, errors, load } = useInbox();
   const [open, setOpen] = useState<Partial<Record<Section, boolean>>>({});
   const [refreshing, setRefreshing] = useState(false);
   const online = hosts.filter(h => h.online);
@@ -41,7 +43,11 @@ function Inbox() {
 
   const items = useMemo(() => {
     const list: Item[] = [];
-    for (const section of ['needs', 'working', 'recent', 'unsent', 'snoozed', 'settled'] as Section[]) {
+    for (const section of ['needs', 'working', 'recent', 'unsent', 'bots', 'snoozed', 'settled'] as const) {
+      if (section === 'bots') {
+        if (bots.length) list.push({ type: 'header', section, count: bots.length }, ...bots.map((row, i) => ({ type: 'bot' as const, row, last: i === bots.length - 1 })));
+        continue;
+      }
       const rows = inbox[section];
       if (!rows.length) continue;
       const folded = FOLDED.includes(section);
@@ -49,14 +55,15 @@ function Inbox() {
       if (!folded || open[section]) rows.forEach((row, i) => list.push({ type: 'row', section, row, last: i === rows.length - 1 }));
     }
     return list;
-  }, [inbox, open]);
+  }, [inbox, bots, open]);
 
   const render = ({ item }: { item: Item }) => {
+    if (item.type === 'bot') return <BotRow row={item.row} last={item.last} minute={minute} />;
     if (item.type === 'row') return <InboxRow row={item.row} snoozed={item.section === 'snoozed'} last={item.last} minute={minute} />;
     const title = item.open === undefined ? TITLES[item.section] : `${TITLES[item.section]} (${item.count})`;
     if (item.open === undefined) return <Text style={[styles.section, { color: colors.secondary }]} accessibilityRole="header">{title}</Text>;
     return (
-      <Pressable onPress={() => setOpen(o => ({ ...o, [item.section]: !o[item.section] }))} style={styles.foldHeader} accessibilityRole="button" accessibilityState={{ expanded: item.open }}>
+      <Pressable onPress={() => setOpen(o => ({ ...o, [item.section]: !o[item.section as Section] }))} style={styles.foldHeader} accessibilityRole="button" accessibilityState={{ expanded: item.open }}>
         <Text style={[styles.section, styles.foldTitle, { color: colors.secondary }]}>{title}</Text>
         <Icon ios={item.open ? 'chevron.down' : 'chevron.right'} android={item.open ? 'expand_more' : 'chevron_right'} size={12} color={colors.secondary} />
       </Pressable>
@@ -94,7 +101,7 @@ function Inbox() {
         contentInsetAdjustmentBehavior="automatic"
         contentContainerStyle={{ paddingLeft: insets.left, paddingRight: insets.right, paddingBottom: 16 }}
         data={items}
-        keyExtractor={item => (item.type === 'header' ? `h/${item.section}` : `${item.section}/${item.row.key}`)}
+        keyExtractor={item => (item.type === 'header' ? `h/${item.section}` : item.type === 'bot' ? item.row.key : `${item.section}/${item.row.key}`)}
         renderItem={render}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}
         ListHeaderComponent={

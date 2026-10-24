@@ -4,11 +4,13 @@ import { useEffect } from 'react';
 import { StyleSheet, useColorScheme, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { connect } from '../connect/client.ts';
+import { LiveActivityHost } from '../live/LiveActivityHost.tsx';
 import { HOME, SIGN_IN } from '../routes.ts';
 import { useStatus } from '../store/index.ts';
 import { useOutboxFlusher } from '../store/local.ts';
 import { loadAppearance } from '../ui/appearance.ts';
 import { useWallpaperShown, WallpaperLayer } from '../ui/Backdrop.tsx';
+import { hasGlass } from '../ui/Glass.tsx';
 import { MenuHost } from '../ui/Menu.tsx';
 import { Sidebar } from '../ui/Sidebar.tsx';
 import { useSidebar, useSplit } from '../ui/split.tsx';
@@ -24,6 +26,8 @@ const clear = (theme: typeof DefaultTheme) => ({ ...theme, colors: { ...theme.co
 const THEMES = { light: DefaultTheme, dark: DarkTheme, clearLight: clear(DefaultTheme), clearDark: clear(DarkTheme) };
 
 const sheet = { presentation: 'formSheet', sheetGrabberVisible: true, headerShown: true } as const;
+/** Pull request, Changes and a diff push over the task with a native header (Liquid Glass where available). */
+const pushed = { headerShown: true, headerTransparent: hasGlass, headerBackButtonDisplayMode: 'minimal' } as const;
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
@@ -60,6 +64,9 @@ export default function RootLayout() {
                 <Stack.Screen name="new-task" options={{ ...sheet, sheetAllowedDetents: [0.75, 1], title: 'New task' }} />
                 <Stack.Screen name="task-settings" options={{ ...sheet, sheetAllowedDetents: [0.5, 0.9], title: 'Model & permissions' }} />
                 <Stack.Screen name="task-info" options={{ ...sheet, sheetAllowedDetents: [0.45, 0.8], title: 'Task info' }} />
+                <Stack.Screen name="pull" options={{ ...pushed, title: 'Pull request' }} />
+                <Stack.Screen name="changes" options={{ ...pushed, title: 'Changes' }} />
+                <Stack.Screen name="diff" options={{ ...pushed, title: 'Diff' }} />
               </Stack.Protected>
               <Stack.Protected guard={!signedIn} redirectTo={HOME}>
                 <Stack.Screen name="sign-in" />
@@ -68,6 +75,7 @@ export default function RootLayout() {
           </View>
         </View>
         <MenuHost />
+        <LiveActivityHost />
       </ThemeProvider>
     </GestureHandlerRootView>
   );

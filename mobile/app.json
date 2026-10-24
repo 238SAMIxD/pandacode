@@ -13,7 +13,8 @@
       "supportsTablet": false,
       "icon": "./assets/images/icon.png",
       "infoPlist": {
-        "CFBundleDisplayName": "PandaCode"
+        "CFBundleDisplayName": "PandaCode",
+        "NSSupportsLiveActivities": true
       },
       "config": {
         "usesNonExemptEncryption": false
@@ -71,7 +72,16 @@
           }
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-widgets",
+        {
+          "bundleIdentifier": "com.aicodeking.pandacode.LiveActivity",
+          "groupIdentifier": "group.com.aicodeking.pandacode",
+          "enablePushNotifications": false,
+          "frequentUpdates": false
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

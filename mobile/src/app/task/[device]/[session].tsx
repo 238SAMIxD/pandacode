@@ -7,6 +7,7 @@ import { FlatList, Keyboard, LayoutAnimation, Platform, Pressable, ScrollView, S
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { connect } from '../../../connect/client.ts';
 import type { PendingRequest } from '../../../connect/types.ts';
+import { botOf } from '../../../store/inbox.ts';
 import { taskKey, useConnect } from '../../../store/index.ts';
 import { duration, type TurnRow } from '../../../store/turns.ts';
 import { Composer } from '../../../ui/Composer.tsx';
@@ -14,7 +15,7 @@ import { Glass, hasGlass } from '../../../ui/Glass.tsx';
 import { ApprovalCard, InputCard } from '../../../ui/requests.tsx';
 import { isActive } from '../../../ui/status.tsx';
 import { Icon } from '../../../ui/Icon.tsx';
-import { TaskHeader } from '../../../ui/TaskHeader.tsx';
+import { HeaderBlur, TaskHeader } from '../../../ui/TaskHeader.tsx';
 import { useColors } from '../../../ui/theme.ts';
 import { useBackdrop } from '../../../ui/Backdrop.tsx';
 import { Transcript } from '../../../ui/transcript.tsx';
@@ -82,13 +83,15 @@ export default function TaskScreen() {
   const { device = '', session = '' } = useLocalSearchParams<{ device: string; session: string }>();
   const backdrop = useBackdrop();
   const insets = useSafeAreaInsets();
-  // With Liquid Glass the header is transparent (TaskHeader); the transcript starts below it, so no
-  // scroll view sits under the bar and iOS adds no scroll edge effect or inset there.
+  // With Liquid Glass the header is transparent (TaskHeader): the transcript runs under it, inset
+  // by its height, with HeaderBlur behind the bar.
   const header = useHeaderHeight();
   const task = useConnect(s => s.tasks[device]?.tasks.find(t => t.sessionId === session));
   // Narrow selectors: a streamed text delta changes none of these, so this screen, the
   // composer and the list stay put while only the live row re-renders.
   const key = taskKey(device, session);
+  const pull = useConnect(s => !!s.pulls[key]);
+  const bot = useConnect(s => botOf(s.bots[device], task, session));
   const liveStatus = useConnect(s => s.live[key]?.status ?? 'idle');
   const approvals = useConnect(s => s.live[key]?.approvals ?? NONE);
   const inputs = useConnect(s => s.live[key]?.inputs ?? NONE);
@@ -102,6 +105,7 @@ export default function TaskScreen() {
   useEffect(() => {
     connect.watch(device, [session]);
     connect.loadMessages(device, session).catch(() => undefined);
+    connect.loadPull(device, session).catch(() => undefined); // shows the header's pull request item
     return () => connect.unwatch(device, [session]);
   }, [device, session]);
 
@@ -109,10 +113,11 @@ export default function TaskScreen() {
   const running = isActive(status);
   return (
     <View style={[styles.screen, { backgroundColor: backdrop.background }]}>
-      <TaskHeader deviceId={device} sessionId={session} running={running} title={task?.title || 'Task'} />
+      <TaskHeader deviceId={device} sessionId={session} running={running} title={task?.title || 'Task'} pull={pull} bot={bot} />
       {/* Side insets: the iPhone Duo's rail, or a landscape notch. */}
-      <View style={[styles.screen, { paddingTop: hasGlass ? header : 0, paddingLeft: insets.left, paddingRight: insets.right }]}>
-        <Transcript deviceId={device} sessionId={session} top={12} bottom={bottom + keyboard + 12} listRef={list} onAway={setAway} />
+      <View style={[styles.screen, { paddingLeft: insets.left, paddingRight: insets.right }]}>
+        <Transcript deviceId={device} sessionId={session} top={(hasGlass ? header : 0) + 12} bottom={bottom + keyboard + 12} listRef={list} onAway={setAway} />
+        <HeaderBlur height={header} />
         <View style={[styles.dock, { left: insets.left, right: insets.right, bottom: keyboard, paddingBottom: keyboard ? 8 : Math.max(insets.bottom, 10) }]} onLayout={e => setBottom(e.nativeEvent.layout.height)} pointerEvents="box-none">
           <Floaters deviceId={device} sessionId={session} running={running} away={away} onLatest={latest} />
           {requests && (
@@ -121,7 +126,7 @@ export default function TaskScreen() {
               {inputs.map(r => <InputCard key={r.requestId} deviceId={device} sessionId={session} request={r} />)}
             </ScrollView>
           )}
-          <Composer deviceId={device} sessionId={session} running={running} />
+          <Composer deviceId={device} sessionId={session} running={running} bot={bot} />
         </View>
       </View>
     </View>

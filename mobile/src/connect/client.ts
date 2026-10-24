@@ -8,16 +8,17 @@ import { clearIcons, loadIcons, resetIcons, saveIcons, useIcons } from '../store
 import { File, Paths } from 'expo-file-system';
 import { BUILD_DEMO, DEMO_FILE, demoAtStart } from '../demo.ts';
 import { demoCall, type DemoHost } from '../demo-host.ts';
+import { delivering, settled, unmatched, type Sent } from '../store/sent.ts';
 import { applyEvent, fromList, fromSubscribe, idleLive, lastId, mergeMessages, staleLists } from '../store/reduce.ts';
 import * as auth from './auth.ts';
 import { deleteAccount as deleteAccountSteps } from './delete-account.ts';
 import { build, NOT_CONFIGURED } from './config.ts';
-import { open, pairKey, seal } from './crypto.ts';
-import { LOST, NOT_CONNECTED, OFFLINE, Pending, RATE, request, START_TIMEOUT_MS, TIMEOUT_MS, type Method } from './rpc.ts';
+import { open, pairKey, seal, uuid } from './crypto.ts';
+import { LOST, NOT_CONNECTED, OFFLINE, outdated, Pending, RATE, request, START_TIMEOUT_MS, TIMEOUT_MS, UNKNOWN_METHOD, type Method } from './rpc.ts';
 import * as secrets from './secrets.ts';
 import { AppState } from 'react-native';
 import { RelaySocket } from './socket.ts';
-import type { AgentEvent, ConfigureParams, Device, MessagePage, Provider, ProviderModel, RunFinished, StartParams, SubscribedTask, TasksList } from './types.ts';
+import type { AgentEvent, Bot, Changes, ConfigureParams, Device, Diff, MergeMethod, MessagePage, Provider, ProviderModel, PullDetail, RunFinished, StartParams, SubscribedTask, TasksList } from './types.ts';
 
 const RENEW_MS = 9 * 60_000;
 const REFRESH_MS = 12 * 3600_000;
@@ -28,6 +29,8 @@ const LIST_IDLE_MS = 60_000;
 const LIST_ACTIVE_MS = 15_000;
 /** Presence frames come in bursts; a list younger than this is fresh enough. */
 const LIST_FRESH_MS = 5_000;
+/** A merge waits on GitHub and the host's git. */
+const MERGE_TIMEOUT_MS = 60_000;
 
 let token: string | null = null;
 let secret: Uint8Array | null = null;
@@ -318,18 +321,28 @@ function frame(text: string) {
   else if (message?.type === 'event' && message.name === 'run.finished') void finished(from, message.data);
 }
 
+const active = (status?: string) => status === 'running' || status === 'waiting';
+
 function events(host: string, list: unknown) {
   const ids = watched.get(host);
   if (!ids || !Array.isArray(list)) return;
+  const started = new Set<string>();
   patch(s => {
     const live = { ...s.live };
     for (const event of list as AgentEvent[]) {
       if (typeof event?.sessionId !== 'string' || typeof event.kind !== 'string' || !ids.has(event.sessionId)) continue;
       const key = taskKey(host, event.sessionId);
+      const before = live[key]?.status;
       live[key] = applyEvent(live[key] ?? idleLive(), { ...event, text: typeof event.text === 'string' ? event.text : '' });
+      if (!active(before) && active(live[key].status)) started.add(event.sessionId);
     }
-    return { live, tasks: withStatuses(s, host, live) };
+    let sent = s.sent;
+    for (const id of started) if (sent[taskKey(host, id)]) sent = { ...sent, [taskKey(host, id)]: delivering(sent[taskKey(host, id)]) };
+    return { live, sent, tasks: withStatuses(s, host, live) };
   });
+  // A turn that starts on its own (the host delivering a queued prompt after the last run's
+  // copy) saved its prompt before its first event: copy it now, not only at this run's end.
+  for (const id of started) void loadMessages(host, id).catch(() => undefined);
 }
 
 /** Mirrors live statuses into the host's task list. */
@@ -353,10 +366,12 @@ async function finished(host: string, data: RunFinished) {
   if (!watched.get(host)?.has(data.sessionId)) return;
   await loadMessages(host, data.sessionId).catch(() => undefined); // the next subscribe retries
   const key = taskKey(host, data.sessionId);
+  // The turn may have opened a pull request (or changed the linked one).
+  if (key in state().pulls) void loadPull(host, data.sessionId, true).catch(() => undefined);
   const status = data.stopped ? 'stopped' : data.successful ? 'idle' : 'failed';
   patch(s => {
     const live = { ...s.live, [key]: { ...idleLive(), status } };
-    return { live, tasks: withStatuses(s, host, live) };
+    return { live, sent: editSent(s.sent, key, settled), tasks: withStatuses(s, host, live) };
   });
 }
 
@@ -408,7 +423,10 @@ function loadMessages(deviceId: string, sessionId: string): Promise<void> {
       const afterId = lastId(state().messages[key]);
       const reply = await call<MessagePage>(deviceId, 'task.messages', { sessionId, afterId });
       const messages = Array.isArray(reply?.messages) ? reply.messages : [];
-      patch(s => ({ messages: { ...s.messages, [key]: mergeMessages(s.messages[key] ?? [], messages) }, tasks: withTitle(s, deviceId, sessionId, reply?.title) }));
+      patch(s => {
+        const merged = mergeMessages(s.messages[key] ?? [], messages);
+        return { messages: { ...s.messages, [key]: merged }, sent: editSent(s.sent, key, sent => unmatched(sent, merged)), tasks: withTitle(s, deviceId, sessionId, reply?.title) };
+      });
       if (!reply?.hasMore || !messages.length) return;
     }
   };
@@ -452,6 +470,7 @@ async function listTasks(deviceId: string, limit?: number): Promise<TasksList> {
     return { live, tasks: { ...s.tasks, [deviceId]: { ...list, loadedAt: Date.now() } } };
   });
   void projectIcons(deviceId, list.tasks.map(t => t.projectId));
+  if (!state().outdated[deviceId]) void listBots(deviceId).catch(() => undefined);
   return list;
 }
 
@@ -523,9 +542,43 @@ async function startTask(deviceId: string, params: StartParams): Promise<string>
   return sessionId;
 }
 
-const sendMessage = (deviceId: string, sessionId: string, text: string) => call<{ queued: boolean }>(deviceId, 'task.send', { sessionId, text });
+/** Applies `edit` to one task's sent list; unchanged → same object, an empty list is dropped. */
+function editSent(all: ConnectState['sent'], key: string, edit: (sent: Sent[]) => Sent[]): ConnectState['sent'] {
+  const list = all[key];
+  if (!list) return all;
+  const next = edit(list);
+  if (next === list) return all;
+  const { [key]: _, ...rest } = all;
+  return next.length ? { ...rest, [key]: next } : rest;
+}
+
+/** Shows `text` in the transcript at once while `send` runs: kept (as queued if the host queued
+ * it) until the stored copy replaces it, dropped if the send fails. */
+async function optimistic<T>(deviceId: string, sessionId: string, text: string, initial: Sent['state'], send: () => Promise<T>, queued?: (reply: T) => boolean): Promise<T> {
+  const key = taskKey(deviceId, sessionId);
+  const entry: Sent = { id: uuid(), text, state: initial, after: lastId(state().messages[key]) };
+  patch(s => ({ sent: { ...s.sent, [key]: [...(s.sent[key] ?? []), entry] } }));
+  const edit = (change: (e: Sent) => Sent | null) =>
+    patch(s => ({ sent: editSent(s.sent, key, list => list.flatMap(e => (e.id === entry.id ? change(e) ?? [] : [e]))) }));
+  try {
+    const reply = await send();
+    if (queued?.(reply)) edit(e => ({ ...e, state: 'queued' }));
+    return reply;
+  } catch (error) {
+    edit(() => null);
+    throw error;
+  }
+}
+
+const sendMessage = (deviceId: string, sessionId: string, text: string) =>
+  optimistic(deviceId, sessionId, text, 'sending', () => call<{ queued: boolean }>(deviceId, 'task.send', { sessionId, text }), reply => !!reply?.queued);
 const stopTask = (deviceId: string, sessionId: string) => call<object>(deviceId, 'task.stop', { sessionId });
-const steerTask = (deviceId: string, sessionId: string, text: string) => call<object>(deviceId, 'task.steer', { sessionId, text });
+/** The host saves a steer when the agent accepts it, before it answers. */
+async function steerTask(deviceId: string, sessionId: string, text: string) {
+  const reply = await optimistic(deviceId, sessionId, text, 'steering', () => call<object>(deviceId, 'task.steer', { sessionId, text }));
+  void loadMessages(deviceId, sessionId).catch(() => undefined);
+  return reply;
+}
 const configureTask = (deviceId: string, params: ConfigureParams) => call<object>(deviceId, 'task.configure', params);
 /** An answered request leaves the live view at once, as on the desktop. */
 async function answered(deviceId: string, sessionId: string, requestId: string, kind: 'approval_cancelled' | 'input_cancelled', reply: Promise<object>) {
@@ -538,6 +591,96 @@ const respondApproval = (deviceId: string, sessionId: string, requestId: string,
 const respondInput = (deviceId: string, sessionId: string, requestId: string, response: unknown) =>
   answered(deviceId, sessionId, requestId, 'input_cancelled', call(deviceId, 'input.respond', { sessionId, requestId, response }));
 
+// ---- Pull requests, changes and bots (newer hosts) ----
+
+/** A call to a method older desktops lack: their 'Unknown method.' becomes an update note, and the host is remembered as outdated. */
+async function newer<T>(deviceId: string, method: Method, params: unknown, timeoutMs?: number): Promise<T> {
+  try {
+    return await call<T>(deviceId, method, params, timeoutMs);
+  } catch (error) {
+    if ((error as Error).message !== UNKNOWN_METHOD) throw error;
+    patch(s => ({ outdated: { ...s.outdated, [deviceId]: true } }));
+    throw new Error(outdated(state().devices.find(d => d.id === deviceId)?.name ?? 'that computer'));
+  }
+}
+
+const pullOf = (reply: { pull?: unknown } | undefined) => (reply?.pull && typeof reply.pull === 'object' ? reply.pull as PullDetail : null);
+const setPull = (key: string, pull: PullDetail | null) => patch(s => ({ pulls: { ...s.pulls, [key]: pull } }));
+const checking = new Map<string, Promise<PullDetail | null>>();
+
+/** The task's linked pull request, else one its turns opened (task.pullDetect links it). Cached per task unless `force`. */
+function loadPull(deviceId: string, sessionId: string, force = false): Promise<PullDetail | null> {
+  const key = taskKey(deviceId, sessionId);
+  if (!force && key in state().pulls) return Promise.resolve(state().pulls[key]);
+  if (state().outdated[deviceId]) return Promise.resolve(null);
+  const run = checking.get(key) ?? (async () => {
+    try {
+      const pull = pullOf(await newer(deviceId, 'task.pull', { sessionId })) ?? pullOf(await newer(deviceId, 'task.pullDetect', { sessionId }));
+      setPull(key, pull);
+      return pull;
+    } finally {
+      checking.delete(key);
+    }
+  })();
+  checking.set(key, run);
+  return run;
+}
+
+async function pullDiff(deviceId: string, sessionId: string, path: string): Promise<Diff> {
+  const reply = await newer<{ patch?: string; truncated?: boolean }>(deviceId, 'task.pullDiff', { sessionId, path });
+  return { text: typeof reply?.patch === 'string' ? reply.patch : '', truncated: !!reply?.truncated };
+}
+async function mergePull(deviceId: string, sessionId: string, method: MergeMethod): Promise<void> {
+  await newer(deviceId, 'task.pullMerge', { sessionId, method }, MERGE_TIMEOUT_MS);
+  await loadPull(deviceId, sessionId, true);
+}
+
+async function taskChanges(deviceId: string, sessionId: string): Promise<Changes> {
+  const reply = await newer<Partial<Changes>>(deviceId, 'task.changes', { sessionId });
+  return { branch: reply?.branch ?? '', ahead: reply?.ahead ?? 0, behind: reply?.behind ?? 0, files: Array.isArray(reply?.files) ? reply.files : [] };
+}
+async function taskDiff(deviceId: string, sessionId: string, path?: string, staged = false): Promise<Diff> {
+  const reply = await newer<{ diff?: string; truncated?: boolean }>(deviceId, 'task.diff', { sessionId, ...(path ? { path } : {}), staged });
+  return { text: typeof reply?.diff === 'string' ? reply.diff : '', truncated: !!reply?.truncated };
+}
+
+/** One host's bots; an older host has none (and isn't asked again). */
+async function listBots(deviceId: string): Promise<Bot[]> {
+  let bots: Bot[];
+  try {
+    const reply = await newer<{ bots?: Bot[] }>(deviceId, 'bots.list', {});
+    bots = Array.isArray(reply?.bots) ? reply.bots.filter(b => typeof b?.id === 'string') : [];
+  } catch (error) {
+    if (!state().outdated[deviceId]) throw error;
+    bots = [];
+  }
+  patch(s => ({ bots: { ...s.bots, [deviceId]: bots } }));
+  return bots;
+}
+
+const editBot = (deviceId: string, botId: string, change: Partial<Bot>) =>
+  patch(s => ({ bots: { ...s.bots, [deviceId]: (s.bots[deviceId] ?? []).map(b => (b.id === botId ? { ...b, ...change } : b)) } }));
+
+/** The bot's desktop conversation (created on first use) → sessionId. */
+async function botThread(deviceId: string, botId: string): Promise<string> {
+  const known = state().bots[deviceId]?.find(b => b.id === botId)?.desktopSession;
+  if (known) return known;
+  const { sessionId } = await newer<{ sessionId: string }>(deviceId, 'bot.thread', { botId });
+  editBot(deviceId, botId, { desktopSession: sessionId });
+  void listTasks(deviceId).catch(() => undefined);
+  return sessionId;
+}
+
+/** Sends through the bot (its brief and memories apply), shown at once in its conversation. */
+const botMessage = (deviceId: string, botId: string, sessionId: string, text: string) =>
+  optimistic(deviceId, sessionId, text, 'sending', () => newer<{ sessionId: string }>(deviceId, 'bot.message', { botId, text }));
+
+async function pauseBot(deviceId: string, botId: string, paused: boolean): Promise<void> {
+  await newer(deviceId, 'bot.pause', { botId, paused });
+  editBot(deviceId, botId, { paused, state: paused ? 'paused' : 'ready' });
+  void listBots(deviceId).catch(() => undefined);
+}
+
 export const connect = {
   init, signInStart, signInFinish, signInCancel, signOut,
   enterDemo, leaveDemo, deleteAccount,
@@ -545,4 +688,5 @@ export const connect = {
   watch, unwatch, loadMessages,
   listTasks, refreshLists, listProviders, listModels, startTask, projectIcons,
   sendMessage, stopTask, steerTask, configureTask, respondApproval, respondInput,
+  loadPull, pullDiff, mergePull, taskChanges, taskDiff, listBots, botThread, botMessage, pauseBot,
 };

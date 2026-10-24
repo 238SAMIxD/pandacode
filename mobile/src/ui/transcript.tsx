@@ -6,7 +6,8 @@ import { memo, useMemo, useState, type Ref } from 'react';
 import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import type { Message, ToolActivity } from '../connect/types.ts';
 import { connect } from '../connect/client.ts';
-import { taskKey, useConnect, useHistory, useLive, useMessages, type LiveItem } from '../store/index.ts';
+import { taskKey, useConnect, useHistory, useLive, useMessages, useSent, type LiveItem } from '../store/index.ts';
+import type { Sent } from '../store/sent.ts';
 import { removeOutbox, retryOutbox, useLocal } from '../store/local.ts';
 import { attachments, duration, turnRows, type TurnRow } from '../store/turns.ts';
 import { Icon } from './Icon.tsx';
@@ -196,6 +197,33 @@ function Pending({ deviceId, sessionId }: { deviceId: string; sessionId: string 
   );
 }
 
+const SENT_LABEL: Record<Sent['state'], string> = { sending: 'Sending…', steering: 'Steer · Sending…', queued: 'Queued' };
+
+/** Prompts sent from this phone, shown at once until the stored copy replaces them: the ones
+ * starting a turn above the live run (`before`), steers and queued ones after it. */
+function SentBubbles({ deviceId, sessionId, before }: { deviceId: string; sessionId: string; before: boolean }) {
+  const colors = useColors();
+  const sent = useSent(deviceId, sessionId);
+  const shown = sent.filter(e => (e.state === 'sending') === before);
+  if (!shown.length) return null;
+  return (
+    <>
+      {shown.map(entry => (
+        <View key={entry.id} style={styles.userTurn} accessible accessibilityLabel={`${entry.text}, ${SENT_LABEL[entry.state]}`}>
+          <View style={[styles.bubble, styles.sending, { backgroundColor: colors.bubble }]}>
+            <Text style={[styles.userText, { color: colors.text }]}>{entry.text}</Text>
+          </View>
+          <View style={[styles.meta, styles.metaRight]}>
+            {entry.state === 'steering' && <Icon ios="arrow.uturn.right" android="alt_route" size={11} color={colors.secondary} />}
+            {entry.state === 'queued' && <Icon ios="clock" android="schedule" size={11} color={colors.secondary} />}
+            <Text style={[styles.time, { color: colors.secondary }]}>{SENT_LABEL[entry.state]}</Text>
+          </View>
+        </View>
+      ))}
+    </>
+  );
+}
+
 /** The in-flight run: the turn's tools folded, streamed text, and a compact Working row. */
 const LiveRun = memo(function LiveRun({ deviceId, sessionId }: { deviceId: string; sessionId: string }) {
   const colors = useColors();
@@ -291,7 +319,7 @@ export const Transcript = memo(function Transcript({ deviceId, sessionId, top, b
       data={data}
       keyExtractor={key}
       renderItem={render}
-      ListHeaderComponent={<><History deviceId={deviceId} sessionId={sessionId} empty={!messages.length} /><LiveRun deviceId={deviceId} sessionId={sessionId} /><Pending deviceId={deviceId} sessionId={sessionId} /></>}
+      ListHeaderComponent={<><History deviceId={deviceId} sessionId={sessionId} empty={!messages.length} /><SentBubbles deviceId={deviceId} sessionId={sessionId} before /><LiveRun deviceId={deviceId} sessionId={sessionId} /><SentBubbles deviceId={deviceId} sessionId={sessionId} before={false} /><Pending deviceId={deviceId} sessionId={sessionId} /></>}
       contentContainerStyle={[styles.list, { paddingTop: bottom, paddingBottom: top }]}
       keyboardDismissMode="interactive"
       keyboardShouldPersistTaps="handled"
@@ -310,6 +338,7 @@ const styles = StyleSheet.create({
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
   chip: { flexDirection: 'row', alignItems: 'center', gap: 5, maxWidth: 220, borderRadius: 12, paddingHorizontal: 9, paddingVertical: 5, borderCurve: 'continuous' },
   chipText: { fontSize: 13, fontWeight: '500', flexShrink: 1 },
+  sending: { opacity: 0.6 },
   pending: { borderWidth: 1, borderStyle: 'dashed', opacity: 0.85 },
   userText: { fontSize: 16, lineHeight: 22 },
   context: { fontSize: 13, marginTop: 4 },

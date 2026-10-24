@@ -50,9 +50,13 @@ EAS can do this for you at the first build. To do it by hand:
 1. <https://developer.apple.com/account/resources/identifiers/list> → **+**.
 2. Choose **App IDs** → Continue → **App** → Continue.
 3. Description: `PandaCode`. Bundle ID: **Explicit**, `com.aicodeking.pandacode`.
-4. Capabilities: leave all unticked. The app uses no push, iCloud, App Groups or Sign in with
-   Apple.
+4. Capabilities: tick **App Groups** only (the Live Activity extension reads the shared panda mark
+   from `group.com.aicodeking.pandacode`). The app uses no push, iCloud or Sign in with Apple.
 5. Continue → Register.
+6. The Live Activity extension has its own App ID, `com.aicodeking.pandacode.LiveActivity`, with
+   the same App Group, and the group itself is `group.com.aicodeking.pandacode`. EAS creates all
+   three at the first build after Live Activities were added (`expo-widgets` in `app.json`, see
+   [live-activities.md](live-activities.md)).
 
 ## 3. Create the app record in App Store Connect
 
@@ -136,7 +140,12 @@ eas build -p ios --profile production
 ```
 
 The first time, EAS asks to sign in to your Apple account and offers to create the
-distribution certificate and provisioning profile. Answer **Yes**. When it's done it prints a
+distribution certificate and provisioning profile. Answer **Yes**.
+
+The first build with Live Activities also lists a second target, `ExpoWidgetsTarget`
+(`com.aicodeking.pandacode.LiveActivity`), and asks to register its App ID, the App Group
+`group.com.aicodeking.pandacode` and a provisioning profile for it. Accept each prompt; a build
+from an older binary's credentials fails to sign the extension otherwise. When it's done it prints a
 link to the build on expo.dev; the `.ipa` stays there.
 
 EAS keeps the build number (`appVersionSource: remote`) and raises it each build
