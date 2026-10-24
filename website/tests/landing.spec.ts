@@ -56,7 +56,7 @@ test('hero, supported harnesses, and complete page have valid resources and resp
     await expect(disclosure).toContainText('Linux x86_64 and aarch64: AppImage');
     await expect(disclosure).toContainText('Apple silicon or Intel · macOS 12+');
     await expect(disclosure).toContainText('Not notarized by Apple');
-    await expect(disclosure).toContainText('macOS may block the first launch');
+    await expect(disclosure).toContainText('macOS blocks the first launch');
     await expect(disclosure.getByRole('link', { name: /First-launch help/ })).toHaveAttribute('href', 'https://support.apple.com/en-us/102445');
     await expect(page.locator(`[data-download][aria-describedby~="${id}"]`)).toHaveCount(1);
   }
