@@ -79,14 +79,10 @@ function Inbox() {
       <Stack.Screen options={{
         title: '',
         headerLeft: Platform.OS === 'ios' ? undefined : () => <Brand />,
-        // iOS: a native bar button item (below), which the iPhone Duo moves into its rail.
+        // iOS: a native bar button item (below), which the iPhone Duo moves into its rail. The brand is list content there:
+        // a custom header view can't be drawn in the rail and shows up as an empty black circle.
         headerRight: Platform.OS === 'ios' ? undefined : () => <Menu ios="ellipsis" android="more_vert" color={colors.text} items={menu} label="More">{icon => <View style={styles.more}>{icon}</View>}</Menu>,
       }} />
-      {Platform.OS === 'ios' && (
-        <Stack.Toolbar placement="left">
-          <Stack.Toolbar.View hidesSharedBackground><Brand /></Stack.Toolbar.View>
-        </Stack.Toolbar>
-      )}
       {Platform.OS === 'ios' && (
         <Stack.Toolbar placement="right">
           <Stack.Toolbar.Button icon="square.and.pencil" accessibilityLabel="New task" onPress={() => router.push('/new-task')} />
@@ -101,7 +97,12 @@ function Inbox() {
         keyExtractor={item => (item.type === 'header' ? `h/${item.section}` : `${item.section}/${item.row.key}`)}
         renderItem={render}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}
-        ListHeaderComponent={problems.length ? <Text style={[styles.problem, { color: colors.secondary }]}>{problems.join('\n')}</Text> : undefined}
+        ListHeaderComponent={
+          <>
+            {Platform.OS === 'ios' && <View style={styles.listBrand}><Brand /></View>}
+            {problems.length ? <Text style={[styles.problem, { color: colors.secondary }]}>{problems.join('\n')}</Text> : null}
+          </>
+        }
         ListEmptyComponent={<Text style={[styles.empty, { color: colors.secondary }]}>{empty}</Text>}
         initialNumToRender={14}
       />
@@ -122,6 +123,7 @@ function Brand() {
 
 const styles = StyleSheet.create({
   brand: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: Platform.OS === 'ios' ? 4 : 0 },
+  listBrand: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 2 },
   mark: { width: 26, height: 26, borderRadius: 7 },
   brandText: { fontSize: 19, fontWeight: '700', letterSpacing: -0.3 },
   more: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },

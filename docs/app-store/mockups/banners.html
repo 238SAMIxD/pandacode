@@ -1,0 +1,37 @@
+<!doctype html>
+<!-- Launch banners. render-banners.mjs opens it as banners.html?<name> at each size; open it in a browser the same way to preview. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="banners.css">
+</head>
+<body>
+<main class="stage">
+  <section class="copy">
+    <div class="brand"><img class="mark" src="../../../mobile/assets/images/icon.png" alt="">PandaCode</div>
+    <h1><span>PandaCode,</span> <span>now on <em>iPhone.</em></span></h1>
+    <p class="line">See and steer your coding agents from anywhere. End-to-end encrypted.</p>
+    <p class="store">Download on the App Store</p>
+  </section>
+  <section class="phones">
+    <div class="phone left"><img class="screen" src="captures/task-dark.png" alt=""><div class="island"></div></div>
+    <div class="phone right"><img class="screen" src="captures/approval-light.png" alt=""><div class="island"></div></div>
+    <div class="phone front"><img class="screen" src="captures/inbox-light.png" alt=""><div class="island"></div></div>
+  </section>
+</main>
+<script>
+  // name -> [layout, canvas width, height, zoom]: wide layouts are drawn at 1280 units across.
+  const banners = {
+    'social-1600x900': ['wide', 1600, 900, 1.25],
+    'github-social-1280x640': ['wide', 1280, 640, 1],
+    'play-feature-1024x500': ['wide', 1024, 500, 0.8],
+    'website-hero-2400x1200': ['wide', 2400, 1200, 1.875],
+    'square-1080x1080': ['square', 1080, 1080, 1],
+  };
+  const [layout, width, height, zoom] = banners[location.search.slice(1)] || banners['social-1600x900'];
+  document.body.className = layout;
+  Object.assign(document.documentElement.style, { width: `${width}px`, height: `${height}px` });
+  Object.assign(document.querySelector('.stage').style, { width: `${width / zoom}px`, height: `${height / zoom}px`, zoom });
+</script>
+</body>
+</html>

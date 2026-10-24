@@ -227,7 +227,9 @@ Every field, where it lives, and what to put. Values are in [metadata.md](metada
 
 | Field | Value |
 |---|---|
-| iPhone 6.9" Display screenshots | `docs/app-store/screenshots/01-inbox.png` … `06-settings.png`, in that order (screenshots.md) |
+| iPhone 6.3" Display screenshots (required) | `docs/app-store/screenshots/iphone-6.3/01-inbox.png` … `06-settings.png`, in that order (screenshots.md) |
+| iPhone 6.9" Display screenshots | `docs/app-store/screenshots/iphone-6.9/`, same six, same order |
+| iPhone Duo screenshots (optional; badge) | outer display: `iphone-duo-outer/01` … `04`; inner display: `iphone-duo-inner/01` … `05` |
 | Promotional Text, Description, Keywords | metadata.md |
 | Support URL | `https://pandacode.bambooed.ai/support/` |
 | Marketing URL | `https://pandacode.bambooed.ai/` |
@@ -261,7 +263,7 @@ for 1.0.1 and later.
 2. Check the listing link (App Information → **View on App Store**) and put it on the website and
    in the README.
 3. For every later version: bump `version` in `app.json`, run steps 6, 7, 9, 10 (new
-   screenshots only if the UI changed: new captures, then `node docs/app-store/mockups/render.mjs`; fill **What's New**), 11 and 12. Use phased release.
+   screenshots only if the UI changed: new captures, then `node docs/app-store/mockups/render.mjs` (re-renders every set); fill **What's New**), 11 and 12. Use phased release.
 
 ## Rejection checklist
 

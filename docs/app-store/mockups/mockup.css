@@ -1,6 +1,6 @@
 * { margin: 0; box-sizing: border-box; }
 
-html, body { width: 1320px; height: 2868px; overflow: hidden; }
+html, body { width: 100vw; height: 100vh; overflow: hidden; }
 
 body {
   font-family: -apple-system, "SF Pro Display", "Helvetica Neue", sans-serif;
