@@ -19,9 +19,14 @@ async function install(page: Page): Promise<void> {
     expect(source).toMatch(marker);
     await route.fulfill({ response, body: source.replace(marker, `async function invoke(command, args) {
       (window.__agentTeams ??= { calls: [] }).calls.push({ command, args: structuredClone(args) });
+      if (command === 'list_provider_models') await window.__agentTeams.modelGate;
+      if (command === 'architect_configure') {
+        await window.__agentTeams.configureGate;
+        if (window.__agentTeams.configureError) throw new Error(window.__agentTeams.configureError);
+      }
       return invokePreview(command, args);
     }
-    async function invokePreview(command, args) {`) });
+    async function invokePreview(command, args) {`) + '\nwindow.__teamInvoke = invoke; window.__teamEmit = emit;\n' });
   });
   await page.goto('/');
   await page.locator('.task-item[data-id="session-2"]').click();
@@ -51,6 +56,127 @@ async function createTeam(page: Page, name: string): Promise<{ lead: string; oth
   await expect(settings(page).getByRole('listitem').filter({ hasText: name })).toBeVisible();
   return { lead, other };
 }
+
+test.describe('Agent teams', () => {
+test('Team gives immediate feedback while cold model discovery and saving are pending', async ({ page }) => {
+  await install(page);
+  const team = page.getByRole('button', { name: 'Team', exact: true });
+  const prompt = page.locator('#prompt');
+  await prompt.fill('Review this project');
+  const idleBackground = await team.evaluate(el => getComputedStyle(el).backgroundColor);
+  await page.evaluate(() => {
+    const state = (window as any).__agentTeams;
+    state.modelGate = new Promise(resolve => { state.releaseModels = resolve; });
+    state.configureGate = new Promise(resolve => { state.releaseConfigure = resolve; });
+  });
+  await team.click();
+  await expect(team).toHaveAttribute('aria-busy', 'true', { timeout: 500 });
+  await expect(team).toBeDisabled();
+  expect(await team.evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe(idleBackground);
+  await expect(page.getByRole('button', { name: 'Send message', exact: true })).toBeDisabled();
+  await expect(modelButton(page)).toBeDisabled();
+  await prompt.press('Enter');
+  await expect(prompt).toHaveValue('Review this project');
+  expect(await calls(page, 'send_message')).toHaveLength(0);
+  await expect.poll(async () => (await calls(page, 'list_provider_models')).length).toBeGreaterThan(0);
+  expect(await calls(page, 'architect_configure')).toHaveLength(0);
+  await page.mouse.move(0, 0);
+  await expect(page.locator('.tip-bubble')).toHaveCount(0);
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+    await page.locator('#composer').screenshot({ path: `test-results/team-toggle-pending-${theme}.png` });
+  }
+  await page.setViewportSize({ width: 800, height: 940 });
+  await expect(team.locator('.support-spinner')).toBeVisible();
+  await page.setViewportSize({ width: 1440, height: 940 });
+  await page.evaluate(() => (window as any).__agentTeams.releaseModels());
+  await expect.poll(async () => (await calls(page, 'architect_configure')).length).toBe(1);
+  await expect(team).toHaveAttribute('aria-busy', 'true');
+  await expect(team).toHaveAttribute('aria-pressed', 'false');
+  await page.evaluate(() => (window as any).__agentTeams.releaseConfigure());
+  await expect(team).toHaveAttribute('aria-busy', 'false');
+  await expect(team).toHaveAttribute('aria-pressed', 'true');
+  await expect(team).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Send message', exact: true })).toBeEnabled();
+  await expect(prompt).toHaveValue('Review this project');
+  await team.click();
+  await expect(team).toHaveAttribute('aria-pressed', 'false');
+  await expect(team).toBeEnabled();
+});
+
+test('Team recovers from a failed save without changing its state or losing the prompt', async ({ page }) => {
+  await install(page);
+  const team = page.getByRole('button', { name: 'Team', exact: true });
+  await page.locator('#prompt').fill('Keep this draft');
+  for (const enabled of [false, true]) {
+    await page.evaluate(() => { (window as any).__agentTeams.configureError = 'Team save failed'; });
+    await team.click();
+    await expect(page.getByRole('status')).toHaveText('Team save failed');
+    await expect(team).toHaveAttribute('aria-busy', 'false');
+    await expect(team).toHaveAttribute('aria-pressed', String(enabled));
+    await expect(team).toBeEnabled();
+    await expect(modelButton(page)).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Send message', exact: true })).toBeEnabled();
+    await expect(page.locator('#prompt')).toHaveValue('Keep this draft');
+    await page.evaluate(() => { delete (window as any).__agentTeams.configureError; });
+    await team.click();
+    await expect(team).toHaveAttribute('aria-pressed', String(!enabled));
+    await expect(team).toBeEnabled();
+  }
+});
+
+test('Team pending feedback belongs to its task and leaving cancels unsaved setup', async ({ page }) => {
+  await install(page);
+  const team = page.getByRole('button', { name: 'Team', exact: true });
+  await page.locator('#prompt').fill('Draft for the first task');
+  await page.evaluate(() => {
+    const state = (window as any).__agentTeams;
+    state.modelGate = new Promise(resolve => { state.releaseModels = resolve; });
+  });
+  await team.click();
+  await expect(team).toHaveAttribute('aria-busy', 'true');
+  await expect.poll(async () => (await calls(page, 'list_provider_models')).length).toBeGreaterThan(0);
+  await page.locator('.task-item[data-id="session-3"]').click();
+  await expect(page.locator('#prompt')).toHaveAttribute('data-session-id', 'session-3');
+  await expect(team).toBeEnabled();
+  await expect(team).toHaveAttribute('aria-busy', 'false');
+  await page.locator('#prompt').fill('Draft for the other task');
+  await page.evaluate(() => (window as any).__agentTeams.releaseModels());
+  // A fresh toggle uses the settled catalog; only the current task may be configured.
+  await team.click();
+  await expect(team).toHaveAttribute('aria-pressed', 'true');
+  await expect(team).toBeEnabled();
+  const configured = await calls(page, 'architect_configure');
+  expect(configured).toHaveLength(1);
+  expect(configured[0].args.sessionId).toBe('session-3');
+  await expect(page.locator('#prompt')).toHaveValue('Draft for the other task');
+  await page.locator('.task-item[data-id="session-2"]').click();
+  await expect(page.locator('#prompt')).toHaveValue('Draft for the first task');
+  await expect(team).toHaveAttribute('aria-busy', 'false');
+  await expect(team).toHaveAttribute('aria-pressed', 'false');
+  await expect(team).toBeEnabled();
+});
+
+test('Team releases queued follow-ups that arrived during setup', async ({ page }) => {
+  await install(page);
+  await page.evaluate(() => {
+    const state = (window as any).__agentTeams;
+    state.modelGate = new Promise(resolve => { state.releaseModels = resolve; });
+  });
+  const team = page.getByRole('button', { name: 'Team', exact: true });
+  await team.click();
+  await expect(team).toHaveAttribute('aria-busy', 'true');
+  await page.evaluate(async () => {
+    const win = window as any;
+    await win.__teamInvoke('queue_add', { sessionId: 'session-2', text: 'Follow up after setup', attachments: [] });
+    win.__teamEmit('queue-changed', { sessionId: 'session-2' });
+  });
+  await expect(page.getByRole('region', { name: 'Queued messages', exact: true })).toBeVisible();
+  expect(await calls(page, 'architect_start')).toHaveLength(0);
+  await page.evaluate(() => (window as any).__agentTeams.releaseModels());
+  await expect.poll(async () => (await calls(page, 'architect_start')).map(call => call.args.text)).toEqual(['Follow up after setup']);
+  expect(await calls(page, 'send_message')).toHaveLength(0);
+});
 
 test('the classic team setup switch brings back Architect & workers', async ({ page }) => {
   await install(page);
@@ -194,4 +320,5 @@ test('the model filter is a full-height field, not a collapsed line', async ({ p
   expect(filterBox.height).toBeGreaterThanOrEqual(nameBox.height);
   expect(filterBox.paddingLeft).toBeGreaterThanOrEqual(8);
   expect(filterBox.width).toBeGreaterThan(300);
+});
 });

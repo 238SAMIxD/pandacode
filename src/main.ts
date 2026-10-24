@@ -229,10 +229,10 @@ async function showArchitectSetup(anchor: HTMLElement): Promise<void> {
 const TEAM_TIP = 'Team mode: your selected model becomes the lead. It plans the work, starts other agents in parallel, picks a model for each worker on its own, and reviews their results. To choose the workers yourself, just say so in your prompt, like "use Sonnet 5.5 workers" or "have Codex review it". Click to turn Team on or off.';
 /** Team toggles an automatic team, or with Settings → Classic team setup opens Architect & workers. */
 function teamButton(s: Session): string {
-  const on = Boolean(teams.get(s.id));
+  const on = Boolean(teams.get(s.id)), busy = teamToggles.has(s.id);
   return classicTeamSetup()
-    ? `<button type="button" class="composer-team-button" data-action="architect-setup" aria-label="Architect & workers" aria-pressed="${on}" title="Architect & workers">${icon('worktree')}<span>Team</span></button>`
-    : `<button type="button" class="composer-team-button" data-action="team-toggle" aria-label="Team" aria-description="${escape(TEAM_TIP)}" aria-pressed="${on}" data-tip="${escape(TEAM_TIP)}">${icon('worktree')}<span>Team</span></button>`;
+    ? `<button type="button" class="composer-team-button" data-action="architect-setup" aria-label="Architect & workers" aria-pressed="${on}" aria-busy="${busy}" ${busy ? 'disabled' : ''} title="Architect & workers">${icon('worktree')}<span>Team</span></button>`
+    : `<button type="button" class="composer-team-button" data-action="team-toggle" aria-label="Team" aria-description="${escape(TEAM_TIP)}" aria-pressed="${on}" aria-busy="${busy}" ${busy ? 'disabled' : ''} data-tip="${escape(TEAM_TIP)}">${busy ? '<span class="support-spinner" aria-hidden="true"></span>' : icon('worktree')}<span>Team</span></button>`;
 }
 const AUTO_ROSTER_MAX = 24, AUTO_PER_HARNESS = 6;
 /** Installed models the lead may pick from; it can also name any other model directly. */
@@ -251,12 +251,13 @@ async function autoRoster(): Promise<WorkerProfile[]> {
   });
   return roster;
 }
-let teamToggleBusy = false;
+const teamToggles = new Set<string>();
 async function toggleTeam(): Promise<void> {
-  const task = session(); if (!task || teamToggleBusy) return;
+  const task = session(); if (!task || configuringSessions.has(task.id)) return;
   closeMenus();
-  teamToggleBusy = true;
+  teamToggles.add(task.id); configuringSessions.add(task.id);
   try {
+    renderComposer();
     const team = teams.get(task.id) ?? await loadTeam(task.id);
     let config: TeamConfig | null = null;
     if (!team) {
@@ -268,9 +269,11 @@ async function toggleTeam(): Promise<void> {
     const saved = await call<TeamSnapshot | null>('architect_configure', { sessionId: task.id, config, architect: null, profileId: null });
     onArchitect(saved ?? { sessionId: task.id, removed: true });
     await reloadSessions();
-    if (task.id !== state.sessionId) return;
-    renderComposer();
-  } finally { teamToggleBusy = false; }
+  } finally {
+    teamToggles.delete(task.id); configuringSessions.delete(task.id);
+    if (task.id === state.sessionId) renderComposer();
+    run(dispatchQueue(task.id));
+  }
 }
 const ACTIVITY_WINDOW = 24 * 60 * 60 * 1000;
 const $app = document.querySelector<HTMLDivElement>('#app')!;
@@ -1484,8 +1487,8 @@ function renderComposer(): void {
   if (taskStage(s) === 'completed' || s.archived) { $('#composer-area').innerHTML = `<div class="board-completed-note">${s.archived ? 'This task is archived.' : 'This task is complete.'}${state.view === 'conversation' ? `<button type="button" class="secondary-button" data-action="${s.archived ? 'archive-task' : 'board-reopen'}">${s.archived ? 'Restore task' : 'Reopen task'}</button>` : s.archived ? '' : ' Reopen it above to continue.'}</div>`; browserPanel?.refresh(); return; }
   const previous = state.drafts.get(s.id) ?? '';
   const running = isRunning(), behavior = approvalMode(s.provider, s.mode);
-  const team = teams.get(s.id), modelLocked = running && !team;
-  $('#composer-area').innerHTML = `<form id="composer" class="composer ${running ? 'composer-running' : ''}"><div id="attachments" class="attachments">${attachmentBar(s)}</div><textarea id="prompt" data-session-id="${escape(s.id)}" aria-label="Message your coding agent" placeholder="${running ? (team ? 'Queue a follow-up…' : 'Queue a follow-up · ⌘↩ steers now') : composerPlaceholder()}" aria-description="${running ? `Enter to queue for when the agent finishes.${team ? '' : ' Command Enter to steer the running turn.'}` : 'Enter to send. Shift Enter for a new line.'}" rows="2"></textarea><div class="composer-toolbar"><div class="composer-tools">${button('attach', 'Attach files for context', 'plus', '', 'type="button"')}<button type="button" id="model-picker-trigger" class="model-picker" data-action="model" aria-label="Choose harness and model" aria-description="${escape([modelLabel(s), teamModelLabel(s)].filter(Boolean).join(' '))}" aria-haspopup="dialog" aria-expanded="false" title="${team && !team.config.auto ? 'Choose team profile and models' : 'Choose harness and model'}" ${modelLocked ? 'disabled' : ''}><span class="provider-small ${s.provider}">${providerLogo(s.provider)}</span><span class="model-detail" data-model-label>${escape(modelLabel(s))}</span><span class="team-model-count" data-team-model-label ${teamModelLabel(s) ? '' : 'hidden'}>${teamModelLabel(s)}</span>${icon('down')}</button><span class="composer-separator"></span><button type="button" id="mode-picker-trigger" class="mode-picker" data-action="mode" data-mode="${behavior.id}" title="${escape(behavior.description)}" aria-haspopup="dialog" aria-expanded="false" ${running ? 'disabled' : ''}>${icon(behavior.icon)}<span>${escape(behavior.label)}</span>${icon('down')}</button>${teamButton(s)}${tokenSaver.button(s.id)}</div>${running && !team ? `<button type="button" class="steer-button" data-action="steer" title="Send into the running turn (${shortcut('Enter')})" aria-label="Steer the running turn">${icon('spark')}<span>Steer</span></button>` : ''}${running ? '<button type="button" class="send-button stop-button" data-action="stop" title="Stop task (Esc)" aria-label="Stop task">' + icon('stop') + '</button>' : '<button type="submit" class="send-button" title="Send message (' + shortcut('Enter') + ')" aria-label="Send message">' + icon('arrow') + '</button>'}</div></form>${s.archived ? '<div class="composer-footnote"><span>Archived task</span></div>' : ''}`;
+  const team = teams.get(s.id), togglingTeam = teamToggles.has(s.id), modelLocked = (running && !team) || togglingTeam;
+  $('#composer-area').innerHTML = `<form id="composer" class="composer ${running ? 'composer-running' : ''}"><div id="attachments" class="attachments">${attachmentBar(s)}</div><textarea id="prompt" data-session-id="${escape(s.id)}" aria-label="Message your coding agent" placeholder="${running ? (team ? 'Queue a follow-up…' : 'Queue a follow-up · ⌘↩ steers now') : composerPlaceholder()}" aria-description="${running ? `Enter to queue for when the agent finishes.${team ? '' : ' Command Enter to steer the running turn.'}` : 'Enter to send. Shift Enter for a new line.'}" rows="2"></textarea><div class="composer-toolbar"><div class="composer-tools">${button('attach', 'Attach files for context', 'plus', '', 'type="button"')}<button type="button" id="model-picker-trigger" class="model-picker" data-action="model" aria-label="Choose harness and model" aria-description="${escape([modelLabel(s), teamModelLabel(s)].filter(Boolean).join(' '))}" aria-haspopup="dialog" aria-expanded="false" title="${team && !team.config.auto ? 'Choose team profile and models' : 'Choose harness and model'}" ${modelLocked ? 'disabled' : ''}><span class="provider-small ${s.provider}">${providerLogo(s.provider)}</span><span class="model-detail" data-model-label>${escape(modelLabel(s))}</span><span class="team-model-count" data-team-model-label ${teamModelLabel(s) ? '' : 'hidden'}>${teamModelLabel(s)}</span>${icon('down')}</button><span class="composer-separator"></span><button type="button" id="mode-picker-trigger" class="mode-picker" data-action="mode" data-mode="${behavior.id}" title="${escape(behavior.description)}" aria-haspopup="dialog" aria-expanded="false" ${running || togglingTeam ? 'disabled' : ''}>${icon(behavior.icon)}<span>${escape(behavior.label)}</span>${icon('down')}</button>${teamButton(s)}${tokenSaver.button(s.id)}</div>${running && !team ? `<button type="button" class="steer-button" data-action="steer" title="Send into the running turn (${shortcut('Enter')})" aria-label="Steer the running turn">${icon('spark')}<span>Steer</span></button>` : ''}${running ? '<button type="button" class="send-button stop-button" data-action="stop" title="Stop task (Esc)" aria-label="Stop task">' + icon('stop') + '</button>' : '<button type="submit" class="send-button" title="Send message (' + shortcut('Enter') + ')" aria-label="Send message"' + (togglingTeam ? ' disabled' : '') + '>' + icon('arrow') + '</button>'}</div></form>${s.archived ? '<div class="composer-footnote"><span>Archived task</span></div>' : ''}`;
   $('#composer-area').insertAdjacentHTML('afterbegin', worktrees.contextBar(s, newTaskView()));
   // Approvals sit above everything that rides on the prompt, the context bar included.
   $('#composer-area').insertAdjacentHTML('afterbegin', '<div id="approval-bar"></div>');
