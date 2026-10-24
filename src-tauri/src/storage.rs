@@ -162,7 +162,7 @@ pub struct Store {
 type Result<T> = std::result::Result<T, String>;
 /// The newest `PRAGMA user_version`. Every migration step below must run for any
 /// database older than this, so the guard reads this constant, never a literal.
-pub const SCHEMA_VERSION: i64 = 29;
+pub const SCHEMA_VERSION: i64 = 30;
 
 const SIDEBAR_ORDER: &str = "pinned DESC,sidebar_order IS NULL,sidebar_order,COALESCE(MAX(last_response_at,last_prompt_at),last_response_at,last_prompt_at,created_at) DESC,id";
 
@@ -427,9 +427,22 @@ impl Store {
                 migration.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS sessions_remote ON sessions(remote_device,remote_session) WHERE remote_session IS NOT NULL; PRAGMA user_version=26;").map_err(|e| e.to_string())?;
             }
             if version < 28 {
-                // Both 0.3.31 builds stamped 27, each with only half of this union:
-                // upstream's cloud-agents column, or the import-identity columns. The
-                // adds below are exists-checked, so any partial 27 heals to 28.
+                // Bots: an optional personality (soul.md) kept apart from instructions (docs/bots.md).
+                crate::bots::migrate_soul(&migration)?;
+                migration.execute_batch("PRAGMA user_version=28;").map_err(|e| e.to_string())?;
+            }
+            if version < 29 {
+                // Bots: skill and MCP references, and the bot a project task was started with (docs/bots.md).
+                crate::bots::migrate_capabilities(&migration)?;
+                migration.execute_batch("PRAGMA user_version=29;").map_err(|e| e.to_string())?;
+            }
+            if version < 30 {
+                // The union of two features that both stamped the columns below into
+                // version 27: a 27..=29 database may hold the cloud agents column
+                // (docs/cloud-agents.md) without the import-identity columns, or the
+                // other way round. The exists-checked adds below repair any partial
+                // state. Runs after the bots steps so its stamp is the last one to
+                // leave the migration.
                 // Cloud agents: the machine and run behind a task (docs/cloud-agents.md).
                 let cloud: bool = migration.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name='cloud')", [], |r| r.get(0)).map_err(|e| e.to_string())?;
                 if !cloud {
@@ -447,17 +460,7 @@ impl Store {
                         migration.execute_batch(&format!("ALTER TABLE sessions ADD COLUMN {name} {definition};")).map_err(|e| e.to_string())?;
                     }
                 }
-                migration.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS sessions_import_identity ON sessions(import_source,import_id) WHERE import_id IS NOT NULL; PRAGMA user_version=28;").map_err(|e| e.to_string())?;
-            }
-            if version < 28 {
-                // Bots: an optional personality (soul.md) kept apart from instructions (docs/bots.md).
-                crate::bots::migrate_soul(&migration)?;
-                migration.execute_batch("PRAGMA user_version=28;").map_err(|e| e.to_string())?;
-            }
-            if version < 29 {
-                // Bots: skill and MCP references, and the bot a project task was started with (docs/bots.md).
-                crate::bots::migrate_capabilities(&migration)?;
-                migration.execute_batch("PRAGMA user_version=29;").map_err(|e| e.to_string())?;
+                migration.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS sessions_import_identity ON sessions(import_source,import_id) WHERE import_id IS NOT NULL; PRAGMA user_version=30;").map_err(|e| e.to_string())?;
             }
             migration.commit().map_err(|e| e.to_string())?;
         }
@@ -3038,24 +3041,27 @@ mod tests {
     }
 
     #[test]
-    fn a_partial_schema_27_database_heals_to_the_union() {
-        // Both 0.3.31 builds stamped 27 with half of the union: this branch's earlier
-        // bundle wrote the import identity without `cloud`; upstream's release wrote
-        // `cloud` without the import identity. Either partial has to heal on open.
-        for drop_command in [
-            "ALTER TABLE sessions DROP COLUMN cloud;",
-            "DROP INDEX sessions_import_identity; ALTER TABLE sessions DROP COLUMN import_source; ALTER TABLE sessions DROP COLUMN import_id; ALTER TABLE sessions DROP COLUMN transcript_only;",
+    fn a_partial_database_heals_to_the_union() {
+        // Half-stamped databases heal here: the columns below were stamped into
+        // version 27 by two features independently, so a database may hold `cloud`
+        // without the import-identity columns, or the other way round. Either
+        // partial — however it got stamped — heals on open.
+        for (drop_command, stamp) in [
+            ("ALTER TABLE sessions DROP COLUMN cloud;", 27),
+            ("DROP INDEX sessions_import_identity; ALTER TABLE sessions DROP COLUMN import_source; ALTER TABLE sessions DROP COLUMN import_id; ALTER TABLE sessions DROP COLUMN transcript_only;", 27),
+            // A mid-series database that already carried the next feature's column.
+            ("DROP INDEX sessions_import_identity; ALTER TABLE sessions DROP COLUMN import_source; ALTER TABLE sessions DROP COLUMN import_id; ALTER TABLE sessions DROP COLUMN transcript_only;", 28),
         ] {
-            let dir = std::env::temp_dir().join(format!("pandacode-partial-27-{}", id()));
+            let dir = std::env::temp_dir().join(format!("pandacode-partial-{}", id()));
             std::fs::create_dir_all(&dir).unwrap();
             let path = dir.join("legacy.db");
             {
                 let store = Store::open(&path).unwrap();
-                store.db.execute_batch(&format!("{drop_command} PRAGMA user_version=27;")).unwrap();
+                store.db.execute_batch(&format!("{drop_command} PRAGMA user_version={stamp};")).unwrap();
             }
             let healed = Store::open(&path).unwrap();
             assert_eq!(healed.db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0)).unwrap(), SCHEMA_VERSION);
-            assert!(healed.sessions().is_ok(), "the listing query runs on any partial 27");
+            assert!(healed.sessions().is_ok(), "the listing query runs on any partial state");
             drop(healed);
             std::fs::remove_dir_all(dir).unwrap();
         }
