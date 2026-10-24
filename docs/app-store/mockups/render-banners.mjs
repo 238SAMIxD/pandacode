@@ -10,9 +10,12 @@ const out = path.join(here, '..', 'banners');
 const banners = [
   'social-1600x900', 'github-social-1280x640', 'play-feature-1024x500',
   'website-hero-2400x1200', 'square-1080x1080',
+  // App Store Connect creative assets: product page header and search results.
+  'app-store/header-3840x1646', 'app-store/header-5244x2950',
+  'app-store/search-results-3840x2560', 'app-store/search-results-1920x1280',
 ];
 
-mkdirSync(out, { recursive: true });
+mkdirSync(path.join(out, 'app-store'), { recursive: true });
 const only = process.argv.slice(2);
 const browser = await chromium.launch({ channel: 'chrome' });
 for (const name of banners.filter(n => !only.length || only.includes(n))) {
