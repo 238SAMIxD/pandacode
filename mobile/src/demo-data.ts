@@ -26,7 +26,9 @@ export function seedDemo() {
     t('flaky', 'Fix the flaky upload test on CI', 'relay', 'codex', 'fix/upload-retry', 6, { status: 'running' }),
     t('icons', 'Which icon set should the toolbar use?', 'design-system', 'opencode', 'main', 14, { status: 'waiting', pending: [{ kind: 'input_request', requestId: 'q1', text: 'Pick one' }] }),
     t('docs', 'Document the Connect relay protocol', 'pandacode', 'claude', 'docs/relay', 9),
-    t('perf', 'Speed up the sidebar morph on large projects', 'pandacode', 'kimi', 'perf/sidebar', 40),
+    t('perf', 'Speed up the sidebar morph on large projects', 'pandacode', 'kimi', 'perf/sidebar', 40, { status: 'stopped' }),
+    t('stall', 'Regenerate the API client from the OpenAPI spec', 'payments', 'claude', 'chore/api-client', 11, { status: 'running', runStartedAt: now - 11 * MIN, lastEventAt: now - 4 * MIN }),
+    t('limit', 'Translate the settings screens', 'pandacode-web', 'claude', 'i18n/settings', 20),
     t('migrate', 'Migrate billing webhooks to the new queue', 'payments', 'glm', 'chore/queue', 95, { status: 'failed' }),
     t('readme', 'Refresh the README screenshots', 'pandacode', 'grok', 'main', 3 * 1440),
     t('lint', 'Turn on the stricter lint rules', 'relay', 'codex', 'chore/lint', 5 * 1440),
@@ -43,12 +45,15 @@ export function seedDemo() {
   const tool = (id: string, name: string, input: string, output: string, status: ToolActivity['status'] = 'completed'): ToolActivity => ({ id, name, status, input, output });
   let id = 0;
   const m = (role: string, content: string, at: number, turnDurationMs: number | null = null): Message => ({ id: ++id, role, content, createdAt: now - at * MIN, turnDurationMs });
-  const toolMessage = (activity: ToolActivity, at: number) => m('tool', JSON.stringify(activity), at);
+  // The desktop's stored record (src/tool-activity.ts).
+  const toolMessage = (activity: ToolActivity, at: number) => m('tool', JSON.stringify({ type: 'tool_activity', version: 1, ...activity }), at);
+  const json = (value: unknown) => JSON.stringify(value);
   const docs: Message[] = [
     m('user', 'Write a short doc for the relay protocol: frames, sealing, and replay protection.', 16),
-    toolMessage(tool('t1', 'Read', 'src-tauri/src/remote/crypto.rs', 'pub fn seal(…)'), 15.8),
-    toolMessage(tool('t2', 'Grep', 'nonce|ts', '14 matches in 3 files'), 15.6),
-    toolMessage(tool('t3', 'Write', 'docs/relay-protocol.md', 'Wrote 112 lines'), 14),
+    toolMessage(tool('t1', 'Read', json({ file_path: 'src-tauri/src/remote/crypto.rs' }), 'pub fn seal(key: &[u8; 32], from: &str, to: &str, body: &[u8]) -> String {\n    let nonce = random_nonce();\n    …'), 15.8),
+    toolMessage(tool('t2', 'Grep', json({ pattern: 'nonce|ts', path: 'src-tauri/src/remote' }), 'src-tauri/src/remote/crypto.rs:12: let nonce = random_nonce();\nsrc-tauri/src/remote/host.rs:88: if ts < now - MAX_SKEW {'), 15.6),
+    toolMessage(tool('t5', 'Bash', json({ command: 'cargo test remote::crypto' }), 'running 6 tests\ntest remote::crypto::seals_and_opens ... ok\ntest remote::crypto::refuses_replays ... ok\n\ntest result: ok. 6 passed; 0 failed'), 15.2),
+    toolMessage(tool('t3', 'Write', json({ file_path: 'docs/relay-protocol.md', content: '# Relay protocol\n\nFrames are JSON…\n' }), 'Wrote 112 lines'), 14),
     m('assistant', [
       'I wrote **docs/relay-protocol.md**. The short version:',
       '',
@@ -62,7 +67,7 @@ export function seedDemo() {
       '```',
     ].join('\n'), 14, 2 * MIN + 12_000),
     m('user', 'Nice. Add a sequence diagram too?', 10),
-    toolMessage(tool('t4', 'Edit', 'docs/relay-protocol.md', '+18 −0'), 9.5),
+    toolMessage(tool('t4', 'Edit', json({ file_path: 'docs/relay-protocol.md', old_string: '## Handshake\n', new_string: '## Handshake\n\n```mermaid\nsequenceDiagram\n  Phone->>Relay: sealed request\n  Relay->>Host: forward\n  Host-->>Phone: sealed reply\n```\n' }), 'The file docs/relay-protocol.md has been updated.'), 9.5),
     m('assistant', 'Added a Mermaid sequence diagram under **Handshake** showing phone → relay → host and the sealed reply. It renders on GitHub.', 9, 41_000),
   ];
   const auth: Message[] = [
@@ -80,13 +85,37 @@ export function seedDemo() {
   const live: Record<string, Live> = {
     'studio/auth': { ...idleLive(), status: 'waiting', activity: 'Waiting for approval', approvals: [{ kind: 'approval', requestId: 'r1', text: 'Run `npm install @simplewebauthn/server` in **pandacode-web**?', tool: tool('b1', 'Bash', 'npm install @simplewebauthn/server', '', 'running') }] },
     'studio/flaky': {
-      ...idleLive(), status: 'running', activity: 'Running Bash',
+      ...idleLive(), status: 'running', activity: 'Running Bash', startedAt: now - 6 * MIN,
+      todos: [
+        { text: 'Reproduce the flaky upload test', status: 'completed' },
+        { text: 'Find the race in the retry timer', status: 'completed' },
+        { text: 'Switch the test to fake timers', status: 'in_progress' },
+        { text: 'Run it 50 times to confirm', status: 'pending' },
+      ],
+      subagents: [
+        { id: 'sa1', name: 'Explore', prompt: 'Find every caller of uploadWithRetry', status: 'completed', response: 'Three callers: the upload queue, the avatar form and the CLI sync.', startedAt: now - 5.5 * MIN, updatedAt: now - 4 * MIN,
+          tools: [tool('s1', 'Grep', json({ pattern: 'uploadWithRetry' }), 'src/queue.ts:14\nsrc/avatar.ts:31\ncli/sync.ts:8'), tool('s2', 'Read', json({ file_path: 'src/queue.ts' }), '…')] },
+        { id: 'sa2', name: 'CI history', prompt: 'Check the last 50 CI runs for this failure', status: 'running', response: '', startedAt: now - 3 * MIN, updatedAt: now - 10_000,
+          tools: [tool('s3', 'Bash', json({ command: 'gh run list --limit 50 --json conclusion' }), '[…]'), tool('s4', 'Bash', json({ command: 'gh run view 9812 --log-failed' }), '', 'running')] },
+        { id: 'sa3', name: 'Timers', prompt: 'Read the fake timer docs for vitest', status: 'running', response: '', startedAt: now - 2 * MIN, updatedAt: now - 20_000,
+          tools: [tool('s5', 'WebFetch', json({ url: 'https://vitest.dev/guide/mocking#timers', prompt: 'How do fake timers advance promises?' }), '', 'running')] },
+      ],
       items: [
-        { kind: 'tool', tool: tool('f1', 'Grep', 'retry', '6 matches') },
-        { kind: 'text', text: 'The test races the upload\'s **retry timer**: it asserts before the second attempt settles. I\'m switching it to fake timers and' },
-        { kind: 'tool', tool: tool('f2', 'Bash', 'npm test -- upload --repeat 50', '', 'running') },
+        { kind: 'tool', tool: tool('f1', 'Grep', json({ pattern: 'retry', path: 'relay/src/upload' }), 'relay/src/upload/retry.ts:22: setTimeout(retry, backoff(attempt))'), startedAt: now - 5.8 * MIN, endedAt: now - 5.8 * MIN },
+        { kind: 'tool', tool: tool('f3', 'Read', json({ file_path: 'relay/src/upload/retry.ts' }), 'export function retry(…)'), startedAt: now - 5.7 * MIN, endedAt: now - 5.7 * MIN },
+        { kind: 'tool', tool: tool('f4', 'TodoWrite', json({ todos: [{ content: 'Reproduce the flaky upload test', status: 'completed' }, { content: 'Find the race in the retry timer', status: 'completed' }, { content: 'Switch the test to fake timers', status: 'in_progress' }, { content: 'Run it 50 times to confirm', status: 'pending' }] }), ''), startedAt: now - 5 * MIN, endedAt: now - 5 * MIN },
+        { kind: 'text', text: 'The test races the upload\'s **retry timer**: it asserts before the second attempt settles.' },
+        { kind: 'tool', tool: tool('f5', 'Edit', json({ file_path: 'relay/test/upload.test.ts', old_string: "  await upload(file);\n  expect(calls).toBe(2);", new_string: "  vi.useFakeTimers();\n  const done = upload(file);\n  await vi.runAllTimersAsync();\n  await done;\n  expect(calls).toBe(2);" }), 'The file relay/test/upload.test.ts has been updated.'), startedAt: now - 2.2 * MIN, endedAt: now - 2.1 * MIN },
+        { kind: 'tool', tool: tool('f6', 'Bash', json({ command: 'npm test -- upload' }), 'Exit code: 1\nWall time: 4s\nOutput:\nFAIL test/upload.test.ts > retries once\n  expected 1 to be 2', 'failed'), startedAt: now - 2 * MIN, endedAt: now - 1.9 * MIN },
+        { kind: 'text', text: 'One more spot: the queue awaits a real `sleep`. I\'m switching it to fake timers and' },
+        { kind: 'tool', tool: tool('f2', 'Bash', json({ command: 'npm test -- upload --repeat 50' }), '', 'running'), startedAt: now - 40_000 },
       ],
     },
+    'studio/stall': {
+      ...idleLive(), status: 'running', activity: 'Running Bash', startedAt: now - 11 * MIN, lastEventAt: now - 4 * MIN,
+      items: [{ kind: 'tool', tool: tool('st1', 'Bash', json({ command: 'npx openapi-generator-cli generate -i spec.yaml' }), '', 'running'), startedAt: now - 4 * MIN }],
+    },
+    'studio/limit': { ...idleLive(), status: 'idle', limited: { text: 'Claude usage limit reached.', resetsAt: now + 47 * MIN } },
     'studio/icons': { ...idleLive(), status: 'waiting', inputs: [{ kind: 'input_request', requestId: 'q1', text: '', data: { kind: 'questions', questions: [{ id: 'set', header: 'Icons', question: 'Which icon set should the toolbar use?', options: [{ label: 'SF Symbols', description: 'Native on Apple platforms' }, { label: 'Lucide', description: 'Same everywhere' }] }] } }] },
   };
   // One project with an icon from its computer (projects.icons); the rest keep their initials.

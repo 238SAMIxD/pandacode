@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
 
@@ -29,6 +30,8 @@ pub(crate) const PAGE_BUDGET: usize = 180 * 1024;
 const MAX_PROJECT_ICON_IDS: usize = 50;
 const MAX_PROJECT_ICON_BYTES: usize = 64 * 1024;
 const MAX_BOT_AVATAR_BYTES: usize = 32 * 1024;
+const SUBAGENT_SNAPSHOT_BUDGET: usize = 40 * 1024;
+const MAX_SUBAGENT_SNAPSHOT: usize = 64;
 const DIFF_BUDGET: usize = 120 * 1024;
 const MAX_PATH: usize = 4096;
 /// A single message or event larger than this is cut, with [`CUT`] marking the cut.
@@ -777,20 +780,82 @@ fn fit_pull_detail(pull: &mut Value) {
     pull["truncated"] = json!(truncated);
 }
 
+#[derive(Clone, Copy)]
+struct LiveTiming {
+    last_event_at: i64,
+    run_started_at: Option<i64>,
+}
+
+struct LiveRun {
+    timing: LiveTiming,
+    subagents: Vec<Value>,
+    subagents_truncated: bool,
+}
+
+fn add_live_timing(task: &mut Value, timing: Option<LiveTiming>) {
+    let Some(timing) = timing else { return };
+    task["lastEventAt"] = json!(timing.last_event_at);
+    if let Some(started_at) = timing.run_started_at {
+        task["runStartedAt"] = json!(started_at);
+    }
+}
+
+/// Fits desktop-shaped child snapshots into a small slice of the response budget.
+fn bounded_subagents(activities: &[crate::providers::SubagentActivity], budget: usize) -> Result<(Vec<Value>, bool)> {
+    let mut items = Vec::new();
+    let mut truncated = activities.len() > MAX_SUBAGENT_SNAPSHOT;
+    for activity in activities.iter().take(MAX_SUBAGENT_SNAPSHOT) {
+        let mut item = serde_json::to_value(activity).map_err(|error| error.to_string())?;
+        let original_size = item.to_string().len();
+        let current_size = json!(&items).to_string().len();
+        let separator = usize::from(!items.is_empty());
+        let remaining = budget.saturating_sub(current_size.saturating_add(separator));
+        shrink(&mut item, remaining);
+        let item_size = item.to_string().len();
+        if item_size > remaining {
+            truncated = true;
+            break;
+        }
+        truncated |= item_size < original_size;
+        items.push(item);
+    }
+    truncated |= items.len() < activities.len();
+    Ok((items, truncated))
+}
+
+fn live_run(agent: &crate::RunningAgent) -> Result<LiveRun> {
+    let activities = agent
+        .subagents
+        .lock()
+        .map_err(|error| error.to_string())?
+        .merge_history(Vec::new());
+    let (subagents, subagents_truncated) = bounded_subagents(&activities, SUBAGENT_SNAPSHOT_BUDGET)?;
+    Ok(LiveRun {
+        timing: LiveTiming {
+            last_event_at: agent.last_event.load(Ordering::SeqCst),
+            run_started_at: None,
+        },
+        subagents,
+        subagents_truncated,
+    })
+}
+
 /// Returns local tasks and their projects for a viewer's task picker. Store::sessions
 /// already omits drafts and architect workers; mirrors are filtered and bot workspaces tagged here.
 fn tasks_list(state: &AppState, limit: usize) -> Result<Value> {
-    let (active, pending_by_session) = {
+    let (last_event_by_session, pending_by_session) = {
         let agents = state.agents.lock().map_err(|e| e.to_string())?;
+        let mut last_event = HashMap::new();
         let mut pending = HashMap::new();
         for (session_id, agent) in agents.iter() {
+            last_event.insert(session_id.clone(), agent.last_event.load(Ordering::SeqCst));
             let requests = agent.pending_requests.lock().map_err(|e| e.to_string())?;
             let items = pending_items(&requests);
             if !items.is_empty() {
                 pending.insert(session_id.clone(), items);
             }
         }
-        (agents.keys().cloned().collect::<HashSet<_>>(), pending)
+        (last_event, pending)
     };
     let (sessions, project_rows, bots_by_project) = {
         let store = state.store.lock().map_err(|e| e.to_string())?;
@@ -825,8 +890,9 @@ fn tasks_list(state: &AppState, limit: usize) -> Result<Value> {
         .into_iter()
         .take(limit)
         .map(|task| {
-            let status = if matches!(task.status.as_str(), "running" | "waiting") && !active.contains(&task.id) { "interrupted" } else { task.status.as_str() };
+            let status = if matches!(task.status.as_str(), "running" | "waiting") && !last_event_by_session.contains_key(&task.id) { "interrupted" } else { task.status.as_str() };
             let project_name = project_names.get(&task.project_id).or_else(|| bots_by_project.get(&task.project_id).map(|(_, name)| name)).cloned().unwrap_or_default();
+            let run_started_at = task.last_prompt_at;
             let mut item = json!({
                 "sessionId": task.id,
                 "title": task.title,
@@ -842,6 +908,9 @@ fn tasks_list(state: &AppState, limit: usize) -> Result<Value> {
                 "lastPromptAt": task.last_prompt_at,
                 "pending": pending_by_session.get(&task.id).cloned().unwrap_or_default(),
             });
+            if let Some(&last_event_at) = last_event_by_session.get(&task.id) {
+                add_live_timing(&mut item, Some(LiveTiming { last_event_at, run_started_at }));
+            }
             if let Some((bot_id, bot_name)) = bots_by_project.get(&task.project_id) {
                 item["botId"] = json!(bot_id);
                 item["botName"] = json!(bot_name);
@@ -913,30 +982,43 @@ fn fit_project_icons(icons: impl IntoIterator<Item = (String, Option<String>)>) 
 /// Each subscribed task that exists here: its status as this window shows it, its newest
 /// message id (so the viewer pulls what it missed) and its title.
 fn subscribed_tasks(state: &AppState, ids: &[String]) -> Result<Vec<Value>> {
-    let (active, pending_by_session) = {
+    let (active_runs, pending_by_session) = {
         let agents = state.agents.lock().map_err(|e| e.to_string())?;
+        let mut active_runs = HashMap::new();
         let mut pending = HashMap::new();
         for id in ids {
             if let Some(agent) = agents.get(id) {
+                active_runs.insert(id.clone(), live_run(agent)?);
                 let requests = agent.pending_requests.lock().map_err(|e| e.to_string())?;
                 pending.insert(id.clone(), pending_items(&requests));
             }
         }
-        (agents.keys().cloned().collect::<HashSet<_>>(), pending)
+        (active_runs, pending)
     };
     let store = state.store.lock().map_err(|e| e.to_string())?;
     let mut tasks = Vec::new();
     for id in ids {
-        let row: Option<(String, String, i64)> = store
+        let row: Option<(String, String, i64, Option<i64>)> = store
             .db
-            .query_row("SELECT status,title,(SELECT COALESCE(MAX(id),0) FROM messages WHERE session_id=?1) FROM sessions WHERE id=?1 AND remote_device IS NULL", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .query_row("SELECT status,title,(SELECT COALESCE(MAX(id),0) FROM messages WHERE session_id=?1),last_prompt_at FROM sessions WHERE id=?1 AND remote_device IS NULL", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
             .optional()
             .map_err(|e| e.to_string())?;
-        let Some((status, title, last_id)) = row else { continue };
+        let Some((status, title, last_id, last_prompt_at)) = row else { continue };
         // Only a registered agent is really running; a stale row reads as interrupted.
-        let status = if active.contains(id) || !matches!(status.as_str(), "running" | "waiting") { status } else { "interrupted".into() };
+        let status = if active_runs.contains_key(id) || !matches!(status.as_str(), "running" | "waiting") { status } else { "interrupted".into() };
         let pending = pending_by_session.get(id).cloned().unwrap_or_default();
-        tasks.push(json!({"sessionId": id, "status": status, "lastId": last_id, "title": title, "pending": pending}));
+        let mut task = json!({"sessionId": id, "status": status, "lastId": last_id, "title": title, "pending": pending});
+        if let Some(run) = active_runs.get(id) {
+            add_live_timing(
+                &mut task,
+                Some(LiveTiming { run_started_at: last_prompt_at, ..run.timing }),
+            );
+            task["subagents"] = json!(run.subagents);
+            if run.subagents_truncated {
+                task["subagentsTruncated"] = json!(true);
+            }
+        }
+        tasks.push(task);
     }
     fit_list(&mut tasks, PAGE_BUDGET.saturating_sub(json!({"tasks": []}).to_string().len()));
     Ok(tasks)
@@ -1163,6 +1245,61 @@ fn cut(message: &mut Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn subagent(id: &str, response: &str) -> crate::providers::SubagentActivity {
+        crate::providers::SubagentActivity {
+            id: id.into(),
+            parent_id: None,
+            name: "Reviewer".into(),
+            prompt: "Inspect the change".into(),
+            status: "running".into(),
+            response: response.into(),
+            tools: Vec::new(),
+            started_at: 1_700_000_000_000,
+            updated_at: 1_700_000_000_500,
+        }
+    }
+
+    #[test]
+    fn live_timestamps_are_unix_milliseconds_and_omitted_without_a_run() {
+        let mut task = json!({"sessionId": "s1"});
+        add_live_timing(&mut task, None);
+        assert!(task.get("lastEventAt").is_none());
+        assert!(task.get("runStartedAt").is_none());
+
+        add_live_timing(
+            &mut task,
+            Some(LiveTiming {
+                last_event_at: 1_700_000_000_250,
+                run_started_at: Some(1_700_000_000_000),
+            }),
+        );
+        assert_eq!(task["lastEventAt"], 1_700_000_000_250_i64);
+        assert_eq!(task["runStartedAt"], 1_700_000_000_000_i64);
+    }
+
+    #[test]
+    fn subagent_snapshots_keep_desktop_shape_and_mark_budget_cuts() {
+        let (items, truncated) = bounded_subagents(&[subagent("run:worker", "Reading the source")], 1024).unwrap();
+        assert!(!truncated);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["id"], "run:worker");
+        assert_eq!(items[0]["parentId"], Value::Null);
+        assert_eq!(items[0]["name"], "Reviewer");
+        assert_eq!(items[0]["prompt"], "Inspect the change");
+        assert_eq!(items[0]["status"], "running");
+        assert_eq!(items[0]["response"], "Reading the source");
+        assert_eq!(items[0]["tools"], json!([]));
+        assert_eq!(items[0]["startedAt"], 1_700_000_000_000_i64);
+        assert_eq!(items[0]["updatedAt"], 1_700_000_000_500_i64);
+
+        let large = subagent("run:large", &"activity ".repeat(512));
+        let (items, truncated) = bounded_subagents(&[large], 512).unwrap();
+        assert!(truncated);
+        assert_eq!(items.len(), 1);
+        assert!(items[0]["response"].as_str().unwrap().ends_with(CUT));
+        assert!(json!(items).to_string().len() <= 512);
+    }
 
     #[test]
     fn everything_is_refused_while_hosting_is_off() {

@@ -19,7 +19,7 @@ import { useInbox } from './useInbox.ts';
 const SHARE = 0.32;
 const MIN_WIDTH = 300;
 const SEARCH = 48;
-const ORDER: (Section | 'bots')[] = ['needs', 'working', 'recent', 'unsent', 'bots', 'settled', 'snoozed'];
+const ORDER: (Section | 'bots')[] = ['running', 'needs', 'recent', 'unsent', 'bots', 'settled', 'snoozed'];
 
 export const useSidebarWidth = () => Math.max(MIN_WIDTH, Math.round(useWindowDimensions().width * SHARE));
 

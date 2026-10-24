@@ -9,7 +9,7 @@ import { File, Paths } from 'expo-file-system';
 import { BUILD_DEMO, DEMO_FILE, demoAtStart } from '../demo.ts';
 import { demoCall, type DemoHost } from '../demo-host.ts';
 import { delivering, settled, unmatched, type Sent } from '../store/sent.ts';
-import { applyEvent, fromList, fromSubscribe, idleLive, lastId, mergeMessages, staleLists } from '../store/reduce.ts';
+import { applyEvent, ended, fromList, fromSubscribe, idleLive, lastId, mergeMessages, staleLists } from '../store/reduce.ts';
 import * as auth from './auth.ts';
 import { deleteAccount as deleteAccountSteps } from './delete-account.ts';
 import { build, NOT_CONFIGURED } from './config.ts';
@@ -44,6 +44,11 @@ const pending = new Pending();
 const keys = new Map<string, { publicKey: string; key: Uint8Array }>();
 /** Tasks the UI has open, per host; subscribed, renewed, and re-subscribed on presence. */
 const watched = new Map<string, Set<string>>();
+/** Running tasks per host, subscribed too so the inbox can show what each is doing (at most GLANCE_MAX). */
+const glanced = new Map<string, Set<string>>();
+const GLANCE_MAX = 20;
+/** Every subscribed task of a host: open ones and running ones. */
+const subscribed = (host: string) => new Set([...(watched.get(host) ?? []), ...(glanced.get(host) ?? [])]);
 const loads = new Map<string, Promise<void>>();
 
 const state = () => useConnect.getState();
@@ -166,6 +171,7 @@ async function signOut(): Promise<void> {
   token = null;
   keys.clear();
   watched.clear();
+  glanced.clear();
   presence = false;
   await secrets.clearSession();
   const { deviceId, ready } = state();
@@ -200,7 +206,7 @@ const validDevice = (d: any): d is Device =>
 function applyDevices(list: unknown[]) {
   const devices = list.filter(validDevice).slice(0, 64);
   for (const id of keys.keys()) if (!devices.some(d => d.id === id && d.publicKey === keys.get(id)!.publicKey)) keys.delete(id);
-  for (const id of watched.keys()) if (!devices.some(d => d.id === id)) watched.delete(id);
+  for (const map of [watched, glanced]) for (const id of map.keys()) if (!devices.some(d => d.id === id)) map.delete(id);
   patch({ devices });
 }
 
@@ -324,8 +330,8 @@ function frame(text: string) {
 const active = (status?: string) => status === 'running' || status === 'waiting';
 
 function events(host: string, list: unknown) {
-  const ids = watched.get(host);
-  if (!ids || !Array.isArray(list)) return;
+  const ids = subscribed(host);
+  if (!ids.size || !Array.isArray(list)) return;
   const started = new Set<string>();
   patch(s => {
     const live = { ...s.live };
@@ -342,7 +348,7 @@ function events(host: string, list: unknown) {
   });
   // A turn that starts on its own (the host delivering a queued prompt after the last run's
   // copy) saved its prompt before its first event: copy it now, not only at this run's end.
-  for (const id of started) void loadMessages(host, id).catch(() => undefined);
+  for (const id of started) if (watched.get(host)?.has(id)) void loadMessages(host, id).catch(() => undefined);
 }
 
 /** Mirrors live statuses into the host's task list. */
@@ -370,7 +376,7 @@ async function finished(host: string, data: RunFinished) {
   if (key in state().pulls) void loadPull(host, data.sessionId, true).catch(() => undefined);
   const status = data.stopped ? 'stopped' : data.successful ? 'idle' : 'failed';
   patch(s => {
-    const live = { ...s.live, [key]: { ...idleLive(), status } };
+    const live = { ...s.live, [key]: ended(s.live[key], status) };
     return { live, sent: editSent(s.sent, key, settled), tasks: withStatuses(s, host, live) };
   });
 }
@@ -386,6 +392,15 @@ function watch(deviceId: string, sessionIds: string[]) {
   if (ids.size !== before) void subscribeHost(deviceId);
 }
 
+/** Follows a host's running tasks (from its list) so their activity shows in the inbox. */
+function glance(deviceId: string, sessionIds: string[]) {
+  const before = glanced.get(deviceId) ?? new Set<string>();
+  const next = new Set(sessionIds.slice(0, GLANCE_MAX));
+  if (next.size) glanced.set(deviceId, next);
+  else glanced.delete(deviceId);
+  if ([...next].some(id => !before.has(id) && !watched.get(deviceId)?.has(id))) void subscribeHost(deviceId);
+}
+
 function unwatch(deviceId: string, sessionIds: string[]) {
   const ids = watched.get(deviceId);
   sessionIds.forEach(id => ids?.delete(id));
@@ -393,12 +408,12 @@ function unwatch(deviceId: string, sessionIds: string[]) {
 }
 
 async function subscribeAll() {
-  await Promise.all([...watched.keys()].map(subscribeHost));
+  await Promise.all([...new Set([...watched.keys(), ...glanced.keys()])].map(subscribeHost));
 }
 
 /** Subscribe replies catch up on missed status changes, pending requests and messages. */
 async function subscribeHost(deviceId: string): Promise<void> {
-  const ids = [...(watched.get(deviceId) ?? [])].slice(0, 500);
+  const ids = [...subscribed(deviceId)].slice(0, 500);
   if (!ids.length || !socket.open) return;
   let reply: { tasks: SubscribedTask[] };
   try {
@@ -409,10 +424,10 @@ async function subscribeHost(deviceId: string): Promise<void> {
   const tasks = Array.isArray(reply?.tasks) ? reply.tasks : [];
   patch(s => {
     const live = { ...s.live };
-    for (const t of tasks) live[taskKey(deviceId, t.sessionId)] = fromSubscribe(live[taskKey(deviceId, t.sessionId)] ?? idleLive(), t.status, t.pending);
+    for (const t of tasks) live[taskKey(deviceId, t.sessionId)] = fromSubscribe(live[taskKey(deviceId, t.sessionId)] ?? idleLive(), t.status, t.pending, t);
     return { live, tasks: withStatuses(s, deviceId, live) };
   });
-  for (const t of tasks) if (t.lastId > lastId(state().messages[taskKey(deviceId, t.sessionId)])) void loadMessages(deviceId, t.sessionId).catch(() => undefined);
+  for (const t of tasks) if (watched.get(deviceId)?.has(t.sessionId) && t.lastId > lastId(state().messages[taskKey(deviceId, t.sessionId)])) void loadMessages(deviceId, t.sessionId).catch(() => undefined);
 }
 
 /** Copies messages newer than the last stored one, following hasMore. Calls run one at a time per task. */
@@ -464,11 +479,12 @@ async function listTasks(deviceId: string, limit?: number): Promise<TasksList> {
     const live = { ...s.live };
     for (const t of list.tasks) {
       const key = taskKey(deviceId, t.sessionId);
-      const next = fromList(live[key], t.status, Array.isArray(t.pending) ? t.pending : undefined);
+      const next = fromList(live[key], t.status, Array.isArray(t.pending) ? t.pending : undefined, t);
       if (next) live[key] = next;
     }
     return { live, tasks: { ...s.tasks, [deviceId]: { ...list, loadedAt: Date.now() } } };
   });
+  glance(deviceId, list.tasks.filter(t => active(t.status)).map(t => t.sessionId));
   void projectIcons(deviceId, list.tasks.map(t => t.projectId));
   if (!state().outdated[deviceId]) void listBots(deviceId).catch(() => undefined);
   return list;

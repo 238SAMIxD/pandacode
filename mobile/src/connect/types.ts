@@ -9,7 +9,7 @@ export interface Project { id: string; name: string; repo: string | null }
 
 export type TaskStatus = 'idle' | 'running' | 'waiting' | 'interrupted' | 'failed' | 'stopped' | (string & {});
 
-export interface TaskSummary {
+export interface TaskSummary extends HostActivity {
   sessionId: string; title: string; status: TaskStatus; projectId: string; projectName: string;
   provider: string; model: string; effort: string | null; mode: string; pinned: boolean;
   updatedAt: number; lastPromptAt: number | null; branch?: string; chat?: boolean;
@@ -19,12 +19,15 @@ export interface TaskSummary {
   pending?: PendingRequest[];
 }
 
+/** Newer hosts: when the run's newest event came and when it started (ms), and its subagents. */
+export interface HostActivity { lastEventAt?: number | null; runStartedAt?: number | null; subagents?: unknown }
+
 export interface TasksList { tasks: TaskSummary[]; projects: Project[] }
 
 /** An approval or input request waiting on the host, from a subscribe reply. */
 export interface PendingRequest { kind: 'approval' | 'input_request' | (string & {}); requestId: string; text: string; data?: unknown; tool?: ToolActivity }
 
-export interface SubscribedTask { sessionId: string; status: TaskStatus; lastId: number; title: string; pending?: PendingRequest[] }
+export interface SubscribedTask extends HostActivity { sessionId: string; status: TaskStatus; lastId: number; title: string; pending?: PendingRequest[] }
 
 export interface Message { id: number; role: string; content: string; createdAt: number; turnDurationMs: number | null }
 export interface MessagePage { messages: Message[]; hasMore: boolean; title: string }

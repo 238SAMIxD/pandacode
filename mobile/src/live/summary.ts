@@ -46,17 +46,18 @@ export interface Summarized {
 
 /**
  * `tracked` is the previous result's set (empty for a new activity). Snoozed tasks stay out, as in
- * the inbox's Needs and Working sections.
+ * the inbox's Running and Needs you sections.
  */
 export function summarize(inbox: Inbox, tracked: ReadonlySet<string>, updated: string, mark: string): Summarized {
-  const active = [...inbox.needs, ...inbox.working];
-  const finished = [...inbox.recent, ...inbox.settled].filter(r => tracked.has(r.key));
+  const waiting = inbox.needs.filter(r => r.badge === 'approval' || r.badge === 'question');
+  const active = [...waiting, ...inbox.running];
+  const finished = [...inbox.recent, ...inbox.needs.filter(r => !waiting.includes(r)), ...inbox.settled].filter(r => tracked.has(r.key));
   const rows = [...active, ...finished].map(toRow);
   const next = new Set([...tracked, ...active.map(r => r.key)]);
   const single = active.length === 1 ? active[0] : rows.length === 1 ? [...active, ...finished][0] : null;
   const url = single ? `pandacode://task/${encodeURIComponent(single.deviceId)}/${encodeURIComponent(single.task.sessionId)}` : 'pandacode://inbox';
   return {
-    summary: { headline: headline(active.length, inbox.needs.length), active: active.length, attention: inbox.needs.length, rows: rows.slice(0, MAX_ROWS), updated, mark, url },
+    summary: { headline: headline(active.length, waiting.length), active: active.length, attention: waiting.length, rows: rows.slice(0, MAX_ROWS), updated, mark, url },
     tracked: next,
   };
 }

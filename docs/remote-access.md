@@ -191,8 +191,8 @@ approval policy: remote prompts get no more power than local ones.
 
 | Method | Params | Result |
 |---|---|---|
-| `subscribe` | `{ sessionIds: [...] }` (≤ 500) | `{ tasks: [{ sessionId, status, lastId, title, pending }] }` for those that exist. `pending` is the current `[{ kind: "approval" \| "input_request", requestId, text, data, tool? }]` for requests the viewer can still answer; large payloads are cut to fit. Answered, cancelled and ended-run requests are removed. Adds the ids to this device's subscription for 10 minutes; the viewer renews every 9 minutes and on every presence frame. An expired subscription starts over. |
-| `tasks.list` | `{ limit?: 0..500 }` (default 200) | `{ tasks: [{ sessionId, title, status, projectId, projectName, provider, model, effort, mode, pinned, updatedAt, lastPromptAt, branch?, chat?, botId?, botName?, pending }], projects: [{ id, name, repo: "owner/name" \| null }] }`. `pending` has the same shape and meaning as for `subscribe`. Tasks are ordered by latest prompt or response and omit drafts and mirrors. Bot workspace tasks include `botId` and `botName`; other tasks may include chats (`chat: true`). Projects omit bot workspaces. The tail is dropped to keep the reply under 180 KiB. |
+| `subscribe` | `{ sessionIds: [...] }` (≤ 500) | `{ tasks: [{ sessionId, status, lastId, title, pending, lastEventAt?, runStartedAt?, subagents?, subagentsTruncated? }] }` for those that exist. `pending` is the current `[{ kind: "approval" \| "input_request", requestId, text, data, tool? }]` for requests the viewer can still answer; large payloads are cut to fit. Answered, cancelled and ended-run requests are removed. While a host run is active (including waiting for input or approval), `lastEventAt` is the unix-millisecond time of the harness's last event, `runStartedAt` is the latest saved prompt time when known, and `subagents` is a snapshot in the desktop `SubagentActivity` shape: `[{ id, parentId, name, prompt, status, response, tools: [{ id, name, status, input, output, writePaths? }], startedAt, updatedAt }]`. The phone can derive active/total child counts and tool counts from the array and each item's status and tools. `subagentsTruncated: true` appears only when entries or activity text were cut to fit the 40 KiB per-task subagent budget. These live-run fields are absent when the task is not active. Adds the ids to this device's subscription for 10 minutes; the viewer renews every 9 minutes and on every presence frame. An expired subscription starts over. |
+| `tasks.list` | `{ limit?: 0..500 }` (default 200) | `{ tasks: [{ sessionId, title, status, projectId, projectName, provider, model, effort, mode, pinned, updatedAt, lastPromptAt, lastEventAt?, runStartedAt?, branch?, chat?, botId?, botName?, pending }], projects: [{ id, name, repo: "owner/name" \| null }] }`. `pending` has the same shape and meaning as for `subscribe`. `lastEventAt` and `runStartedAt` use the same definitions as `subscribe` and are included only for an active host run. Tasks are ordered by latest prompt or response and omit drafts and mirrors. Bot workspace tasks include `botId` and `botName`; other tasks may include chats (`chat: true`). Projects omit bot workspaces. The tail is dropped to keep the reply under 180 KiB. |
 | `projects.icons` | `{ projectIds: string[] }` (1..=50; use project ids from `tasks.list`) | `{ icons: { [projectId]: string \| null } }`. Known non-bot local projects map to their icon `data:` URL, or `null` when no icon exists or it exceeds 64 KiB. Unknown ids are omitted. Icons stop being added before the result exceeds 180 KiB, so omitted ids can be requested again. |
 | `providers.list` | `{ force?: boolean }` | the host's `list_providers` result: `[{ id, name, installed, path, version, models }]`. `force` drops the same ACP catalog caches. If it would not fit one reply, the longest `models` lists are halved until it does. |
 | `providers.models` | `{ provider, force?: boolean }` | the host's `list_provider_models` result: `[{ id, name, description, reasoningEfforts, defaultReasoningEffort, contextWindow }]`, its tail dropped to fit one reply. `provider` must be a known harness id (`Unknown provider.`). |
@@ -266,8 +266,61 @@ each subscriber at most one `agent.events { events: [...] }` frame every 100 ms 
 the events pass the 180 KiB frame budget; an event over 120 KiB is cut). Consecutive text deltas
 of the same message are merged, so streaming costs at most 10 frames a second per subscriber,
 whatever the token rate. A subscriber more than 4096 events behind stops buffering until it
-catches up at the run end. Each event is the host's raw `AgentEvent` (`sessionId`, `kind`, `text`,
-`requestId`, `data`, `tool`), approval ids included.
+catches up at the run end. Each event is an `AgentEvent` with `sessionId`, `kind`, `text`,
+`requestId`, `data`, and optional `tool`; request ids are included where applicable. These are
+the kinds sent in `agent.events`:
+
+| Kind | Meaning |
+|---|---|
+| `approval` | The agent requests permission for a tool action. `requestId`, `data` and optional `tool` describe the request. |
+| `approval_cancelled` | An outstanding approval was withdrawn or cancelled. |
+| `commands_changed` | The harness's available command catalogue changed. |
+| `error` | The provider reports a run error; the explanation is in `text`. |
+| `goal` | Snapshot of the Codex goal state. |
+| `goal_input` | The goal runtime is asking for user input. |
+| `goal_ready` | Goal setup completed and its initial state is available. |
+| `input_cancelled` | An outstanding structured-input request was withdrawn or cancelled. |
+| `input_request` | The agent requests structured user input; `requestId`, `data` and optional `tool` carry the answerable request. |
+| `limited` | The provider reports an account usage limit; `data` may include `resetsAt` and `window`. |
+| `message_start` | A new assistant message or phase starts; `data.messageId` identifies it and `data.phase` may identify its phase. |
+| `session` | The provider's native session id is available in `text`. |
+| `status` | Progress or state text. Plan updates and reasoning/thinking notices use this kind; any provider metadata is reduced to recognized scalar fields. |
+| `steer` | A steer was accepted, delivered, or failed; `data` includes its id, status and mode. |
+| `subagent` | A child-agent snapshot changed. `data` is a desktop `SubagentActivity` (`id`, `parentId`, `name`, `prompt`, `status`, `response`, `tools`, `startedAt`, `updatedAt`); ids are scoped to the parent run. |
+| `task_settings` | Goal runtime task settings changed. |
+| `text` | Assistant text delta. `data.messageId` and optional phase associate it with its message. |
+| `tool` | A tool started or changed; the current `ToolActivity` is in `tool` (`id`, `name`, `status`, `input`, `output`, and optional `writePaths`). |
+| `turn_complete` | A Codex goal turn completed. |
+| `turn_start` | A Codex goal turn started. |
+| `usage` | Sanitized context-token usage snapshot; `data` carries recognized usage fields only. |
+
+There are no separate `plan`, `todo`, `thinking` or `reasoning` event kinds: those provider
+updates are represented as `status` text and/or data. The provider's `done` event is consumed by
+the desktop run loop and is not sent in `agent.events`. Likewise, local `status: running`,
+`turn_changes`, persistence errors, and final `done` emissions are window events rather than
+Connect `AgentEvent`s. Connect signals the end with `run.finished` instead.
+
+For example, a live child update is an ordinary `agent.events` item:
+
+```json
+{
+  "sessionId": "host-session-id",
+  "kind": "subagent",
+  "text": "",
+  "requestId": null,
+  "data": {
+    "id": "run-id:child-id",
+    "parentId": null,
+    "name": "Tests",
+    "prompt": "Run the focused tests",
+    "status": "running",
+    "response": "Checking the project setup…",
+    "tools": [{ "id": "run-id:child-id:tool-id", "name": "Bash", "status": "running", "input": "cargo test", "output": "" }],
+    "startedAt": 1792866000000,
+    "updatedAt": 1792866000500
+  }
+}
+```
 
 At a run end the host queues `run.finished { sessionId, successful, stopped, text }` after that
 run's last events. The viewer copies the new messages, ends the local turn, then emits the

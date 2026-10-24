@@ -1,4 +1,4 @@
-// The inbox (home): every computer's tasks in one list. Needs you, Working, Recent,
+// The inbox (home): every computer's tasks in one list. Running, Needs you, Recent,
 // Unsent (the outbox), Bots (every computer's bots; their conversations stay out of the other
 // sections), then Snoozed and Settled folded away. Logic in src/store/inbox.ts.
 import { Image } from 'expo-image';
@@ -18,7 +18,7 @@ import { useBackdrop } from '../../../ui/Backdrop.tsx';
 import { useColors } from '../../../ui/theme.ts';
 import { useInbox } from '../../../ui/useInbox.ts';
 
-const TITLES: Record<Section | 'bots', string> = { bots: 'Bots', needs: 'Needs you', working: 'Working', recent: 'Recent', unsent: 'Unsent', snoozed: 'Snoozed', settled: 'Settled' };
+const TITLES: Record<Section | 'bots', string> = { bots: 'Bots', running: 'Running', needs: 'Needs you', recent: 'Recent', unsent: 'Unsent', snoozed: 'Snoozed', settled: 'Settled' };
 const FOLDED: (Section | 'bots')[] = ['snoozed', 'settled'];
 
 type Item = { type: 'header'; section: Section | 'bots'; count: number; open?: boolean } | { type: 'row'; section: Section; row: Row; last: boolean } | { type: 'bot'; row: BotItem; last: boolean };
@@ -43,7 +43,7 @@ function Inbox() {
 
   const items = useMemo(() => {
     const list: Item[] = [];
-    for (const section of ['needs', 'working', 'recent', 'unsent', 'bots', 'snoozed', 'settled'] as const) {
+    for (const section of ['running', 'needs', 'recent', 'unsent', 'bots', 'snoozed', 'settled'] as const) {
       if (section === 'bots') {
         if (bots.length) list.push({ type: 'header', section, count: bots.length }, ...bots.map((row, i) => ({ type: 'bot' as const, row, last: i === bots.length - 1 })));
         continue;

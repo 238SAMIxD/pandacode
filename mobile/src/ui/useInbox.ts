@@ -4,28 +4,35 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { connect, NOT_SIGNED_IN } from '../connect/client.ts';
-import { botRows, inboxSections } from '../store/inbox.ts';
-import { useConnect, useHosts } from '../store/index.ts';
+import { botRows, glanceOf, inboxSections, type RunGlance } from '../store/inbox.ts';
+import { useConnect, useHosts, type ConnectState } from '../store/index.ts';
 import { useLocal } from '../store/local.ts';
 import type { Live } from '../store/reduce.ts';
 
 /**
- * Only what the inbox shows from each live run (status and request counts), as a string, so
- * streamed text deltas don't recompute the list.
+ * Only what the inbox shows from each live run (status, request counts, limit and its glance:
+ * current tool, thinking, subagents), as one string, so streamed text deltas don't recompute the
+ * list. lastEventAt is left out: each row's clock reads it when it ticks.
  */
-const liveSignature = (live: Record<string, Live>) =>
-  Object.entries(live).map(([key, l]) => `${key}|${l.status}|${l.approvals.length}|${l.inputs.length}`).join('\n');
+function liveSignature(live: Record<string, Live>, tasks: ConnectState['tasks']): string {
+  return JSON.stringify(Object.entries(live).map(([key, l]) => {
+    const [host, sessionId] = [key.slice(0, key.indexOf('/')), key.slice(key.indexOf('/') + 1)];
+    const { lastEventAt: _, ...glance } = glanceOf(l, tasks[host]?.tasks.find(t => t.sessionId === sessionId));
+    return [key, l.status, l.approvals.length, l.inputs.length, l.limited ?? null, glance];
+  }));
+}
 
-function useLiteLive(): Record<string, Live> {
-  const signature = useConnect(s => liveSignature(s.live));
+function useLiteLive(): { live: Record<string, Live>; glances: Record<string, RunGlance> } {
+  const signature = useConnect(s => liveSignature(s.live, s.tasks));
   return useMemo(() => {
-    const lite: Record<string, Live> = {};
-    for (const line of signature ? signature.split('\n') : []) {
-      const [key, status, approvals, inputs] = line.split('|');
+    const live: Record<string, Live> = {};
+    const glances: Record<string, RunGlance> = {};
+    for (const [key, status, approvals, inputs, limited, glance] of JSON.parse(signature) as [string, string, number, number, Live['limited'] | null, RunGlance][]) {
       const real = useConnect.getState().live[key];
-      lite[key] = { status, activity: '', items: [], approvals: real?.approvals ?? Array(Number(approvals)), inputs: real?.inputs ?? Array(Number(inputs)) };
+      live[key] = { status, activity: '', items: [], approvals: real?.approvals ?? Array(approvals), inputs: real?.inputs ?? Array(inputs), limited: limited ?? undefined };
+      glances[key] = glance;
     }
-    return lite;
+    return { live, glances };
   }, [signature]);
 }
 
@@ -42,7 +49,7 @@ export function useInbox() {
   const hosts = useHosts();
   const tasks = useConnect(s => s.tasks);
   const allBots = useConnect(s => s.bots);
-  const live = useLiteLive();
+  const { live, glances } = useLiteLive();
   const { snoozed, pins, outbox } = useLocal(useShallow(s => ({ snoozed: s.snoozed, pins: s.pins, outbox: s.outbox })));
   const minute = useMinute();
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -54,7 +61,7 @@ export function useInbox() {
     setErrors(Object.fromEntries(ids.map((id, i) => [id, results[i]]).filter(([, e]) => e && e !== NOT_SIGNED_IN)));
   }, [onlineKey]);
 
-  const inbox = useMemo(() => inboxSections({ hosts, tasks, live, snoozed, pins, outbox, now: minute * 60_000 + 59_999 }), [hosts, tasks, live, snoozed, pins, outbox, minute]);
+  const inbox = useMemo(() => inboxSections({ hosts, tasks, live, glances, snoozed, pins, outbox, now: minute * 60_000 + 59_999 }), [hosts, tasks, live, glances, snoozed, pins, outbox, minute]);
   const bots = useMemo(() => botRows(hosts, allBots, tasks), [hosts, allBots, tasks]);
   return { hosts, inbox, bots, minute, errors, load };
 }

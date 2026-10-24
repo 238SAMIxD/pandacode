@@ -7,7 +7,8 @@ import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Text, View, 
 import Swipeable, { type SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
 import Animated, { useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
 import { connect } from '../connect/client.ts';
-import { elapsedLabel, tomorrowMorning, type InboxRow as Row } from '../store/inbox.ts';
+import { elapsedLabel, stalledFor, tomorrowMorning, type InboxRow as Row } from '../store/inbox.ts';
+import { useConnect } from '../store/index.ts';
 import { removeOutbox, retryOutbox, snooze, togglePin, unsnooze } from '../store/local.ts';
 import { HarnessLogo } from './harness.tsx';
 import { Icon } from './Icon.tsx';
@@ -45,39 +46,76 @@ function stop(row: Row) {
   connect.stopTask(row.deviceId, row.task.sessionId).catch(error => Alert.alert('Could not stop', (error as Error).message));
 }
 
+const clockTime = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+
 function Status({ row, colors }: { row: Row; colors: Colors }) {
   switch (row.badge) {
-    case 'working': return <View style={styles.status}><ActivityIndicator size="small" color={colors.tint} style={styles.spinner} /><Text style={[styles.statusText, { color: colors.tint }]}>Working</Text></View>;
-    case 'approval': return <Text style={[styles.statusText, { color: colors.orange }]}>Approval</Text>;
-    case 'question': return <Text style={[styles.statusText, { color: colors.orange }]}>Question</Text>;
-    case 'failed': return <Text style={[styles.statusText, { color: colors.red }]}>Failed</Text>;
-    case 'unsent': return <View style={styles.status}><Icon ios="clock.arrow.circlepath" android="schedule_send" size={13} color={colors.orange} /><Text style={[styles.statusText, { color: colors.orange }]}>Sends on reconnect</Text></View>;
+    case 'working': return <RunClock row={row} colors={colors} />;
+    case 'approval': return <Label ios="hand.raised.fill" android="front_hand" color={colors.orange} text="Approval" />;
+    case 'question': return <Label ios="questionmark.bubble.fill" android="help" color={colors.orange} text="Question" />;
+    case 'failed': return <Label ios="xmark.octagon.fill" android="error" color={colors.red} text="Failed" />;
+    case 'stopped': return <Label ios="stop.circle" android="stop_circle" color={colors.secondary} text="Stopped" />;
+    case 'limited': return <Label ios="gauge.with.needle" android="speed" color={colors.orange} text={row.run.limitedUntil ? `Limited until ${clockTime(row.run.limitedUntil)}` : 'Limited'} />;
+    case 'unsent': return <Label ios="clock.arrow.circlepath" android="schedule_send" color={colors.orange} text="Sends on reconnect" />;
     default: return <Text style={[styles.time, { color: colors.secondary }]}>{ago(row.at)}</Text>;
   }
 }
 
-const ELAPSED_TICK_MS = 30_000;
+function Label({ ios, android, color, text }: { ios: MenuItem['ios']; android: MenuItem['android']; color: ColorValue; text: string }) {
+  return <View style={styles.status}><Icon ios={ios!} android={android!} size={12} color={color} /><Text style={[styles.statusText, { color }]} numberOfLines={1}>{text}</Text></View>;
+}
 
-/** "Working 6m" / "Waiting 54m": only this text ticks, every 30 s. */
-function Elapsed({ prefix, since, color }: { prefix: string; since: number; color: ColorValue }) {
+/** Labels that count time re-render on their own, at most this often. */
+const TICK_MS = 15_000;
+
+function useTick() {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), ELAPSED_TICK_MS);
+    const timer = setInterval(() => setNow(Date.now()), TICK_MS);
     return () => clearInterval(timer);
   }, []);
+  return now;
+}
+
+/** "Working 6m" beside a spinner, or "Stalled 4m" once no event came for STALL_MS. Only this ticks;
+ * it reads the run's newest event time when it does, so streamed events never re-render the list. */
+function RunClock({ row, colors }: { row: Row; colors: Colors }) {
+  const now = useTick();
+  const lastEventAt = useConnect.getState().live[row.key]?.lastEventAt ?? row.task.lastEventAt;
+  const stalled = stalledFor(lastEventAt, now);
+  if (stalled !== null) return <Label ios="hourglass" android="hourglass_empty" color={colors.orange} text={`Stalled ${elapsedLabel(stalled)}`} />;
+  const since = row.run.startedAt ?? row.task.lastPromptAt ?? row.at;
+  return <View style={styles.status}><ActivityIndicator size="small" color={colors.tint} style={styles.spinner} /><Text style={[styles.statusText, { color: colors.tint }]}>Working {elapsedLabel(now - since)}</Text></View>;
+}
+
+/** "Waiting 54m": only this text ticks. */
+function Elapsed({ prefix, since, color }: { prefix: string; since: number; color: ColorValue }) {
+  const now = useTick();
   return <Text style={[styles.statusText, { color }]}>{prefix} {elapsedLabel(now - since)}</Text>;
 }
 
-/** The sidebar's status: elapsed time while working or waiting, otherwise as in the inbox. */
+/** The sidebar's status: waiting time on approvals and questions, otherwise as in the inbox. */
 function SidebarStatus({ row, colors }: { row: Row; colors: Colors }) {
-  if (row.badge === 'working') {
-    return <View style={styles.status}><ActivityIndicator size="small" color={colors.tint} style={styles.spinner} /><Elapsed prefix="Working" since={row.task.lastPromptAt ?? row.at} color={colors.tint} /></View>;
-  }
   if (row.badge === 'approval' || row.badge === 'question') {
     return <View style={styles.status}><Icon ios={row.badge === 'approval' ? 'hand.raised.fill' : 'questionmark.bubble.fill'} android={row.badge === 'approval' ? 'front_hand' : 'help'} size={12} color={colors.orange} /><Elapsed prefix="Waiting" since={row.at} color={colors.orange} /></View>;
   }
   return <Status row={row} colors={colors} />;
 }
+
+/** A running row's second line: what the agent is doing now and how many subagents are working. */
+function Activity({ row, colors }: { row: Row; colors: Colors }) {
+  const { activity, agents } = row.run;
+  if (row.badge !== 'working' || (!activity && !agents)) return null;
+  return (
+    <View style={styles.line}>
+      <Icon ios={activity === 'Thinking' ? 'brain' : 'arrow.turn.down.right'} android={activity === 'Thinking' ? 'psychology' : 'subdirectory_arrow_right'} size={11} color={colors.secondary} />
+      <Text style={[styles.activity, { color: colors.secondary }]} numberOfLines={1}>{activity || 'Working'}</Text>
+      {agents > 0 && <Text style={[styles.agents, { color: colors.tint, backgroundColor: colors.tintFill }]}>+{agents} agent{agents === 1 ? '' : 's'}</Text>}
+    </View>
+  );
+}
+
+const sameRun = (a: Row['run'], b: Row['run']) => a === b || (a.activity === b.activity && a.agents === b.agents && a.startedAt === b.startedAt && a.limitedUntil === b.limitedUntil);
 
 /** Swipe actions sit behind the row; over the wallpaper the row is see-through, so they appear
  * only once a swipe starts. */
@@ -118,6 +156,7 @@ export const InboxRow = memo(function InboxRow({ row, snoozed, last, sidebar, se
         {sidebar ? <SidebarStatus row={row} colors={colors} /> : <Status row={row} colors={colors} />}
       </View>
       <Text style={[styles.title, { color: colors.text }]} numberOfLines={1}>{row.outboxId ? `“${row.text}”` : task.title || 'Untitled task'}</Text>
+      <Activity row={row} colors={colors} />
       <View style={styles.line}>
         <Icon ios="desktopcomputer" android="computer" size={12} color={colors.tertiary} />
         <Text style={[styles.meta, { color: colors.secondary }]} numberOfLines={1}>{[task.branch, row.computer].filter(Boolean).join(' · ')}</Text>
@@ -155,7 +194,7 @@ export const InboxRow = memo(function InboxRow({ row, snoozed, last, sidebar, se
       ) : <Link href={href} replace={replace} asChild>{body}</Link>}
     </Swipeable>
   );
-}, (a, b) => a.row.task === b.row.task && a.row.badge === b.row.badge && a.row.pinned === b.row.pinned && a.row.at === b.row.at
+}, (a, b) => a.row.task === b.row.task && a.row.badge === b.row.badge && sameRun(a.row.run, b.row.run) && a.row.pinned === b.row.pinned && a.row.at === b.row.at
   && a.row.computer === b.row.computer && a.row.outboxId === b.row.outboxId && a.row.text === b.row.text && a.snoozed === b.snoozed && a.last === b.last && a.minute === b.minute
   && a.sidebar === b.sidebar && a.selected === b.selected && a.replace === b.replace);
 
@@ -171,6 +210,8 @@ const styles = StyleSheet.create({
   time: { fontSize: 14, fontVariant: ['tabular-nums'] },
   title: { fontSize: 16, fontWeight: '600', marginTop: 1 },
   meta: { flex: 1, fontSize: 12.5, fontFamily: mono },
+  activity: { flex: 1, fontSize: 13.5 },
+  agents: { fontSize: 12, fontWeight: '600', paddingHorizontal: 7, paddingVertical: 2, borderRadius: 8, overflow: 'hidden' },
   separator: { height: StyleSheet.hairlineWidth, marginTop: 11 },
   swipeRow: { flexDirection: 'row' },
   swipe: { width: 74, alignItems: 'center', justifyContent: 'center', gap: 4 },
