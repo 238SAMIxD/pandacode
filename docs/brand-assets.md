@@ -18,6 +18,8 @@ SHA-256 checksums:
 7be72f1fea831d3ba81a545cee79b7e0ae69449d5d7837c9571ccbfb4aa1e00b  openai.svg
 dbd00e2ad61ea8832ef0b024662a4a8a5d1b66f0599d5d42e1c9688b9d4cfdf6  kimi.png
 ff361d2db319ff823a8d5c2385e338e57d530477455e9407ad8dc8e824b93020  github-copilot.svg
+1124530aea0008f485e80b3a27d51968f99d80e585913bc1437499b78fbb67dc  kilo.svg
+1cb65e5df9037ec4f6664e033a82de53a209fa4e49130959ef56e6bd9deee730  omp.svg
 ```
 
 ## PandaCode artwork
@@ -32,3 +34,5 @@ The app icon (`public/icon.svg`), decorative bamboo grove (`public/bamboo-grove.
 - Command Code: `https://commandcode.ai/favicon/2024/android-chrome-192x192.png` (official commandcode.ai site icon, 192 × 192 PNG, copied byte for byte, retrieved 2026-10-22; SHA-256 `27eab59595aa7570a8b4cdab2d79cff894ab9f47d49e870e68b031ddc1c69e88`). Identifies the Command Code integration; the mark remains Command Code's property.
 - Muse Code: `https://static.xx.fbcdn.net/rsrc.php/yf/r/-7pQO6hUGK_.svg` (the official Meta infinity mark, the SVG site icon of meta.com and about.meta.com, 32 × 32, copied byte for byte, retrieved 2026-10-22; SHA-256 `9c354dc7d40f7862df2dfb34df05ae08c3e956d55a450379803d6cac6878a63e`). Identifies the Muse Code integration, which is Meta's; the mark remains Meta's property.
 - Grok (xAI): `https://grok.com/images/android-chrome-192x192.png` (official grok.com site icon, 192 × 192 PNG, copied byte for byte, retrieved 2026-09-21; SHA-256 `768cbbf7a7528d6e7b3af8112d7cde43eb6c9c8989ad9b06be8047dae1227463`). Identifies the Grok Build integration; the mark remains xAI's property.
+- Kilo Code: `packages/kilo-docs/public/img/logo.svg` from the official `Kilo-Org/kilocode` repository and `kilo.ai` website header (retrieved 2026-10-24; SHA-256 `1124530aea0008f485e80b3a27d51968f99d80e585913bc1437499b78fbb67dc`). `src/provider-logos.ts` inlines it with `currentColor` so it follows the active theme's text color. Identifies the Kilo Code integration; the mark remains Kilo's property.
+- Oh My Pi: `packages/collab-web/public/favicon.svg` from the official `can1357/oh-my-pi` repository and `https://omp.sh/favicon.svg` (retrieved 2026-10-24; SHA-256 `1cb65e5df9037ec4f6664e033a82de53a209fa4e49130959ef56e6bd9deee730`). Identifies the Oh My Pi integration; the mark remains Stencil Labs's property.
