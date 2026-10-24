@@ -61,6 +61,7 @@ mod usage_keychain;
 mod usage_ledger;
 mod workspace;
 mod jj;
+mod tray;
 
 pub use usage_keychain::handle_usage_keychain_helper;
 pub use cloud_agents::handle_cloud_bridge;
@@ -588,6 +589,10 @@ async fn remove_project(state: State<'_, AppState>, project_id: String) -> Resul
 }
 #[tauri::command]
 async fn list_sessions(state: State<'_, AppState>) -> Result<Vec<Session>> {
+    listed_sessions(&state)
+}
+/// Tasks as the sidebar shows them, with stale running states settled.
+pub(crate) fn listed_sessions(state: &AppState) -> Result<Vec<Session>> {
     let agents = state.agents.lock().map_err(|e| e.to_string())?;
     let store = state.store.lock().map_err(|e| e.to_string())?;
     Ok(store
@@ -1720,6 +1725,7 @@ async fn launch_operation_admitted(
     // leave that run alone, so this run neither stops it nor records an end while closing.
     let cloud = cloud_agents::transport::is_cloud(&session_id);
     let _ = app.emit("agent-event", event(&session_id, "status", "running"));
+    tray::refresh(&app);
     let store = state.store.clone();
     let agents = state.agents.clone();
     // Optional metadata must never block a conversation when its storage cannot
@@ -1852,6 +1858,7 @@ async fn launch_operation_admitted(
                         if let Some(request_id) = &e.request_id {
                             bots::approval_requested(&app_sink, &e.session_id, request_id, &e.text);
                         }
+                        tray::refresh(&app_sink);
                     }
                     saved
                 } else {
@@ -2141,6 +2148,8 @@ async fn launch_operation_admitted(
         } else {
             "Turn failed"
         };
+        // Before `done`, so the window's tray_seen for the open task lands after it.
+        tray::finished(&app, &session_id, was_stopped, successful);
         let _ = app.emit("agent-event", event(&session_id, "done", done));
         remote::run_finished(&app, &session_id, successful, was_stopped, done);
         // Bot conversations reply on their channel and send their next queued message.
@@ -2978,11 +2987,34 @@ async fn read_file(
     let root = state.root(&project_id, session_id.as_deref())?;
     blocking(move || workspace::read_file(&root, path)).await
 }
+/// A PDF, Word, spreadsheet or image file for the file viewer, sent as raw bytes rather than JSON.
 #[tauri::command]
-async fn workspace_image(state: State<'_, AppState>, session_id: String, path: String) -> Result<String> {
+async fn read_document_file(
+    state: State<'_, AppState>,
+    project_id: String,
+    session_id: Option<String>,
+    path: String,
+) -> Result<tauri::ipc::Response> {
+    let root = state.root(&project_id, session_id.as_deref())?;
+    blocking(move || workspace::read_document_bytes(&root, &path)).await.map(tauri::ipc::Response::new)
+}
+#[tauri::command]
+async fn workspace_image(
+    state: State<'_, AppState>,
+    project_id: Option<String>,
+    session_id: Option<String>,
+    path: String,
+) -> Result<String> {
     // A question belongs to one task: its images come from that task's checkout only.
-    let project_id = state.store.lock().map_err(|e| e.to_string())?.session(&session_id)?.project_id;
-    let root = state.root(&project_id, Some(&session_id))?;
+    // The file viewer passes the same project and task it read the document with.
+    let project_id = match project_id {
+        Some(id) => id,
+        None => {
+            let session_id = session_id.as_deref().ok_or_else(|| "A task is required to show images".to_string())?;
+            state.store.lock().map_err(|e| e.to_string())?.session(session_id)?.project_id
+        }
+    };
+    let root = state.root(&project_id, session_id.as_deref())?;
     blocking(move || workspace::image_data_url(&root, &path)).await
 }
 #[tauri::command]
@@ -3230,6 +3262,7 @@ pub fn run() {
             }
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
+            secret_store::setup(&dir);
             provider_settings::setup(&dir).map_err(std::io::Error::other)?;
             connections::setup(&dir).map_err(std::io::Error::other)?;
             // Optional integration storage must never prevent the workspace from opening.
@@ -3260,6 +3293,9 @@ pub fn run() {
             app.manage(architect::Runtime::default());
             architect::watchdog::watch(app.handle().clone());
             bots::start(app.handle());
+            if let Err(error) = tray::setup(app.handle()) {
+                eprintln!("Menu bar item is unavailable: {error}");
+            }
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 loop {
@@ -3304,6 +3340,18 @@ pub fn run() {
                     list_provider_models,
                     search_files,
                     open_external_url,
+                ];
+                return handler(invoke);
+            }
+            if invoke.message.webview_ref().label() == "tray" {
+                let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+                    tray::tray_snapshot,
+                    tray::tray_open,
+                    tray::tray_refresh_usage,
+                    tray::tray_show_app,
+                    tray::tray_hide,
+                    tray::tray_quit,
+                    tray::tray_resize,
                 ];
                 return handler(invoke);
             }
@@ -3362,6 +3410,7 @@ pub fn run() {
                 connections::connection_delete,
                 connections::connection_assign,
                 agent_usage::agent_usage,
+                tray::tray_seen,
                 usage_ledger::usage_ledger,
                 capabilities::capabilities_inventory,
                 capabilities::cache_alignment,
@@ -3390,6 +3439,7 @@ pub fn run() {
                 bots::bot_activity,
                 bots::bot_project_ids,
                 bots::bot_message,
+                bots::bot_set_capabilities, bots::bot_assign_task, bots::bot_task_links, bots::bot_task_brief,
                 bots::schedule::bot_schedule_create,
                 bots::schedule::bot_schedule_set_enabled,
                 bots::schedule::bot_schedule_delete,
@@ -3562,6 +3612,12 @@ pub fn run() {
                 skills::skills_matrix,
                 skills::skills_scan,
                 skills::skills_remove,
+                skills::skills_catalogs,
+                skills::skills_catalog_add,
+                skills::skills_catalog_refresh,
+                skills::skills_catalog_state,
+                skills::skills_catalog_import,
+                skills::skills_discover,
                 set_task_link,
                 import_prompt_image,
                 read_document,
@@ -3570,6 +3626,7 @@ pub fn run() {
                 search_files,
                 search_text,
                 read_file,
+                read_document_file,
                 design::design_list,
                 design::design_read,
                 design::design_comments,

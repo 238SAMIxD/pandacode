@@ -340,6 +340,7 @@ fn cache() -> &'static HashMap<&'static str, CacheSlot> {
             "deepseek",
             "commandcode",
             "cline",
+            "kilo",
             "omp",
             "github-copilot",
             "muse",
@@ -532,7 +533,7 @@ pub(crate) async fn agent_usage(
     query_usage(provider, refresh).await
 }
 
-async fn query_usage(provider: String, refresh: bool) -> crate::Result<Usage> {
+pub(crate) async fn query_usage(provider: String, refresh: bool) -> crate::Result<Usage> {
     let slot = cache().get(provider.as_str()).ok_or("Unknown agent.")?;
     Ok(cached(slot, refresh, || async {
         static LIMIT: Semaphore = Semaphore::const_new(3);
@@ -566,6 +567,7 @@ async fn fetch_provider(provider: &str) -> Usage {
         "deepseek" => Usage::empty(provider, "unsupported", "DeepSeek does not expose balance or limits through this agent. Check the DeepSeek platform."),
         "commandcode" => Usage::empty(provider, "unsupported", "Command Code does not expose credits or limits through this agent. Check Command Code Studio."),
         "cline" => Usage::empty(provider, "unsupported", "Cline does not expose credits or limits through this agent. Check your Cline account."),
+        "kilo" => Usage::empty(provider, "unsupported", "Kilo Code does not expose credits or limits through this agent. Check your Kilo account or the model provider's dashboard."),
         "github-copilot" => Usage::empty(provider, "unsupported", "GitHub Copilot CLI does not expose usage limits through this agent. Check your GitHub Copilot settings."),
         "muse" => Usage::empty(provider, "unsupported", "Muse Code reports its usage windows only inside a running session. Check them with /usage in Muse Code."),
         _ => Usage::empty(provider, "unsupported", "Usage limits are not available for this agent."),
@@ -579,6 +581,7 @@ async fn fetch_provider(provider: &str) -> Usage {
             "deepseek" => Some("https://platform.deepseek.com/usage"),
             "commandcode" => Some("https://commandcode.ai/studio"),
             "cline" => Some("https://app.cline.bot"),
+            "kilo" => Some("https://app.kilo.ai"),
             _ => None,
         }
         .map(str::to_owned);

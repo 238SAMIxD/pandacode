@@ -17,7 +17,7 @@ import { recipesCommand } from './preview-recipes';
 import { openCodePreviewKey, openCodePreviewModels, previewOpenCodeChoices, previewOpenCodeSelection } from './preview-opencode';
 const turnChanges = createPreviewTurnChanges();
 const now = Date.now();
-const sampleReadme = '# Orbit\n\nA tiny search index for the browser preview.\n\n## Usage\n\n- Build the index with `createSearchIndex`.\n- Call `search(query)`.\n\n> Results are case-insensitive.\n';
+const sampleReadme = '<div align="center">\n\n<img src="docs/banner.png" alt="Orbit banner" width="100%" onerror="alert(1)"/>\n\n[![Build](https://img.shields.io/badge/build-passing-green)](https://example.com/ci)\n\n<script>alert(1)</script>\n\n<a href="https://example.com/x" download class="toast">Get</a>\n\n</div>\n\n# Orbit\n\nA tiny search index for the browser preview.\n\n## Usage\n\n- Build the index with `createSearchIndex`.\n- Call `search(query)`.\n\n> Results are case-insensitive.\n';
 const sampleSource = '// Browser preview — sample source\nexport function createSearchIndex(items) {\n  return {\n    search(query) {\n      return items.filter(item =>\n        item.title.toLowerCase().includes(query.toLowerCase())\n      );\n    }\n  };\n}\n';
 const previewWorkspaceFiles = ['index.html', '.gitignore', 'README.md', 'package.json', 'tsconfig.json', 'src/main.ts', 'src/style.css', 'src/components/search.ts', 'src/components/search.test.ts', 'src/lib/search-index.ts', 'public/favicon.svg', 'docs/design notes.md'];
 const sampleTestOutput = 'PASS src/components/search.test.ts\n  ✓ filters results as the query changes\n  ✓ preserves keyboard selection\n\nTests: 12 passed, 12 total\nTime: 0.8s\nSample output — no command was executed.';
@@ -119,6 +119,7 @@ const providers: Provider[] = [
   { id: 'deepseek', name: 'DeepSeek', installed: true, path: '/sample/bin/dsh', version: 'Sample provider', models: [] },
   { id: 'commandcode', name: 'Command Code', installed: true, path: '/sample/bin/command-code', version: '1.87.1 (sample)', models: [] },
   { id: 'cline', name: 'Cline', installed: true, path: '/sample/bin/cline', version: '3.0.73 (sample)', models: [] },
+  { id: 'kilo', name: 'Kilo Code', installed: true, path: '/sample/bin/kilo', version: '7.3.41 (sample)', models: [] },
   { id: 'omp', name: 'Oh My Pi', installed: false, path: null, version: '', models: [] },
   { id: 'github-copilot', name: 'GitHub Copilot CLI', installed: true, path: '/sample/bin/copilot', version: 'GitHub Copilot CLI 1.0.82 (sample)', models: [] },
   { id: 'muse', name: 'Muse Code', installed: true, path: '/sample/bin/muse', version: 'Muse Code 1.4.7 (sample)', models: [] },
@@ -153,6 +154,11 @@ function remoteCatalog(id: ProviderId): ProviderModel[] {
   return id === 'codex' ? ['gpt-5-codex', 'gpt-5'].map(model => fallbackModel('codex', model)) : [];
 }
 const catalogs: Record<ProviderId, ProviderModel[]> = {
+  // Recorded from `kilo acp` 7.3.41; efforts belong to its current model only.
+  kilo: [
+    { id: 'kilo/stealth/claude-sonnet-4.6', name: 'Kilo Gateway/Stealth: Claude Sonnet 4.6 (20% off)', description: '', reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'].map(id => ({ id, name: id, description: '' })), defaultReasoningEffort: 'none' },
+    { id: 'kilo/anthropic/claude-sonnet-4.6', name: 'Kilo Gateway/Anthropic: Claude Sonnet 4.6', description: '' },
+  ],
   pi: [{ id: 'anthropic/claude-sonnet-4-5', name: 'Claude Sonnet 4.5', description: 'Sample Pi model.', reasoningEfforts: [{ id: 'low', name: 'Low', description: '' }, { id: 'high', name: 'High', description: '' }], contextWindow: 200000 }],
   omp: [{ id: 'anthropic/claude-sonnet-4-5', name: 'Claude Sonnet 4.5', description: 'Sample omp model.', reasoningEfforts: [{ id: 'low', name: 'Low', description: '' }, { id: 'high', name: 'High', description: '' }], contextWindow: 200000 }],
   deepseek: [
@@ -634,7 +640,30 @@ const architect = createPreviewArchitect({
   agent,
 });
 
+/** Menu bar popover data; `window.__trayCalls` records what it asked for. */
+function trayCommand(command: string, args: Record<string, any>): unknown {
+  ((window as any).__trayCalls ??= []).push({ command, args });
+  if (command !== 'tray_snapshot') return undefined;
+  const now = Date.now(), minutes = (m: number) => now - m * 60_000, hours = (h: number) => new Date(now + h * 3_600_000).toISOString();
+  return {
+    running: [
+      { id: 'tray-running-1', title: 'Polish the new onboarding flow and keyboard navigation', project: 'PandaCode', provider: 'claude', at: minutes(4) },
+      { id: 'tray-running-2', title: 'Build search indexing', project: 'website', provider: 'codex', at: minutes(27) },
+    ],
+    waiting: [{ id: 'tray-waiting', title: 'Run the database migration', project: 'api', provider: 'opencode', at: minutes(12) }],
+    finished: [
+      { id: 'tray-done', title: 'Review the API changes', project: 'api', provider: 'kimi', at: minutes(8) },
+      { id: 'tray-failed', title: 'Fix flaky login test', project: 'PandaCode', provider: 'codex', at: minutes(65), failed: true },
+    ],
+    usage: [
+      { provider: 'claude', status: 'ready', plan: 'Max', stale: false, checkedAt: now, windows: [{ label: '5 hours', usedPercent: 42, resetsAt: hours(2.17) }, { label: 'Weekly', usedPercent: 83, resetsAt: hours(70) }] },
+      { provider: 'codex', status: 'ready', plan: 'Pro', stale: false, checkedAt: now, windows: [{ label: '5 hours', usedPercent: 97, resetsAt: hours(0.6) }] },
+    ],
+    checking: false,
+  };
+}
 export async function invoke<T>(command: string, args: Record<string, any>): Promise<T> {
+  if (command.startsWith('tray_')) return trayCommand(command, args) as T;
   if (command.startsWith('jj_')) return (await import('./preview-jj')).invokeJj<T>(command, args);
   if (command.includes('moodboard')) return (await import('./preview-moodboards')).invokeMoodboards<T>(command, args);
   if (command === 'bots_list' || command.startsWith('bot_')) return invokeBots<T>(command, args, {
@@ -811,7 +840,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       if (!Number.isSafeInteger(args.messageId) || args.messageId <= 0 || boundary < 0 || !['user', 'assistant'].includes(history[boundary].role)) throw new Error('Choose a saved user message or assistant response to fork.');
       const boundaryProvider = historicalProvider(history[boundary], history, source.provider);
       const created: Session = { ...structuredClone(source), id: crypto.randomUUID(), pinned: false, sidebarOrder: null, title: [...source.title].slice(0, 193).join('') + ' (fork)', resumeId: null, status: 'idle', archived: false, goalState: null, contextUsage: null, taskStage: 'in_progress', completedAt: null, lastResponseAt: null, lastPromptAt: null, createdAt: Date.now(), updatedAt: Date.now() };
-      const copied: Message[] = history.slice(0, boundary + 1).filter(message => !['internal', 'changes'].includes(message.role)).map(message => {
+      const copied: Message[] = history.slice(0, boundary + (args.exclusive ? 0 : 1)).filter(message => !['internal', 'changes'].includes(message.role)).map(message => {
         let content = message.content;
         if (message.role === 'tool') {
           try {
@@ -860,6 +889,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       if (args.enabled && !(s.limitedAt && s.limitedUntil)) throw new Error('This task has no usage limit with a known reset time.');
       s.resumeAtReset = Boolean(args.enabled) && Boolean(s.limitedAt); result = s; break;
     }
+    case 'tray_seen': result = null; break;
     case 'clear_usage_limit': { const s = session(args.sessionId); s.limitedAt = null; s.limitedUntil = null; s.resumeAtReset = false; result = null; break; }
     case 'queue_list': result = previewQueue().filter(entry => !args.sessionId || entry.sessionId === args.sessionId); break;
     case 'queue_add': {
@@ -1303,6 +1333,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'design_save_comments': result = previewDesign.saveComments(args.comments); break;
     case 'skills_list': case 'skills_import_folder': case 'skills_import_github': case 'skills_activate':
     case 'skills_deactivate': case 'skills_matrix': case 'skills_scan': case 'skills_remove':
+    case 'skills_catalogs': case 'skills_catalog_add': case 'skills_catalog_refresh': case 'skills_catalog_state': case 'skills_catalog_import': case 'skills_discover':
       result = previewSkills.call(command, args); break;
     case 'simulator_status': result = previewSimulator.status(); break;
     case 'simulator_pose': result = await previewSimulator.pose(args.udid, args.pose); break;
@@ -1313,7 +1344,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'simulator_input': result = previewSimulator.input(args.udid, args.input); break;
     case 'simulator_appearance': result = previewSimulator.appearance(args.mode); break;
     case 'simulator_capture': result = await previewSimulator.capture(args.udid); break;
-    case 'list_files': result = (args.path ? args.path === 'public' ? [{ name: 'favicon.svg', isDir: false }] : args.path === 'src' ? [{ name: 'components', isDir: true }, { name: 'lib', isDir: true }, { name: 'main.ts', isDir: false }, { name: 'style.css', isDir: false }] : [{ name: 'search.ts', isDir: false }, { name: 'search.test.ts', isDir: false }] : [{ name: 'src', isDir: true }, { name: 'public', isDir: true }, { name: 'index.html', isDir: false }, { name: 'package.json', isDir: false }, { name: 'README.md', isDir: false }, { name: 'tsconfig.json', isDir: false }]).map(f => ({ ...f, path: [args.path, f.name].filter(Boolean).join('/') })) satisfies FileEntry[]; break;
+    case 'list_files': result = (args.path ? args.path === 'public' ? [{ name: 'favicon.svg', isDir: false }] : args.path === 'src' ? [{ name: 'components', isDir: true }, { name: 'lib', isDir: true }, { name: 'main.ts', isDir: false }, { name: 'style.css', isDir: false }] : [{ name: 'search.ts', isDir: false }, { name: 'search.test.ts', isDir: false }] : [{ name: 'src', isDir: true }, { name: 'public', isDir: true }, { name: 'index.html', isDir: false }, { name: 'package.json', isDir: false }, { name: 'README.md', isDir: false }, { name: 'tsconfig.json', isDir: false }, { name: 'report.pdf', isDir: false }, { name: 'proposal.docx', isDir: false }, { name: 'budget.xlsx', isDir: false }, { name: 'screenshot.png', isDir: false }]).map(f => ({ ...f, path: [args.path, f.name].filter(Boolean).join('/') })) satisfies FileEntry[]; break;
     case 'search_files': {
       const query = String(args.query ?? '').trim().toLocaleLowerCase().replace(/\/$/, '');
       const files = previewWorkspaceFiles.map(path => ({ path, isDir: false }));
@@ -1389,7 +1420,15 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><defs><linearGradient id="g" x1="0" x2="1"><stop stop-color="#2e513b"/><stop offset="1" stop-color="#ffd43b"/></linearGradient></defs><rect width="320" height="180" rx="12" fill="url(#g)"/><text x="160" y="96" fill="#fffcef" font-family="sans-serif" font-size="18" text-anchor="middle">${String(args.path).split('/').pop()}</text></svg>`;
       result = `data:image/svg+xml;base64,${btoa(svg)}`; break;
     }
-    case 'read_file': result = /\.(md|markdown)$/i.test(args.path) ? sampleReadme : args.path.endsWith('.json') ? '{\n  "name": "orbit",\n  "private": true,\n  "type": "module"\n}' : args.path.endsWith('.html') ? '<!doctype html>\n<html><head><title>Orbit</title></head><body><h1>Orbit</h1></body></html>' : sampleSource; break;
+    // Sample documents are the test fixtures, served by the dev server.
+    case 'read_document_file': {
+      const sample = ({ pdf: 'sample.pdf', docx: 'sample.docx', xlsx: 'sample.xlsx', png: 'sample.png', svg: 'sample.svg' } as Record<string, string>)[String(args.path).split('.').pop()!.toLowerCase()];
+      const response = sample && await fetch(`/tests/fixtures/${sample}`);
+      if (!response || !response.ok) throw new Error('Only PDF, Word (.docx) and spreadsheet files can be shown');
+      result = await response.arrayBuffer();
+      break;
+    }
+    case 'read_file': result = /\.(md|markdown)$/i.test(args.path) ? sampleReadme : args.path.endsWith('.json') ? '{\n  "name": "orbit",\n  "private": true,\n  "type": "module"\n}' : args.path.endsWith('.html') ? '<!doctype html>\n<html><head><title>Orbit</title></head><body><h1>Orbit</h1></body></html>' : args.path.endsWith('.svg') ? '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/></svg>' : sampleSource; break;
     case 'get_metrics': result = { coreRssBytes: 0, activeAgents: timers.size, activeTerminals: 0, databaseBytes: 0 }; break;
     case 'get_terminal_activity': result = { running: false, processNames: [], uncertain: false }; break;
     case 'get_run_script': result = null; break;

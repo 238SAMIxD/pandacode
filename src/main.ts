@@ -13,7 +13,7 @@ import './message-queue.css';
 import './usage-limit.css';
 import './document-viewer.css';
 import './tool-trace.css';
-import { renderDocument, setDocumentView } from './document-viewer';
+import { setDocumentView } from './document-viewer';
 import { moved, queuePanel, type HoldReason, type QueuedMessage } from './message-queue';
 import { afterRun as turnChecksAfterRun, enabled as turnChecksEnabled, noteManualSend, setEnabled as turnChecksSetEnabled } from './turn-checks';
 import { limitActive, limitBanner, resetLabel } from './usage-limit';
@@ -52,7 +52,7 @@ import { changeUiScale, initializeUiSizing, setUiScale } from './ui-size';
 import { approvalBarHtml } from './approval-bar';
 import { createThreadFind } from './thread-find';
 import type { RemoteHost, RemoteRepoCheck, RemoteStatus, RemoteTarget } from './remote-types';
-import { LOCAL, behindDialog, behindText, computerControl, computerItems } from './remote-target';
+import { CONNECT_SETUP, LOCAL, behindDialog, behindText, computerControl, computerItems } from './remote-target';
 import './cloud-agents.css';
 import { SETUP_CHOICE, cloudActionItems, cloudIcon, cloudProvider, cloudStrip, deleteMachineDialog, harnessRefusal, type CloudStage, type CloudTarget } from './cloud-agents';
 import { botsBarHtml, botsListHtml, botsPanelHeadHtml, storedSidebarView, storeSidebarView, syncSeen, type SidebarView } from './sidebar-bots';
@@ -60,6 +60,7 @@ import { connectAgentUiActions, type AgentUiAction } from './agent-ui-actions';
 import { createAgentInput, type AgentInput } from './agent-input';
 import { mountSlashCommands, type SlashCommand } from './slash-commands';
 import { mountFileMentions, type MentionEntry } from './file-mentions';
+import { createFileTabs } from './file-tabs';
 import { bindFileLinkContext, configureFileLinks, isPreviewableFile, refreshFileLinks, type FileLinkContext, type ResolvedFile } from './file-links';
 import { createWorktrees } from './worktrees';
 import { createGithub, githubEnabled } from './github';
@@ -93,8 +94,8 @@ const state = {
   projectFilter: localStorage.getItem('pandacode.projectFilter') ?? '', collapsedFolders: readCollapsed(localStorage, 'pandacode.collapsedFolders'), expandedFolders: new Set<string>(),
   /** Follow-ups typed while an agent works, per task, in delivery order; mirrored from native storage. */
   queues: new Map<string, QueuedMessage[]>(), queueHolds: new Map<string, HoldReason>(), queueEditing: '', queueBusy: new Set<string>(),
-  git: null as GitStatus | null, jj: null as JjStatus | null, files: [] as FileEntry[], filePath: '', gitError: '', filesError: '', inspectorLoading: false,
-  selectedFile: '', selectedContent: '', selectedKind: '' as '' | 'diff' | 'file', selectedStaged: false, filePreviewLoading: false,
+  git: null as GitStatus | null, jj: null as JjStatus | null, files: [] as FileEntry[], openFolders: new Set<string>(), folderFiles: new Map<string, FileEntry[]>(), gitError: '', filesError: '', inspectorLoading: false,
+  selectedFile: '', selectedContent: '', selectedKind: '' as '' | 'diff', selectedStaged: false, filePreviewLoading: false,
   browserUrl: '',
   attachments: [] as string[], drafts: new Map<string, string>(), defaultProvider: (localStorage.getItem('pandacode.defaultProvider') ?? localStorage.getItem('pandacode.provider') ?? 'claude') as ProviderId,
   browserAttachments: new Map<string, BrowserAttachment[]>(),
@@ -140,7 +141,7 @@ let browserLifecycle = Promise.resolve();
 let browserOwner = '', browserRevision = 0, inspectorSuppressed = false;
 /** The user's last explicit inspector toggle; a task without saved panel state follows it. */
 let inspectorChosen = true;
-type ThreadPanel = { workspace: string; open: boolean; tab: typeof state.inspectorTab; folder: string; file: string; kind: typeof state.selectedKind; staged: boolean; context?: FileLinkContext; browserUrl: string };
+type ThreadPanel = { workspace: string; open: boolean; tab: typeof state.inspectorTab; folders: string[]; file: string; kind: typeof state.selectedKind; staged: boolean; context?: FileLinkContext; browserUrl: string };
 const threadPanels = new Map<string, ThreadPanel>();
 const teams = new Map<string, TeamSnapshot | null>();
 let architectView: ArchitectView | undefined;
@@ -285,7 +286,7 @@ $app.innerHTML = `<div class="workspace">
   </aside>
   <main class="main-pane">
     <header class="workspace-header" data-tauri-drag-region="deep"><div class="header-leading" data-tauri-drag-region>${button('toggle-sidebar', 'Hide sidebar', 'sidebar', 'sidebar-toggle', 'id="sidebar-toggle" aria-controls="workspace-sidebar" aria-expanded="true" aria-keyshortcuts="Meta+B Control+B"')}<div id="breadcrumb" class="breadcrumb" data-tauri-drag-region></div></div><div class="header-actions">${preview ? '<span class="preview-status">Browser preview · sample data</span>' : ''}<button type="button" id="update-status" class="update-status" hidden>${icon('refresh')}<span>Restart to update</span></button><div class="view-switch" role="group" aria-label="Workspace view"><button data-action="conversation-view" aria-label="Conversation view" aria-pressed="true">${icon('chat')}<span>Conversation</span></button><button data-action="board-view" aria-label="Board view" aria-pressed="false">${icon('board')}<span>Board</span></button><button data-action="github-view" aria-label="GitHub view" aria-pressed="false">${icon('github')}<span>GitHub</span></button></div><button type="button" class="header-run" id="run-project-button" data-action="run-project" aria-label="Run project" title="Run pandacode-run.sh" hidden>${icon('play')}<span>Run</span></button>${button('deploy', 'Deploy', 'upload', '', 'id="deploy-button" aria-haspopup="dialog"')}<span class="header-divider" aria-hidden="true"></span>${button('moodboards', 'Project moodboards', 'images')}${button('browser', 'Open browser', 'globe', '', 'id="browser-toggle"')}${button('terminal', `Toggle terminal (${shortcut('J')})`, 'terminal', '', 'id="terminal-toggle" aria-controls="terminal-drawer" aria-expanded="false"')}<span class="header-divider" aria-hidden="true"></span>${button('toggle-inspector', `Toggle inspector (${shortcut('B', true)})`, 'panel', 'active', 'id="inspector-toggle"')}${button('task-menu', 'Task actions', 'more', '', 'id="task-menu-trigger" aria-haspopup="dialog" aria-expanded="false"')}</div></header>
-    <div class="work-area"><section id="project-board" class="project-board" aria-label="Project board" hidden></section><section id="github-hub" aria-label="GitHub" hidden></section><section class="conversation-pane"><div id="task-details-heading" class="task-details-heading" hidden></div><div id="subagents-host" class="subagents-host" hidden></div><div id="transcript" class="transcript" role="log" aria-label="Conversation" aria-live="off"></div><div id="composer-area" class="composer-area"></div></section></div>
+    <div class="work-area"><section id="project-board" class="project-board" aria-label="Project board" hidden></section><section id="github-hub" aria-label="GitHub" hidden></section><section class="conversation-pane"><div id="file-tabs" class="file-tabs" role="tablist" aria-label="Open files" hidden></div><section id="file-view" class="file-view" role="tabpanel" aria-label="Open file" hidden></section><div id="task-details-heading" class="task-details-heading" hidden></div><div id="subagents-host" class="subagents-host" hidden></div><div id="transcript" class="transcript" role="log" aria-label="Conversation" aria-live="off"></div><div id="composer-area" class="composer-area"></div></section></div>
     <div id="terminal-drawer" class="terminal-drawer" hidden><div class="drawer-heading"><span>${icon('terminal')}<span id="terminal-project" class="muted"></span></span><div class="terminal-tabs" role="tablist" aria-label="Terminal tabs"></div><div class="terminal-heading-actions"><button class="icon-button" data-terminal-action="new" aria-label="New terminal" title="New terminal">${icon('plus')}</button><button class="icon-button" data-terminal-action="minimize" aria-label="Minimize terminal" title="Minimize terminal">${icon('minimize')}</button><button class="icon-button" data-terminal-action="close" aria-label="Close terminal" title="Close terminal" aria-haspopup="dialog">${icon('close')}</button></div></div><div id="terminal-host"></div></div>
   </main>
   <section id="settings-page" aria-label="Settings" hidden></section>
@@ -336,6 +337,15 @@ const searchPanel = createSearchPanel({
   context: () => project() ? workspaceContext() : null,
   open: path => run(openFile(path, 'file')),
 });
+const fileTabs = createFileTabs({
+  call,
+  canAttach: context => Boolean(state.sessionId) && context.sessionId === state.sessionId,
+  attach: path => attachFile(path),
+  preview: (path, context) => previewFile(path, context),
+  notify: text => notify(text),
+  report: error => report(error),
+  focusConversation: () => document.querySelector<HTMLElement>('#prompt')?.focus(),
+});
 const pullView = createPullView({
   call,
   openUrl: url => call('open_external_url', { url }),
@@ -374,7 +384,7 @@ const worktrees = createWorktrees({
   git: () => state.git, gitError: () => state.gitError,
   draft: () => document.querySelector<HTMLTextAreaElement>('#prompt')?.value ?? '',
   attachable: () => newTaskView(),
-  computer: (task, fresh) => computerControl(task, fresh, remoteTargets, remoteChoice, cloudTargets),
+  computer: (task, fresh) => computerControl(task, fresh, remoteTargets, remoteChoice, cloudTargets) + botTaskControl(task, fresh),
   running: () => isRunning(),
   afterAttach: async (saved, live) => {
     const index = state.sessions.findIndex(s => s.id === saved.id); if (index >= 0) state.sessions[index] = saved;
@@ -522,7 +532,7 @@ const disposeMessageActions = bindMessageActions($('#transcript'), {
     const saved = state.messages.find(message => String(message.id) === key);
     return saved && saved.id > 0 && ['user', 'assistant'].includes(saved.role)
       ? call<string>('get_message_content', { sessionId, messageId: saved.id }) : saved?.content;
-  }, onFork: forkAtMessage, report,
+  }, onFork: (sessionId, messageId) => forkAtMessage(sessionId, messageId), onEdit: editAtMessage, report,
 });
 const transcriptScroller = $('#transcript');
 transcriptScroller.tabIndex = 0;
@@ -578,20 +588,22 @@ window.addEventListener('pagehide', () => { disposeSidebarResizing(); disposeIns
 function project(): Project | undefined { return state.projects.find(p => p.id === state.projectId); }
 function workspaceContext(s = session()): { projectId: string; sessionId?: string } { return { projectId: s?.projectId ?? state.projectId, ...(s ? { sessionId: s.id } : {}) }; }
 function workspaceKey(): string { return `${state.projectId}:${session()?.worktreePath ?? ''}`; }
+/** PDFs and images open in a file tab like other documents; the tab still offers the browser preview. */
+const OPENS_IN_TAB = /\.(?:pdf|png|jpe?g|gif|webp|avif|bmp|ico|svg)$/i;
 function workspacePath(): string { return session()?.worktreePath ?? project()?.path ?? ''; }
 configureFileLinks({
   context: () => state.projectId ? workspaceContext() : undefined,
   resolve: (context, paths) => call<ResolvedFile[]>('resolve_workspace_files', { ...context, paths }),
   open: async (context, file) => {
     try {
-      if (file.previewable) await previewFile(file.path, context);
-      else { state.inspectorTab = 'files'; await openFile(file.path, 'file', false, context); }
+      if (file.previewable && !OPENS_IN_TAB.test(file.path)) await previewFile(file.path, context);
+      else await openFile(file.path, 'file', false, context);
     } catch (error) { report(error); }
   },
 });
 function saveThreadPanel(): void {
   if (!state.sessionId || deletedSessions.has(state.sessionId)) return;
-  threadPanels.set(state.sessionId, { workspace: workspaceKey(), open: state.inspector, tab: state.inspectorTab, folder: state.filePath, file: state.selectedFile, kind: state.selectedKind, staged: state.selectedStaged, context: selectedFileContext && { ...selectedFileContext }, browserUrl: state.browserUrl });
+  threadPanels.set(state.sessionId, { workspace: workspaceKey(), open: state.inspector, tab: state.inspectorTab, folders: [...state.openFolders], file: state.selectedFile, kind: state.selectedKind, staged: state.selectedStaged, context: selectedFileContext && { ...selectedFileContext }, browserUrl: state.browserUrl });
 }
 function restoreThreadPanel(task?: Session): void {
   clearWorkspaceInspector(false);
@@ -599,9 +611,10 @@ function restoreThreadPanel(task?: Session): void {
   const sameWorkspace = saved?.workspace === workspaceKey();
   // Without saved state the conversation opens the panel on Files, unless the user closed it or it would cover the chat.
   state.inspector = saved?.open ?? (state.view === 'conversation' && inspectorChosen && !matchMedia('(max-width: 920px)').matches);
-  state.inspectorTab = saved?.tab ?? 'files'; state.filePath = sameWorkspace ? saved?.folder ?? '' : '';
+  state.inspectorTab = saved?.tab ?? 'files'; state.openFolders = new Set(sameWorkspace ? saved?.folders : []);
   state.selectedFile = sameWorkspace ? saved?.file ?? '' : ''; state.selectedKind = sameWorkspace ? saved?.kind ?? '' : ''; state.selectedStaged = saved?.staged ?? false;
   state.browserUrl = sameWorkspace ? saved?.browserUrl ?? '' : ''; selectedFileContext = sameWorkspace && saved?.context ? { ...saved.context } : undefined;
+  fileTabs.show(state.sessionId, workspaceKey());
   state.filePreviewLoading = Boolean(state.selectedKind);
 }
 async function restoreSelectedFile(): Promise<void> {
@@ -609,7 +622,7 @@ async function restoreSelectedFile(): Promise<void> {
   const request = ++fileRequest, owner = state.sessionId;
   const path = state.selectedFile, kind = state.selectedKind, context = selectedFileContext ?? workspaceContext();
   try {
-    const content = await call<string>(kind === 'file' ? 'read_file' : 'git_diff', { ...context, path, staged: state.selectedStaged });
+    const content = await call<string>('git_diff', { ...context, path, staged: state.selectedStaged });
     if (request !== fileRequest || owner !== state.sessionId) return;
     state.selectedContent = content; selectedFileContext = { ...context };
   } catch (error) {
@@ -622,7 +635,7 @@ async function restoreSelectedFile(): Promise<void> {
 function clearWorkspaceInspector(render = true): void {
   ++inspectorRequest; ++fileRequest;
   state.git = null; state.files = []; state.gitError = ''; state.filesError = ''; state.inspectorLoading = Boolean(state.projectId);
-  state.filePath = ''; state.selectedFile = ''; state.selectedContent = ''; state.selectedKind = ''; state.filePreviewLoading = false;
+  state.openFolders = new Set(); state.folderFiles = new Map(); state.selectedFile = ''; state.selectedContent = ''; state.selectedKind = ''; state.filePreviewLoading = false;
   state.browserUrl = '';
   selectedFileContext = undefined;
   if (render) renderInspector();
@@ -700,7 +713,7 @@ function finishLiveMessage(current: Stream, sessionId: string): void {
   current.tools.push({ key: current.retainedMessageKey, content: current.text.length > 16384 ? current.text.slice(0, 16384) + '\n[Activity preview truncated]' : current.text, commentary: true });
   trimLiveActivity(current, sessionId); current.revision++;
 }
- function shortProvider(id: ProviderId): string { return ({ claude: 'Claude', codex: 'Codex', kimi: 'Kimi', opencode: 'OpenCode', glm: 'GLM', antigravity: 'Antigravity', grok: 'Grok', mimo: 'MiMo', pi: 'Pi', deepseek: 'DeepSeek', commandcode: 'Command Code', cline: 'Cline', omp: 'omp', 'github-copilot': 'GitHub Copilot CLI', muse: 'Muse Code' })[id]; }
+ function shortProvider(id: ProviderId): string { return ({ claude: 'Claude', codex: 'Codex', kimi: 'Kimi', opencode: 'OpenCode', glm: 'GLM', antigravity: 'Antigravity', grok: 'Grok', mimo: 'MiMo', pi: 'Pi', deepseek: 'DeepSeek', commandcode: 'Command Code', cline: 'Cline', kilo: 'Kilo', omp: 'omp', 'github-copilot': 'GitHub Copilot CLI', muse: 'Muse Code' })[id]; }
 function selectedModel(s: Session): ProviderModel { return provider(s.provider)?.models.find(model => model.id === (s.model || 'default')) ?? fallbackModel(s.provider, s.model); }
 function modelLabel(s?: Session): string {
   if (!s) return 'Default model';
@@ -1202,7 +1215,7 @@ function messageHtml(m: Message): string {
   if (m.role === 'error') return `<div class="message-error">${icon('alert')}<span>${escape(m.content)}</span></div>`;
   const isUser = m.role === 'user';
   const author = historicalProvider(m, state.messages, session()?.provider ?? state.defaultProvider);
-  return `<article class="message ${isUser ? 'user-message' : 'agent-message'}" data-message-id="${m.id}"><div class="message-meta"><span class="message-avatar ${isUser ? 'user-avatar' : ''}">${isUser ? 'Y' : providerLogo(author)}</span><strong>${isUser ? 'You' : escape(provider(author)?.name || 'Agent')}</strong><time>${formatTime(m.createdAt)}</time></div><div class="message-content ${isUser ? '' : 'markdown'}" ${isUser ? '' : `data-markdown="${m.id}"`}>${isUser ? userContent(m.content) : escape(m.content)}</div>${isUser && m.id < 0 ? steerStateHtml(m) : ''}${messageActionsHtml(m.sessionId, m.id, m.id > 0 && (isUser || m.role === 'assistant'))}</article>`;
+  return `<article class="message ${isUser ? 'user-message' : 'agent-message'}" data-message-id="${m.id}"><div class="message-meta"><span class="message-avatar ${isUser ? 'user-avatar' : ''}">${isUser ? 'Y' : providerLogo(author)}</span><strong>${isUser ? 'You' : escape(provider(author)?.name || 'Agent')}</strong><time>${formatTime(m.createdAt)}</time></div><div class="message-content ${isUser ? '' : 'markdown'}" ${isUser ? '' : `data-markdown="${m.id}"`}>${isUser ? userContent(m.content) : escape(m.content)}</div>${isUser && m.id < 0 ? steerStateHtml(m) : ''}${messageActionsHtml(m.sessionId, m.id, m.id > 0 && (isUser || m.role === 'assistant'), isUser && m.id > 0)}</article>`;
 }
 // Context appended at send time (files, documents, folders, GitHub, browser, images) folds
 // behind one summary so the transcript reads as what you said, with the payload a click away.
@@ -1434,6 +1447,7 @@ function renderComposer(): void {
   $('#composer-area').insertAdjacentHTML('afterbegin', '<div id="approval-bar"></div>');
   $('#composer').insertAdjacentHTML('beforebegin', cloudStrip(s) + (running ? '' : limitBanner(s)) + queuePanel({ entries: state.queues.get(s.id) ?? [], hold: state.queueHolds.get(s.id) ?? null, running, steerable: !team, sendable: !botProjects.has(s.projectId) && !s.archived, editingId: state.queueEditing || null, busy: state.queueBusy.has(s.id), steering: steeringQueued }));
   renderApprovalBar(); resizePrompt();
+  $('#transcript').toggleAttribute('data-running', running);
   void github.status(s.projectId);
   const prompt = document.querySelector<HTMLTextAreaElement>('#prompt');
   // The prompt stays open during a run: messages typed then are queued or steered.
@@ -1774,22 +1788,32 @@ async function loadOlderMessages(): Promise<void> {
 }
 
 const pendingMessageForks = new Set<string>();
-async function forkAtMessage(sessionId: string, messageId: number): Promise<void> {
+/** `draft` makes an Edit: the fork stops before the message, which waits in the composer. */
+async function forkAtMessage(sessionId: string, messageId: number, draft?: string): Promise<void> {
   const key = JSON.stringify([sessionId, messageId]);
   if (pendingMessageForks.has(key)) return;
   pendingMessageForks.add(key);
   const generation = state.generation;
   try {
-    const fork = await call<Session>('fork_session_at_message', { sessionId, messageId });
+    const fork = await call<Session>('fork_session_at_message', { sessionId, messageId, exclusive: draft !== undefined });
     state.sessions = [fork, ...state.sessions.filter(task => task.id !== fork.id)];
+    if (draft) state.drafts.set(fork.id, draft);
     if (generation === state.generation) {
       await selectSession(fork.id, true);
-      notify('Conversation forked. Both tasks use the same checkout.');
+      if (draft !== undefined) document.querySelector<HTMLTextAreaElement>('#prompt')?.focus();
+      notify(draft !== undefined ? 'Rewound to before your message. Edit it and send.' : 'Conversation forked. Both tasks use the same checkout.');
     } else {
       scheduleNavigation();
       notify('Conversation forked. Your new task is in the task list.');
     }
   } finally { pendingMessageForks.delete(key); }
+}
+async function editAtMessage(sessionId: string, messageId: number): Promise<void> {
+  if (isRunning(sessionId)) throw new Error('Stop the agent before editing a message.');
+  const content = await call<string>('get_message_content', { sessionId, messageId });
+  // Attached context (files, images) is not re-attached; only what you typed returns.
+  const typed = content.search(CONTEXT_BOUNDARY);
+  await forkAtMessage(sessionId, messageId, typed < 0 ? content : content.slice(0, typed));
 }
 
 /* Each thread's last page. Switching back draws it in the same frame as the click; the
@@ -1805,6 +1829,8 @@ function rememberThread(id: string): void {
 }
 const pageSignature = (messages: Message[]): string => messages.filter(message => message.id > 0).map(message => `${message.id}:${message.content.length}`).join(',');
 
+// The menu bar item lists finished tasks until they are viewed.
+function markTraySeen(sessionId: string): void { void call('tray_seen', { sessionId }).catch(() => undefined); }
 async function selectSession(id: string, focusComposer = false): Promise<void> {
   if (deletedSessions.has(id)) return;
   const s = state.sessions.find(s => s.id === id); if (!s) return;
@@ -1816,11 +1842,12 @@ async function selectSession(id: string, focusComposer = false): Promise<void> {
     if (previousTask.taskDescription) previousTask.taskDescription = [...previousTask.taskDescription].slice(0, 512).join('');
     fullTaskDescription = undefined;
   }
-  if (state.view !== 'conversation') state.boardPanel = true;
+  // Opening a task from the board or GitHub shows its conversation, not a file tab left open in it.
+  if (state.view !== 'conversation') { state.boardPanel = true; fileTabs.showConversation(); }
   // A bot's conversation lives in the Bots section; it never re-points the project filter.
   if (state.projectFilter && state.projectFilter !== s.projectId && !botProjects.has(s.projectId) && !chatTask(s)) setProjectFilter(s.projectId);
   if (state.collapsedFolders.delete(s.projectId)) saveCollapsedFolders();
-  state.sessionId = s.id; activateProject(s.projectId, false); if (changingTask) restoreThreadPanel(s); state.archived = s.archived; state.attachments = [];
+  state.sessionId = s.id; markTraySeen(s.id); activateProject(s.projectId, false); if (changingTask) restoreThreadPanel(s); state.archived = s.archived; state.attachments = [];
   const remembered = changingTask ? threadPages.get(id) : undefined;
   state.messages = remembered ? [...remembered.messages] : []; state.messagesLoading = !remembered; state.messagesError = ''; state.hasOlder = remembered?.hasOlder ?? false;
   const generation = ++state.generation;
@@ -1910,7 +1937,7 @@ function removeDeletedSessions(ids: string[]): void {
     state.drafts.delete(id); state.browserAttachments.delete(id); state.moodboardAttachments.delete(id);
     attachments.clear(id); pendingPromptActivity.delete(id);
     subagents.forget(id);
-    threadPanels.delete(id);
+    threadPanels.delete(id); fileTabs.forget(id);
   }
   state.sessions = state.sessions.filter(task => !removed.has(task.id));
   ++sessionsReload;
@@ -2314,7 +2341,7 @@ async function send(): Promise<void> {
   try {
     const contexts = await Promise.all(filePaths.map(path => fileContext(s, path)));
     // Mentioned issues and pull requests travel with the message, so every harness can read them.
-    const content = text + contexts.join('') + browserContextText(browserItems) + attachments.contextFor(promptItems) + await github.contextFor(s.projectId, s.id, text) + tokenSaver.contextFor(s.id);
+    const content = text + contexts.join('') + browserContextText(browserItems) + attachments.contextFor(promptItems) + await github.contextFor(s.projectId, s.id, text) + await botTaskBrief(s) + tokenSaver.contextFor(s.id);
     const sentIds = new Set(browserItems.map(item => item.id));
     const remaining = (state.browserAttachments.get(s.id) ?? []).filter(item => !sentIds.has(item.id));
     if (remaining.length) state.browserAttachments.set(s.id, remaining); else state.browserAttachments.delete(s.id);
@@ -2552,16 +2579,24 @@ async function refreshInspector(): Promise<void> {
   const request = ++inspectorRequest;
   const p = project(); if (!p) { state.git = null; state.jj = null; state.files = []; state.gitError = ''; state.filesError = ''; state.inspectorLoading = false; renderInspector(); return; }
   state.inspectorLoading = true; renderInspector();
-  const id = p.id, folder = state.filePath, context = workspaceContext(), key = workspaceKey();
-  const results = await Promise.allSettled([call<GitStatus>('git_status', context), call<FileEntry[]>('list_files', { ...context, path: folder }), call<JjStatus>('jj_status', context)]);
-  if (request !== inspectorRequest || id !== state.projectId || key !== workspaceKey() || folder !== state.filePath) return;
+  const id = p.id, folders = [...state.openFolders], context = workspaceContext(), key = workspaceKey();
+  const [results, children] = await Promise.all([
+    Promise.allSettled([call<GitStatus>('git_status', context), call<FileEntry[]>('list_files', { ...context, path: '' }), call<JjStatus>('jj_status', context)]),
+    Promise.allSettled(folders.map(path => call<FileEntry[]>('list_files', { ...context, path }))),
+  ]);
+  if (request !== inspectorRequest || id !== state.projectId || key !== workspaceKey()) return;
+  // Only folders still open take the new listing; a failed read keeps the last one rather than collapsing the folder.
+  children.forEach((result, index) => {
+    const path = folders[index];
+    if (result.status === 'fulfilled' && state.openFolders.has(path)) state.folderFiles.set(path, result.value);
+  });
   state.inspectorLoading = false;
   state.git = results[0].status === 'fulfilled' ? results[0].value : null;
   state.gitError = results[0].status === 'rejected' ? errorText(results[0].reason) || 'Git status could not be loaded.' : '';
   state.files = results[1].status === 'fulfilled' ? results[1].value : [];
   state.jj = results[2].status === 'fulfilled' ? results[2].value : null;
   state.filesError = results[1].status === 'rejected' ? errorText(results[1].reason) || 'The folder could not be read.' : '';
-  renderInspector(); renderHeader();
+  renderInspector(); renderHeader(); fileTabs.reload();
 }
 /** The simulator panel stays mounted once opened; hiding it stops its frames. */
 function syncSimulatorPanel(): void {
@@ -2663,7 +2698,7 @@ async function performAgentUiAction(request: AgentUiAction): Promise<unknown> {
   await active();
   const { action, args } = request;
   if (action === 'open_task') { await selectSession(String(args.taskId)); return { opened: state.sessionId === args.taskId }; }
-  if (action === 'open_file') { if (args.view === 'rendered' || args.view === 'raw') setDocumentView(String(args.path), args.view); state.inspectorTab = 'files'; await openFile(String(args.path), 'file'); return { opened: state.selectedFile === args.path }; }
+  if (action === 'open_file') { if (args.view === 'rendered' || args.view === 'raw') setDocumentView(String(args.path), args.view); await openFile(String(args.path), 'file'); return { opened: fileTabs.active === args.path }; }
   if (action === 'open_terminal') { if (!terminalPanel.open) await toggleTerminal(); return { opened: terminalPanel.open }; }
   if (action === 'run_project') return projectRunner.run(request.requestId, active);
   if (action === 'preview_file') { await previewFile(String(args.path), workspaceContext(), active); return { opened: true }; }
@@ -2684,6 +2719,33 @@ async function performAgentUiAction(request: AgentUiAction): Promise<unknown> {
   throw new Error('Unknown app action.');
 }
 const INSPECTOR_TITLES: Record<typeof state.inspectorTab, string> = { files: 'Files', search: 'Search', changes: 'Changes', browser: 'Browser', pull: 'Pull request', simulator: 'Simulators', vm: 'Virtual machines', design: 'Design' };
+/** Files tab rows, VS Code style: open folders list their children inline, indented by depth. */
+function fileTree(files: FileEntry[], depth: number): string {
+  return files.map(file => {
+    const open = file.isDir && state.openFolders.has(file.path), path = escape(file.path);
+    const row = `<div class="file-row" style="--depth:${depth}"><button data-action="${file.isDir ? 'toggle-file-folder' : isPreviewableFile(file.path) && !OPENS_IN_TAB.test(file.path) ? 'preview-file' : 'open-file'}" data-path="${path}"${file.isDir ? ` aria-expanded="${open}"` : ''}>${file.isDir ? icon('chevron', 'file-twisty') : '<span class="file-twisty"></span>'}${fileIcon(file.name, file.isDir)}<span>${escape(file.name)}</span></button>${!file.isDir && /\.(html?|svg)$/i.test(file.path) ? button('view-source', 'View source of ' + file.name, 'file', 'file-attach', `data-path="${path}"`) : ''}${!file.isDir ? button('attach-file', 'Attach ' + file.name, 'plus', 'file-attach', `data-path="${path}"`) : ''}</div>`;
+    return row + (open ? fileTree(state.folderFiles.get(file.path) ?? [], depth + 1) : '');
+  }).join('');
+}
+async function toggleFolder(path: string): Promise<void> {
+  // The tree redraws from scratch, so keyboard focus returns to the folder row it was on.
+  const render = () => {
+    const focused = (document.activeElement as HTMLElement | null)?.dataset.path === path;
+    renderInspector();
+    if (focused) document.querySelector<HTMLElement>(`#inspector-content [data-action="toggle-file-folder"][data-path="${CSS.escape(path)}"]`)?.focus();
+  };
+  if (state.openFolders.delete(path)) { state.folderFiles.delete(path); render(); return; }
+  state.openFolders.add(path); render();
+  const key = workspaceKey();
+  try {
+    const files = await call<FileEntry[]>('list_files', { ...workspaceContext(), path });
+    if (key === workspaceKey() && state.openFolders.has(path)) state.folderFiles.set(path, files);
+  } catch (error) {
+    if (key !== workspaceKey()) return;
+    state.openFolders.delete(path); report(error);
+  }
+  render();
+}
 function renderInspector(): void {
   const diffEpoch = ++inspectorDiffEpoch;
   inspectorDiff?.dispose(); inspectorDiff = undefined;
@@ -2728,8 +2790,7 @@ function renderInspector(): void {
   }
   if (state.selectedKind) {
     if (state.filePreviewLoading) { target.innerHTML = '<div class="inspector-empty" role="status">Loading file…</div>'; return; }
-    target.innerHTML = `<div class="file-preview-header"><button data-action="back-inspector">${icon('chevron', 'rotate-180')} Back</button><div class="file-preview-actions">${isPreviewableFile(state.selectedFile) ? button('preview-selected-file', 'Preview in browser', 'globe') : ''}${button('copy-file', 'Copy file', 'copy')}${state.selectedKind === 'file' ? selectedFileContext?.sessionId && selectedFileContext.sessionId !== state.sessionId ? '' : `<button data-action="attach-file" data-path="${escape(state.selectedFile)}">${icon('attach')} Attach</button>` : button('toggle-diff-stage', state.selectedStaged ? 'Unstage file' : 'Stage file', state.selectedStaged ? 'close' : 'plus')}</div></div><div class="file-preview-title">${icon('file')}<span title="${escape(state.selectedFile)}">${escape(state.selectedFile)}</span></div>${state.selectedKind === 'diff' ? '<div class="inspector-diff-host"></div>' : '<div class="document-host"></div>'}`;
-    if (state.selectedKind === 'file') renderDocument(target.querySelector<HTMLElement>('.document-host')!, state.selectedFile, state.selectedContent);
+    target.innerHTML = `<div class="file-preview-header"><button data-action="back-inspector">${icon('chevron', 'rotate-180')} Back</button><div class="file-preview-actions">${isPreviewableFile(state.selectedFile) ? button('preview-selected-file', 'Preview in browser', 'globe') : ''}${button('copy-file', 'Copy file', 'copy')}${button('toggle-diff-stage', state.selectedStaged ? 'Unstage file' : 'Stage file', state.selectedStaged ? 'close' : 'plus')}</div></div><div class="file-preview-title">${icon('file')}<span title="${escape(state.selectedFile)}">${escape(state.selectedFile)}</span></div><div class="inspector-diff-host"></div>`;
     if (state.selectedKind === 'diff' && state.inspector) {
       const host = target.querySelector<HTMLElement>('.inspector-diff-host')!;
       const patch = state.selectedContent, path = state.selectedFile;
@@ -2742,7 +2803,7 @@ function renderInspector(): void {
     return;
   }
   if (state.inspectorTab === 'files') {
-    target.innerHTML = `<div class="file-folder-path"><span>${escape(project()?.name)}${state.filePath ? ' / ' + escape(state.filePath) : ''}</span>${state.filePath ? button('parent-folder', 'Go to parent folder', 'arrow') : ''}</div><div class="file-list">${state.files.map(file => `<div class="file-row"><button data-action="${file.isDir ? 'open-folder' : isPreviewableFile(file.path) ? 'preview-file' : 'open-file'}" data-path="${escape(file.path)}">${fileIcon(file.name, file.isDir)}<span>${escape(file.name)}</span>${file.isDir ? icon('chevron') : ''}</button>${!file.isDir && /\.(html?|svg)$/i.test(file.path) ? button('open-file', 'View source of ' + file.name, 'file', 'file-attach', `data-path="${escape(file.path)}"`) : ''}${!file.isDir ? button('attach-file', 'Attach ' + file.name, 'plus', 'file-attach', `data-path="${escape(file.path)}"`) : ''}</div>`).join('') || '<div class="inspector-empty">This folder is empty.</div>'}</div>`; return;
+    target.innerHTML = `<div class="file-folder-path"><span>${escape(project()?.name)}</span>${state.openFolders.size ? button('collapse-folders', 'Collapse folders', 'minimize') : ''}</div><div class="file-list">${fileTree(state.files, 0) || '<div class="inspector-empty">This folder is empty.</div>'}</div>`; return;
   }
   if (state.jj?.isRepo && !state.jj.colocated) {
     showJjPanel(target, state.jj, {
@@ -2779,9 +2840,16 @@ async function previewFile(path: string, context = workspaceContext(), active?: 
   if (!browserPanel) throw new Error('Browser could not be opened.');
   await browserPanel.navigate(file.url);
 }
-async function openFile(path: string, kind: 'file' | 'diff', staged = false, context = workspaceContext()): Promise<void> {
+async function openFile(path: string, kind: 'file' | 'diff', staged = false, context = workspaceContext(), source = false): Promise<void> {
   const p = project(); if (!p) return;
-  const request = ++fileRequest, generation = state.generation; const content = await call<string>(kind === 'file' ? 'read_file' : 'git_diff', { ...context, path, staged }); if (request !== fileRequest || p.id !== state.projectId || generation !== state.generation) return;
+  // Files open as tabs in their task's conversation; from the board that is the task panel beside it.
+  if (kind === 'file') {
+    if (context.sessionId && context.sessionId !== state.sessionId) await selectSession(context.sessionId);
+    if (context.sessionId && context.sessionId !== state.sessionId) return;
+    if (state.view !== 'conversation' && !state.boardPanel) setWorkspaceView('conversation');
+    fileTabs.open(path, context, source); return;
+  }
+  const request = ++fileRequest, generation = state.generation; const content = await call<string>('git_diff', { ...context, path, staged }); if (request !== fileRequest || p.id !== state.projectId || generation !== state.generation) return;
   selectedFileContext = { ...context };
   state.selectedFile = path; state.selectedContent = content; state.selectedKind = kind; state.selectedStaged = staged; state.filePreviewLoading = false; state.inspector = true; renderInspector();
 }
@@ -3086,7 +3154,7 @@ async function showChoices(anchor: HTMLElement, options: ChoiceOptions): Promise
 async function showMode(anchor: HTMLElement): Promise<void> {
   const s = session(); if (!s || isRunning() || configuringSessions.has(s.id)) return;
   const generation = state.generation;
-  const modes = approvalModes(s.provider);
+  const modes = approvalModes(s.provider, s.mode);
   await showChoices(anchor, { title: 'Permissions', width: 320, items: modes.map(mode => ({ ...mode, selected: s.mode === mode.id })), onSelect: async id => {
     if (s.id !== state.sessionId || generation !== state.generation || isRunning() || configuringSessions.has(s.id)) throw new Error('Select the task again to change its permissions.');
     const chosen = modes.find(mode => mode.id === id); if (!chosen) throw new Error('Choose an available approval behavior.');
@@ -3522,11 +3590,46 @@ function ensureBotProjects(): Promise<void> { return botProjectsLoad ??= reloadB
 async function reloadBotProjects(withProjects = true): Promise<void> {
   sidebarBots = await call<import('./bots').Bot[]>('bots_list').catch(() => sidebarBots);
   botProjects = new Set(sidebarBots.map(bot => bot.projectId));
+  taskBots = new Map(Object.entries(await call<Record<string, string>>('bot_task_links').catch(() => Object.fromEntries(taskBots))));
   // An earlier build could leave the filter on a bot's workspace; send it back to All projects.
   if (botProjects.has(state.projectFilter)) setProjectFilter('');
   // A new bot brings a workspace project; a renamed bot renames it.
   if (withProjects) state.projects = await call<Project[]>('list_projects');
   renderNavigation(); renderHeader();
+}
+/* A project task can start with a bot (#114): its first message carries the bot's brief and
+ * skills, and it uses the bot's harness and model. The task keeps its own project and checkout. */
+let taskBots = new Map<string, string>();
+const NO_BOT = 'none';
+function botTaskControl(task: Session, fresh: boolean): string {
+  const bot = sidebarBots.find(item => item.id === taskBots.get(task.id));
+  if (!fresh) return bot ? `<span class="composer-computer composer-computer-fixed" aria-label="Bot: ${escape(bot.name)} (fixed for this task)">${icon('bot')}<span>with ${escape(bot.name)}</span></span>` : '';
+  if (!sidebarBots.length || botProjects.has(task.projectId) || chatTask(task) || task.remoteDevice || task.cloud || remoteChoice !== LOCAL) return '';
+  const name = bot?.name ?? 'No bot';
+  return `<button type="button" id="composer-bot" class="composer-computer" data-action="bot-task-menu" aria-label="Bot: ${escape(name)}" aria-haspopup="dialog" aria-expanded="false" title="Start this task with a bot">${icon('bot')}<span>${escape(name)}</span>${icon('down')}</button>`;
+}
+async function showBotTaskMenu(anchor: HTMLElement): Promise<void> {
+  const task = session(); if (!task) return;
+  const chosen = taskBots.get(task.id) ?? NO_BOT;
+  const items = [{ id: NO_BOT, label: 'No bot', icon: 'close', selected: chosen === NO_BOT }, ...sidebarBots.map(bot => ({ id: bot.id, label: bot.name, description: bot.role, icon: 'bot', selected: bot.id === chosen }))];
+  await showChoices(anchor, { title: 'Bot', width: 280, items, onSelect: id => { closeChoiceMenu(); run(assignTaskBot(task, id === NO_BOT ? null : id)); } });
+}
+async function assignTaskBot(task: Session, botId: string | null): Promise<void> {
+  if (!newTaskView() || state.sessionId !== task.id) throw new Error('Choose a bot before the task\'s first message.');
+  configuringSessions.add(task.id);
+  try {
+    const bot = await call<import('./bots').Bot | null>('bot_assign_task', { sessionId: task.id, botId });
+    if (bot) {
+      taskBots.set(task.id, bot.id);
+      // The bot's harness and model become the task's defaults; the picker can still change them.
+      if (bot.provider !== task.provider || bot.model !== task.model) upsertSession(await call<Session>('configure_session', { sessionId: task.id, provider: bot.provider, model: bot.model }));
+    } else taskBots.delete(task.id);
+  } finally { configuringSessions.delete(task.id); }
+  if (state.sessionId === task.id) render();
+}
+/** The bot's brief for a task's next message, once per brief version; empty without a bot. */
+async function botTaskBrief(task: Session): Promise<string> {
+  return taskBots.has(task.id) ? await call<string | null>('bot_task_brief', { sessionId: task.id }) ?? '' : '';
 }
 const userProjects = (): Project[] => state.projects.filter(project => !botProjects.has(project.id) && !isChatProject(project));
 /** Whether a task runs as a projectless chat. */
@@ -3626,6 +3729,7 @@ async function showComputerMenu(anchor: HTMLElement): Promise<void> {
   await showChoices(anchor, { title: 'Run on', width: 280, items: computerItems(remoteTargets, remoteChoice, cloudTargets), onSelect: id => {
     closeChoiceMenu();
     if (id === SETUP_CHOICE) { run(showSettings('cloud')); return; }
+    if (id === CONNECT_SETUP) { run(showSettings('remote')); return; }
     remoteChoice = id; renderHeader();
     const task = session();
     if (cloudProvider(id)) { if (task && newTaskView()) { const refusal = harnessRefusal(task.provider, provider(task.provider)?.name ?? task.provider); if (refusal) notify(refusal); } return; }
@@ -3797,6 +3901,7 @@ async function action(name: string, element: HTMLElement): Promise<void> {
     case 'bot-pause': if (element.dataset.bot) { const bot = sidebarBots.find(item => item.id === element.dataset.bot); if (bot) { await call('bot_set_paused', { botId: bot.id, paused: !bot.paused }); notify(bot.paused ? `${bot.name} resumed` : `${bot.name} paused`); await reloadBotProjects(false); } } break;
     case 'open-bot': if (element.dataset.bot) await openBot(element.dataset.bot); break;
     case 'computer-menu': await showComputerMenu(element); break;
+    case 'bot-task-menu': await showBotTaskMenu(element); break;
     case 'cloud-menu': await showCloudMenu(element); break;
     case 'toggle-bots-view': setSidebarView(sidebarView === 'bots' ? 'tasks' : 'bots'); break;
     case 'import-conversations': await showConversationImport(); break;
@@ -3832,12 +3937,13 @@ async function action(name: string, element: HTMLElement): Promise<void> {
     case 'tab-search': state.inspectorTab = 'search'; state.selectedKind = ''; renderInspector(); document.querySelector<HTMLInputElement>('#inspector-content .search-input')?.focus(); break;
     case 'browser': inspectorSuppressed = false; state.inspector = true; state.inspectorTab = 'browser'; state.selectedKind = ''; renderInspector(); break;
     case 'refresh-inspector': if (state.inspectorTab === 'pull') { pullView.forget(state.sessionId); renderInspector(); break; } if (state.inspectorTab === 'search') searchPanel.refresh(); refreshFileLinks(workspaceContext()); await refreshInspector(); break;
-    case 'open-folder': state.filePath = element.dataset.path!; await refreshInspector(); break;
-    case 'parent-folder': state.filePath = state.filePath.split('/').slice(0, -1).join('/'); await refreshInspector(); break;
+    case 'toggle-file-folder': await toggleFolder(element.dataset.path!); break;
+    case 'collapse-folders': state.openFolders = new Set(); state.folderFiles = new Map(); renderInspector(); document.querySelector<HTMLElement>('#inspector-content .file-row button')?.focus(); break;
     case 'run-project': if (!element.dataset.sessionId || element.dataset.sessionId === state.sessionId) await projectRunner.run(); break;
     case 'preview-file': await previewFile(element.dataset.path!); break;
     case 'preview-selected-file': await previewFile(state.selectedFile, selectedFileContext); break;
     case 'open-file': await openFile(element.dataset.path!, 'file'); break;
+    case 'view-source': await openFile(element.dataset.path!, 'file', false, workspaceContext(), true); break;
     case 'open-diff': await openFile(element.dataset.path!, 'diff', element.dataset.staged === 'true'); break;
     case 'back-inspector': state.selectedKind = ''; renderInspector(); break;
     case 'attach': await attachments.openMenu(element); break;
@@ -3980,7 +4086,17 @@ async function boot(): Promise<void> {
   run(subscribe('vm-changed', event => { if (event && !Array.isArray(event) && event.show) openVm(); void vmPanel?.refresh(); }).then(() => undefined));
   // bridge.ts has no typed overload for this event yet.
   run((subscribe as (name: string, callback: () => void) => Promise<() => void>)('design-changed', () => void designPanel?.refresh()).then(() => undefined));
-  run(subscribe('agent-event', (event: AgentEvent) => { if (event.kind === 'done' && event.sessionId === state.sessionId) void designPanel?.refresh(); }).then(() => undefined));
+  run(subscribe('agent-event', (event: AgentEvent) => {
+    if (event.kind !== 'done' || event.sessionId !== state.sessionId) return;
+    void designPanel?.refresh();
+    if (document.hasFocus()) markTraySeen(event.sessionId);
+  }).then(() => undefined));
+  run((subscribe as (name: string, callback: (event: unknown) => void) => Promise<() => void>)('tray-open-session', sessionId => run((async () => {
+    if (typeof sessionId !== 'string') return;
+    if (!state.sessions.some(s => s.id === sessionId)) await reloadSessions();
+    if (state.view !== 'conversation') state.boardPanel = true;
+    await selectSession(sessionId, true);
+  })())).then(() => undefined));
   run(subscribe('simulator-changed', event => { if (event?.show) openSimulator(); void simulatorPanel?.refresh(); }).then(() => undefined));
   run(subscribe('bots-changed', () => run((async () => { botProjectsLoad = reloadBotProjects(); await botProjectsLoad; botsView?.refresh(); })())).then(() => undefined));
   run(initRemote());
