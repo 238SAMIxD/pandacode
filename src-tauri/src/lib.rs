@@ -85,6 +85,7 @@ struct RunningAgent {
     stopped: Arc<AtomicBool>,
     run_id: String,
     approvals: Arc<Mutex<HashSet<String>>>,
+    pending_requests: Arc<Mutex<HashMap<String, AgentEvent>>>,
     subagents: Arc<Mutex<subagent_state::SubagentState>>,
     assistant: Arc<Mutex<String>>,
     /// When the harness last sent anything; team watchdogs stop a turn that went silent.
@@ -97,6 +98,7 @@ impl RunningAgent {
             stopped,
             run_id: uuid::Uuid::new_v4().to_string(),
             approvals: Arc::new(Mutex::new(HashSet::new())),
+            pending_requests: Arc::new(Mutex::new(HashMap::new())),
             subagents: Arc::new(Mutex::new(subagent_state::SubagentState::default())),
             assistant: Arc::new(Mutex::new(String::new())),
             last_event: Arc::new(std::sync::atomic::AtomicI64::new(storage::now())),
@@ -118,9 +120,10 @@ impl RunningAgent {
         request_id: String,
         approved: bool,
     ) -> Result<()> {
-        // Lock order is registry (caller) -> approvals -> store. A new request
+        // Lock order is registry (caller) -> approvals -> pending requests -> store. A new request
         // cannot become waiting between deciding the status and persisting it.
         let mut approvals = self.approvals.lock().map_err(|error| error.to_string())?;
+        let mut pending_requests = self.pending_requests.lock().map_err(|error| error.to_string())?;
         if self.stopped.load(Ordering::SeqCst) || !approvals.contains(&request_id) {
             return Err("This approval is no longer pending.".into());
         }
@@ -134,7 +137,7 @@ impl RunningAgent {
             approved,
         })
         .map_err(|_| "Agent has stopped.".to_string())?;
-        approvals.remove(&request_id);
+        remove_pending_request(&mut approvals, Some(&mut pending_requests), &request_id);
         store.status(
             session_id,
             if approvals.is_empty() {
@@ -160,9 +163,20 @@ impl RunningAgent {
 }
 type Agents = Arc<Mutex<HashMap<String, RunningAgent>>>;
 
+#[cfg(test)]
 fn save_approval(
     store: &Mutex<Store>,
     approvals: &Mutex<HashSet<String>>,
+    run_id: &str,
+    activity: &mut AgentEvent,
+) -> Result<()> {
+    save_approval_with_pending(store, approvals, None, run_id, activity)
+}
+
+fn save_approval_with_pending(
+    store: &Mutex<Store>,
+    approvals: &Mutex<HashSet<String>>,
+    pending_requests: Option<&Mutex<HashMap<String, AgentEvent>>>,
     run_id: &str,
     activity: &mut AgentEvent,
 ) -> Result<()> {
@@ -173,11 +187,8 @@ fn save_approval(
     let request_id = format!("{run_id}:{request_id}");
     activity.request_id = Some(request_id.clone());
     let mut approvals = approvals.lock().map_err(|error| error.to_string())?;
-    if matches!(activity.kind.as_str(), "approval" | "input_request") {
-        approvals.insert(request_id);
-    } else {
-        approvals.remove(&request_id);
-    }
+    let mut pending_requests = pending_requests.map(|requests| requests.lock().map_err(|error| error.to_string())).transpose()?;
+    update_pending_request(&mut approvals, pending_requests.as_mut().map(|requests| &mut **requests), &request_id, activity);
     store.lock().map_err(|error| error.to_string())?.status(
         &activity.session_id,
         if approvals.is_empty() {
@@ -186,6 +197,62 @@ fn save_approval(
             "waiting"
         },
     )
+}
+
+fn update_pending_request(
+    approvals: &mut HashSet<String>,
+    pending_requests: Option<&mut HashMap<String, AgentEvent>>,
+    request_id: &str,
+    activity: &AgentEvent,
+) {
+    if matches!(activity.kind.as_str(), "approval" | "input_request") {
+        approvals.insert(request_id.to_owned());
+        if let Some(pending_requests) = pending_requests {
+            pending_requests.insert(request_id.to_owned(), activity.clone());
+        }
+    } else {
+        remove_pending_request(approvals, pending_requests, request_id);
+    }
+}
+
+fn remove_pending_request(
+    approvals: &mut HashSet<String>,
+    pending_requests: Option<&mut HashMap<String, AgentEvent>>,
+    request_id: &str,
+) {
+    approvals.remove(request_id);
+    if let Some(pending_requests) = pending_requests {
+        pending_requests.remove(request_id);
+    }
+}
+
+#[cfg(test)]
+mod pending_request_tests {
+    use super::*;
+
+    #[test]
+    fn remote_pending_request_payloads_are_added_and_cancelled_with_the_approval_id() {
+        let request_id = "run-id:provider-id";
+        let mut approvals = HashSet::new();
+        let mut pending = HashMap::new();
+        let request = AgentEvent {
+            session_id: "task-id".into(),
+            kind: "input_request".into(),
+            text: "Choose one".into(),
+            request_id: Some(request_id.into()),
+            data: Some(serde_json::json!({"questions": [{"question": "Which?"}]})),
+            tool: None,
+        };
+        update_pending_request(&mut approvals, Some(&mut pending), request_id, &request);
+        assert!(approvals.contains(request_id));
+        assert_eq!(pending.get(request_id).unwrap().text, "Choose one");
+        assert_eq!(pending.get(request_id).unwrap().data, request.data);
+
+        let cancelled = AgentEvent { kind: "input_cancelled".into(), ..request };
+        update_pending_request(&mut approvals, Some(&mut pending), request_id, &cancelled);
+        assert!(!approvals.contains(request_id));
+        assert!(!pending.contains_key(request_id));
+    }
 }
 
 #[cfg(test)]
@@ -1214,6 +1281,7 @@ struct PreparedRun {
     context_handoff: Option<i64>,
     run_id: String,
     pending_approvals: Arc<Mutex<HashSet<String>>>,
+    pending_requests: Arc<Mutex<HashMap<String, AgentEvent>>>,
     subagents: Arc<Mutex<subagent_state::SubagentState>>,
     assistant: Arc<Mutex<String>>,
     last_event: Arc<std::sync::atomic::AtomicI64>,
@@ -1393,6 +1461,7 @@ fn prepare_task_run_in_project(
     let agent = RunningAgent::new(tx, stopped.clone());
     let run_id = agent.run_id.clone();
     let pending_approvals = agent.approvals.clone();
+    let pending_requests = agent.pending_requests.clone();
     let subagents = agent.subagents.clone();
     let assistant = agent.assistant.clone();
     let last_event = agent.last_event.clone();
@@ -1405,6 +1474,7 @@ fn prepare_task_run_in_project(
         context_handoff,
         run_id,
         pending_approvals,
+        pending_requests,
         subagents,
         assistant,
         last_event,
@@ -1452,6 +1522,7 @@ fn prepare_cloud_attach(
         context_handoff: None,
         run_id: agent.run_id.clone(),
         pending_approvals: agent.approvals.clone(),
+        pending_requests: agent.pending_requests.clone(),
         subagents: agent.subagents.clone(),
         assistant: agent.assistant.clone(),
         last_event: agent.last_event.clone(),
@@ -1625,6 +1696,7 @@ async fn launch_operation_admitted(
         context_handoff,
         run_id,
         pending_approvals,
+        pending_requests,
         subagents,
         assistant,
         last_event,
@@ -1708,6 +1780,7 @@ async fn launch_operation_admitted(
         let assistant_sink = assistant.clone();
         let store_sink = store.clone();
         let app_sink = app.clone();
+        let pending_requests_sink = pending_requests.clone();
         let subagents_sink = subagents.clone();
         let goal_reply_sink = goal_reply.clone();
         let goal_agents_sink = agents.clone();
@@ -1774,7 +1847,7 @@ async fn launch_operation_admitted(
                     e.kind.as_str(),
                     "approval" | "approval_cancelled" | "input_request" | "input_cancelled"
                 ) {
-                    let saved = save_approval(&store_sink, &pending_approvals, &run_id, &mut e);
+                    let saved = save_approval_with_pending(&store_sink, &pending_approvals, Some(&pending_requests_sink), &run_id, &mut e);
                     if saved.is_ok() && e.kind == "approval" {
                         if let Some(request_id) = &e.request_id {
                             bots::approval_requested(&app_sink, &e.session_id, request_id, &e.text);
@@ -2051,6 +2124,14 @@ async fn launch_operation_admitted(
             }
         }
         if let Some(registry) = registry.as_mut() {
+            if let Some(agent) = registry.get(&session_id) {
+                if let Ok(mut approvals) = agent.approvals.lock() {
+                    approvals.clear();
+                }
+                if let Ok(mut pending) = agent.pending_requests.lock() {
+                    pending.clear();
+                }
+            }
             registry.remove(&session_id);
         }
         let done = if was_stopped {
@@ -2218,10 +2299,22 @@ async fn respond_user_input(
     };
     // Keep the form pending until the protocol validates the answer. An enqueue
     // acknowledgement alone could discard a rejected answer during streaming.
-    tokio::time::timeout(std::time::Duration::from_secs(15), reply)
+    let accepted = tokio::time::timeout(std::time::Duration::from_secs(15), reply)
         .await
         .map_err(|_| "The agent did not acknowledge the answer. Try again.".to_owned())?
-        .map_err(|_| "The agent stopped before accepting the answer.".to_owned())?
+        .map_err(|_| "The agent stopped before accepting the answer.".to_owned())?;
+    accepted?;
+    let agents = state.agents.lock().map_err(|e| e.to_string())?;
+    if let Some(agent) = agents.get(&session_id) {
+        let mut approvals = agent.approvals.lock().map_err(|e| e.to_string())?;
+        let mut pending_requests = agent.pending_requests.lock().map_err(|e| e.to_string())?;
+        remove_pending_request(&mut approvals, Some(&mut pending_requests), &request_id);
+        state.store.lock().map_err(|e| e.to_string())?.status(
+            &session_id,
+            if approvals.is_empty() { "running" } else { "waiting" },
+        )?;
+    }
+    Ok(())
 }
 
 #[tauri::command]

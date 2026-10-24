@@ -194,10 +194,11 @@ more power than local ones.
 
 | Method | Params | Result |
 |---|---|---|
-| `subscribe` | `{ sessionIds: [...] }` (≤ 500) | `{ tasks: [{ sessionId, status, lastId, title }] }` for those that exist. Adds the ids to this device's subscription for 10 minutes; the viewer renews every 9 minutes and on every presence frame. An expired subscription starts over. |
+| `subscribe` | `{ sessionIds: [...] }` (≤ 500) | `{ tasks: [{ sessionId, status, lastId, title, pending }] }` for those that exist. `pending` is the current `[{ kind: "approval" \| "input_request", requestId, text, data, tool? }]` for requests the viewer can still answer; large payloads are cut to fit. Answered, cancelled and ended-run requests are removed. Adds the ids to this device's subscription for 10 minutes; the viewer renews every 9 minutes and on every presence frame. An expired subscription starts over. |
+| `tasks.list` | `{ limit?: 0..500 }` (default 200) | `{ tasks: [{ sessionId, title, status, projectId, projectName, provider, model, effort, mode, pinned, updatedAt, lastPromptAt, branch?, chat?, pending }], projects: [{ id, name, repo: "owner/name" \| null }] }`. `pending` has the same shape and meaning as for `subscribe`. Tasks are ordered by latest prompt or response, omit drafts, mirrors and bot workspaces, and may include chats (`chat: true`). Projects omit bot workspaces. The tail is dropped to keep the reply under 180 KiB. |
 | `providers.list` | `{ force?: boolean }` | the host's `list_providers` result: `[{ id, name, installed, path, version, models }]`. `force` drops the same ACP catalog caches. If it would not fit one reply, the longest `models` lists are halved until it does. |
 | `providers.models` | `{ provider, force?: boolean }` | the host's `list_provider_models` result: `[{ id, name, description, reasoningEfforts, defaultReasoningEffort, contextWindow }]`, its tail dropped to fit one reply. `provider` must be a known harness id (`Unknown provider.`). |
-| `task.start` | `{ repo: "owner/name", branch?, worktree, prompt, provider, model, mode?, effort? }` | `{ sessionId }` |
+| `task.start` | `{ repo?: "owner/name", projectId?: string, branch?, worktree, prompt, provider, model, mode?, effort? }` (exactly one of `repo` or `projectId`) | `{ sessionId }` |
 | `task.messages` | `{ sessionId, afterId }` | `{ messages: [{ id, role, content, createdAt, turnDurationMs }], hasMore, title }` |
 | `task.send` | `{ sessionId, text }` | `{ queued: boolean }`. Queued if the task is running, like Enter. If the run ended between the check and the queue add, the host takes the entry back and sends it. |
 | `task.stop` | `{ sessionId }` | `{}` |
@@ -213,9 +214,11 @@ A host refuses a session id that is itself a mirror, so tasks never hop twice.
 `task.start` on the host:
 
 1. Refuses a provider that isn't installed there: `<Provider> is not installed on <host>.`
-2. Finds a project whose `origin` is that GitHub repository (as `github_project_repos`, case
-   insensitive). With none, it clones it with `gh` (as `github_clone_repo`, at most 6 minutes)
-   into `~/PandaCode/<name>`, or `<name>-2`, `-3`… when taken, and adds the project.
+2. With `projectId`, uses that registered project directly (bot workspaces are refused). With
+   `repo`, it finds a project whose `origin` is that GitHub repository (as
+   `github_project_repos`, case insensitive). With none, it clones it with `gh` (as
+   `github_clone_repo`, at most 6 minutes) into `~/PandaCode/<name>`, or `<name>-2`, `-3`… when
+   taken, and adds the project.
 3. Fetches `origin` (at most 90 s), then uses the viewer's branch if origin has it, otherwise
    origin's default branch. With a worktree it creates `pandacode/remote-<id>` from
    `origin/<branch>` the normal way. Without one, a fresh clone is checked out on that branch;

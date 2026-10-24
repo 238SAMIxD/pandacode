@@ -6,17 +6,20 @@ use super::{remote, socket, start, Subscriber};
 use crate::{message_queue, providers::AgentEvent, AppState, Result};
 use rusqlite::OptionalExtension;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
 
-pub(crate) const METHODS: [&str; 11] = ["subscribe", "providers.list", "providers.models", "task.start", "task.messages", "task.send", "task.stop", "task.steer", "task.configure", "approval.respond", "input.respond"];
+pub(crate) const METHODS: [&str; 12] = ["subscribe", "tasks.list", "providers.list", "providers.models", "task.start", "task.messages", "task.send", "task.stop", "task.steer", "task.configure", "approval.respond", "input.respond"];
 pub(crate) const OFF: &str = "Remote control is off on this computer";
 pub(crate) const MAX_TEXT: usize = 100 * 1024;
 const SUBSCRIPTION: Duration = Duration::from_secs(10 * 60);
 /// Events wait this long, so one frame carries everything a subscriber missed meanwhile.
 const FLUSH: Duration = Duration::from_millis(100);
 pub(crate) const MAX_IDS: usize = 500;
+const TASKS_DEFAULT: usize = 200;
+const TASKS_MAX: usize = 500;
 const WINDOW_MS: i64 = 60_000;
 const MAX_SEEN: usize = 20_000;
 /// A reply's or event frame's JSON budget: sealing adds a third (base64) plus a small
@@ -84,6 +87,7 @@ pub(crate) fn valid_id(id: &str) -> Result<()> {
 #[derive(Debug, PartialEq)]
 pub(crate) enum Call {
     Subscribe { session_ids: Vec<String> },
+    TasksList { limit: usize },
     Providers { force: bool },
     Models { provider: String, force: bool },
     Start(start::Start),
@@ -128,6 +132,17 @@ fn force_param(params: &Value) -> Result<bool> {
     }
 }
 
+fn task_limit(params: &Value) -> Result<usize> {
+    match params.get("limit").filter(|value| !value.is_null()) {
+        None => Ok(TASKS_DEFAULT),
+        Some(value) => value
+            .as_u64()
+            .and_then(|limit| usize::try_from(limit).ok())
+            .filter(|limit| *limit <= TASKS_MAX)
+            .ok_or_else(|| format!("Limit must be between 0 and {TASKS_MAX}.")),
+    }
+}
+
 fn configure(params: &Value) -> Result<Call> {
     let model = match (name_param(params, "provider")?, name_param(params, "model")?) {
         (Some(provider), Some(model)) => Some((provider, model)),
@@ -152,6 +167,7 @@ pub(crate) fn parse(host_enabled: bool, method: &str, params: &Value) -> Result<
             let session_ids = ids.iter().map(|id| id.as_str().filter(|id| valid_id(id).is_ok()).map(str::to_owned).ok_or("Invalid sessionIds.")).collect::<std::result::Result<_, _>>()?;
             Call::Subscribe { session_ids }
         }
+        "tasks.list" => Call::TasksList { limit: task_limit(params)? },
         "providers.list" => Call::Providers { force: force_param(params)? },
         "providers.models" => {
             let provider = name_param(params, "provider")?.ok_or("Missing provider.")?;
@@ -220,6 +236,15 @@ async fn run(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
             subscriber.until = Some(Instant::now() + SUBSCRIPTION);
             subscriber.sessions.extend(session_ids);
             Ok(json!({"tasks": tasks}))
+        }
+        Call::TasksList { limit } => {
+            let handle = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let state = handle.state::<AppState>();
+                tasks_list(&state, limit)
+            })
+            .await
+            .map_err(|e| e.to_string())?
         }
         Call::Providers { force } => {
             let mut providers = serde_json::to_value(crate::local_providers(force).await).map_err(|e| e.to_string())?;
@@ -298,10 +323,111 @@ async fn run(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
     }
 }
 
+/// Returns local tasks and their projects for a viewer's task picker. Store::sessions
+/// already omits drafts and architect workers; mirrors and bot workspaces are filtered here.
+fn tasks_list(state: &AppState, limit: usize) -> Result<Value> {
+    let (active, pending_by_session) = {
+        let agents = state.agents.lock().map_err(|e| e.to_string())?;
+        let mut pending = HashMap::new();
+        for (session_id, agent) in agents.iter() {
+            let requests = agent.pending_requests.lock().map_err(|e| e.to_string())?;
+            let items = pending_items(&requests);
+            if !items.is_empty() {
+                pending.insert(session_id.clone(), items);
+            }
+        }
+        (agents.keys().cloned().collect::<HashSet<_>>(), pending)
+    };
+    let (sessions, project_rows, bot_projects) = {
+        let store = state.store.lock().map_err(|e| e.to_string())?;
+        (store.sessions()?, store.projects()?, crate::bots::project_ids(&store)?.into_iter().collect::<HashSet<_>>())
+    };
+
+    let project_chats: HashSet<String> = project_rows
+        .iter()
+        .filter(|project| !bot_projects.contains(&project.id) && crate::chats::is_chat_folder(Path::new(&project.path)))
+        .map(|project| project.id.clone())
+        .collect();
+    let projects: Vec<Value> = project_rows
+        .into_iter()
+        .filter(|project| !bot_projects.contains(&project.id))
+        .map(|project| {
+            let repo = crate::github_hub::project_repo(Path::new(&project.path));
+            json!({"id": project.id, "name": project.name, "repo": repo})
+        })
+        .collect();
+    let project_names: HashMap<String, String> = projects
+        .iter()
+        .filter_map(|project| Some((project["id"].as_str()?.to_owned(), project["name"].as_str()?.to_owned())))
+        .collect();
+    let mut sessions: Vec<_> = sessions
+        .into_iter()
+        .filter(|task| task.remote_device.is_none() && !bot_projects.contains(&task.project_id) && project_names.contains_key(&task.project_id))
+        .collect();
+    sessions.sort_by(|a, b| activity_at(b).cmp(&activity_at(a)).then_with(|| a.id.cmp(&b.id)));
+    let tasks: Vec<Value> = sessions
+        .into_iter()
+        .take(limit)
+        .map(|task| {
+            let status = if matches!(task.status.as_str(), "running" | "waiting") && !active.contains(&task.id) { "interrupted" } else { task.status.as_str() };
+            let mut item = json!({
+                "sessionId": task.id,
+                "title": task.title,
+                "status": status,
+                "projectId": task.project_id,
+                "projectName": project_names[&task.project_id],
+                "provider": task.provider,
+                "model": task.model,
+                "effort": task.reasoning_effort,
+                "mode": task.mode,
+                "pinned": task.pinned,
+                "updatedAt": task.updated_at,
+                "lastPromptAt": task.last_prompt_at,
+                "pending": pending_by_session.get(&task.id).cloned().unwrap_or_default(),
+            });
+            if let Some(branch) = task.worktree_branch {
+                item["branch"] = json!(branch);
+            }
+            if project_chats.contains(&task.project_id) {
+                item["chat"] = json!(true);
+            }
+            item
+        })
+        .collect();
+    Ok(fit_task_lists(tasks, projects))
+}
+
+fn activity_at(task: &crate::storage::Session) -> i64 {
+    task.last_response_at.into_iter().chain(task.last_prompt_at).max().unwrap_or(task.created_at)
+}
+
+/// Fits both arrays, including their object envelope, under the relay's reply budget.
+fn fit_task_lists(mut tasks: Vec<Value>, mut projects: Vec<Value>) -> Value {
+    fit_list(&mut projects, PAGE_BUDGET);
+    let task_budget = PAGE_BUDGET.saturating_sub(json!(projects).to_string().len() + 32);
+    fit_list(&mut tasks, task_budget);
+    while json!({"tasks": &tasks, "projects": &projects}).to_string().len() > PAGE_BUDGET {
+        if tasks.pop().is_none() && projects.pop().is_none() {
+            break;
+        }
+    }
+    json!({"tasks": tasks, "projects": projects})
+}
+
 /// Each subscribed task that exists here: its status as this window shows it, its newest
 /// message id (so the viewer pulls what it missed) and its title.
 fn subscribed_tasks(state: &AppState, ids: &[String]) -> Result<Vec<Value>> {
-    let agents = state.agents.lock().map_err(|e| e.to_string())?;
+    let (active, pending_by_session) = {
+        let agents = state.agents.lock().map_err(|e| e.to_string())?;
+        let mut pending = HashMap::new();
+        for id in ids {
+            if let Some(agent) = agents.get(id) {
+                let requests = agent.pending_requests.lock().map_err(|e| e.to_string())?;
+                pending.insert(id.clone(), pending_items(&requests));
+            }
+        }
+        (agents.keys().cloned().collect::<HashSet<_>>(), pending)
+    };
     let store = state.store.lock().map_err(|e| e.to_string())?;
     let mut tasks = Vec::new();
     for id in ids {
@@ -312,10 +438,35 @@ fn subscribed_tasks(state: &AppState, ids: &[String]) -> Result<Vec<Value>> {
             .map_err(|e| e.to_string())?;
         let Some((status, title, last_id)) = row else { continue };
         // Only a registered agent is really running; a stale row reads as interrupted.
-        let status = if agents.contains_key(id) || !matches!(status.as_str(), "running" | "waiting") { status } else { "interrupted".into() };
-        tasks.push(json!({"sessionId": id, "status": status, "lastId": last_id, "title": title}));
+        let status = if active.contains(id) || !matches!(status.as_str(), "running" | "waiting") { status } else { "interrupted".into() };
+        let pending = pending_by_session.get(id).cloned().unwrap_or_default();
+        tasks.push(json!({"sessionId": id, "status": status, "lastId": last_id, "title": title, "pending": pending}));
     }
+    fit_list(&mut tasks, PAGE_BUDGET.saturating_sub(json!({"tasks": []}).to_string().len()));
     Ok(tasks)
+}
+
+/// Clones the currently answerable events into a small JSON shape for late subscribers.
+fn pending_items(requests: &HashMap<String, AgentEvent>) -> Vec<Value> {
+    let mut items: Vec<Value> = requests
+        .values()
+        .map(|event| {
+            let mut item = json!({
+                "kind": event.kind,
+                "requestId": event.request_id,
+                "text": event.text,
+                "data": event.data,
+            });
+            if let Some(tool) = &event.tool {
+                item["tool"] = json!(tool);
+            }
+            shrink(&mut item, MAX_MESSAGE.saturating_sub(1024));
+            item
+        })
+        .collect();
+    items.sort_by(|a, b| a["requestId"].as_str().cmp(&b["requestId"].as_str()));
+    fit_list(&mut items, MAX_MESSAGE);
+    items
 }
 
 /// Messages after `after_id`, oldest first, cut to fit one frame. `hasMore` asks the
@@ -544,7 +695,15 @@ mod tests {
         assert!(parse(true, "task.stop", &json!({})).is_err());
         assert!(parse(true, "approval.respond", &json!({"sessionId": "s", "requestId": "r"})).is_err());
         assert!(parse(true, "input.respond", &json!({"sessionId": "s", "requestId": "r"})).is_err());
-        for gone in ["tasks.list", "task.get", "shell.exec"] {
+        assert_eq!(parse(true, "tasks.list", &json!({})), Ok(Call::TasksList { limit: TASKS_DEFAULT }));
+        assert_eq!(parse(true, "tasks.list", &json!({"limit": null})), Ok(Call::TasksList { limit: TASKS_DEFAULT }));
+        assert_eq!(parse(true, "tasks.list", &json!({"limit": 500})), Ok(Call::TasksList { limit: 500 }));
+        assert_eq!(parse(true, "tasks.list", &json!({"limit": 1})), Ok(Call::TasksList { limit: 1 }));
+        assert_eq!(parse(true, "tasks.list", &json!({"limit": 0})), Ok(Call::TasksList { limit: 0 }));
+        assert!(parse(true, "tasks.list", &json!({"limit": 501})).is_err());
+        assert!(parse(true, "tasks.list", &json!({"limit": 1.5})).is_err());
+        assert!(parse(true, "tasks.list", &json!({"limit": "20"})).is_err());
+        for gone in ["task.get", "shell.exec"] {
             assert!(parse(true, gone, &json!({})).is_err(), "{gone}");
         }
         assert!(valid_id(&"a".repeat(201)).is_err());
@@ -575,6 +734,40 @@ mod tests {
         fit_providers(&mut providers);
         assert!(providers.to_string().len() <= PAGE_BUDGET);
         assert_eq!(providers[1]["models"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn task_and_project_lists_fit_one_reply() {
+        let tasks = vec![json!({"title": "t".repeat(1024)}); 110];
+        let projects = vec![json!({"name": "p".repeat(900)}); 70];
+        let result = fit_task_lists(tasks, projects);
+        assert!(result.to_string().len() <= PAGE_BUDGET);
+        assert!(!result["tasks"].as_array().unwrap().is_empty());
+        assert!(!result["projects"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn remote_pending_requests_keep_answer_payloads_within_one_message_budget() {
+        let request_id = "run-id:provider-id";
+        let requests = HashMap::from([(
+            request_id.to_owned(),
+            AgentEvent {
+                session_id: "task-id".into(),
+                kind: "input_request".into(),
+                text: "Choose one".into(),
+                request_id: Some(request_id.into()),
+                data: Some(json!({"question": "x".repeat(MAX_MESSAGE * 2)})),
+                tool: None,
+            },
+        )]);
+        let pending = pending_items(&requests);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0]["kind"], "input_request");
+        assert_eq!(pending[0]["requestId"], request_id);
+        assert_eq!(pending[0]["text"], "Choose one");
+        assert!(pending[0]["data"]["question"].as_str().unwrap().contains("[cut on the host"));
+        assert!(pending[0].get("tool").is_none());
+        assert!(json!(pending).to_string().len() <= MAX_MESSAGE);
     }
 
     #[test]
