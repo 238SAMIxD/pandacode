@@ -8,6 +8,9 @@ entries in PandaCode's secrets store (see [secret storage](#secret-storage)) and
 from PATH and common per-user installation folders; provider settings report the
 actual path and version. The `default` model delegates model selection to the CLI.
 
+Pi's managed Windows installation is supported without a separate global npm
+installation, including launchers that leave the `node` command unquoted.
+
 Model menus load metadata on demand from the installed CLI. Each choice keeps its
 invocation ID separate from its display name and description, so choosing a named
 model does not rewrite an alias or change the provider's configuration. Codex uses

@@ -10,9 +10,9 @@ impl Bridge {
         server: Option<&mcp_host::Server>,
     ) -> Result<Self, String> {
         let directory = std::env::temp_dir().join(format!("pandacode-pi-{}", uuid::Uuid::new_v4()));
-        let mut builder = std::fs::DirBuilder::new();
+        let builder = &mut std::fs::DirBuilder::new();
         #[cfg(unix)]
-        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        std::os::unix::fs::DirBuilderExt::mode(builder, 0o700);
         builder.create(&directory).map_err(|e| e.to_string())?;
         let bridge = Self(directory);
         let path = bridge.0.join("bridge.mjs");
@@ -798,7 +798,9 @@ mod tests {
     #[ignore]
     async fn installed_pi_lists_models_without_prompting() {
         let path = executable("pi").expect("Pi is installed");
-        assert!(!models(&path, "pi").await.unwrap().is_empty());
+        let catalog = models(&path, "pi").await.unwrap();
+        assert!(catalog.len() > 1, "Pi should advertise models beyond Default");
+        println!("Pi advertised {} models beyond Default", catalog.len() - 1);
     }
 
     fn omp_ready() -> Protocol {
