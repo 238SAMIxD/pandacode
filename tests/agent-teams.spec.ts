@@ -86,7 +86,7 @@ test('Team gives immediate feedback while cold model discovery and saving are pe
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
     await page.locator('#composer').screenshot({ path: `test-results/team-toggle-pending-${theme}.png` });
   }
-  await page.setViewportSize({ width: 800, height: 940 });
+  await page.setViewportSize({ width: 600, height: 940 });
   await expect(team.locator('.support-spinner')).toBeVisible();
   await page.setViewportSize({ width: 1440, height: 940 });
   await page.evaluate(() => (window as any).__agentTeams.releaseModels());
@@ -154,6 +154,32 @@ test('Team pending feedback belongs to its task and leaving cancels unsaved setu
   await expect(page.locator('#prompt')).toHaveValue('Draft for the first task');
   await expect(team).toHaveAttribute('aria-busy', 'false');
   await expect(team).toHaveAttribute('aria-pressed', 'false');
+  await expect(team).toBeEnabled();
+});
+
+test('choosing a bot cannot release the pending Team lock', async ({ page }) => {
+  await install(page);
+  await page.evaluate(() => (window as any).__teamInvoke('bot_create', { input: {
+    name: 'Test bot', role: 'Reviewer', instructions: 'Review code', provider: 'codex', model: '', mode: 'ask', heartbeatMinutes: 0,
+  } }));
+  const bot = page.getByRole('button', { name: 'Bot: No bot', exact: true });
+  await expect(bot).toBeVisible();
+  await page.locator('#prompt').fill('Do not send before Team is ready');
+  await page.evaluate(() => {
+    const state = (window as any).__agentTeams;
+    state.modelGate = new Promise(resolve => { state.releaseModels = resolve; });
+  });
+  const team = page.getByRole('button', { name: 'Team', exact: true });
+  await team.click();
+  await expect(team).toHaveAttribute('aria-busy', 'true');
+  await bot.click();
+  await page.getByRole('menu', { name: 'Bot', exact: true }).getByRole('menuitemradio', { name: /Test bot/ }).click();
+  await expect(bot).toBeVisible();
+  await page.locator('#prompt').press('Enter');
+  expect(await calls(page, 'send_message')).toHaveLength(0);
+  await expect(page.locator('#prompt')).toHaveValue('Do not send before Team is ready');
+  await page.evaluate(() => (window as any).__agentTeams.releaseModels());
+  await expect(team).toHaveAttribute('aria-pressed', 'true');
   await expect(team).toBeEnabled();
 });
 

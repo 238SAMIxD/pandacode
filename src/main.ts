@@ -3679,6 +3679,7 @@ async function showBotTaskMenu(anchor: HTMLElement): Promise<void> {
 }
 async function assignTaskBot(task: Session, botId: string | null): Promise<void> {
   if (!newTaskView() || state.sessionId !== task.id) throw new Error('Choose a bot before the task\'s first message.');
+  if (configuringSessions.has(task.id)) return;
   configuringSessions.add(task.id);
   try {
     const bot = await call<import('./bots').Bot | null>('bot_assign_task', { sessionId: task.id, botId });
