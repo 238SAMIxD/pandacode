@@ -15,6 +15,9 @@ test('renders Markdown as a reader and switches to raw source', async ({ page })
   await expect(page.getByRole('button', { name: 'Copy file', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Attach', exact: true })).toBeVisible();
   await expect(viewer.locator('.doc-reader')).toHaveCSS('user-select', 'text');
+  // In a file tab the reader fills the pane rather than keeping the narrow inspector measure.
+  const share = await viewer.locator('.doc-reader').evaluate(element => element.getBoundingClientRect().width / element.closest('.file-view-body')!.getBoundingClientRect().width);
+  expect(share).toBeGreaterThan(0.95);
 
   await viewer.getByRole('button', { name: 'Raw', exact: true }).click();
   await expect(viewer.getByRole('button', { name: 'Raw', exact: true })).toHaveAttribute('aria-pressed', 'true');
@@ -22,7 +25,8 @@ test('renders Markdown as a reader and switches to raw source', async ({ page })
   await expect(viewer.locator('.doc-raw')).toContainText('## Usage');
 
   // The choice is remembered for Markdown files during the session.
-  await page.locator('[data-action="back-inspector"]').click();
+  await page.getByRole('button', { name: 'Close README.md', exact: true }).click();
+  await expect(page.locator('.document-viewer')).toHaveCount(0);
   await page.locator('[data-action="open-file"][data-path="README.md"]').click();
   await expect(page.locator('.document-viewer .doc-raw')).toContainText('# Orbit');
 });
