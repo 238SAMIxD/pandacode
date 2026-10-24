@@ -634,7 +634,30 @@ const architect = createPreviewArchitect({
   agent,
 });
 
+/** Menu bar popover data; `window.__trayCalls` records what it asked for. */
+function trayCommand(command: string, args: Record<string, any>): unknown {
+  ((window as any).__trayCalls ??= []).push({ command, args });
+  if (command !== 'tray_snapshot') return undefined;
+  const now = Date.now(), minutes = (m: number) => now - m * 60_000, hours = (h: number) => new Date(now + h * 3_600_000).toISOString();
+  return {
+    running: [
+      { id: 'tray-running-1', title: 'Polish the new onboarding flow and keyboard navigation', project: 'PandaCode', provider: 'claude', at: minutes(4) },
+      { id: 'tray-running-2', title: 'Build search indexing', project: 'website', provider: 'codex', at: minutes(27) },
+    ],
+    waiting: [{ id: 'tray-waiting', title: 'Run the database migration', project: 'api', provider: 'opencode', at: minutes(12) }],
+    finished: [
+      { id: 'tray-done', title: 'Review the API changes', project: 'api', provider: 'kimi', at: minutes(8) },
+      { id: 'tray-failed', title: 'Fix flaky login test', project: 'PandaCode', provider: 'codex', at: minutes(65), failed: true },
+    ],
+    usage: [
+      { provider: 'claude', status: 'ready', plan: 'Max', stale: false, checkedAt: now, windows: [{ label: '5 hours', usedPercent: 42, resetsAt: hours(2.17) }, { label: 'Weekly', usedPercent: 83, resetsAt: hours(70) }] },
+      { provider: 'codex', status: 'ready', plan: 'Pro', stale: false, checkedAt: now, windows: [{ label: '5 hours', usedPercent: 97, resetsAt: hours(0.6) }] },
+    ],
+    checking: false,
+  };
+}
 export async function invoke<T>(command: string, args: Record<string, any>): Promise<T> {
+  if (command.startsWith('tray_')) return trayCommand(command, args) as T;
   if (command.startsWith('jj_')) return (await import('./preview-jj')).invokeJj<T>(command, args);
   if (command.includes('moodboard')) return (await import('./preview-moodboards')).invokeMoodboards<T>(command, args);
   if (command === 'bots_list' || command.startsWith('bot_')) return invokeBots<T>(command, args, {
