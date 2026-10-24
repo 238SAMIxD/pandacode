@@ -156,18 +156,21 @@ After 5–30 minutes the build shows under **TestFlight → iOS Builds**, first 
 
 ## 8. Export compliance
 
-When the build finishes processing, TestFlight shows **Missing Compliance**. Click
-**Manage** and answer. See [Export compliance](#export-compliance) below for why.
+`mobile/app.json` sets `"ios": { "config": { "usesNonExemptEncryption": false } }`
+(`ITSAppUsesNonExemptEncryption = NO`). The app uses only standard, published algorithms
+(X25519, XChaCha20-Poly1305) to protect its own users' data, and is free and publicly available,
+which is the usual case for the mass-market exemption in Category 5, Part 2 of the US EAR. With
+`NO`, App Store Connect asks no encryption questions per build and needs no encryption
+documents or compliance code. Leave **App Information → App Encryption Documentation** empty.
 
-| Question | Answer |
-|---|---|
-| What type of encryption algorithms does your app implement? | **Standard encryption algorithms instead of, or in addition to, using or accessing the encryption within Apple's operating system** |
-| Is your app going to be available on the App Store in France? | **No** for 1.0 if you have not filed a French declaration (then remove France in Pricing and Availability). **Yes** only with the declaration in hand; App Store Connect asks you to upload it. |
+Why not `YES`: `YES` tells Apple the app needs approved encryption documentation, and every
+build must then carry the code Apple issues (`ITSEncryptionExportComplianceCode`). Without it
+the upload is rejected with ITMS-90592.
 
-`mobile/app.json` sets `"ios": { "config": { "usesNonExemptEncryption": true } }`
-(`ITSAppUsesNonExemptEncryption = YES`). That only says "yes, uses encryption"; you still
-answer the questions above in App Store Connect, once per build or once under App Information →
-App Encryption Documentation.
+The mass-market exemption usually comes with an annual self-classification report to the US
+Bureau of Industry and Security (BIS), due each February for the previous year. See
+[Export compliance](#export-compliance) below. This is not legal advice; confirm it for your
+own situation.
 
 ## 9. TestFlight internal testing
 

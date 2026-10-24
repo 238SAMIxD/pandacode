@@ -16,7 +16,7 @@
         "CFBundleDisplayName": "PandaCode"
       },
       "config": {
-        "usesNonExemptEncryption": true
+        "usesNonExemptEncryption": false
       },
       "privacyManifests": {
         "NSPrivacyTracking": false,

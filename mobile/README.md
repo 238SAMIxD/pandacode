@@ -36,10 +36,7 @@ Settings → Account → Delete account… calls the relay's `DELETE /v1/account
 Expo modules use (UserDefaults CA92.1, file timestamps C617.1, system boot time 35F9.1, disk space
 E174.1; the app's own code uses SecureStore, which is the Keychain, and one cache file).
 
-`ios.config.usesNonExemptEncryption` is `true`: besides HTTPS, the app implements standard
-algorithms itself (X25519 + XChaCha20-Poly1305 end-to-end encryption, `src/connect/crypto.ts`). In App
-Store Connect that means answering the export compliance questions for standard encryption
-algorithms; the legal details (exemption category, France declaration) are in `docs/app-store/`.
+`ios.config.usesNonExemptEncryption` is `false`: the app's end-to-end encryption (X25519 + XChaCha20-Poly1305, `src/connect/crypto.ts`) uses only standard algorithms for its own users' data, the usual mass-market exemption case, so no encryption documentation or compliance code is needed. `true` would require Apple's `ITSEncryptionExportComplianceCode` in every build (ITMS-90592 otherwise). Details and the yearly BIS self-classification note are in `docs/app-store/SUBMITTING.md` step 8.
 
 Fill in before building or submitting:
 
