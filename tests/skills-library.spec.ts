@@ -21,6 +21,44 @@ async function open(page: Page): Promise<void> {
 const item = (page: Page, name: string) => page.getByRole('list', { name: 'Library' }).locator('.skills-item', { hasText: name });
 const status = (page: Page, row: string, column: number) => page.getByRole('table', { name: 'Skills by harness' }).getByRole('row', { name: new RegExp(row) }).locator('td').nth(column);
 
+test.describe('Skills & rules', () => {
+for (const theme of ['light', 'dark']) {
+  test(`import controls stay readable and full height in ${theme}`, async ({ page }) => {
+    await open(page);
+    await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+    const form = page.getByRole('form', { name: 'Import a skill or rule' });
+    const path = form.getByRole('textbox', { name: 'Folder or file path' });
+    expect.soft((await path.boundingBox())!.height).toBeGreaterThanOrEqual(32);
+    await expect(form.getByRole('combobox')).toHaveCount(3);
+    for (const select of await form.getByRole('combobox').all()) {
+      const colors = await select.locator('option').evaluateAll(options => options.map(option => {
+        const probe = document.createElement('span');
+        probe.style.cssText = 'background:var(--panel);color:var(--text)';
+        option.closest('form')!.append(probe);
+        const expected = getComputedStyle(probe);
+        const actual = getComputedStyle(option);
+        const colors = { background: actual.backgroundColor, text: actual.color, panel: expected.backgroundColor, foreground: expected.color };
+        probe.remove();
+        return colors;
+      }));
+      for (const color of colors) {
+        expect(color.background).toBe(color.panel);
+        expect(color.text).toBe(color.foreground);
+      }
+    }
+    await path.fill('/path/to/skill-folder');
+    await form.screenshot({ path: `test-results/skills-import-${theme}.png` });
+    await form.getByRole('combobox', { name: 'Kind', exact: true }).selectOption('rule');
+    await expect(form.getByRole('combobox', { name: 'Kind', exact: true })).toHaveValue('rule');
+    await form.getByRole('combobox', { name: 'Source', exact: true }).selectOption('github');
+    for (const input of await form.getByRole('textbox').all()) {
+      expect((await input.boundingBox())!.height).toBeGreaterThanOrEqual(32);
+    }
+    await form.getByRole('combobox', { name: 'Project for project scope' }).selectOption('orbit');
+    await expect(form.getByRole('combobox', { name: 'Project for project scope' })).toHaveValue('orbit');
+  });
+}
+
 test('activating a skill for Claude Code and Codex shows in the matrix, and drift is reported', async ({ page }) => {
   await open(page);
   await page.getByRole('checkbox', { name: 'Release notes: Claude Code · User' }).check();
@@ -121,4 +159,5 @@ test('a pstack-sized collection is scanned as a catalog and imports past 64 file
   await expect(page.getByRole('list', { name: 'Library' }).locator('.skills-item')).toHaveCount(42);
   await page.getByRole('button', { name: 'Refresh acme/pstack' }).click();
   await expect(page.getByRole('status')).toHaveText('Refreshed acme/pstack. Library copies stay as imported.');
+});
 });

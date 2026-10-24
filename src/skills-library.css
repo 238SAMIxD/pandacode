@@ -3,6 +3,8 @@
 .skills-import-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .skills-import input,.skills-import select{flex:1;min-width:8rem;height:32px;padding:0 10px;border-radius:3px;border:1px solid color-mix(in srgb,var(--text) 12%,transparent);background:color-mix(in srgb,var(--text) 4%,transparent);color:var(--text);font:inherit;font-size:.82rem}
 .skills-import select{flex:0 1 auto}
+.skills-import>input{flex:none}
+.skills-import option{background:var(--panel);color:var(--text)}
 .skills-import input:focus-visible,.skills-import select:focus-visible,.skills-toggle input:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
 .skills-import-actions{justify-content:space-between}
 .skills-message{margin:0;font-size:.76rem;color:var(--muted);min-height:1em}
