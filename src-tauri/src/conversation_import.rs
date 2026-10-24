@@ -181,7 +181,12 @@ pub async fn list_importable_conversations(app: tauri::AppHandle, window: tauri:
             .await
         }
         "codex" => codex_page(&app.state::<AppState>(), &search, &cursor).await,
-        "github-copilot" => copilot_page(&app.state::<AppState>(), &search, include_cloud.unwrap_or(false)).await,
+        "github-copilot" => {
+            // Reading and parsing the logs is disk work; keep it off the async
+            // runtime and out of every search keystroke, like the Claude path.
+            let listed = crate::blocking(move || Ok(copilot::prepared_logs(&copilot::home(), COPILOT_SCAN_LIMIT))).await?;
+            copilot_page(&app.state::<AppState>(), &search, include_cloud.unwrap_or(false), listed).await
+        }
         _ => Err("Import conversations from Claude Code, Codex, or GitHub Copilot CLI.".into()),
     }
 }
@@ -194,33 +199,30 @@ fn project_for_repository(store: &crate::storage::Store, repository: &str) -> Re
     }))
 }
 
-async fn copilot_page(state: &AppState, search: &Option<String>, include_cloud: bool) -> Result<ImportPage> {
+async fn copilot_page(state: &AppState, search: &Option<String>, include_cloud: bool, listed: Vec<(String, copilot::Prepared)>) -> Result<ImportPage> {
     let root = copilot::home();
     let mut items = Vec::new();
     let mut local_ids = std::collections::HashSet::new();
-    for (id, path) in copilot::logs(&root, COPILOT_SCAN_LIMIT) {
+    for (id, parsed) in listed {
         local_ids.insert(id.clone());
-        let parsed = match copilot::read_events(&path) {
-            Ok(events) => copilot::summarize(&id, &events).map(|summary| (summary, events)),
-            Err(message) => {
-                let store = state.store.lock().map_err(|e| e.to_string())?;
-                let imported_task_id = store.imported_task("github-copilot", &id)?;
-                items.push(Importable {
-                    id,
-                    title: "Copilot session cannot be imported".into(),
-                    folder: String::new(),
-                    updated_at: 0,
-                    messages: None,
-                    model: None,
-                    imported_task_id,
-                    unavailable: Some(message),
-                    source_kind: "local".into(),
-                    transcript_only: false,
-                });
-                continue;
-            }
+        let Some(summary) = parsed.summary else {
+            let Some(message) = parsed.unavailable else { continue };
+            let store = state.store.lock().map_err(|e| e.to_string())?;
+            let imported_task_id = store.imported_task("github-copilot", &id)?;
+            items.push(Importable {
+                id,
+                title: "Copilot session cannot be imported".into(),
+                folder: String::new(),
+                updated_at: 0,
+                messages: None,
+                model: None,
+                imported_task_id,
+                unavailable: Some(message),
+                source_kind: "local".into(),
+                transcript_only: false,
+            });
+            continue;
         };
-        let Some((summary, _)) = parsed else { continue };
         if !matches(search, &[&summary.title, &summary.folder]) {
             continue;
         }

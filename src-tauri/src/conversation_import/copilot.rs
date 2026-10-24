@@ -1,8 +1,13 @@
 //! Reads GitHub Copilot CLI's documented local session event logs. Cloud
 //! discovery is handled separately through the supported Copilot SDK API.
 use serde_json::Value;
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+
+/// Parsed Copilot CLI logs, keyed by path and last-modified time (see `prepared_logs`).
+static PREPARED_LOGS: OnceLock<Mutex<HashMap<(PathBuf, u128), Prepared>>> = OnceLock::new();
 
 #[derive(Clone, Debug)]
 pub(crate) struct CloudSession {
@@ -263,6 +268,53 @@ pub(crate) fn history(events: &[Value]) -> Vec<Entry> {
         }
     }
     entries.into()
+}
+
+/// One log's parse result for the importer list: its summary, none when the file
+/// holds no session, or why it cannot be imported.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Prepared {
+    pub(crate) summary: Option<Summary>,
+    pub(crate) unavailable: Option<String>,
+}
+
+/// Parses a listing's logs once each, cached by path and mtime: `copilot_page`
+/// re-runs on every search keystroke, and reading and parsing up to 400 logs
+/// dominates it. Entries whose files leave the listing are dropped, so the map
+/// stays small and stale files expire. Callers wrap this in `crate::blocking`.
+pub(crate) fn prepared_logs(root: &Path, limit: usize) -> Vec<(String, Prepared)> {
+    let cache = PREPARED_LOGS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cache = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut keys = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for (id, path) in logs(root, limit) {
+        let stamp = modified_millis(&path);
+        let key = (path, stamp);
+        keys.insert(key.clone());
+        let entry = match cache.get(&key) {
+            Some(entry) => entry.clone(),
+            None => {
+                let entry = match read_events(&key.0) {
+                    Ok(events) => Prepared { summary: summarize(&id, &events), unavailable: None },
+                    Err(message) => Prepared { summary: None, unavailable: Some(message) },
+                };
+                cache.insert(key, entry.clone());
+                entry
+            }
+        };
+        out.push((id, entry));
+    }
+    cache.retain(|key, _| keys.contains(key));
+    out
+}
+
+fn modified_millis(path: &Path) -> u128 {
+    std::fs::metadata(path)
+        .ok()
+        .and_then(|meta| meta.modified().ok())
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|age| age.as_millis())
+        .unwrap_or(0)
 }
 
 pub(crate) fn logs(root: &Path, limit: usize) -> Vec<(String, PathBuf)> {
