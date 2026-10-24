@@ -6,6 +6,7 @@ import { memo, useEffect, useRef, useState } from 'react';
 import { FlatList, Keyboard, LayoutAnimation, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { connect } from '../../../connect/client.ts';
+import { markOpen } from '../../../connect/perf.ts';
 import type { PendingRequest } from '../../../connect/types.ts';
 import { botOf } from '../../../store/inbox.ts';
 import { taskKey, useConnect } from '../../../store/index.ts';
@@ -103,6 +104,7 @@ export default function TaskScreen() {
   const [latest] = useState(() => () => list.current?.scrollToOffset({ offset: 0, animated: true }));
 
   useEffect(() => {
+    markOpen(taskKey(device, session));
     connect.watch(device, [session]);
     connect.loadMessages(device, session).catch(() => undefined);
     connect.loadPull(device, session).catch(() => undefined); // shows the header's pull request item

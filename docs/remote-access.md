@@ -197,7 +197,7 @@ approval policy: remote prompts get no more power than local ones.
 | `providers.list` | `{ force?: boolean }` | the host's `list_providers` result: `[{ id, name, installed, path, version, models }]`. `force` drops the same ACP catalog caches. If it would not fit one reply, the longest `models` lists are halved until it does. |
 | `providers.models` | `{ provider, force?: boolean }` | the host's `list_provider_models` result: `[{ id, name, description, reasoningEfforts, defaultReasoningEffort, contextWindow }]`, its tail dropped to fit one reply. `provider` must be a known harness id (`Unknown provider.`). |
 | `task.start` | `{ repo?: "owner/name", projectId?: string, branch?, worktree, prompt, provider, model, mode?, effort? }` (exactly one of `repo` or `projectId`) | `{ sessionId }` |
-| `task.messages` | `{ sessionId, afterId }` | `{ messages: [{ id, role, content, createdAt, turnDurationMs }], hasMore, title }` |
+| `task.messages` | `{ sessionId, afterId?, tail?, beforeId?, limit? }` (`limit` is 1..400; defaults to 100 for `tail`/`beforeId`, 400 for `afterId`) | `{ messages: [{ id, role, content, createdAt, turnDurationMs }], hasMore, hasOlder, title, lastId }`. `tail: true` returns the newest page; `beforeId` returns the page immediately before that message id. Both are oldest-first. Use only one of `afterId`, `tail: true` or `beforeId`; mixing them is refused. `hasMore` means newer rows follow this page, `hasOlder` means older rows precede its first message, and `lastId` is the newest message id (or `null` for an empty thread). |
 | `task.send` | `{ sessionId, text }` | `{ queued: boolean }`. Queued if the task is running, like Enter. If the run ended between the check and the queue add, the host takes the entry back and sends it. |
 | `task.stop` | `{ sessionId }` | `{}` |
 | `task.steer` | `{ sessionId, text }` | `{}` (as `steer_task`) |
@@ -334,13 +334,17 @@ that ended while this computer wasn't listening, and messages newer than `remote
 
 ### Message copies
 
-`task.messages` returns the messages after `afterId`, oldest first: at most 400 rows, kept
-within 180 KiB of JSON, `hasMore` when more remain. Any message over 120 KiB is cut and ends with
+`task.messages` keeps the legacy `afterId` path for desktop mirrors: rows after the cursor, oldest
+first, at most 400 rows by default. `tail: true` starts at the newest message, and `beforeId` pages
+backward from that id; those modes default to 100 rows. Every mode is kept within 180 KiB of JSON,
+and newest-first pages keep the newest rows that fit. `hasMore` reports newer rows after the page;
+`hasOlder` reports older rows before its first row. `lastId` is the current newest message id, or
+`null` for an empty thread. Any message over 120 KiB is cut and ends with
 `…[cut on the host to fit a remote page]` (JSON tool content is cut inside, so it still parses).
-The viewer stores a page and advances `remote_synced_id` in one transaction, and skips a page
-that no longer starts at the stored position (a concurrent copy got there first), so messages
-are never copied twice. It follows `hasMore` for up to 50 pages per copy, and also takes the
-host's title.
+The desktop mirror stores an `afterId` page and advances `remote_synced_id` in one transaction,
+and skips a page that no longer starts at the stored position (a concurrent copy got there first),
+so messages are never copied twice. It follows `hasMore` for up to 50 pages per copy and also takes
+the host's title.
 
 Known limit: a message the host rewrites in place after it was copied (a tool's status, say)
 is not copied again.

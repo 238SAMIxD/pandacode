@@ -7,8 +7,9 @@ import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Text, View, 
 import Swipeable, { type SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
 import Animated, { useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
 import { connect } from '../connect/client.ts';
+import { markOpen } from '../connect/perf.ts';
 import { elapsedLabel, stalledFor, tomorrowMorning, type InboxRow as Row } from '../store/inbox.ts';
-import { useConnect } from '../store/index.ts';
+import { taskKey, useConnect } from '../store/index.ts';
 import { removeOutbox, retryOutbox, snooze, togglePin, unsnooze } from '../store/local.ts';
 import { HarnessLogo } from './harness.tsx';
 import { Icon } from './Icon.tsx';
@@ -124,6 +125,12 @@ function Reveal({ progress, children }: { progress: SharedValue<number>; childre
   return <Animated.View style={[styles.swipeRow, style]}>{children}</Animated.View>;
 }
 
+/** Press-in: start reading the thread's cache so it draws in the screen's first frame. */
+function warm(deviceId: string, sessionId: string) {
+  markOpen(taskKey(deviceId, sessionId));
+  void connect.peek(deviceId, sessionId);
+}
+
 function SwipeAction({ label, ios, android, color, onPress }: { label: string; ios: MenuItem['ios']; android: MenuItem['android']; color: string; onPress: () => void }) {
   return (
     <Pressable onPress={onPress} style={[styles.swipe, { backgroundColor: color }]} accessibilityRole="button" accessibilityLabel={label}>
@@ -144,6 +151,7 @@ export const InboxRow = memo(function InboxRow({ row, snoozed, last, sidebar, se
   const href = { pathname: '/task/[device]/[session]' as const, params: { device: row.deviceId, session: task.sessionId } };
   const body = (
     <Pressable onLongPress={Platform.OS === 'ios' && !replace ? undefined : () => showActions(task.title, menu)}
+      onPressIn={row.outboxId ? undefined : () => warm(row.deviceId, task.sessionId)}
       style={StyleSheet.flatten(sidebar
         ? [styles.row, styles.sidebarRow, { backgroundColor: selected ? colors.fill : backdrop.grouped }]
         : [styles.row, last && styles.lastRow, { backgroundColor: backdrop.background }])}

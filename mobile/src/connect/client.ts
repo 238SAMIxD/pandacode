@@ -9,7 +9,9 @@ import { File, Paths } from 'expo-file-system';
 import { BUILD_DEMO, DEMO_FILE, demoAtStart } from '../demo.ts';
 import { demoCall, type DemoHost } from '../demo-host.ts';
 import { delivering, settled, unmatched, type Sent } from '../store/sent.ts';
-import { applyEvent, ended, fromList, fromSubscribe, idleLive, lastId, mergeMessages, staleLists } from '../store/reduce.ts';
+import { applyEvent, ended, fromList, fromSubscribe, idleLive, lastId, mergeMessages, prependMessages, staleLists } from '../store/reduce.ts';
+import { cachedLastId, clearThreads, readThread, saveThread } from '../store/threads.ts';
+import { PrefetchQueue, prefetchOrder } from '../store/prefetch.ts';
 import * as auth from './auth.ts';
 import { deleteAccount as deleteAccountSteps } from './delete-account.ts';
 import { build, NOT_CONFIGURED } from './config.ts';
@@ -18,12 +20,19 @@ import { LOST, NOT_CONNECTED, OFFLINE, outdated, Pending, RATE, request, START_T
 import * as secrets from './secrets.ts';
 import { AppState } from 'react-native';
 import { RelaySocket } from './socket.ts';
-import type { AgentEvent, Bot, Changes, ConfigureParams, Device, Diff, MergeMethod, MessagePage, Provider, ProviderModel, PullDetail, RunFinished, StartParams, SubscribedTask, TasksList } from './types.ts';
+import { markCurrent } from './perf.ts';
+import { newestPage, olderByAfterId, pageMessages, type Fetch } from './paging.ts';
+import type { AgentEvent, Bot, Changes, ConfigureParams, Device, Diff, MergeMethod, Message, MessagePage, Provider, ProviderModel, PullDetail, RunFinished, StartParams, SubscribedTask, TasksList } from './types.ts';
 
 const RENEW_MS = 9 * 60_000;
 const REFRESH_MS = 12 * 3600_000;
 const MAX_FRAME = 256 * 1024;
 const MAX_PAGES = 50;
+/** Messages asked for when a thread opens with nothing held, and per older page on scroll. */
+const TAIL = 60;
+const OLDER = 60;
+/** afterId pages a background prefetch may copy. */
+const PREFETCH_PAGES = 2;
 /** Task lists refresh this often while the app is open (faster while a task runs). */
 const LIST_IDLE_MS = 60_000;
 const LIST_ACTIVE_MS = 15_000;
@@ -49,7 +58,15 @@ const glanced = new Map<string, Set<string>>();
 const GLANCE_MAX = 20;
 /** Every subscribed task of a host: open ones and running ones. */
 const subscribed = (host: string) => new Set([...(watched.get(host) ?? []), ...(glanced.get(host) ?? [])]);
-const loads = new Map<string, Promise<void>>();
+/** Per taskKey: the message calls in order (one at a time), and the newest copy (it owns `history`). */
+const queues = new Map<string, Promise<unknown>>();
+const copies = new Map<string, Promise<unknown>>();
+/** Cache reads per taskKey this launch (single flight; the first one fills the store). */
+const warming = new Map<string, Promise<void>>();
+/** When each thread was last copied in full (prefetch skips fresh ones). */
+const copiedAt = new Map<string, number>();
+/** Hosts whose task.messages has no tail/beforeId (replies without hasOlder): afterId paging only. */
+const legacy = new Set<string>();
 
 const state = () => useConnect.getState();
 const patch = (update: Partial<ConnectState> | ((s: ConnectState) => Partial<ConnectState>)) => useConnect.setState(update);
@@ -172,6 +189,7 @@ async function signOut(): Promise<void> {
   keys.clear();
   watched.clear();
   glanced.clear();
+  forgetThreads();
   presence = false;
   await secrets.clearSession();
   const { deviceId, ready } = state();
@@ -249,6 +267,7 @@ async function deleteAccount(): Promise<void> {
     wipe: async () => {
       await secrets.wipe();
       await clearIcons();
+      forgetThreads();
     },
     signOut: async () => {
       await signOut();
@@ -389,6 +408,7 @@ function watch(deviceId: string, sessionIds: string[]) {
   const before = ids.size;
   sessionIds.forEach(id => ids.add(id));
   watched.set(deviceId, ids);
+  prefetch.hold('thread');
   if (ids.size !== before) void subscribeHost(deviceId);
 }
 
@@ -405,6 +425,7 @@ function unwatch(deviceId: string, sessionIds: string[]) {
   const ids = watched.get(deviceId);
   sessionIds.forEach(id => ids?.delete(id));
   if (ids && !ids.size) watched.delete(deviceId);
+  if (!watched.size) prefetch.release('thread');
 }
 
 async function subscribeAll() {
@@ -430,36 +451,157 @@ async function subscribeHost(deviceId: string): Promise<void> {
   for (const t of tasks) if (watched.get(deviceId)?.has(t.sessionId) && t.lastId > lastId(state().messages[taskKey(deviceId, t.sessionId)])) void loadMessages(deviceId, t.sessionId).catch(() => undefined);
 }
 
-/** Copies messages newer than the last stored one, following hasMore. Calls run one at a time per task. */
-function loadMessages(deviceId: string, sessionId: string): Promise<void> {
+/** One task's task.messages call with these params. */
+const fetchFor = (deviceId: string, sessionId: string): Fetch => params => call<MessagePage>(deviceId, 'task.messages', { sessionId, ...params });
+
+/** Stores a page: after the newest message, before the oldest, or in place of the window (a tail).
+ * Prepend and replace also record whether older messages remain. Saved to disk shortly after. */
+function store(deviceId: string, sessionId: string, page: Message[], mode: 'append' | 'prepend' | 'replace', reply?: Partial<MessagePage> | null) {
   const key = taskKey(deviceId, sessionId);
-  const run = async () => {
-    for (let page = 0; page < MAX_PAGES; page++) {
-      const afterId = lastId(state().messages[key]);
-      const reply = await call<MessagePage>(deviceId, 'task.messages', { sessionId, afterId });
-      const messages = Array.isArray(reply?.messages) ? reply.messages : [];
-      patch(s => {
-        const merged = mergeMessages(s.messages[key] ?? [], messages);
-        return { messages: { ...s.messages, [key]: merged }, sent: editSent(s.sent, key, sent => unmatched(sent, merged)), tasks: withTitle(s, deviceId, sessionId, reply?.title) };
-      });
-      if (!reply?.hasMore || !messages.length) return;
+  patch(s => {
+    const held = s.messages[key] ?? [];
+    const merged = mode === 'replace' ? page : mode === 'prepend' ? prependMessages(held, page) : mergeMessages(held, page);
+    const { [key]: _, ...rest } = s.older;
+    const older = mode === 'append' ? s.older : reply?.hasOlder ? { ...rest, [key]: 'more' as const } : rest;
+    return { messages: { ...s.messages, [key]: merged }, older, sent: editSent(s.sent, key, sent => unmatched(sent, merged)), tasks: withTitle(s, deviceId, sessionId, reply?.title) };
+  });
+  saveThread(key, () => ({ messages: state().messages[key], hasOlder: state().older[key] !== undefined }));
+}
+
+/** Runs a task's message calls one at a time, in order. */
+function serial<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const next = (queues.get(key) ?? Promise.resolve()).catch(() => undefined).then(run);
+  queues.set(key, next);
+  const done = () => { if (queues.get(key) === next) queues.delete(key); };
+  next.then(done, done);
+  return next;
+}
+
+/** Draws the thread from the disk cache when the store holds none of it (press-in, open, prefetch). */
+function peek(deviceId: string, sessionId: string): Promise<void> {
+  const key = taskKey(deviceId, sessionId);
+  if (state().demo || key in state().messages) return Promise.resolve();
+  let read = warming.get(key);
+  if (!read) {
+    read = readThread(key).then(cached => {
+      if (!cached || key in state().messages) return;
+      patch(s => ({ messages: { ...s.messages, [key]: cached.messages }, older: cached.hasOlder ? { ...s.older, [key]: 'more' } : s.older }));
+    }, () => undefined);
+    warming.set(key, read);
+  }
+  return read;
+}
+
+/**
+ * Brings a thread up to date. With nothing held (in memory or on disk) the newest page comes
+ * first (tail); then the messages after the newest one held, following hasMore. A held window
+ * far behind (its first afterId page has more after it) is replaced by the tail. Hosts without
+ * tail/beforeId page by afterId from the start, as before. Runs one call at a time per task.
+ */
+function loadMessages(deviceId: string, sessionId: string, pages = MAX_PAGES): Promise<void> {
+  const key = taskKey(deviceId, sessionId);
+  const run = async (): Promise<string> => {
+    await peek(deviceId, sessionId);
+    const fetch = fetchFor(deviceId, sessionId);
+    const tail = () => newestPage(fetch, deviceId, legacy, { tail: true, limit: TAIL });
+    const held = !!state().messages[key]?.length;
+    if (!held) {
+      // An older host answers as for afterId 0 (the first page) or refuses (then the loop starts at 0).
+      const { page, legacy: old } = await tail();
+      // A prefetch learning the host is older stops: its first page is the oldest, not the newest.
+      if (old && pages < MAX_PAGES) return 'afterId';
+      if (page) store(deviceId, sessionId, pageMessages(page), old ? 'append' : 'replace', page);
+      if (page && !page.hasMore) return old ? 'afterId' : 'tail';
     }
+    for (let n = 0; n < pages; n++) {
+      const reply = await fetch({ afterId: lastId(state().messages[key]) });
+      if (n === 0 && held && reply?.hasMore) {
+        const { page, legacy: old } = await tail();
+        if (!old && page) {
+          store(deviceId, sessionId, pageMessages(page), 'replace', page);
+          if (!page.hasMore) return 'tail';
+          continue;
+        }
+      }
+      const messages = pageMessages(reply);
+      store(deviceId, sessionId, messages, 'append', reply);
+      if (!reply?.hasMore || !messages.length) return 'afterId';
+    }
+    return 'afterId';
   };
-  const next = (loads.get(key) ?? Promise.resolve()).catch(() => undefined).then(run);
-  loads.set(key, next);
+  const copy = serial(key, run);
+  copies.set(key, copy);
   const settle = (error: string | null) => {
-    if (loads.get(key) !== next) return; // a later copy owns the state now
-    loads.delete(key);
+    if (copies.get(key) !== copy) return; // a later copy owns the state now
+    copies.delete(key);
     patch(s => {
       const { [key]: _, ...history } = s.history;
       return { history: error === null ? history : { ...history, [key]: error } };
     });
   };
   patch(s => ({ history: { ...s.history, [key]: null } }));
-  return next.then(() => settle(null), (error: Error) => {
+  return copy.then(how => {
+    copiedAt.set(key, Date.now());
+    settle(null);
+    markCurrent(key, how);
+  }, (error: Error) => {
     settle(error?.message || 'Could not load this task.');
     throw error;
   });
+}
+
+/** The page before the oldest message held, when the user scrolls near it. Hosts without
+ * beforeId page forward from the start up to it. A failure leaves it to the next scroll. */
+function loadOlder(deviceId: string, sessionId: string): Promise<void> {
+  const key = taskKey(deviceId, sessionId);
+  if (state().older[key] !== 'more') return Promise.resolve();
+  const setOlder = (value?: 'more' | 'loading') => patch(s => {
+    const { [key]: _, ...rest } = s.older;
+    return { older: value ? { ...rest, [key]: value } : rest };
+  });
+  setOlder('loading');
+  return serial(key, async () => {
+    const first = state().messages[key]?.[0]?.id;
+    if (!first) return setOlder();
+    const fetch = fetchFor(deviceId, sessionId);
+    const { page, legacy: old } = await newestPage(fetch, deviceId, legacy, { beforeId: first, limit: OLDER });
+    if (!old && page) return store(deviceId, sessionId, pageMessages(page), 'prepend', page);
+    store(deviceId, sessionId, await olderByAfterId(fetch, first, page, MAX_PAGES), 'prepend', { hasOlder: false });
+  }).catch(() => setOlder('more'));
+}
+
+/** Copies threads ahead in the background, one call at a time, held while a thread is open or a prompt sends. */
+const prefetch = new PrefetchQueue(async key => {
+  const at = key.indexOf('/');
+  const [deviceId, sessionId] = [key.slice(0, at), key.slice(at + 1)];
+  if (legacy.has(deviceId) && !(key in state().messages) && cachedLastId(key) === undefined) return;
+  await loadMessages(deviceId, sessionId, PREFETCH_PAGES);
+});
+
+/** Queues the threads worth copying ahead from every online host's list: running, waiting, then the most recent. */
+function schedulePrefetch() {
+  const s = state();
+  if (s.demo) return;
+  const known = (key: string) => {
+    const id = Math.max(lastId(s.messages[key]), cachedLastId(key) ?? 0);
+    const at = copiedAt.get(key);
+    return id || at ? { lastId: id, at: at ?? 0 } : undefined;
+  };
+  const open = new Set([...watched].flatMap(([host, ids]) => [...ids].map(id => taskKey(host, id))));
+  const lists = Object.entries(s.tasks)
+    .filter(([deviceId]) => s.devices.some(d => d.id === deviceId && d.online))
+    // Without tail pages a first copy starts at the oldest messages: only cached threads catch up.
+    .map(([deviceId, list]) => ({ deviceId, tasks: list.tasks.filter(t => !legacy.has(deviceId) || known(taskKey(deviceId, t.sessionId))) }));
+  prefetch.replace(prefetchOrder(lists, known, Date.now()).filter(key => !open.has(key)));
+}
+
+/** Sign-out and account deletion: nothing of any thread stays in memory or on disk. */
+function forgetThreads() {
+  prefetch.replace([]);
+  warming.clear();
+  copiedAt.clear();
+  legacy.clear();
+  clearThreads();
 }
 
 function withTitle(s: ConnectState, host: string, sessionId: string, title: unknown): ConnectState['tasks'] {
@@ -487,6 +629,7 @@ async function listTasks(deviceId: string, limit?: number): Promise<TasksList> {
   glance(deviceId, list.tasks.filter(t => active(t.status)).map(t => t.sessionId));
   void projectIcons(deviceId, list.tasks.map(t => t.projectId));
   if (!state().outdated[deviceId]) void listBots(deviceId).catch(() => undefined);
+  schedulePrefetch();
   return list;
 }
 
@@ -574,6 +717,7 @@ async function optimistic<T>(deviceId: string, sessionId: string, text: string, 
   const key = taskKey(deviceId, sessionId);
   const entry: Sent = { id: uuid(), text, state: initial, after: lastId(state().messages[key]) };
   patch(s => ({ sent: { ...s.sent, [key]: [...(s.sent[key] ?? []), entry] } }));
+  prefetch.hold(`send:${entry.id}`);
   const edit = (change: (e: Sent) => Sent | null) =>
     patch(s => ({ sent: editSent(s.sent, key, list => list.flatMap(e => (e.id === entry.id ? change(e) ?? [] : [e]))) }));
   try {
@@ -583,6 +727,8 @@ async function optimistic<T>(deviceId: string, sessionId: string, text: string, 
   } catch (error) {
     edit(() => null);
     throw error;
+  } finally {
+    prefetch.release(`send:${entry.id}`);
   }
 }
 
@@ -701,7 +847,7 @@ export const connect = {
   init, signInStart, signInFinish, signInCancel, signOut,
   enterDemo, leaveDemo, deleteAccount,
   refreshDevices, revokeDevice,
-  watch, unwatch, loadMessages,
+  watch, unwatch, loadMessages, loadOlder, peek,
   listTasks, refreshLists, listProviders, listModels, startTask, projectIcons,
   sendMessage, stopTask, steerTask, configureTask, respondApproval, respondInput,
   loadPull, pullDiff, mergePull, taskChanges, taskDiff, listBots, botThread, botMessage, pauseBot,

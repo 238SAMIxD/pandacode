@@ -17,6 +17,8 @@ export interface TaskSummary extends HostActivity {
   botId?: string; botName?: string;
   /** Approvals and questions waiting on the host now. */
   pending?: PendingRequest[];
+  /** The newest message id, from hosts that send it (prefetch skips threads already current). */
+  lastId?: number;
 }
 
 /** Newer hosts: when the run's newest event came and when it started (ms), and its subagents. */
@@ -30,7 +32,8 @@ export interface PendingRequest { kind: 'approval' | 'input_request' | (string &
 export interface SubscribedTask extends HostActivity { sessionId: string; status: TaskStatus; lastId: number; title: string; pending?: PendingRequest[] }
 
 export interface Message { id: number; role: string; content: string; createdAt: number; turnDurationMs: number | null }
-export interface MessagePage { messages: Message[]; hasMore: boolean; title: string }
+/** `hasMore`: newer messages follow the page; `hasOlder` (newer hosts, tail/beforeId pages): older ones precede it. */
+export interface MessagePage { messages: Message[]; hasMore: boolean; title: string; hasOlder?: boolean; lastId?: number | null }
 
 export interface ReasoningEffort { id: string; name: string; description: string }
 export interface ProviderModel { id: string; name: string; description: string; reasoningEfforts?: ReasoningEffort[]; defaultReasoningEffort?: string | null; contextWindow?: number | null }

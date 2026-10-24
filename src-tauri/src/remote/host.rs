@@ -22,6 +22,7 @@ const FLUSH: Duration = Duration::from_millis(100);
 pub(crate) const MAX_IDS: usize = 500;
 const TASKS_DEFAULT: usize = 200;
 const TASKS_MAX: usize = 500;
+const MESSAGE_PAGE_DEFAULT: i64 = 100;
 const WINDOW_MS: i64 = 60_000;
 const MAX_SEEN: usize = 20_000;
 /// A reply's or event frame's JSON budget: sealing adds a third (base64) plus a small
@@ -36,7 +37,7 @@ const DIFF_BUDGET: usize = 120 * 1024;
 const MAX_PATH: usize = 4096;
 /// A single message or event larger than this is cut, with [`CUT`] marking the cut.
 const MAX_MESSAGE: usize = 120 * 1024;
-/// Messages read per `task.messages` page before the budget trims it.
+/// Messages read per legacy `afterId` `task.messages` page before the budget trims it.
 const PAGE_ROWS: i64 = 400;
 /// Buffered events per subscriber; a viewer that falls this far behind resyncs at run end.
 const MAX_BUFFER: usize = 4096;
@@ -94,7 +95,7 @@ pub(crate) enum Call {
     Providers { force: bool },
     Models { provider: String, force: bool },
     Start(start::Start),
-    Messages { session_id: String, after_id: i64 },
+    Messages { session_id: String, page: MessagePaging },
     Send { session_id: String, text: String },
     Stop { session_id: String },
     Steer { session_id: String, text: String },
@@ -111,6 +112,13 @@ pub(crate) enum Call {
     BotThread { bot_id: String },
     BotMessage { bot_id: String, text: String },
     BotPause { bot_id: String, paused: bool },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum MessagePaging {
+    After { after_id: i64, limit: i64 },
+    Tail { limit: i64 },
+    Before { before_id: i64, limit: i64 },
 }
 
 pub(crate) fn id_param(params: &Value, key: &str) -> Result<String> {
@@ -154,6 +162,43 @@ fn task_limit(params: &Value) -> Result<usize> {
             .filter(|limit| *limit <= TASKS_MAX)
             .ok_or_else(|| format!("Limit must be between 0 and {TASKS_MAX}.")),
     }
+}
+
+fn message_paging(params: &Value) -> Result<MessagePaging> {
+    let tail = match params.get("tail").filter(|value| !value.is_null()) {
+        None => None,
+        Some(value) => Some(value.as_bool().ok_or("Invalid tail.")?),
+    };
+    let before_id = match params.get("beforeId").filter(|value| !value.is_null()) {
+        None => None,
+        Some(value) => Some(value.as_i64().filter(|id| *id >= 0).ok_or("Invalid beforeId.")?),
+    };
+    let limit = match params.get("limit").filter(|value| !value.is_null()) {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_u64()
+                .and_then(|limit| i64::try_from(limit).ok())
+                .filter(|limit| (1..=PAGE_ROWS).contains(limit))
+                .ok_or_else(|| format!("Limit must be between 1 and {PAGE_ROWS}."))?,
+        ),
+    };
+    if tail == Some(true) && before_id.is_some() {
+        return Err("Use tail or beforeId, not both.".into());
+    }
+    if params.get("afterId").is_some() && (tail == Some(true) || before_id.is_some()) {
+        return Err("Use afterId or newest-first paging, not both.".into());
+    }
+    Ok(if tail == Some(true) {
+        MessagePaging::Tail { limit: limit.unwrap_or(MESSAGE_PAGE_DEFAULT) }
+    } else if let Some(before_id) = before_id {
+        MessagePaging::Before { before_id, limit: limit.unwrap_or(MESSAGE_PAGE_DEFAULT) }
+    } else {
+        MessagePaging::After {
+            after_id: params["afterId"].as_i64().unwrap_or(0).max(0),
+            limit: limit.unwrap_or(PAGE_ROWS),
+        }
+    })
 }
 
 fn path_param(params: &Value, key: &str) -> Result<Option<String>> {
@@ -225,7 +270,7 @@ pub(crate) fn parse(host_enabled: bool, method: &str, params: &Value) -> Result<
             Call::Models { provider, force: force_param(params)? }
         }
         "task.start" => Call::Start(start::parse(params)?),
-        "task.messages" => Call::Messages { session_id: id_param(params, "sessionId")?, after_id: params["afterId"].as_i64().unwrap_or(0).max(0) },
+        "task.messages" => Call::Messages { session_id: id_param(params, "sessionId")?, page: message_paging(params)? },
         "task.send" => Call::Send { session_id: id_param(params, "sessionId")?, text: text_param(params, "text")? },
         "task.stop" => Call::Stop { session_id: id_param(params, "sessionId")? },
         "task.steer" => Call::Steer { session_id: id_param(params, "sessionId")?, text: text_param(params, "text")? },
@@ -350,10 +395,13 @@ async fn run(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
             Ok(models)
         }
         Call::Start(request) => start::run(app, from, request).await,
-        Call::Messages { session_id, after_id } => {
+        Call::Messages { session_id, page } => {
             local_task(&state, &session_id)?;
             let store = state.store.lock().map_err(|e| e.to_string())?;
-            messages_page(&store.db, &session_id, after_id)
+            match page {
+                MessagePaging::After { after_id, limit } if limit == PAGE_ROWS => messages_page(&store.db, &session_id, after_id),
+                page => messages_page_with(&store.db, &session_id, page),
+            }
         }
         Call::Send { session_id, text } => {
             local_task(&state, &session_id)?;
@@ -1047,20 +1095,48 @@ fn pending_items(requests: &HashMap<String, AgentEvent>) -> Vec<Value> {
     items
 }
 
-/// Messages after `after_id`, oldest first, cut to fit one frame. `hasMore` asks the
-/// viewer for the next page after the last id it got.
+fn message_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+    Ok(json!({"id": row.get::<_, i64>(0)?, "role": row.get::<_, String>(1)?, "content": row.get::<_, String>(2)?, "createdAt": row.get::<_, i64>(3)?, "turnDurationMs": row.get::<_, Option<i64>>(4)?}))
+}
+
+fn message_exists(db: &rusqlite::Connection, session_id: &str, id: i64, older: bool) -> Result<bool> {
+    let comparison = if older { "<" } else { ">" };
+    db.query_row(
+        &format!("SELECT EXISTS(SELECT 1 FROM messages WHERE session_id=?1 AND id{comparison}?2)"),
+        rusqlite::params![session_id, id],
+        |row| row.get(0),
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Legacy `afterId` page entrypoint used by mirror copies and tests.
 pub(crate) fn messages_page(db: &rusqlite::Connection, session_id: &str, after_id: i64) -> Result<Value> {
+    messages_page_with(db, session_id, MessagePaging::After { after_id, limit: PAGE_ROWS })
+}
+
+/// Reads a message page oldest first, cutting individual messages and the page to fit one frame.
+/// `hasMore` means newer rows follow the page; `hasOlder` means older rows precede its first id.
+pub(crate) fn messages_page_with(db: &rusqlite::Connection, session_id: &str, page: MessagePaging) -> Result<Value> {
     let title: String = db.query_row("SELECT title FROM sessions WHERE id=?1", [session_id], |r| r.get(0)).optional().map_err(|e| e.to_string())?.ok_or("Conversation not found.")?;
-    let mut statement = db.prepare("SELECT id,role,content,created_at,turn_duration_ms FROM messages WHERE session_id=?1 AND id>?2 ORDER BY id LIMIT ?3").map_err(|e| e.to_string())?;
-    let rows: Vec<Value> = statement
-        .query_map(rusqlite::params![session_id, after_id, PAGE_ROWS], |r| {
-            Ok(json!({"id": r.get::<_, i64>(0)?, "role": r.get::<_, String>(1)?, "content": r.get::<_, String>(2)?, "createdAt": r.get::<_, i64>(3)?, "turnDurationMs": r.get::<_, Option<i64>>(4)?}))
-        })
-        .map_err(|e| e.to_string())?
-        .collect::<rusqlite::Result<_>>()
+    let last_id: Option<i64> = db
+        .query_row("SELECT MAX(id) FROM messages WHERE session_id=?1", [session_id], |row| row.get(0))
         .map_err(|e| e.to_string())?;
+    let newest_first = matches!(page, MessagePaging::Tail { .. } | MessagePaging::Before { .. });
+    let mut statement = match page {
+        MessagePaging::After { .. } => db.prepare("SELECT id,role,content,created_at,turn_duration_ms FROM messages WHERE session_id=?1 AND id>?2 ORDER BY id LIMIT ?3"),
+        MessagePaging::Tail { .. } => db.prepare("SELECT id,role,content,created_at,turn_duration_ms FROM messages WHERE session_id=?1 ORDER BY id DESC LIMIT ?2"),
+        MessagePaging::Before { .. } => db.prepare("SELECT id,role,content,created_at,turn_duration_ms FROM messages WHERE session_id=?1 AND id<?2 ORDER BY id DESC LIMIT ?3"),
+    }
+    .map_err(|e| e.to_string())?;
+    let mapped = match page {
+        MessagePaging::After { after_id, limit } => statement.query_map(rusqlite::params![session_id, after_id, limit], message_row),
+        MessagePaging::Tail { limit } => statement.query_map(rusqlite::params![session_id, limit], message_row),
+        MessagePaging::Before { before_id, limit } => statement.query_map(rusqlite::params![session_id, before_id, limit], message_row),
+    }
+    .map_err(|e| e.to_string())?;
+    let rows: Vec<Value> = mapped.collect::<rusqlite::Result<_>>().map_err(|e| e.to_string())?;
     let fetched = rows.len();
-    let mut room = PAGE_BUDGET.saturating_sub(json!({"messages": [], "hasMore": true, "title": title}).to_string().len());
+    let mut room = PAGE_BUDGET.saturating_sub(json!({"messages": [], "hasMore": false, "hasOlder": false, "title": &title, "lastId": last_id}).to_string().len());
     let mut kept = Vec::new();
     for mut message in rows {
         if message.to_string().len() > MAX_MESSAGE {
@@ -1074,8 +1150,24 @@ pub(crate) fn messages_page(db: &rusqlite::Connection, session_id: &str, after_i
         room = room.saturating_sub(size);
         kept.push(message);
     }
-    let has_more = kept.len() < fetched || fetched as i64 == PAGE_ROWS;
-    Ok(json!({"messages": kept, "hasMore": has_more, "title": title}))
+    if newest_first {
+        kept.reverse();
+    }
+    let first_id = kept.first().and_then(|message| message["id"].as_i64());
+    let last_page_id = kept.last().and_then(|message| message["id"].as_i64());
+    let has_older = match first_id {
+        Some(id) => message_exists(db, session_id, id, true)?,
+        None => false,
+    };
+    let has_more = match page {
+        MessagePaging::After { limit, .. } => kept.len() < fetched || fetched as i64 == limit,
+        MessagePaging::Tail { .. } => false,
+        MessagePaging::Before { .. } => match last_page_id {
+            Some(id) => message_exists(db, session_id, id, false)?,
+            None => false,
+        },
+    };
+    Ok(json!({"messages": kept, "hasMore": has_more, "hasOlder": has_older, "title": title, "lastId": last_id}))
 }
 
 /// Drops the tail of a list until its JSON fits `budget`.
@@ -1316,8 +1408,8 @@ mod tests {
         assert!(parse(true, "subscribe", &json!({"sessionIds": ["a b"]})).is_err());
         assert!(parse(true, "subscribe", &json!({"sessionIds": vec!["s"; MAX_IDS + 1]})).is_err());
         assert_eq!(parse(true, "task.send", &json!({"sessionId": "s1", "text": " hi "})), Ok(Call::Send { session_id: "s1".into(), text: "hi".into() }));
-        assert_eq!(parse(true, "task.messages", &json!({"sessionId": "s1", "afterId": 7})), Ok(Call::Messages { session_id: "s1".into(), after_id: 7 }));
-        assert_eq!(parse(true, "task.messages", &json!({"sessionId": "s1", "afterId": -3})), Ok(Call::Messages { session_id: "s1".into(), after_id: 0 }));
+        assert_eq!(parse(true, "task.messages", &json!({"sessionId": "s1", "afterId": 7})), Ok(Call::Messages { session_id: "s1".into(), page: MessagePaging::After { after_id: 7, limit: PAGE_ROWS } }));
+        assert_eq!(parse(true, "task.messages", &json!({"sessionId": "s1", "afterId": -3})), Ok(Call::Messages { session_id: "s1".into(), page: MessagePaging::After { after_id: 0, limit: PAGE_ROWS } }));
         assert_eq!(parse(true, "task.configure", &json!({"sessionId": "s1", "effort": null})), Ok(Call::Configure { session_id: "s1".into(), model: None, effort: Some(None), mode: None }));
         assert_eq!(parse(true, "task.configure", &json!({"sessionId": "s1", "mode": "ask"})), Ok(Call::Configure { session_id: "s1".into(), model: None, effort: None, mode: Some("ask".into()) }));
         assert_eq!(parse(true, "task.configure", &json!({"sessionId": "s1", "provider": "codex", "model": "gpt"})), Ok(Call::Configure { session_id: "s1".into(), model: Some(("codex".into(), "gpt".into())), effort: None, mode: None }));
@@ -1373,6 +1465,27 @@ mod tests {
         ] {
             assert!(parse(true, method, &params).is_err(), "{method} {params}");
         }
+    }
+
+    #[test]
+    fn message_paging_options_are_parsed_and_validated() {
+        let tail = parse(true, "task.messages", &json!({"sessionId": "s1", "tail": true})).unwrap();
+        assert_eq!(tail, Call::Messages { session_id: "s1".into(), page: MessagePaging::Tail { limit: MESSAGE_PAGE_DEFAULT } });
+
+        let before = parse(true, "task.messages", &json!({"sessionId": "s1", "beforeId": 19, "limit": 25})).unwrap();
+        assert_eq!(before, Call::Messages { session_id: "s1".into(), page: MessagePaging::Before { before_id: 19, limit: 25 } });
+        assert_eq!(parse(true, "task.messages", &json!({"sessionId": "s1", "beforeId": 19})), Ok(Call::Messages { session_id: "s1".into(), page: MessagePaging::Before { before_id: 19, limit: MESSAGE_PAGE_DEFAULT } }));
+        assert_eq!(parse(true, "task.messages", &json!({"sessionId": "s1", "tail": true, "limit": 1})), Ok(Call::Messages { session_id: "s1".into(), page: MessagePaging::Tail { limit: 1 } }));
+        assert_eq!(parse(true, "task.messages", &json!({"sessionId": "s1", "beforeId": 19, "limit": 400})), Ok(Call::Messages { session_id: "s1".into(), page: MessagePaging::Before { before_id: 19, limit: 400 } }));
+
+        assert!(parse(true, "task.messages", &json!({"sessionId": "s1", "tail": true, "afterId": 1})).is_err());
+        assert!(parse(true, "task.messages", &json!({"sessionId": "s1", "beforeId": 1, "afterId": 2})).is_err());
+        assert!(parse(true, "task.messages", &json!({"sessionId": "s1", "tail": true, "beforeId": 1})).is_err());
+        assert!(parse(true, "task.messages", &json!({"sessionId": "s1", "tail": true, "limit": 0})).is_err());
+        assert!(parse(true, "task.messages", &json!({"sessionId": "s1", "tail": true, "limit": 401})).is_err());
+        assert!(parse(true, "task.messages", &json!({"sessionId": "s1", "beforeId": "19"})).is_err());
+        assert!(parse(true, "task.messages", &json!({"sessionId": "s1", "beforeId": -1})).is_err());
+        assert!(parse(true, "task.messages", &json!({"sessionId": "s1", "tail": "yes"})).is_err());
     }
 
     #[test]
@@ -1606,13 +1719,76 @@ mod tests {
         db.execute_batch("CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT NOT NULL); CREATE TABLE messages(id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created_at INTEGER NOT NULL, turn_duration_ms INTEGER); INSERT INTO sessions VALUES ('s','Task'),('t','Other');").unwrap();
         let tool = json!({"status": "completed", "output": "o".repeat(300 * 1024)}).to_string();
         db.execute("INSERT INTO messages(session_id,role,content,created_at) VALUES ('s','tool',?1,1),('t','user','elsewhere',2),('s','assistant','done',3)", [&tool]).unwrap();
-        let page = messages_page(&db, "s", 0).unwrap();
+        let page = messages_page_with(&db, "s", MessagePaging::After { after_id: 0, limit: PAGE_ROWS }).unwrap();
         let messages = page["messages"].as_array().unwrap();
         assert_eq!((messages.len(), page["hasMore"].as_bool(), page["title"].as_str()), (2, Some(false), Some("Task")), "only this task's messages");
+        assert_eq!(page["lastId"], 3);
+        assert_eq!(page["hasOlder"], false);
         assert!(messages[0].to_string().len() <= MAX_MESSAGE);
         let parsed = serde_json::from_str::<Value>(messages[0]["content"].as_str().unwrap()).expect("tool content still parses");
         assert!(parsed["output"].as_str().unwrap().ends_with(CUT) && parsed["status"] == "completed");
         assert_eq!(messages[1]["content"], "done");
-        assert!(messages_page(&db, "missing", 0).is_err());
+        assert!(messages_page_with(&db, "missing", MessagePaging::After { after_id: 0, limit: PAGE_ROWS }).is_err());
+    }
+
+    #[test]
+    fn message_pages_report_older_rows_last_id_and_empty_threads() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT NOT NULL); CREATE TABLE messages(id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created_at INTEGER NOT NULL, turn_duration_ms INTEGER); INSERT INTO sessions VALUES ('s','Task'),('empty','Empty'); INSERT INTO messages(session_id,role,content,created_at) VALUES ('s','user','first',1),('s','assistant','last',2);").unwrap();
+
+        let page = messages_page_with(&db, "s", MessagePaging::After { after_id: 1, limit: PAGE_ROWS }).unwrap();
+        assert_eq!(page["messages"][0]["content"], "last");
+        assert_eq!(page["hasOlder"], true);
+        assert_eq!(page["lastId"], 2);
+
+        let empty = messages_page_with(&db, "empty", MessagePaging::Tail { limit: MESSAGE_PAGE_DEFAULT }).unwrap();
+        assert_eq!(empty["messages"], json!([]));
+        assert_eq!(empty["hasMore"], false);
+        assert_eq!(empty["hasOlder"], false);
+        assert_eq!(empty["lastId"], Value::Null);
+    }
+
+    #[test]
+    fn tail_and_before_pages_return_the_newest_rows_oldest_first() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT NOT NULL); CREATE TABLE messages(id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created_at INTEGER NOT NULL, turn_duration_ms INTEGER); INSERT INTO sessions VALUES ('s','Task');").unwrap();
+        for index in 1..=5 {
+            db.execute("INSERT INTO messages(session_id,role,content,created_at) VALUES ('s','user',?1,?2)", rusqlite::params![format!("message-{index}"), index]).unwrap();
+        }
+
+        let tail = messages_page_with(&db, "s", MessagePaging::Tail { limit: 2 }).unwrap();
+        assert_eq!(tail["messages"].as_array().unwrap().iter().map(|message| message["id"].as_i64().unwrap()).collect::<Vec<_>>(), [4, 5]);
+        assert_eq!(tail["hasOlder"], true);
+        assert_eq!(tail["hasMore"], false);
+        assert_eq!(tail["lastId"], 5);
+
+        let before = messages_page_with(&db, "s", MessagePaging::Before { before_id: 4, limit: 2 }).unwrap();
+        assert_eq!(before["messages"].as_array().unwrap().iter().map(|message| message["id"].as_i64().unwrap()).collect::<Vec<_>>(), [2, 3]);
+        assert_eq!(before["hasOlder"], true);
+        assert_eq!(before["hasMore"], true);
+        assert_eq!(before["lastId"], 5);
+    }
+
+    #[test]
+    fn newest_first_pages_keep_the_newest_messages_that_fit_the_budget() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT NOT NULL); CREATE TABLE messages(id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created_at INTEGER NOT NULL, turn_duration_ms INTEGER); INSERT INTO sessions VALUES ('s','Task');").unwrap();
+        for index in 1..=4 {
+            db.execute("INSERT INTO messages(session_id,role,content,created_at) VALUES ('s','user',?1,?2)", rusqlite::params!["x".repeat(72 * 1024), index]).unwrap();
+        }
+
+        let page = messages_page_with(&db, "s", MessagePaging::Tail { limit: 4 }).unwrap();
+        let messages = page["messages"].as_array().unwrap();
+        assert_eq!(messages.iter().map(|message| message["id"].as_i64().unwrap()).collect::<Vec<_>>(), [3, 4]);
+        assert!(page.to_string().len() <= PAGE_BUDGET);
+        assert_eq!(page["hasOlder"], true);
+        assert_eq!(page["lastId"], 4);
+
+        let before = messages_page_with(&db, "s", MessagePaging::Before { before_id: 4, limit: 4 }).unwrap();
+        let messages = before["messages"].as_array().unwrap();
+        assert_eq!(messages.iter().map(|message| message["id"].as_i64().unwrap()).collect::<Vec<_>>(), [2, 3]);
+        assert!(before.to_string().len() <= PAGE_BUDGET);
+        assert_eq!(before["hasOlder"], true);
+        assert_eq!(before["hasMore"], true);
     }
 }

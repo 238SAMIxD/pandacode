@@ -23,8 +23,10 @@ export interface ConnectState {
   devices: Device[];
   /** tasks.list per host. */
   tasks: Record<string, TasksList & { loadedAt: number }>;
-  /** Messages per taskKey, oldest first, incremental by afterId. */
+  /** Messages per taskKey, oldest first: the newest window (tail page or disk cache), grown by afterId and beforeId pages. Absent until first loaded. */
   messages: Record<string, Message[]>;
+  /** Per taskKey: the host has messages before the first one held ('more'), or they are loading. */
+  older: Record<string, 'more' | 'loading'>;
   /** A message copy in flight (null) or the error of the last one, per taskKey; absent once copied. */
   history: Record<string, string | null>;
   /** Prompts sent from this phone per taskKey, until their stored copy arrives (src/store/sent.ts). */
@@ -47,7 +49,7 @@ export interface ConnectState {
 
 export const initialState = (): ConnectState => ({
   configured: !!build, ready: false, signedIn: false, connected: false, account: null, deviceId: '',
-  devices: [], tasks: {}, messages: {}, history: {}, sent: {}, live: {}, providers: {}, models: {}, bots: {}, pulls: {}, outdated: {}, error: null, demo: false,
+  devices: [], tasks: {}, messages: {}, older: {}, history: {}, sent: {}, live: {}, providers: {}, models: {}, bots: {}, pulls: {}, outdated: {}, error: null, demo: false,
 });
 
 export const useConnect = create<ConnectState>(() => initialState());
@@ -72,6 +74,9 @@ export function useHosts(): DeviceRow[] {
 export const useTasks = (deviceId: string) => useConnect(s => s.tasks[deviceId]);
 /** null while copying, the last copy's error, or undefined. */
 export const useHistory = (deviceId: string, sessionId: string) => useConnect(s => s.history[taskKey(deviceId, sessionId)]);
+/** The thread has been drawn from the cache or the host at least once (an empty one too). */
+export const useLoaded = (deviceId: string, sessionId: string) => useConnect(s => taskKey(deviceId, sessionId) in s.messages);
+export const useOlder = (deviceId: string, sessionId: string) => useConnect(s => s.older[taskKey(deviceId, sessionId)]);
 export const useMessages = (deviceId: string, sessionId: string) => useConnect(s => s.messages[taskKey(deviceId, sessionId)] ?? EMPTY);
 /** This phone's sent prompts the transcript doesn't hold yet. */
 export const useSent = (deviceId: string, sessionId: string) => {

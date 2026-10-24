@@ -46,6 +46,13 @@ export function mergeMessages(existing: readonly Message[], page: readonly Messa
   return fresh.length ? [...existing, ...fresh] : (existing as Message[]);
 }
 
+/** Puts an older page before the first stored message; skips any overlap. */
+export function prependMessages(existing: readonly Message[], page: readonly Message[]): Message[] {
+  const first = existing.length ? existing[0].id : Infinity;
+  const older = page.filter(m => m.id < first);
+  return older.length ? [...older, ...existing] : (existing as Message[]);
+}
+
 export const lastId = (messages: readonly Message[] | undefined) => (messages?.length ? messages[messages.length - 1].id : 0);
 
 const waiting = (live: Live) => live.approvals.length + live.inputs.length > 0;

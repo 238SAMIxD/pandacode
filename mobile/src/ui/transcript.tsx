@@ -2,11 +2,12 @@
 // each; the live run is its own component reading useLive, so streamed deltas re-render only it.
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
-import { memo, useMemo, useState, type Ref } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState, type Ref } from 'react';
+import { markPaint } from '../connect/perf.ts';
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import type { Message } from '../connect/types.ts';
 import { connect } from '../connect/client.ts';
-import { taskKey, useConnect, useHistory, useLive, useMessages, useSent, type LiveItem } from '../store/index.ts';
+import { taskKey, useConnect, useHistory, useLive, useLoaded, useMessages, useOlder, useSent, type LiveItem } from '../store/index.ts';
 import type { Sent } from '../store/sent.ts';
 import { removeOutbox, retryOutbox, useLocal } from '../store/local.ts';
 import { attachments, duration, turnRows, type TurnRow } from '../store/turns.ts';
@@ -236,23 +237,28 @@ const plain = (text = '') => text.replace(/\*\*|__|`/g, '');
 
 const toolKey = (item: LiveItem, i: number) => (item.kind === 'tool' && item.tool.id ? item.tool.id : `g${i}`);
 
-/** The message copy: a spinner while it runs, its error with Retry when it failed. */
+/** Grey bubbles in the shape of a transcript, while a thread with nothing cached loads. */
+function Skeleton() {
+  const colors = useColors();
+  return (
+    <View accessible accessibilityLabel="Loading messages" style={styles.skeleton}>
+      {SKELETON.map((width, i) => <View key={i} style={[styles.bone, i % 2 ? styles.boneReply : styles.boneUser, { width, backgroundColor: colors.fill }]} />)}
+    </View>
+  );
+}
+const SKELETON = ['62%', '88%', '48%', '80%'] as const;
+
+/** The message copy: a skeleton until anything (cached or fetched) shows, then nothing while it
+ * refreshes; a failure with Retry ("Couldn't refresh" over cached or older messages). */
 function History({ deviceId, sessionId, empty }: { deviceId: string; sessionId: string; empty: boolean }) {
   const colors = useColors();
   const history = useHistory(deviceId, sessionId);
-  if (history === undefined) return null;
-  if (history === null) {
-    return empty ? (
-      <View style={styles.activity} accessibilityLabel="Loading messages">
-        <ActivityIndicator size="small" style={styles.small} />
-        <Text style={[styles.workText, { color: colors.secondary }]}>Loading messages…</Text>
-      </View>
-    ) : null;
-  }
+  const loaded = useLoaded(deviceId, sessionId);
+  if (typeof history !== 'string') return empty && !loaded ? <Skeleton /> : null;
   return (
     <View style={styles.failed}>
       <Icon ios="exclamationmark.circle" android="error" size={14} color={colors.red} />
-      <Text style={[styles.failedText, { color: colors.red }]} numberOfLines={3}>{`Couldn't load ${empty ? 'this task' : 'the newest messages'}: ${history}`}</Text>
+      <Text style={[styles.failedText, { color: colors.red }]} numberOfLines={3}>{empty ? `Couldn't load this task: ${history}` : `Couldn't refresh: ${history}`}</Text>
       <Pressable onPress={() => connect.loadMessages(deviceId, sessionId).catch(() => undefined)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Retry loading messages">
         <Text style={[styles.retry, { color: colors.tint }]}>Retry</Text>
       </Pressable>
@@ -260,7 +266,20 @@ function History({ deviceId, sessionId, empty }: { deviceId: string; sessionId: 
   );
 }
 
+/** Above the oldest message: a spinner while an older page loads. */
+function Older({ deviceId, sessionId }: { deviceId: string; sessionId: string }) {
+  const colors = useColors();
+  if (useOlder(deviceId, sessionId) !== 'loading') return null;
+  return (
+    <View style={[styles.activity, styles.older]} accessibilityLabel="Loading older messages">
+      <ActivityIndicator size="small" style={styles.small} />
+      <Text style={[styles.workText, { color: colors.secondary }]}>Loading older messages…</Text>
+    </View>
+  );
+}
+
 const key = (row: TurnRow) => row.id;
+const ANCHOR = { minIndexForVisible: 0, autoscrollToTopThreshold: AWAY };
 const render = ({ item }: { item: TurnRow }) => <Row row={item} />;
 
 /** Inverted list: newest at the bottom, the live run and unsent messages below the last stored message.
@@ -270,6 +289,9 @@ export const Transcript = memo(function Transcript({ deviceId, sessionId, top, b
 }) {
   const messages = useMessages(deviceId, sessionId);
   const data = useMemo(() => turnRows(messages).reverse(), [messages]);
+  useEffect(() => { if (data.length) markPaint(taskKey(deviceId, sessionId), data.length); }, [data.length, deviceId, sessionId]);
+  // Inverted: the end is the top, so this asks for older history as the user nears it.
+  const onEndReached = useCallback(() => void connect.loadOlder(deviceId, sessionId), [deviceId, sessionId]);
   const onScroll = useMemo(() => {
     if (!onAway) return undefined;
     let away = false;
@@ -286,13 +308,21 @@ export const Transcript = memo(function Transcript({ deviceId, sessionId, top, b
       keyExtractor={key}
       renderItem={render}
       ListHeaderComponent={<><History deviceId={deviceId} sessionId={sessionId} empty={!messages.length} /><SentBubbles deviceId={deviceId} sessionId={sessionId} before /><LiveRun deviceId={deviceId} sessionId={sessionId} /><SentBubbles deviceId={deviceId} sessionId={sessionId} before={false} /><Pending deviceId={deviceId} sessionId={sessionId} /></>}
+      ListFooterComponent={<Older deviceId={deviceId} sessionId={sessionId} />}
+      onEndReached={onEndReached}
+      onEndReachedThreshold={1}
+      // New messages arriving while the user reads further up don't move what they read; near the
+      // newest message the list follows it.
+      maintainVisibleContentPosition={ANCHOR}
       contentContainerStyle={[styles.list, { paddingTop: bottom, paddingBottom: top }]}
       keyboardDismissMode="interactive"
       keyboardShouldPersistTaps="handled"
       onScroll={onScroll}
       scrollEventThrottle={100}
-      initialNumToRender={12}
-      windowSize={11}
+      initialNumToRender={10}
+      maxToRenderPerBatch={8}
+      windowSize={9}
+      removeClippedSubviews
     />
   );
 });
@@ -324,4 +354,9 @@ const styles = StyleSheet.create({
   retry: { fontSize: 15, fontWeight: '600' },
   current: { flex: 1, fontSize: 12, fontFamily: mono },
   small: { transform: [{ scale: 0.8 }] },
+  older: { justifyContent: 'center' },
+  skeleton: { gap: 14, marginVertical: 18 },
+  bone: { height: 44, borderRadius: 22, borderCurve: 'continuous' },
+  boneUser: { alignSelf: 'flex-end', maxWidth: '75%' },
+  boneReply: { alignSelf: 'flex-start', height: 72, borderRadius: 16 },
 });
