@@ -22,8 +22,8 @@ export const HARNESSES: Record<string, Harness> = {
   cline: { name: 'Cline', logo: require('../../assets/providers/cline.svg'), mono: true },
   'github-copilot': { name: 'GitHub Copilot', logo: require('../../assets/providers/github-copilot.svg'), mono: true },
   muse: { name: 'Muse Code', logo: require('../../assets/providers/muse.svg') },
-  kilo: { name: 'Kilo Code' },
-  omp: { name: 'omp' },
+  kilo: { name: 'Kilo Code', logo: require('../../assets/providers/kilo.svg'), mono: true },
+  omp: { name: 'Oh My Pi', logo: require('../../assets/providers/omp.svg'), black: true },
 };
 
 export const harnessName = (id: string) => HARNESSES[id]?.name ?? id;

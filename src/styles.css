@@ -737,6 +737,7 @@ html[data-theme="dark"] :is(.task-indicator.running,.selected .task-indicator,.a
 html[data-theme="dark"] .task-indicator.attention{background:#edb464}
 html[data-theme="dark"] .provider-logo[data-provider="codex"]{filter:invert(1)}
 html[data-theme="dark"] .provider-logo[data-provider="kimi"]{border-radius:50%;box-shadow:0 0 0 1px rgb(255 255 255 / .22)}
+html[data-theme="dark"] .provider-logo[data-provider="omp"]{border-radius:4px;box-shadow:0 0 0 1px rgb(255 255 255 / .18)}
 html[data-theme="dark"] .user-avatar{background:var(--raised)}
 html[data-theme="dark"] :is(.markdown pre,.tool-activity pre){background:#252522;border-color:var(--border);color:var(--text)}
 html[data-theme="dark"] .markdown :not(pre)>code{background:var(--raised);color:#dfdccb}

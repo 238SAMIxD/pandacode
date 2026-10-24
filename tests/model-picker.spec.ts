@@ -1,11 +1,19 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
+
+async function openPicker(page: Page): Promise<void> {
+  await page.goto('/');
+  await expect(page.locator('.task-item.selected .task-title')).toHaveText('Make search feel instant', { timeout: 15_000 });
+  await expect(page.locator('#transcript article').first()).toBeVisible({ timeout: 15_000 });
+  await page.locator('.new-task-button').click();
+  await expect(page.locator('.new-task-welcome')).toBeVisible({ timeout: 15_000 });
+  await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Harness and model', exact: true })).toBeVisible({ timeout: 15_000 });
+}
 
 // Issue #123: the picker lists only installed harnesses. The preview marks
 // Antigravity and Oh My Pi as not installed.
 test('the harness picker hides harnesses that are not installed', async ({ page }) => {
-  await page.goto('/');
-  await page.locator('.new-task-button').click();
-  await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
+  await openPicker(page);
   const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
   await expect(picker.getByRole('region', { name: 'Grok Build' })).toBeVisible();
   await expect(picker.locator('[data-provider="antigravity"], [data-provider="omp"]')).toHaveCount(0);
@@ -25,9 +33,7 @@ test('the model picker displays provider logos for Cline, Kilo Code and Oh My Pi
       ),
     });
   });
-  await page.goto('/');
-  await page.locator('.new-task-button').click();
-  await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
+  await openPicker(page);
   const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
 
   // Cline reference: heading and options have .provider-logo[data-provider="cline"]
