@@ -9,7 +9,7 @@ const OPTIONS: SecureStore.SecureStoreOptions = { keychainAccessible: SecureStor
 
 export const get = (name: string) => SecureStore.getItemAsync(name, OPTIONS).catch(() => null);
 export const set = (name: string, value: string) => SecureStore.setItemAsync(name, value, OPTIONS);
-const remove = (name: string) => SecureStore.deleteItemAsync(name, OPTIONS).catch(() => undefined);
+export const remove = (name: string) => SecureStore.deleteItemAsync(name, OPTIONS).catch(() => undefined);
 
 /** Key pins from before trust was dropped (same GitHub account is enough); deleted at start. */
 export const forgetPins = () => remove('connect.pins');
@@ -43,6 +43,12 @@ export async function newDeviceId(): Promise<string> {
 }
 
 let keyLock: Promise<Uint8Array> | null = null;
+
+/** After account deletion: token, account, device id and key go; the next sign-in makes new ones. */
+export async function wipe(): Promise<void> {
+  await Promise.all(Object.values(KEYS).map(remove));
+  keyLock = null;
+}
 
 /** The device's private key. Only a missing or undecodable key is ever generated, behind a lock. */
 export function getSecret(): Promise<Uint8Array> {

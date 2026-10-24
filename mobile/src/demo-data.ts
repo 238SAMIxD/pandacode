@@ -1,5 +1,5 @@
-// Fake computers, tasks and messages for demo mode (src/demo.ts). Screenshots only.
-import type { Device, Message, TaskSummary, ToolActivity } from './connect/types.ts';
+// Fake computers, tasks and messages for demo mode (src/demo.ts): screenshots and App Review.
+import type { Device, Message, Project, TaskSummary, ToolActivity } from './connect/types.ts';
 import { useConnect } from './store/index.ts';
 import { iconKey } from './store/icon-cache.ts';
 import { useIcons } from './store/icons.ts';
@@ -64,7 +64,8 @@ export function seedDemo() {
     m('assistant', 'I need the `@simplewebauthn/server` package for the registration and assertion checks.', 2.5, 90_000),
   ];
   const flaky: Message[] = [m('user', 'The upload test fails about one run in ten on CI. Find out why and fix it.', 6)];
-  const tasks = { studio: { tasks: studio, projects: [], loadedAt: now }, laptop: { tasks: laptop, projects: [], loadedAt: now } };
+  const projects = (list: TaskSummary[]): Project[] => [...new Set(list.map(x => x.projectId))].map(id => ({ id, name: id, repo: null }));
+  const tasks = { studio: { tasks: studio, projects: projects(studio), loadedAt: now }, laptop: { tasks: laptop, projects: projects(laptop), loadedAt: now } };
   const live: Record<string, Live> = {
     'studio/auth': { ...idleLive(), status: 'waiting', activity: 'Waiting for approval', approvals: [{ kind: 'approval', requestId: 'r1', text: 'Run `npm install @simplewebauthn/server` in **pandacode-web**?', tool: tool('b1', 'Bash', 'npm install @simplewebauthn/server', '', 'running') }] },
     'studio/flaky': {
@@ -81,7 +82,7 @@ export function seedDemo() {
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#111"/><circle cx="16" cy="16" r="8" fill="#f5c400"/></svg>';
   useIcons.setState({ cache: { [iconKey('studio', 'pandacode')]: { url: `data:image/svg+xml;base64,${btoa(svg)}`, at: now } } });
   useConnect.setState({
-    ready: true, signedIn: true, connected: true, configured: true, deviceId: 'phone',
+    ready: true, signedIn: true, connected: true, configured: true, deviceId: 'phone', demo: true, error: null,
     account: { id: '1', login: 'pandadev', avatarUrl: '' },
     devices, tasks,
     messages: { 'studio/docs': docs, 'studio/auth': auth, 'studio/flaky': flaky },

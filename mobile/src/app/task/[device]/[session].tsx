@@ -7,7 +7,6 @@ import { FlatList, Keyboard, LayoutAnimation, Platform, Pressable, ScrollView, S
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { connect } from '../../../connect/client.ts';
 import type { PendingRequest } from '../../../connect/types.ts';
-import { DEMO } from '../../../demo.ts';
 import { taskKey, useConnect } from '../../../store/index.ts';
 import { duration, type TurnRow } from '../../../store/turns.ts';
 import { Composer } from '../../../ui/Composer.tsx';
@@ -101,7 +100,6 @@ export default function TaskScreen() {
   const [latest] = useState(() => () => list.current?.scrollToOffset({ offset: 0, animated: true }));
 
   useEffect(() => {
-    if (DEMO) return;
     connect.watch(device, [session]);
     connect.loadMessages(device, session).catch(() => undefined);
     return () => connect.unwatch(device, [session]);

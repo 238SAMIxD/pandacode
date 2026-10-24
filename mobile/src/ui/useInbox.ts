@@ -4,7 +4,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { connect, NOT_SIGNED_IN } from '../connect/client.ts';
-import { DEMO } from '../demo.ts';
 import { inboxSections } from '../store/inbox.ts';
 import { useConnect, useHosts } from '../store/index.ts';
 import { useLocal } from '../store/local.ts';
@@ -49,7 +48,6 @@ export function useInbox() {
 
   const onlineKey = hosts.filter(h => h.online).map(h => h.id).join(',');
   const load = useCallback(async () => {
-    if (DEMO) return;
     const ids = onlineKey ? onlineKey.split(',') : [];
     const results = await Promise.all(ids.map(id => connect.listTasks(id).then(() => '', (e: Error) => e.message)));
     setErrors(Object.fromEntries(ids.map((id, i) => [id, results[i]]).filter(([, e]) => e && e !== NOT_SIGNED_IN)));

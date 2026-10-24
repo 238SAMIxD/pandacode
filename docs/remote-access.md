@@ -101,6 +101,9 @@ All routes except auth take `Authorization: Bearer <relay token>`. Errors are `{
   The desktop uses it only for an explicit `remote_devices` call made before the
   socket's first presence frame.
 - `DELETE /v1/devices/:id` → `{ ok: true }`
+- `DELETE /v1/account` → `{ ok: true }`: deletes all relay state for the account and closes its
+  sockets with `4001 (signed out)`. Since tokens are accepted only for registered devices, all
+  existing tokens become invalid; signing in again creates a fresh relay account.
 - `POST /v1/token` → `{ token }`: a fresh 30-day token for the same account and device
 - `GET /v1/connect?host=0|1` (WebSocket upgrade) → joins the account's Durable Object, advertising
   whether this device hosts

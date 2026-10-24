@@ -32,11 +32,13 @@ export interface ConnectState {
   models: Record<string, ProviderModel[]>;
   /** The last user-facing connection error (sign-out, relay). */
   error: string | null;
+  /** Demo mode (src/demo.ts): fake data, no network. */
+  demo: boolean;
 }
 
 export const initialState = (): ConnectState => ({
   configured: !!build, ready: false, signedIn: false, connected: false, account: null, deviceId: '',
-  devices: [], tasks: {}, messages: {}, history: {}, live: {}, providers: {}, models: {}, error: null,
+  devices: [], tasks: {}, messages: {}, history: {}, live: {}, providers: {}, models: {}, error: null, demo: false,
 });
 
 export const useConnect = create<ConnectState>(() => initialState());
@@ -50,7 +52,7 @@ function useRows(): DeviceRow[] {
 
 const EMPTY: never[] = [];
 
-export const useStatus = () => useConnect(useShallow(s => ({ configured: s.configured, ready: s.ready, signedIn: s.signedIn, connected: s.connected, account: s.account, error: s.error })));
+export const useStatus = () => useConnect(useShallow(s => ({ configured: s.configured, ready: s.ready, signedIn: s.signedIn, connected: s.connected, account: s.account, error: s.error, demo: s.demo })));
 /** Every device signed in to the account. */
 export const useDevices = useRows;
 /** Other computers with remote access on: the ones the phone can open. */

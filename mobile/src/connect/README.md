@@ -23,6 +23,8 @@ controls their tasks. Screens read state with hooks from `src/store` and act wit
 ## Actions (`connect.*`, all async, throw `Error` with a user-facing message)
 
 - Sign-in: `signInStart()` → `{ userCode, verificationUri, expiresIn, … }` (show the code, open the URL), then `signInFinish(code)` waits for GitHub and registers the phone. `signInCancel()`, `signOut()`.
+- Demo (`src/demo.ts`): `enterDemo()` / `leaveDemo()`; while on, every host call goes to `src/demo-host.ts` and nothing reaches the network. `signOut()` in demo mode leaves it.
+- Account: `deleteAccount()` → relay `DELETE /v1/account`, then wipes secrets and the icon cache and signs out (screens also call `clearLocal()`).
 - Devices: `revokeDevice(deviceId)`. `refreshDevices()` only matters before the socket's first presence frame.
 - Tasks: `listTasks(deviceId, limit?)`, `refreshLists(maxAgeMs?)` (every online host), `startTask(deviceId, { repo | projectId, branch?, worktree, prompt, provider, model, mode?, effort? })` → sessionId (waits up to 12.5 min; the new task is watched).
 - Open a task: `watch(deviceId, [sessionId])` subscribes (renewed every 9 min and on presence), copies missed messages and streams events into `useLive`; `unwatch` when the screen goes. `loadMessages(deviceId, sessionId)` copies new messages on demand (follows `hasMore`).

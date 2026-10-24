@@ -4,8 +4,8 @@ import { useEffect } from 'react';
 import { create } from 'zustand';
 import { connect } from '../connect/client.ts';
 import { uuid } from '../connect/crypto.ts';
-import { get, set } from '../connect/secrets.ts';
-import { DEMO } from '../demo.ts';
+import { useShallow } from 'zustand/react/shallow';
+import { get, remove, set } from '../connect/secrets.ts';
 import { activeSnoozes, type OutboxEntry } from './inbox.ts';
 import { useConnect } from './index.ts';
 import { applyFlush, flush, isUnsent, parseOutbox } from './outbox.ts';
@@ -23,10 +23,14 @@ interface LocalState {
   steers: Record<string, number>;
 }
 
-export const useLocal = create<LocalState>(() => ({ loaded: false, snoozed: {}, pins: {}, outbox: [], steers: {} }));
+const empty = (): LocalState => ({ loaded: false, snoozed: {}, pins: {}, outbox: [], steers: {} });
+export const useLocal = create<LocalState>(empty);
+
+/** Demo mode's seeded snoozes and outbox are never saved or sent. */
+const demo = () => useConnect.getState().demo;
 
 const save = () => {
-  if (DEMO) return;
+  if (demo()) return;
   const { snoozed, pins, outbox } = useLocal.getState();
   set(KEY, JSON.stringify({ snoozed, pins })).catch(() => undefined);
   set(OUTBOX_KEY, JSON.stringify(outbox)).catch(() => undefined);
@@ -35,6 +39,7 @@ const patch = (update: (s: LocalState) => Partial<LocalState>) => { useLocal.set
 
 export async function loadLocal() {
   const [raw, outbox] = await Promise.all([get(KEY), get(OUTBOX_KEY)]);
+  if (demo()) return; // demo mode started while reading
   let stored: Partial<LocalState> = {};
   try { stored = JSON.parse(raw ?? '{}') ?? {}; } catch { /* unreadable: start empty */ }
   const record = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
@@ -83,9 +88,15 @@ function enqueue(deviceId: string, sessionId: string, text: string) {
   patch(s => ({ outbox: [...s.outbox, { id: uuid(), deviceId, sessionId, text, createdAt: Date.now() }] }));
 }
 
+/** Account deletion: snoozes, pins and the outbox, in memory and stored. */
+export async function clearLocal(): Promise<void> {
+  useLocal.setState({ ...empty(), loaded: true });
+  await Promise.all([remove(KEY), remove(OUTBOX_KEY)]);
+}
+
 let flushing = false;
 export async function flushOutbox() {
-  if (flushing || DEMO) return;
+  if (flushing || demo()) return;
   flushing = true;
   try {
     const { connected, devices } = useConnect.getState();
@@ -113,10 +124,15 @@ export function retryOutbox(id: string) {
   void flushOutbox();
 }
 
-/** Loads local state, then flushes whenever the relay reconnects or a computer comes online. */
+/** Loads local state (again after leaving demo mode), then flushes whenever the relay reconnects or a computer comes online. */
 export function useOutboxFlusher() {
   const loaded = useLocal(s => s.loaded);
+  const { ready, demoOn } = useConnect(useShallow(s => ({ ready: s.ready, demoOn: s.demo })));
   const signal = useConnect(s => (s.connected ? s.devices.filter(d => d.online).map(d => d.id).sort().join(',') : ''));
-  useEffect(() => { if (!DEMO) void loadLocal(); }, []);
+  useEffect(() => {
+    if (!ready || demoOn) return;
+    useLocal.setState(empty());
+    void loadLocal();
+  }, [ready, demoOn]);
   useEffect(() => { if (loaded && signal) void flushOutbox(); }, [loaded, signal]);
 }

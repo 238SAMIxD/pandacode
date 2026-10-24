@@ -4,9 +4,13 @@
 import './polyfill.ts';
 import { initialState, taskKey, useConnect, type ConnectState } from '../store/index.ts';
 import { chunks, dueIcons, mergeIcons } from '../store/icon-cache.ts';
-import { loadIcons, saveIcons, useIcons } from '../store/icons.ts';
+import { clearIcons, loadIcons, resetIcons, saveIcons, useIcons } from '../store/icons.ts';
+import { File, Paths } from 'expo-file-system';
+import { BUILD_DEMO, DEMO_FILE, demoAtStart } from '../demo.ts';
+import { demoCall, type DemoHost } from '../demo-host.ts';
 import { applyEvent, fromList, fromSubscribe, idleLive, lastId, mergeMessages, staleLists } from '../store/reduce.ts';
 import * as auth from './auth.ts';
+import { deleteAccount as deleteAccountSteps } from './delete-account.ts';
 import { build, NOT_CONFIGURED } from './config.ts';
 import { open, pairKey, seal } from './crypto.ts';
 import { LOST, NOT_CONNECTED, OFFLINE, Pending, RATE, request, START_TIMEOUT_MS, TIMEOUT_MS, type Method } from './rpc.ts';
@@ -72,10 +76,14 @@ const instances = globalThis as { __pandacodeSocket?: RelaySocket };
 instances.__pandacodeSocket?.dispose();
 instances.__pandacodeSocket = socket;
 
-/** Reads secrets and connects when signed in. Call once at app start. */
+/** The build-time demo applies until the user leaves it once this launch. */
+let buildDemo = BUILD_DEMO;
+
+/** Reads secrets and connects when signed in, or enters demo mode. Call once at app start. */
 async function init(): Promise<void> {
   if (initialized) return;
   initialized = true;
+  if (demoAtStart(buildDemo, buildDemo ? null : await readDemo())) return seedDemo();
   const [saved, account, deviceId] = await Promise.all([secrets.getToken(), secrets.getAccount(), secrets.getDeviceId()]);
   secret = await secrets.getSecret();
   // A newer instance took over while this one read secrets: two sockets would replace each other.
@@ -110,7 +118,46 @@ function signInCancel() {
   signInAbort = null;
 }
 
+// ---- Demo mode (src/demo.ts) ----
+
+const demoFile = () => new File(Paths.document, DEMO_FILE);
+const readDemo = async () => {
+  try {
+    const f = demoFile();
+    return f.exists ? await f.text() : null;
+  } catch { return null; }
+};
+
+async function seedDemo() {
+  const data = await import('../demo-data.ts');
+  data.seedDemo();
+  patch({ demo: true, error: null });
+}
+
+/** From sign-in: fake computers and tasks, no network, kept across launches. */
+async function enterDemo(): Promise<void> {
+  signInCancel();
+  const f = demoFile();
+  if (!f.exists) f.create();
+  await f.write('1');
+  await seedDemo();
+}
+
+/** Back to sign-in with nothing of the demo left. */
+async function leaveDemo(): Promise<void> {
+  buildDemo = false;
+  const f = demoFile();
+  if (f.exists) f.delete();
+  resetIcons();
+  useConnect.setState({ ...initialState(), ready: true }, true);
+  initialized = false;
+  await init();
+}
+
+const demoHost: DemoHost = { get: () => state(), set: patch, later: (run, ms) => { setTimeout(run, ms); }, now: Date.now };
+
 async function signOut(): Promise<void> {
+  if (state().demo) return leaveDemo();
   socket.stop();
   pending.failAll('Signed out.');
   token = null;
@@ -168,6 +215,10 @@ async function refreshDevices(): Promise<void> {
 }
 
 async function revokeDevice(deviceId: string): Promise<void> {
+  if (state().demo) {
+    if (deviceId === state().deviceId) return leaveDemo();
+    return patch(s => ({ devices: s.devices.filter(d => d.id !== deviceId) }));
+  }
   if (!token) throw new Error(NOT_SIGNED_IN);
   const used = token;
   await auth.revokeDevice(used, deviceId).catch(error => {
@@ -175,6 +226,28 @@ async function revokeDevice(deviceId: string): Promise<void> {
     throw error;
   });
   if (deviceId === state().deviceId) return signOut();
+}
+
+/** Deletes the account and every device from the relay, then wipes this phone's secrets and caches and signs out. */
+async function deleteAccount(): Promise<void> {
+  if (!token) throw new Error(NOT_SIGNED_IN);
+  const used = token;
+  await deleteAccountSteps({
+    remove: () => auth.deleteAccount(used).catch(error => {
+      if (error instanceof auth.SignedOut) signOutIf(error.token);
+      throw error;
+    }),
+    wipe: async () => {
+      await secrets.wipe();
+      await clearIcons();
+    },
+    signOut: async () => {
+      await signOut();
+      // A fresh key and device id for the next sign-in.
+      secret = await secrets.getSecret();
+      patch({ deviceId: await secrets.getDeviceId() });
+    },
+  });
 }
 
 // ---- Calls ----
@@ -201,6 +274,7 @@ function pairFor(device: Device): Uint8Array {
 }
 
 async function call<T>(deviceId: string, method: Method, params: unknown, timeoutMs = TIMEOUT_MS): Promise<T> {
+  if (state().demo) return demoCall(demoHost, deviceId, method, params) as Promise<T>;
   const device = callable(deviceId);
   const message = request(method, params);
   const body = seal(pairFor(device), state().deviceId, device.id, JSON.stringify(message));
@@ -466,6 +540,7 @@ const respondInput = (deviceId: string, sessionId: string, requestId: string, re
 
 export const connect = {
   init, signInStart, signInFinish, signInCancel, signOut,
+  enterDemo, leaveDemo, deleteAccount,
   refreshDevices, revokeDevice,
   watch, unwatch, loadMessages,
   listTasks, refreshLists, listProviders, listModels, startTask, projectIcons,

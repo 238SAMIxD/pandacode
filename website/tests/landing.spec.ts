@@ -51,13 +51,11 @@ test('hero, supported harnesses, and complete page have valid resources and resp
   for (const id of ['hero-distribution', 'download-distribution']) {
     const disclosure = page.locator(`#${id}`);
     await expect(disclosure).toContainText('macOS · Windows · Linux');
-    await expect(disclosure).toContainText('Unsigned build');
+    await expect(disclosure).toContainText('Signed and notarized by Apple');
+    await expect(disclosure).not.toContainText('Unsigned build');
     await expect(disclosure).toContainText('Windows x64 and arm64: unsigned installer');
     await expect(disclosure).toContainText('Linux x86_64 and aarch64: AppImage');
     await expect(disclosure).toContainText('Apple silicon or Intel · macOS 12+');
-    await expect(disclosure).toContainText('Not notarized by Apple');
-    await expect(disclosure).toContainText('macOS blocks the first launch');
-    await expect(disclosure.getByRole('link', { name: /First-launch help/ })).toHaveAttribute('href', 'https://support.apple.com/en-us/102445');
     await expect(page.locator(`[data-download][aria-describedby~="${id}"]`)).toHaveCount(1);
   }
   await capture(page, info, 'hero');
@@ -133,7 +131,8 @@ async function expectPrivacyDetails(page: Page) {
   await expect(footer.getByRole('link', {name: 'License', exact: true})).toHaveAttribute('href', '/license/');
   await expect(footer.getByRole('link', {name: 'Changelog', exact: true})).toHaveAttribute('href', '/changelog/');
   await expect(footer.getByRole('link', {name: 'GitHub', exact: true})).toHaveAttribute('href', repo);
-  await expect(footer.getByRole('link', {name: 'Support', exact: true})).toHaveAttribute('href', issues);
+  await expect(footer.getByRole('link', {name: 'Support', exact: true})).toHaveAttribute('href', '/support/');
+  await expect(footer.getByRole('link', {name: 'Issues', exact: true})).toHaveAttribute('href', issues);
   await expect(footer.getByRole('link', {name: 'Terms'})).toHaveCount(0);
 }
 
@@ -413,7 +412,7 @@ test('server-rendered hero and feature copy remain visible without JavaScript', 
   await expect(page.locator('.download-content .button')).toHaveAttribute('href', releases);
   await expect(page.locator('#open-source pre')).toContainText('npm run desktop');
   await expect(page.locator('#download-distribution')).toBeVisible();
-  await expect(page.locator('#download-distribution')).toContainText('Not notarized by Apple');
+  await expect(page.locator('#download-distribution')).toContainText('Signed and notarized by Apple');
   await expectPreviewDisclosures(page);
   await expectPrivacyDetails(page);
   await expectComparison(page);

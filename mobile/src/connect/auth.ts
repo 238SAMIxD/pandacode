@@ -155,3 +155,5 @@ export async function refreshToken(old: string): Promise<string | null> {
 
 export const listDevices = (token: string): Promise<Device[]> => relay('GET', '/v1/devices', token).then(r => (Array.isArray(r?.devices) ? r.devices : []));
 export const revokeDevice = (token: string, id: string) => relay('DELETE', `/v1/devices/${encodeURIComponent(id)}`, token);
+/** Deletes the account and every device from the relay; `{ ok: true }` confirms (delete-account.ts checks). */
+export const deleteAccount = (token: string): Promise<unknown> => relay('DELETE', '/v1/account', token);

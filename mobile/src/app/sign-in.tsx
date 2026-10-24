@@ -43,6 +43,8 @@ export default function SignIn() {
     }
   };
   const cancel = () => { connect.signInCancel(); setCode(null); };
+  const demo = () => connect.enterDemo().catch(e => setError((e as Error).message));
+  const explore = <Button label="Explore the demo" onPress={demo} />;
   const copy = async () => {
     if (!code) return;
     await Clipboard.setStringAsync(code.userCode);
@@ -61,6 +63,7 @@ export default function SignIn() {
         <Glass style={styles.card}>
           <Text style={[styles.body, { color: colors.text }]}>PandaCode Connect is not configured in this build.</Text>
           <Text style={[styles.small, { color: colors.secondary }]}>{configProblem} Put PANDACODE_RELAY_URL and PANDACODE_GITHUB_CLIENT_ID in mobile/.env (or the shell), then restart Metro with npx expo start --clear.</Text>
+          {explore}
         </Glass>
       ) : code ? (
         <Glass style={styles.card}>
@@ -82,6 +85,8 @@ export default function SignIn() {
         <View style={styles.bottom}>
           {!!(error || status.error) && <Text style={[styles.small, { color: colors.red, textAlign: 'center' }]}>{error || status.error}</Text>}
           {starting ? <ActivityIndicator /> : <Button label="Sign in with GitHub" kind="primary" onPress={start} />}
+          {!starting && explore}
+          <Text style={[styles.small, styles.hint, { color: colors.secondary }]}>No computer yet? The demo shows sample computers and tasks, with nothing sent anywhere.</Text>
         </View>
       )}
     </SafeAreaView>
@@ -101,4 +106,5 @@ const styles = StyleSheet.create({
   actions: { flexDirection: 'row', gap: 10 },
   waiting: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   bottom: { gap: 14, marginBottom: 12 },
+  hint: { textAlign: 'center' },
 });

@@ -5,7 +5,6 @@ import { router, Stack, useFocusEffect } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { DEMO } from '../../../demo.ts';
 import type { InboxRow as Row, Section } from '../../../store/inbox.ts';
 import { useStatus } from '../../../store/index.ts';
 import { Icon } from '../../../ui/Icon.tsx';
@@ -65,7 +64,7 @@ function Inbox() {
   };
 
   const offline = hosts.filter(h => !h.online).map(h => h.name);
-  const problems = [...Object.values(errors), ...(connected || DEMO ? [] : ['Connecting to PandaCode Connect…'])];
+  const problems = [...Object.values(errors), ...(connected ? [] : ['Connecting to PandaCode Connect…'])];
   const empty = !hosts.length ? 'Turn on remote access on a computer signed in to the same GitHub account to see its tasks here.'
     : !online.length ? `${offline.join(', ')} ${offline.length > 1 ? 'are' : 'is'} offline.`
     : 'No tasks yet. Start one with New task.';
@@ -95,8 +94,9 @@ function Inbox() {
       )}
       <FlatList
         style={{ backgroundColor: backdrop.background }}
+        // Automatic adds the tab bar's inset; the padding keeps the last row off the bar's glass.
         contentInsetAdjustmentBehavior="automatic"
-        contentContainerStyle={{ paddingLeft: insets.left, paddingRight: insets.right }}
+        contentContainerStyle={{ paddingLeft: insets.left, paddingRight: insets.right, paddingBottom: 16 }}
         data={items}
         keyExtractor={item => (item.type === 'header' ? `h/${item.section}` : `${item.section}/${item.row.key}`)}
         renderItem={render}
