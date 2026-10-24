@@ -54,8 +54,8 @@ embedded editor engine.
   going while your laptop sleeps; changes come back to a local worktree. See
   [cloud agents](docs/cloud-agents.md).
 - **Simulators.** iOS Simulator and Android emulator tools for agents.
-- **Deploys.** Start a deploy task for Vercel, Cloudflare, Railway, AWS or Google
-  Cloud from the header, with approval-gated CLI runs (AWS and Google Cloud use
+- **Deploys.** Start a deploy task for Vercel, Cloudflare, Railway, Netlify, AWS or Google
+  Cloud from the header ([Netlify setup](docs/netlify.md)), with approval-gated CLI runs (AWS and Google Cloud use
   your installed CLI and its login).
 - **GitHub view.** Your repositories with their threads, pull requests and issues;
   review, fix checks, merge or solve an issue in one click. Each opens as a linked

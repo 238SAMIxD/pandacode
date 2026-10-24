@@ -90,6 +90,8 @@ fn resolve(path: &Path, windows: bool) -> Result<Launch, String> {
             "copilot" => "@github/copilot",
             "cline" => "cline",
             "kilo" | "kilocode" => "@kilocode/cli",
+            "netlify" => "netlify-cli",
+            "npx" => "npm",
             _ => return Err(
                 "This batch launcher is unsupported. Select the native harness executable instead."
                     .into(),
@@ -619,6 +621,21 @@ mod tests {
         let launch = resolve(&shim, true).unwrap();
         assert_eq!(launch.program, external_path_for(&node, true));
         assert_eq!(launch.args, [external_path_for(&script, true).into_os_string()]);
+    }
+
+    #[test]
+    fn windows_netlify_and_npx_shims_use_node_without_a_batch_shell() {
+        for (name, package) in [("netlify", "netlify-cli"), ("npx", "npm")] {
+            let f = Fixture::new();
+            let node = f.file("npm/node.exe", "");
+            let shim = f.file(&format!("npm/{name}.cmd"), "@echo off\r\n");
+            f.file(&format!("npm/node_modules/{package}/package.json"),
+                &serde_json::json!({"bin": {name: format!("bin/{name}.js")}}).to_string());
+            let script = f.file(&format!("npm/node_modules/{package}/bin/{name}.js"), "");
+            let launch = resolve(&shim, true).unwrap();
+            assert_eq!(launch.program, external_path_for(&node, true));
+            assert_eq!(launch.args, [external_path_for(&script, true).into_os_string()]);
+        }
     }
 
     #[test]
