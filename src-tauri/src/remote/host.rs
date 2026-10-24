@@ -5,6 +5,7 @@
 use super::{remote, socket, start, Subscriber};
 use crate::{message_queue, providers::AgentEvent, AppState, Result};
 use rusqlite::OptionalExtension;
+use base64::Engine;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
@@ -13,7 +14,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
 
-pub(crate) const METHODS: [&str; 23] = ["subscribe", "tasks.list", "projects.icons", "providers.list", "providers.models", "task.start", "task.messages", "task.send", "task.stop", "task.steer", "task.configure", "approval.respond", "input.respond", "task.pull", "task.pullDiff", "task.pullMerge", "task.pullDetect", "task.changes", "task.diff", "bots.list", "bot.thread", "bot.message", "bot.pause"];
+pub(crate) const METHODS: [&str; 25] = ["subscribe", "tasks.list", "projects.icons", "providers.list", "providers.models", "task.start", "task.messages", "task.attachment", "task.workspaceImage", "task.send", "task.stop", "task.steer", "task.configure", "approval.respond", "input.respond", "task.pull", "task.pullDiff", "task.pullMerge", "task.pullDetect", "task.changes", "task.diff", "bots.list", "bot.thread", "bot.message", "bot.pause"];
 pub(crate) const OFF: &str = "Remote control is off on this computer";
 pub(crate) const MAX_TEXT: usize = 100 * 1024;
 const SUBSCRIPTION: Duration = Duration::from_secs(10 * 60);
@@ -96,6 +97,8 @@ pub(crate) enum Call {
     Models { provider: String, force: bool },
     Start(start::Start),
     Messages { session_id: String, page: MessagePaging },
+    Attachment { session_id: String, id: String, variant: crate::attachments::Variant, offset: u64 },
+    WorkspaceImage { session_id: String, path: String, variant: crate::attachments::Variant, offset: u64 },
     Send { session_id: String, text: String },
     Stop { session_id: String },
     Steer { session_id: String, text: String },
@@ -125,6 +128,23 @@ pub(crate) fn id_param(params: &Value, key: &str) -> Result<String> {
     let id = params[key].as_str().ok_or_else(|| format!("Missing {key}."))?;
     valid_id(id).map_err(|_| format!("Invalid {key}."))?;
     Ok(id.to_owned())
+}
+
+fn uuid_param(params: &Value, key: &str) -> Result<String> {
+    let id = id_param(params, key)?;
+    let parsed = uuid::Uuid::parse_str(&id).map_err(|_| format!("Invalid {key}."))?;
+    if parsed.to_string() != id { return Err(format!("Invalid {key}.")); }
+    Ok(id)
+}
+
+fn variant_offset(params: &Value) -> Result<(crate::attachments::Variant, u64)> {
+    let variant = params.get("variant").and_then(Value::as_str).ok_or("Missing variant.")?;
+    let variant = crate::attachments::Variant::parse(variant)?;
+    let offset = match params.get("offset").filter(|value| !value.is_null()) {
+        None => 0,
+        Some(value) => value.as_u64().ok_or("Invalid offset.")?,
+    };
+    Ok((variant, offset))
 }
 
 pub(crate) fn text_param(params: &Value, key: &str) -> Result<String> {
@@ -271,6 +291,15 @@ pub(crate) fn parse(host_enabled: bool, method: &str, params: &Value) -> Result<
         }
         "task.start" => Call::Start(start::parse(params)?),
         "task.messages" => Call::Messages { session_id: id_param(params, "sessionId")?, page: message_paging(params)? },
+        "task.attachment" => {
+            let (variant, offset) = variant_offset(params)?;
+            Call::Attachment { session_id: id_param(params, "sessionId")?, id: uuid_param(params, "id")?, variant, offset }
+        }
+        "task.workspaceImage" => {
+            let (variant, offset) = variant_offset(params)?;
+            let path = path_param(params, "path")?.ok_or("Missing path.")?;
+            Call::WorkspaceImage { session_id: id_param(params, "sessionId")?, path, variant, offset }
+        }
         "task.send" => Call::Send { session_id: id_param(params, "sessionId")?, text: text_param(params, "text")? },
         "task.stop" => Call::Stop { session_id: id_param(params, "sessionId")? },
         "task.steer" => Call::Steer { session_id: id_param(params, "sessionId")?, text: text_param(params, "text")? },
@@ -402,6 +431,28 @@ async fn run(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
                 MessagePaging::After { after_id, limit } if limit == PAGE_ROWS => messages_page(&store.db, &session_id, after_id),
                 page => messages_page_with(&store.db, &session_id, page),
             }
+        }
+        Call::Attachment { session_id, id, variant, offset } => {
+            local_task(&state, &session_id)?;
+            let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+            let store = state.store.clone();
+            crate::blocking(move || {
+                let store = store.lock().map_err(|error| error.to_string())?;
+                let image = crate::attachments::load_attachment(&store.db, &app_data_dir, &session_id, &id)?;
+                let (mime, bytes) = crate::attachments::variant_bytes(&image.bytes, &image.metadata.mime, variant)?;
+                crate::attachments::chunk_reply(&bytes, &mime, offset)
+            }).await
+        }
+        Call::WorkspaceImage { session_id, path, variant, offset } => {
+            let root = task_root(&state, &session_id)?;
+            crate::blocking(move || {
+                let data_url = crate::workspace::image_data_url(&root, &path)?;
+                let (header, encoded) = data_url.split_once(',').ok_or("Invalid workspace image.")?;
+                let mime = header.strip_prefix("data:").and_then(|value| value.strip_suffix(";base64")).ok_or("Invalid workspace image.")?;
+                let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|error| error.to_string())?;
+                let (mime, bytes) = crate::attachments::variant_bytes(&bytes, mime, variant)?;
+                crate::attachments::chunk_reply(&bytes, &mime, offset)
+            }).await
         }
         Call::Send { session_id, text } => {
             local_task(&state, &session_id)?;
@@ -1095,8 +1146,45 @@ fn pending_items(requests: &HashMap<String, AgentEvent>) -> Vec<Value> {
     items
 }
 
+fn context_attachments(message_id: i64, content: &str) -> Vec<Value> {
+    let mut attachments = Vec::new();
+    for line in content.lines() {
+        let (kind, raw_name) = if let Some(name) = line.strip_prefix("Document context: ") {
+            ("document", name)
+        } else if let Some(path) = line.strip_prefix("Folder context: ") {
+            ("folder", path)
+        } else { continue };
+        let value = raw_name.split(" (").next().unwrap_or(raw_name).trim();
+        if value.is_empty() { continue; }
+        let name = if kind == "folder" {
+            Path::new(value).file_name().and_then(|part| part.to_str()).unwrap_or(value)
+        } else { value };
+        let ordinal = attachments.len();
+        attachments.push(json!({"id": format!("context-{message_id}-{ordinal}"), "kind": kind, "name": name}));
+    }
+    attachments
+}
+
+fn fit_message(message: &mut Value) {
+    if message["role"] != "user" {
+        cut(message);
+        return;
+    }
+    while message.to_string().len() > MAX_MESSAGE {
+        let Some(content) = message.get("content").and_then(Value::as_str).map(str::to_owned) else { break };
+        if content.is_empty() { break; }
+        let next = if content.len() <= CUT.len() { String::new() } else { format!("{}{CUT}", head(&content, content.len() / 2)) };
+        message["content"] = json!(next);
+    }
+    while message.to_string().len() > MAX_MESSAGE {
+        let Some(items) = message.get_mut("attachments").and_then(Value::as_array_mut) else { break };
+        if items.pop().is_none() { break; }
+        message["attachmentsTruncated"] = json!(true);
+    }
+}
+
 fn message_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
-    Ok(json!({"id": row.get::<_, i64>(0)?, "role": row.get::<_, String>(1)?, "content": row.get::<_, String>(2)?, "createdAt": row.get::<_, i64>(3)?, "turnDurationMs": row.get::<_, Option<i64>>(4)?}))
+    Ok(json!({"id": row.get::<_, i64>(0)?, "role": row.get::<_, String>(1)?, "content": row.get::<_, String>(2)?, "createdAt": row.get::<_, i64>(3)?, "turnDurationMs": row.get::<_, Option<i64>>(4)?, "attachments": []}))
 }
 
 fn message_exists(db: &rusqlite::Connection, session_id: &str, id: i64, older: bool) -> Result<bool> {
@@ -1134,13 +1222,25 @@ pub(crate) fn messages_page_with(db: &rusqlite::Connection, session_id: &str, pa
         MessagePaging::Before { before_id, limit } => statement.query_map(rusqlite::params![session_id, before_id, limit], message_row),
     }
     .map_err(|e| e.to_string())?;
-    let rows: Vec<Value> = mapped.collect::<rusqlite::Result<_>>().map_err(|e| e.to_string())?;
+    let mut rows: Vec<Value> = mapped.collect::<rusqlite::Result<_>>().map_err(|e| e.to_string())?;
     let fetched = rows.len();
+    let has_attachment_table: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_attachments')", [], |row| row.get(0)).map_err(|e| e.to_string())?;
+    for message in &mut rows {
+        let message_id = message["id"].as_i64().unwrap_or_default();
+        let mut attachments = if has_attachment_table {
+            crate::attachments::message_attachment_rows(db, session_id, message_id)?
+        } else { Vec::new() };
+        if message["role"] == "user" {
+            let content = message["content"].as_str().unwrap_or_default();
+            attachments.extend(context_attachments(message_id, content));
+        }
+        message["attachments"] = json!(attachments);
+    }
     let mut room = PAGE_BUDGET.saturating_sub(json!({"messages": [], "hasMore": false, "hasOlder": false, "title": &title, "lastId": last_id}).to_string().len());
     let mut kept = Vec::new();
     for mut message in rows {
         if message.to_string().len() > MAX_MESSAGE {
-            cut(&mut message);
+            fit_message(&mut message);
         }
         let size = message.to_string().len() + 1;
         // The first message always fits: once cut it is under the budget.
@@ -1418,6 +1518,11 @@ mod tests {
         assert!(parse(true, "task.send", &json!({"sessionId": "s1", "text": "  "})).is_err());
         assert!(parse(true, "task.messages", &json!({"sessionId": "a\nb"})).is_err());
         assert!(parse(true, "task.stop", &json!({})).is_err());
+        let image_id = uuid::Uuid::new_v4().to_string();
+        assert!(matches!(parse(true, "task.attachment", &json!({"sessionId":"s1","id":image_id,"variant":"thumb"})), Ok(Call::Attachment { offset: 0, .. })));
+        assert!(parse(true, "task.attachment", &json!({"sessionId":"s1","id":"../../secret","variant":"full"})).is_err());
+        assert!(parse(true, "task.workspaceImage", &json!({"sessionId":"s1","path":"../secret.png","variant":"thumb"})).is_err());
+        assert!(parse(true, "task.workspaceImage", &json!({"sessionId":"s1","path":"src/pic.png","variant":"full","offset":-1})).is_err());
         assert!(parse(true, "approval.respond", &json!({"sessionId": "s", "requestId": "r"})).is_err());
         assert!(parse(true, "input.respond", &json!({"sessionId": "s", "requestId": "r"})).is_err());
         assert_eq!(parse(true, "tasks.list", &json!({})), Ok(Call::TasksList { limit: TASKS_DEFAULT }));

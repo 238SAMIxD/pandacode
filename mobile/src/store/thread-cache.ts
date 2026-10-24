@@ -49,10 +49,10 @@ export const touch = (index: CacheIndex, key: string, entry: Partial<CacheEntry>
   ({ ...index, [key]: { bytes: 0, lastId: 0, ...(index[key] as CacheEntry | undefined), ...entry, file: fileName(key) } });
 
 /** Drops the least recently used threads until the rest fit `max`; returns the kept index and the dropped files. */
-export function evict(index: CacheIndex, max = CACHE_BYTES): { index: CacheIndex; drop: string[] } {
+export function evict<E extends { file: string; at: number; bytes: number }>(index: Record<string, E>, max = CACHE_BYTES): { index: Record<string, E>; drop: string[] } {
   const entries = Object.entries(index).sort((a, b) => b[1].at - a[1].at);
   let total = 0;
-  const kept: CacheIndex = {};
+  const kept: Record<string, E> = {};
   const drop: string[] = [];
   for (const [key, entry] of entries) {
     total += entry.bytes;

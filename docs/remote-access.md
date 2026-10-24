@@ -197,7 +197,10 @@ approval policy: remote prompts get no more power than local ones.
 | `providers.list` | `{ force?: boolean }` | the host's `list_providers` result: `[{ id, name, installed, path, version, models }]`. `force` drops the same ACP catalog caches. If it would not fit one reply, the longest `models` lists are halved until it does. |
 | `providers.models` | `{ provider, force?: boolean }` | the host's `list_provider_models` result: `[{ id, name, description, reasoningEfforts, defaultReasoningEffort, contextWindow }]`, its tail dropped to fit one reply. `provider` must be a known harness id (`Unknown provider.`). |
 | `task.start` | `{ repo?: "owner/name", projectId?: string, branch?, worktree, prompt, provider, model, mode?, effort? }` (exactly one of `repo` or `projectId`) | `{ sessionId }` |
-| `task.messages` | `{ sessionId, afterId?, tail?, beforeId?, limit? }` (`limit` is 1..400; defaults to 100 for `tail`/`beforeId`, 400 for `afterId`) | `{ messages: [{ id, role, content, createdAt, turnDurationMs }], hasMore, hasOlder, title, lastId }`. `tail: true` returns the newest page; `beforeId` returns the page immediately before that message id. Both are oldest-first. Use only one of `afterId`, `tail: true` or `beforeId`; mixing them is refused. `hasMore` means newer rows follow this page, `hasOlder` means older rows precede its first message, and `lastId` is the newest message id (or `null` for an empty thread). |
+| `task.messages` | `{ sessionId, afterId?, tail?, beforeId?, limit? }` (`limit` is 1..400; defaults to 100 for `tail`/`beforeId`, 400 for `afterId`) | `{ messages: [{ id, role, content, createdAt, turnDurationMs, attachments }], hasMore, hasOlder, title, lastId }`. `attachments` is always an array; saved images include `{ id, kind: "image", name, mime, bytes, width, height }`, while document and folder context markers carry `{ id, kind, name }`. `tail: true` returns the newest page; `beforeId` returns the page immediately before that message id. Both are oldest-first. Use only one of `afterId`, `tail: true` or `beforeId`; mixing them is refused. `hasMore` means newer rows follow this page, `hasOlder` means older rows precede its first message, and `lastId` is the newest message id (or `null` for an empty thread). |
+| `task.attachment` | `{ sessionId, id, variant: "thumb" | "full", offset? }` | `{ mime, total, offset, data, done }`, with `data` a base64 chunk. Image ids must be UUIDs linked to a message in that same local session. `thumb` is a JPEG with a long edge no larger than 480 px and fits one chunk. `full` returns original bytes unless the source exceeds 8 MiB, when the host makes a JPEG with a long edge no larger than 2048 px. Chunks contain at most 120 KiB of raw bytes. |
+| `task.workspaceImage` | `{ sessionId, path, variant: "thumb" | "full", offset? }` | The same chunk shape as `task.attachment`. Uses the local task's workspace image checks: relative paths only, no traversal or escaping symlinks, image types only, and a maximum source size of 8 MiB. Mirrors are refused. |
+
 | `task.send` | `{ sessionId, text }` | `{ queued: boolean }`. Queued if the task is running, like Enter. If the run ended between the check and the queue add, the host takes the entry back and sends it. |
 | `task.stop` | `{ sessionId }` | `{}` |
 | `task.steer` | `{ sessionId, text }` | `{}` (as `steer_task`) |
@@ -215,7 +218,15 @@ approval policy: remote prompts get no more power than local ones.
 | `approval.respond` | `{ sessionId, requestId, approve: boolean }` | `{}` |
 | `input.respond` | `{ sessionId, requestId, response }` | `{}` (as `respond_user_input`) |
 
-A host refuses a session id that is itself a mirror, so tasks never hop twice.
+A host refuses a session id that is itself a mirror, so tasks never hop twice. Attachment bytes are
+read on the blocking pool and are only served when a `message_attachments` row ties the UUID to a
+message in the requested session. Prompt captures start in the cache at
+`browser-captures/<uuid>.png`; schema 30 links them to their saved message and copies the PNG into
+`<app data>/attachments/<session id>/<uuid>.png` so cache cleanup cannot remove it. Moodboard
+images remain in `moodboard_images.original`; each link records both the board id and image UUID. Document and
+folder contents remain in the saved message text under `Document context:` and `Folder context:`;
+`task.messages` also exposes those markers in its `attachments` list. Deleting a task removes its
+attachment rows and copied files. The host never accepts a filesystem path for `task.attachment`.
 
 ### Starting a task on another computer
 

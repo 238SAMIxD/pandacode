@@ -31,7 +31,8 @@ export interface PendingRequest { kind: 'approval' | 'input_request' | (string &
 
 export interface SubscribedTask extends HostActivity { sessionId: string; status: TaskStatus; lastId: number; title: string; pending?: PendingRequest[] }
 
-export interface Message { id: number; role: string; content: string; createdAt: number; turnDurationMs: number | null }
+/** `attachments`: newer hosts' rows (checked by parseAttachments in src/store/attachments.ts). */
+export interface Message { id: number; role: string; content: string; createdAt: number; turnDurationMs: number | null; attachments?: unknown }
 /** `hasMore`: newer messages follow the page; `hasOlder` (newer hosts, tail/beforeId pages): older ones precede it. */
 export interface MessagePage { messages: Message[]; hasMore: boolean; title: string; hasOlder?: boolean; lastId?: number | null }
 

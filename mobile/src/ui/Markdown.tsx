@@ -1,8 +1,12 @@
 // Native Markdown (react-native-enriched-markdown, md4c). Memoized by source, so a row only
-// re-parses when its text changes; links open in the system browser.
+// re-parses when its text changes; links open in the system browser. Images never reach the
+// native renderer (it would fetch remote ones): workspace paths draw as ReplyImage thumbnails,
+// anything with a scheme becomes a link (replyParts in src/store/attachments.ts).
 import { memo, useMemo } from 'react';
 import { Linking, Platform, useColorScheme } from 'react-native';
 import { EnrichedMarkdownText, type MarkdownStyle } from 'react-native-enriched-markdown';
+import { replyParts } from '../store/attachments.ts';
+import { ReplyImage } from './Attachments.tsx';
 import { mono } from './theme.ts';
 
 const open = ({ url }: { url: string }) => { if (/^https?:\/\//i.test(url)) void Linking.openURL(url); };
@@ -26,5 +30,8 @@ function useStyle(): MarkdownStyle {
 
 export const Markdown = memo(function Markdown({ text, streaming }: { text: string; streaming?: boolean }) {
   const style = useStyle();
-  return <EnrichedMarkdownText markdown={text} markdownStyle={style} flavor="github" onLinkPress={open} selectable streamingAnimation={streaming} />;
+  const parts = useMemo(() => replyParts(text), [text]);
+  const body = (markdown: string, key?: number) => <EnrichedMarkdownText key={key} markdown={markdown} markdownStyle={style} flavor="github" onLinkPress={open} selectable streamingAnimation={streaming} />;
+  if (parts.length === 1 && parts[0].kind === 'text') return body(parts[0].text);
+  return <>{parts.map((part, i) => (part.kind === 'text' ? body(part.text, i) : <ReplyImage key={i} alt={part.alt} path={part.path} />))}</>;
 });

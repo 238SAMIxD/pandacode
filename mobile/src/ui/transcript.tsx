@@ -10,7 +10,10 @@ import { connect } from '../connect/client.ts';
 import { taskKey, useConnect, useHistory, useLive, useLoaded, useMessages, useOlder, useSent, type LiveItem } from '../store/index.ts';
 import type { Sent } from '../store/sent.ts';
 import { removeOutbox, retryOutbox, useLocal } from '../store/local.ts';
-import { attachments, duration, turnRows, type TurnRow } from '../store/turns.ts';
+import { duration, turnRows, type TurnRow } from '../store/turns.ts';
+import { bubbleAttachments } from '../store/attachments.ts';
+import { Chips, ImageGrid, ThreadContext } from './Attachments.tsx';
+import { ImageViewerHost } from './ImageViewer.tsx';
 import { Icon } from './Icon.tsx';
 import { Markdown } from './Markdown.tsx';
 import { showActions } from './Menu.tsx';
@@ -23,9 +26,6 @@ import { mono, useColors } from './theme.ts';
 const CONTEXT_BOUNDARY = /\n\n(?=(?:File|Document|Folder|GitHub|Browser element) context[ :(]|Attached (?:browser screenshot|image|mockup)[ :]|Bot brief:\n|Response style \(PandaCode token saver)/;
 /** How far from the newest message (pt) before the jump-to-latest button shows. */
 const AWAY = 240;
-
-const attachmentIcon = (kind: string) =>
-  kind.startsWith('Attached') ? ['photo', 'image'] as const : kind === 'Folder context' ? ['folder', 'folder'] as const : ['doc', 'description'] as const;
 
 const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 
@@ -51,25 +51,14 @@ function UserBubble({ message }: { message: Message }) {
   const content = message.content;
   const cut = content.search(CONTEXT_BOUNDARY);
   const prompt = cut < 0 ? content : content.slice(0, cut);
-  const files = useMemo(() => (cut < 0 ? [] : attachments(content.slice(cut))), [content, cut]);
+  const files = useMemo(() => bubbleAttachments(message.attachments, cut < 0 ? '' : content.slice(cut)), [message.attachments, content, cut]);
   const steeredAt = useLocal(s => s.steers[prompt.trim()]);
   return (
     <View style={styles.userTurn}>
       <View style={[styles.bubble, { backgroundColor: colors.bubble }]}>
-        <Text selectable style={[styles.userText, { color: colors.text }]}>{prompt}</Text>
-        {files.length > 0 && (
-          <View style={styles.chips}>
-            {files.map((file, i) => {
-              const [ios, android] = attachmentIcon(file.kind);
-              return (
-                <View key={i} style={[styles.chip, { backgroundColor: colors.fill }]} accessible accessibilityLabel={`${file.kind}: ${file.name}`}>
-                  <Icon ios={ios} android={android} size={13} color={colors.tint} />
-                  <Text style={[styles.chipText, { color: colors.tint }]} numberOfLines={1}>{file.name}</Text>
-                </View>
-              );
-            })}
-          </View>
-        )}
+        <ImageGrid images={files.images} />
+        {!!prompt && <Text selectable style={[styles.userText, { color: colors.text }]}>{prompt}</Text>}
+        <Chips chips={files.chips} />
         {cut >= 0 && (
           <Pressable onPress={() => setShowContext(s => !s)} accessibilityRole="button">
             <Text style={[styles.context, { color: colors.secondary }]}>{showContext ? content.slice(cut + 2) : 'Attached context'}</Text>
@@ -300,7 +289,10 @@ export const Transcript = memo(function Transcript({ deviceId, sessionId, top, b
       if (next !== away) onAway((away = next));
     };
   }, [onAway]);
+  const thread = useMemo(() => ({ deviceId, sessionId }), [deviceId, sessionId]);
   return (
+    <ThreadContext.Provider value={thread}>
+    <ImageViewerHost />
     <FlatList
       ref={listRef}
       inverted
@@ -324,6 +316,7 @@ export const Transcript = memo(function Transcript({ deviceId, sessionId, top, b
       windowSize={9}
       removeClippedSubviews
     />
+    </ThreadContext.Provider>
   );
 });
 
@@ -331,9 +324,6 @@ const styles = StyleSheet.create({
   list: { paddingHorizontal: 18 },
   userTurn: { alignItems: 'flex-end', marginTop: 18, marginBottom: 6 },
   bubble: { maxWidth: '85%', borderRadius: 24, paddingHorizontal: 16, paddingVertical: 11, borderCurve: 'continuous' },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
-  chip: { flexDirection: 'row', alignItems: 'center', gap: 5, maxWidth: 220, borderRadius: 12, paddingHorizontal: 9, paddingVertical: 5, borderCurve: 'continuous' },
-  chipText: { fontSize: 13, fontWeight: '500', flexShrink: 1 },
   sending: { opacity: 0.6 },
   pending: { borderWidth: 1, borderStyle: 'dashed', opacity: 0.85 },
   userText: { fontSize: 16, lineHeight: 22 },

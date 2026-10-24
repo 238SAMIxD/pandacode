@@ -12,6 +12,9 @@ import { delivering, settled, unmatched, type Sent } from '../store/sent.ts';
 import { applyEvent, ended, fromList, fromSubscribe, idleLive, lastId, mergeMessages, prependMessages, staleLists } from '../store/reduce.ts';
 import { cachedLastId, clearThreads, readThread, saveThread } from '../store/threads.ts';
 import { PrefetchQueue, prefetchOrder } from '../store/prefetch.ts';
+import { clearBlobs } from '../store/attachment-files.ts';
+import type { Variant } from '../store/attachments.ts';
+import { fetchAttachment, type AttachmentDeps, type Source } from './attachments.ts';
 import * as auth from './auth.ts';
 import { deleteAccount as deleteAccountSteps } from './delete-account.ts';
 import { build, NOT_CONFIGURED } from './config.ts';
@@ -602,6 +605,7 @@ function forgetThreads() {
   copiedAt.clear();
   legacy.clear();
   clearThreads();
+  clearBlobs();
 }
 
 function withTitle(s: ConnectState, host: string, sessionId: string, title: unknown): ConnectState['tasks'] {
@@ -843,6 +847,22 @@ async function pauseBot(deviceId: string, botId: string, paused: boolean): Promi
   void listBots(deviceId).catch(() => undefined);
 }
 
+// ---- Attachments ----
+
+const attachmentDeps: AttachmentDeps = {
+  call: (deviceId, method, params) => call(deviceId, method, params),
+  // Below the thread's own message calls: wait for whatever is queued for it now.
+  after: (deviceId, sessionId) => (queues.get(taskKey(deviceId, sessionId)) ?? Promise.resolve()).catch(() => undefined),
+  // Above prefetch: it holds while any download waits.
+  hold: () => prefetch.hold('attachments'),
+  release: () => prefetch.release('attachments'),
+  demo: id => (state().demo ? import('../demo-images.ts').then(m => m.demoImage(id)) : undefined),
+};
+
+/** A message attachment or workspace image as a file:// URI (see ./attachments.ts). */
+const attachment = (deviceId: string, sessionId: string, source: Source, variant: Variant) =>
+  fetchAttachment(attachmentDeps, deviceId, sessionId, source, variant);
+
 export const connect = {
   init, signInStart, signInFinish, signInCancel, signOut,
   enterDemo, leaveDemo, deleteAccount,
@@ -851,4 +871,5 @@ export const connect = {
   listTasks, refreshLists, listProviders, listModels, startTask, projectIcons,
   sendMessage, stopTask, steerTask, configureTask, respondApproval, respondInput,
   loadPull, pullDiff, mergePull, taskChanges, taskDiff, listBots, botThread, botMessage, pauseBot,
+  attachment,
 };

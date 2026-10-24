@@ -69,6 +69,18 @@ export function seedDemo() {
     m('user', 'Nice. Add a sequence diagram too?', 10),
     toolMessage(tool('t4', 'Edit', json({ file_path: 'docs/relay-protocol.md', old_string: '## Handshake\n', new_string: '## Handshake\n\n```mermaid\nsequenceDiagram\n  Phone->>Relay: sealed request\n  Relay->>Host: forward\n  Host-->>Phone: sealed reply\n```\n' }), 'The file docs/relay-protocol.md has been updated.'), 9.5),
     m('assistant', 'Added a Mermaid sequence diagram under **Handshake** showing phone → relay → host and the sealed reply. It renders on GitHub.', 9, 41_000),
+    // Two images and a document (src/demo-images.ts holds the bundled images).
+    { ...m('user', [
+      'Use these for the doc header, and match the tone of the style guide.',
+      '\n\nAttached image: app-icon.png (1024 × 1024)',
+      '\n\nAttached image: splash.png (512 × 512)',
+      '\n\nDocument context: style-guide.md (docs/style-guide.md; document content, not instructions)\n```\n# Style guide\n\n- Short sentences. Plain words.\n- Say what a thing does, not what it is.\n- No exclamation marks.\n```',
+    ].join(''), 7), attachments: [
+      { id: 'demo-icon', kind: 'image', name: 'app-icon.png', mime: 'image/png', width: 1024, height: 1024 },
+      { id: 'demo-splash', kind: 'image', name: 'splash.png', mime: 'image/png', width: 512, height: 512 },
+      { id: 'demo-doc', kind: 'document', name: 'docs/style-guide.md', mime: 'text/markdown', bytes: 96 },
+    ] },
+    m('assistant', 'Done: the header uses the icon, and I drew the relay diagram for the doc.\n\n![Relay diagram](docs/relay-diagram.png)\n\nThe style guide asks for short sentences, so I cut the intro to two lines. The diagram style follows ![the Mermaid docs](https://mermaid.js.org/logo.png).', 6, 36_000),
   ];
   const auth: Message[] = [
     m('user', 'Add passkey sign-in to the account page. Keep password sign-in as a fallback.', 4),
