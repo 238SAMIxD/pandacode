@@ -27,6 +27,20 @@ test('renders Markdown as a reader and switches to raw source', async ({ page })
   await expect(page.locator('.document-viewer .doc-raw')).toContainText('# Orbit');
 });
 
+test('renders README HTML with workspace images, like a GitHub README', async ({ page }) => {
+  await page.locator('[data-action="open-file"][data-path="README.md"]').click();
+  const reader = page.locator('.document-viewer .doc-reader');
+  await expect(reader.locator('[align="center"]')).toBeVisible();
+  await expect(reader).not.toContainText('<div');
+  const banner = reader.getByRole('img', { name: 'Orbit banner' });
+  await expect(banner).toHaveAttribute('src', /^data:image\//);
+  await expect(banner).toHaveAttribute('width', '100%');
+  // Remote images are never fetched: a badge becomes its text, still linked.
+  await expect(reader.locator('img[src^="http"]')).toHaveCount(0);
+  await expect(reader.getByRole('link', { name: 'Build' })).toHaveAttribute('href', 'https://example.com/ci');
+  await expect(reader.locator('script, [onerror], [download], .toast')).toHaveCount(0);
+});
+
 test('shows code with line numbers that are not selectable and a wrap toggle', async ({ page }) => {
   await page.locator('[data-action="open-file"][data-path="package.json"]').click();
   const viewer = page.locator('.document-viewer');
