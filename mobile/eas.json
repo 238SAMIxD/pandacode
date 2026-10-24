@@ -7,7 +7,9 @@
     "development": {
       "distribution": "internal",
       "environment": "development",
-      "ios": { "simulator": true }
+      "ios": {
+        "simulator": true
+      }
     },
     "preview": {
       "distribution": "internal",
@@ -21,7 +23,6 @@
   "submit": {
     "production": {
       "ios": {
-        "ascAppId": "ASC_APP_ID",
         "appleTeamId": "C92N85W6NZ"
       }
     }
