@@ -138,14 +138,18 @@ pandacode serve --import-bots bots.json
 - Secret values are inline or `"env:NAME"`, read from the environment at import — put the
   tokens in the systemd unit's `Environment=`/`EnvironmentFile=`, not in the file.
 - Importing is idempotent: bots match by name (existing profiles are updated), channels
-  by kind+label, schedules by title, rules by pattern+decision — re-applying converges,
-  so keep the file in version control and re-apply after edits. A bot that fails is
-  reported and skipped; serve exits non-zero until the file is clean.
-- Web channels print their chat links at import (`http://host:47321/chat/<id>#<token>` —
-  loopback unless the channel's `config.remote` is true).
+  by kind+label, schedules by title, and rules by pattern (an edited decision replaces
+  the old rule) — re-applying converges, so keep the file in version control and
+  re-apply after edits. A bot that fails is reported and skipped; serve exits non-zero
+  until the file is clean. Token shapes are checked at import (a truncated or swapped
+  token fails the import instead of dying later).
+- Web channels print their chat links at import
+  (`http://127.0.0.1:<port>/chat/<id>#<token>`). The chat server binds loopback only:
+  reach it through an SSH tunnel (`ssh -L 47321:127.0.0.1:47321 host`).
 - `--export-bots bots.json` writes every bot's configuration without secrets (channels
-  list `secretsNeeded` names; web tokens are excluded — a re-import mints a fresh link).
-  Use it to snapshot or move a server's setup; put the tokens back before re-importing.
+  list `secretsNeeded` names; web tokens are excluded — a re-import mints a fresh link;
+  already-fired once-schedules are omitted, since their run time is gone). Use it to
+  snapshot or move a server's setup; put the tokens back before re-importing.
 
 Schedules, rules, profiles and secrets are read fresh by a running serve; channels added
 by hand (not through the import) need a restart to connect.
