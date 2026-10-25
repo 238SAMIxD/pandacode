@@ -791,6 +791,12 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'prompt_activity': result = sampleUsageLedger().rows.filter((_, i) => i % 3 === 0).map(row => [row[0], i2p(row[1]), 1 + (row[0] % 7)]); break;
     case 'agent_usage': {
       const provider = String(args.provider);
+      if (provider === 'deepseek') {
+        result = { provider, status: 'ready', checkedAt: Date.now(), stale: false, plan: null, windows: [],
+          source: 'Sample limits for the browser preview. No provider request was made.',
+          message: 'Balance CNY 110.00 (granted 10.00, topped up 100.00).' };
+        break;
+      }
       const supported = ['claude', 'codex', 'kimi', 'glm', 'opencode'].includes(provider);
       result = { provider, status: supported ? 'ready' : 'unsupported', checkedAt: Date.now(), stale: false,
         plan: provider === 'codex' ? 'Pro' : provider === 'opencode' ? 'Go' : null,

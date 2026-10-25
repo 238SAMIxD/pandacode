@@ -602,12 +602,13 @@ async fn fetch_provider(provider: &str, env: &[(String, String)]) -> Usage {
         "codex" => fetch_codex(env).await,
         "claude" => fetch_claude(env).await,
         _ if !env.is_empty() => Usage::empty(provider, "unsupported", "Limits are read for each Claude Code and Codex connection. This harness's limits are shown for its global setup only."),
-        "kimi" | "glm" | "opencode" | "antigravity" => crate::agent_usage_providers::fetch(provider).await,
+        "kimi" | "glm" | "opencode" | "antigravity" | "deepseek" => {
+            crate::agent_usage_providers::fetch(provider).await
+        }
         "grok" => Usage::empty(provider, "unsupported", "Grok does not expose subscription usage through this agent. Check your account dashboard."),
         "mimo" => Usage::empty(provider, "unsupported", "MiMo does not expose account limits through this agent. View your Token Plan dashboard."),
         "omp" => Usage::empty(provider, "unsupported", "omp uses the model provider you configured for it. Check that provider's dashboard for limits."),
         "pi" => Usage::empty(provider, "unsupported", "Pi uses the model provider you configured for it. Check that provider's dashboard for limits."),
-        "deepseek" => Usage::empty(provider, "unsupported", "DeepSeek does not expose balance or limits through this agent. Check the DeepSeek platform."),
         "commandcode" => Usage::empty(provider, "unsupported", "Command Code does not expose credits or limits through this agent. Check Command Code Studio."),
         "cline" => Usage::empty(provider, "unsupported", "Cline does not expose credits or limits through this agent. Check your Cline account."),
         "kilo" => Usage::empty(provider, "unsupported", "Kilo Code does not expose credits or limits through this agent. Check your Kilo account or the model provider's dashboard."),
@@ -693,8 +694,15 @@ async fn fetch_claude(env: &[(String, String)]) -> Usage {
         crate::provider_settings::claude_connection_mode().is_inherit(),
         |name| std::env::var(name).ok(),
         &settings,
-    ) || claude_override(true, |name| env.iter().find(|(key, _)| key == name).map(|(_, value)| value.clone()), &Value::Null)
-    {
+    ) || claude_override(
+        true,
+        |name| {
+            env.iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.clone())
+        },
+        &Value::Null,
+    ) {
         return Usage::empty("claude", "unavailable", "Claude is configured with an API key, custom endpoint, or environment credentials. Saved Claude subscription limits do not describe that connection.");
     }
     let (credential, source) = match read_claude_credential(&config, env).await {
@@ -954,12 +962,24 @@ mod tests {
     #[test]
     fn connection_environment_selects_its_own_config_folder_and_login() {
         let pair = |k: &str, v: &str| (k.to_owned(), v.to_owned());
-        let work = [pair("CLAUDE_CONFIG_DIR", "/tmp/old"), pair("CLAUDE_CONFIG_DIR", "/Users/me/.claude-work")];
+        let work = [
+            pair("CLAUDE_CONFIG_DIR", "/tmp/old"),
+            pair("CLAUDE_CONFIG_DIR", "/Users/me/.claude-work"),
+        ];
         // The connection's last value wins; anything it doesn't set comes from PandaCode's environment.
-        assert_eq!(var(&work, "CLAUDE_CONFIG_DIR").as_deref(), Some("/Users/me/.claude-work"));
+        assert_eq!(
+            var(&work, "CLAUDE_CONFIG_DIR").as_deref(),
+            Some("/Users/me/.claude-work")
+        );
         assert_eq!(var(&work, "PATH"), std::env::var("PATH").ok());
-        assert_eq!(claude_config_dir_in(&work), Some(PathBuf::from("/Users/me/.claude-work")));
-        assert_eq!(claude_config_dir_in(&[pair("CLAUDE_CONFIG_DIR", "relative")]), None);
+        assert_eq!(
+            claude_config_dir_in(&work),
+            Some(PathBuf::from("/Users/me/.claude-work"))
+        );
+        assert_eq!(
+            claude_config_dir_in(&[pair("CLAUDE_CONFIG_DIR", "relative")]),
+            None
+        );
         assert_eq!(claude_config_dir_in(&[]), claude_config_dir());
         #[cfg(target_os = "macos")]
         assert_eq!(
@@ -978,10 +998,14 @@ mod tests {
 
     #[tokio::test]
     async fn claude_connection_with_its_own_api_key_is_not_a_subscription() {
-        let dir = std::env::temp_dir().join(format!("pandacode-usage-conn-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("pandacode-usage-conn-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let env = [
-            ("CLAUDE_CONFIG_DIR".to_owned(), dir.to_string_lossy().into_owned()),
+            (
+                "CLAUDE_CONFIG_DIR".to_owned(),
+                dir.to_string_lossy().into_owned(),
+            ),
             ("ANTHROPIC_API_KEY".to_owned(), "synthetic-key".to_owned()),
         ];
         let usage = fetch_claude(&env).await;
