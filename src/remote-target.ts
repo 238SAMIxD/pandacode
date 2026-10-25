@@ -2,6 +2,8 @@ import { escape, icon } from './dom';
 import type { RemoteRepoCheck, RemoteTarget } from './remote-types';
 import type { Session } from './types';
 import { cloudChip, cloudItems, cloudProvider, type CloudTarget } from './cloud-agents';
+// Start progress for a New task sent to another computer; importing it here loads its strip actions.
+export { clearRemoteStart, remoteStartStrip, startStageText, trackRemoteStart } from './remote-progress';
 
 /* The context bar's computer choice (PandaCode Connect). A new task can start on another
  * signed-in computer; a task that runs there shows that computer, locked. */

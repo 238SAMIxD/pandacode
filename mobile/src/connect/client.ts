@@ -20,7 +20,7 @@ import * as auth from './auth.ts';
 import { deleteAccount as deleteAccountSteps } from './delete-account.ts';
 import { build, NOT_CONFIGURED } from './config.ts';
 import { open, pairKey, seal, uuid } from './crypto.ts';
-import { BackgroundGate, LOST, NOT_CONNECTED, OFFLINE, outdated, Pending, RATE, request, START_TIMEOUT_MS, TIMEOUT_MS, UNKNOWN_METHOD, type Method } from './rpc.ts';
+import { BackgroundGate, LOST, NOT_CONNECTED, OFFLINE, outdated, Pending, RATE, Replay, request, STALE, START_TIMEOUT_MS, TIMEOUT_MS, UNKNOWN_METHOD, type Method } from './rpc.ts';
 import * as secrets from './secrets.ts';
 import { AppState } from 'react-native';
 import { RelaySocket } from './socket.ts';
@@ -64,6 +64,7 @@ const gate = new BackgroundGate();
 let booted: Promise<void> = Promise.resolve();
 /** Calls waiting for the socket's presence frame (see whenConnected). */
 let connectWaiters: (() => void)[] = [];
+const inbound = new Replay();
 /** Pair keys by device id, with the public key they were derived from. */
 const keys = new Map<string, { publicKey: string; key: Uint8Array }>();
 /** Tasks the UI has open, per host; subscribed, renewed, and re-subscribed on presence. */
@@ -421,6 +422,11 @@ function frame(text: string) {
   if (!device?.publicKey) return;
   let message: any;
   try { message = JSON.parse(open(pairFor(device), from, to, body)); } catch { return; }
+  // Replies and events carry ts + nonce: a stale or repeated one (or an older host's) is dropped.
+  if ((message?.type === 'res' || message?.type === 'event') && !inbound.check(message.ts, message.nonce)) {
+    if (message.type === 'res') pending.resolve(from, { id: message.id, ok: false, error: STALE });
+    return;
+  }
   if (message?.type === 'res') pending.resolve(from, message);
   else if (message?.type === 'event' && message.name === 'agent.events') events(from, message.data?.events);
   else if (message?.type === 'event' && message.name === 'run.finished') void finished(from, message.data);

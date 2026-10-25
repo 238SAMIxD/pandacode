@@ -1,5 +1,5 @@
-//! ACP v1 transport for OpenCode, Kilo, Antigravity, Grok Build, Command Code, Cline and
-//! GitHub Copilot CLI. Kimi retains its provider-specific mode mapping.
+//! ACP v1 transport for OpenCode, Kilo, Antigravity, Grok Build, Command Code, Cline,
+//! GitHub Copilot CLI and Devin. Kimi retains its provider-specific mode mapping.
 use super::*;
 use crate::slash_commands::claude::Pipe;
 
@@ -7,7 +7,7 @@ const DISCOVERY_STARTUP: Duration = Duration::from_secs(60);
 const COMMAND_GRACE: Duration = Duration::from_secs(1);
 pub(crate) const ACP_STARTUP_TIMEOUT: &str = "ACP startup timed out after 60 seconds. Check the harness installation and sign-in, then refresh.";
 
-fn rpc_error(frame: &Value, stage: &str) -> String {
+pub(super) fn rpc_error(frame: &Value, stage: &str) -> String {
     let message = model_text(frame["error"]["message"].as_str(), "ACP request failed", 1000);
     let data = &frame["error"]["data"];
     let detail = data.as_str().or_else(|| data["message"].as_str()).or_else(|| data["details"].as_str()).unwrap_or("");
@@ -70,6 +70,7 @@ pub(super) fn configure(command: &mut Command, config: &RunConfig) {
         }
         "cline" => super::cline::configure(command, config),
         "kilo" => super::kilo::configure(command),
+        "devin" => super::devin::configure(command),
         _ => {
             #[cfg(target_os = "linux")]
             command.arg("--uid=");
@@ -131,14 +132,14 @@ pub(super) fn configuration(mode: &str) -> String {
     inline.to_string()
 }
 
-fn options<'a>(config: &'a Value, category: &str) -> Option<&'a Value> {
+pub(super) fn options<'a>(config: &'a Value, category: &str) -> Option<&'a Value> {
     let selects = || config["configOptions"].as_array().into_iter().flatten().take(64).filter(|option| option["type"] == "select");
     // An exact ID wins: Cline files its account `provider` option under the model category too.
     selects()
         .find(|option| option["id"] == category)
         .or_else(|| selects().find(|option| option["category"] == category))
 }
-fn choices(option: &Value) -> Vec<&Value> {
+pub(super) fn choices(option: &Value) -> Vec<&Value> {
     option["options"]
         .as_array()
         .into_iter()
@@ -185,6 +186,9 @@ impl Protocol {
             }
             if self.config.provider == "kilo" && value["error"]["code"] == -32000 {
                 return Err(super::kilo::SIGN_IN.into());
+            }
+            if self.config.provider == "devin" && value["error"]["code"] == -32000 {
+                return Err(super::devin::SIGN_IN.into());
             }
             if value["error"]["code"] == -32000 {
                 return Err(format!("{} requires authentication. Sign in using its own CLI or official extension, then retry.", self.config.provider));
@@ -237,9 +241,11 @@ impl Protocol {
                         if self.mcp_required {
                             return Err("This harness does not advertise HTTP MCP support required for PandaCode tools. Update its ACP server.".into());
                         }
-                        // Title suggestions are optional metadata. Older ACP
-                        // agents can continue normally using the local fallback.
+                        // Title suggestions and host tools are optional capabilities.
+                        // Older ACP agents or harnesses without HTTP MCP can continue
+                        // normally using the local fallback.
                         self.mcp_server = None;
+                        self.mcp_tool_names.clear();
                     }
                     let mut params = json!({"cwd":launch::external_path(&self.config.cwd),"mcpServers":self.mcp_server.iter().collect::<Vec<_>>()});
                     let method = if self.remote_id.is_empty() {
@@ -329,6 +335,9 @@ impl Protocol {
         {
             self.acp_update_config(&value["params"]["update"]);
         }
+        if self.config.provider == "devin" && super::devin::subagent_usage(&value) {
+            return Ok(step);
+        }
         if value["method"] == "session/request_permission" {
             if value["params"]["sessionId"]
                 .as_str()
@@ -412,6 +421,9 @@ impl Protocol {
                     step.write.push(json!({"jsonrpc":"2.0","id":value["id"],"result":{"outcome":{"outcome":"cancelled"}}}));
                 }
                 return Ok(step);
+            }
+            if self.config.provider == "devin" {
+                return self.devin_permission(value, step);
             }
             if self.config.provider == "cline" {
                 let tool = &value["params"]["toolCall"];
@@ -549,6 +561,8 @@ impl Protocol {
             &[super::commandcode::mode_id(&self.config.mode)]
         } else if self.config.provider == "kilo" {
             &[super::kilo::mode_id(&self.config.mode)]
+        } else if self.config.provider == "devin" {
+            &[super::devin::mode_id(&self.config.mode)]
         } else if self.config.provider == "cline" {
             // Cline has Plan and Act; approvals ride on permission requests.
             &[if self.config.mode == "plan" { "plan" } else { "act" }]
@@ -602,11 +616,14 @@ impl Protocol {
                 .iter()
                 .find(|id| choices(option).iter().any(|entry| entry["value"] == **id));
             if let Some(id) = found {
+                if self.unchanged(option, id) {
+                    return self.acp_model(step);
+                }
                 step.write
                     .push(choice_request(&self.remote_id, 4, option, id)?);
                 return Ok(());
             }
-            if self.config.mode == "plan" || matches!(self.config.provider.as_str(), "opencode" | "kilo" | "commandcode" | "cline") {
+            if self.config.mode == "plan" || matches!(self.config.provider.as_str(), "opencode" | "kilo" | "commandcode" | "cline" | "devin") {
                 return Err("This harness does not advertise the selected task mode.".into());
             }
         } else if let Some(modes) = self.acp_config["modes"]["availableModes"].as_array() {
@@ -617,17 +634,37 @@ impl Protocol {
                 step.write.push(json!({"jsonrpc":"2.0","id":4,"method":"session/set_mode","params":{"sessionId":self.remote_id,"modeId":mode["id"]}}));
                 return Ok(());
             }
-            if self.config.mode == "plan" || matches!(self.config.provider.as_str(), "opencode" | "kilo" | "commandcode" | "cline") {
+            if self.config.mode == "plan" || matches!(self.config.provider.as_str(), "opencode" | "kilo" | "commandcode" | "cline" | "devin") {
                 return Err("This harness does not advertise the selected task mode.".into());
             }
-        } else if self.config.mode == "plan" || self.config.provider == "kilo" {
-            return Err(if self.config.provider == "kilo" {
+        } else if self.config.mode == "plan" || matches!(self.config.provider.as_str(), "kilo" | "devin") {
+            return Err(if matches!(self.config.provider.as_str(), "kilo" | "devin") {
                 "This harness does not advertise the selected task mode."
             } else {
                 "This harness does not advertise a read-only planning mode."
             }.into());
         }
         self.acp_model(step)
+    }
+    /// Devin keeps each setting on its saved session, so a resumed task skips
+    /// the round trip for any value it already has.
+    fn unchanged(&self, option: &Value, value: &str) -> bool {
+        self.config.provider == "devin" && option["currentValue"] == value
+    }
+    /// Devin's permission requests carry only the tool call ID and options, and
+    /// several allow options grant standing access, so the generic path (which
+    /// treats more than one allow as a question) does not apply.
+    fn devin_permission(&mut self, value: Value, mut step: Step) -> Result<Step, String> {
+        let plan_exit = super::devin::is_plan_exit(&value);
+        let one_allow = value["params"]["options"].as_array().is_some_and(|options| options.iter().any(|option| option["optionId"] == "allow_once"));
+        if self.config.mode == "full" && one_allow && !plan_exit {
+            step.write.push(super::devin::decision(&value, true));
+            return Ok(step);
+        }
+        let tool = self.tools.get(field(&value["params"]["toolCall"], "toolCallId"));
+        let label = super::devin::approval_label(&value, tool);
+        self.approval(value, label, &mut step)?;
+        Ok(step)
     }
     fn acp_copilot_permissions(&mut self, step: &mut Step) -> Result<(), String> {
         let option = options(&self.acp_config, "allow_all")
@@ -642,10 +679,16 @@ impl Protocol {
         Ok(())
     }
     fn acp_model(&mut self, step: &mut Step) -> Result<(), String> {
+        if self.config.provider == "devin" && !self.image_blocks.is_empty() && super::devin::rejects_images(&self.acp_config, &self.config.model) {
+            return Err("This Devin model does not accept images. Choose another model, or remove the images and describe them.".into());
+        }
         if self.config.model.is_empty() || self.config.model == "default" {
             return self.acp_effort(step);
         }
         if let Some(option) = options(&self.acp_config, "model") {
+            if self.unchanged(option, &self.config.model) {
+                return self.acp_effort(step);
+            }
             step.write.push(choice_request(
                 &self.remote_id,
                 5,
@@ -680,6 +723,7 @@ impl Protocol {
         if let Some(effort) = &self.config.reasoning_effort {
             let option = options(&self.acp_config, "thought_level").or_else(|| options(&self.acp_config, "effort"));
             match option {
+                Some(option) if self.unchanged(option, effort) => self.kimi_prompt(step),
                 Some(option) => step
                     .write
                     .push(choice_request(&self.remote_id, 6, option, effort)?),
@@ -1000,8 +1044,8 @@ const MAX_STEERS: usize = 16;
 /// Request ids for live steering prompts, clear of startup (1-7), cancel (900) and goals (10000+).
 const STEER_IDS: std::ops::Range<u64> = 2000..9000;
 
-/// Steering for ACP runs. OpenCode folds a second `session/prompt` into the running
-/// loop at its next step (both requests answer at turn end), so it steers live.
+/// Steering for ACP runs. OpenCode and Devin fold a second `session/prompt` into the
+/// running loop at its next step (both requests answer at turn end), so they steer live.
 /// Kimi rejects a busy prompt and Grok only queues one natively as a later turn,
 /// so for every other agent the text waits here and goes out as the next
 /// `session/prompt` on the same session when the current one ends.
@@ -1034,7 +1078,7 @@ impl Protocol {
             let _ = reply.send(Err("Too many steering messages are waiting; the message stays queued.".into()));
             return step;
         }
-        let live = self.config.provider == "opencode" && self.phase == 1 && !steers.turn_over && !self.remote_id.is_empty();
+        let live = matches!(self.config.provider.as_str(), "opencode" | "devin") && self.phase == 1 && !steers.turn_over && !self.remote_id.is_empty();
         let mode = if live { "live" } else { "next-turn" };
         step.events.push(self.steer_event(&id, &text, "pending", mode));
         if live {

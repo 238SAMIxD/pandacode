@@ -109,7 +109,9 @@ async fn session(app: &tauri::AppHandle, generation: u64, token: &str) -> Outcom
     let Ok(mut request) = url.into_client_request() else { return Outcome::Failed };
     let Ok(authorization) = format!("Bearer {token}").parse() else { return Outcome::Unauthorized };
     request.headers_mut().insert("Authorization", authorization);
-    let stream = match tokio::time::timeout(Duration::from_secs(15), tokio_tungstenite::connect_async(request)).await {
+    // Nothing legitimate is larger than the relay's frame limit.
+    let limits = tungstenite::protocol::WebSocketConfig::default().max_message_size(Some(MAX_FRAME + 4096)).max_frame_size(Some(MAX_FRAME + 4096));
+    let stream = match tokio::time::timeout(Duration::from_secs(15), tokio_tungstenite::connect_async_with_config(request, Some(limits), false)).await {
         Ok(Ok((stream, _))) => stream,
         Ok(Err(tungstenite::Error::Http(response))) if matches!(response.status().as_u16(), 401 | 403) => return Outcome::Unauthorized,
         _ => return Outcome::Failed,
@@ -290,18 +292,38 @@ fn frame(app: &tauri::AppHandle, text: &str, peers: &mut HashMap<String, mpsc::S
             let Ok(key) = peer_key(app, from) else { return };
             let Ok(plain) = crypto::open(&key, from, to, body) else { return };
             let Ok(message) = serde_json::from_slice::<Value>(&plain) else { return };
+            if matches!(message["type"].as_str(), Some("res" | "event")) && !fresh(app, from, &message) {
+                return;
+            }
             match message["type"].as_str() {
                 Some("req") => queue(app, from, (message, key), peers),
                 Some("res") => super::client::resolve(app, from, &message),
                 Some("event") => match message["name"].as_str() {
                     Some("agent.events") => mirror::events(app, from, &message["data"]),
                     Some("run.finished") => mirror::finished(app, from, &message["data"]),
+                    Some("task.progress") => super::start::progress(app, from, &message["data"]),
                     _ => {}
                 },
                 _ => {}
             }
         }
     }
+}
+
+/// The error a call gets when its reply is stale, repeated, or from a host without `ts`/`nonce`.
+const STALE: &str = "That computer's reply was stale or repeated. Update PandaCode on both computers and check their clocks.";
+
+/// Replies and events carry `ts` and `nonce` like requests; a stale or repeated one is
+/// dropped (a reply fails its call at once instead of timing out).
+fn fresh(app: &tauri::AppHandle, from: &str, message: &Value) -> bool {
+    let checked = remote(app).lock().inbound.check(message["ts"].as_i64(), message["nonce"].as_str(), chrono::Utc::now().timestamp_millis());
+    if checked.is_err() {
+        eprintln!("PandaCode Connect: dropped a stale or repeated {} from {from}.", message["type"].as_str().unwrap_or_default());
+        if message["type"] == "res" {
+            super::client::resolve(app, from, &json!({"id": message["id"], "ok": false, "error": STALE}));
+        }
+    }
+    checked.is_ok()
 }
 
 fn queue(app: &tauri::AppHandle, from: &str, (message, key): (Value, crypto::Key), peers: &mut HashMap<String, mpsc::Sender<Request>>) {
@@ -491,12 +513,20 @@ fn peer_key(app: &tauri::AppHandle, device_id: &str) -> Result<crypto::Key> {
     Ok(key)
 }
 
-/// Seals a message with a known key and queues it on the socket as `{to, body, ref}`.
+/// Adds `ts` and a fresh `nonce`, so the receiver can refuse replays (docs/remote-access.md).
+fn stamp(message: &Value, now_ms: i64) -> Value {
+    let mut message = message.clone();
+    message["ts"] = json!(now_ms);
+    message["nonce"] = json!(uuid::Uuid::new_v4().simple().to_string());
+    message
+}
+
+/// Seals a stamped message with a known key and queues it on the socket as `{to, body, ref}`.
 /// Replies go straight to the socket outbox; only mirrored event frames use the 100 ms flush.
 fn send_sealed(app: &tauri::AppHandle, to: &str, key: &crypto::Key, message: &Value) -> Result<SendStats> {
     let me = remote(app).device_id();
     let json_started = Instant::now();
-    let plain = message.to_string();
+    let plain = stamp(message, chrono::Utc::now().timestamp_millis()).to_string();
     let payload_bytes = plain.len();
     let mut json_micros = json_started.elapsed().as_micros();
     let seal_started = Instant::now();
@@ -550,6 +580,20 @@ mod tests {
         assert_eq!(pending.next_ordered(&mut active).unwrap().message["method"], "task.start");
         pending.push(Request { message: json!({"method": "batch"}), key: [0; 32], queued_at: Instant::now() });
         assert_eq!(pending.reads.back().unwrap().message["method"], "batch");
+    }
+
+    #[test]
+    fn every_sealed_message_is_stamped_and_a_replay_is_refused() {
+        let event = json!({"type": "event", "name": "run.finished", "data": {}});
+        let (a, b) = (stamp(&event, 1_000), stamp(&event, 1_000));
+        assert_eq!((a["ts"].as_i64(), a["name"].as_str()), (Some(1_000), Some("run.finished")));
+        assert_ne!(a["nonce"], b["nonce"]);
+        // The viewer's check: once only, inside the window, and never without the fields.
+        let mut inbound = host::Replay::default();
+        assert!(inbound.check(a["ts"].as_i64(), a["nonce"].as_str(), 1_500).is_ok());
+        assert!(inbound.check(a["ts"].as_i64(), a["nonce"].as_str(), 1_600).is_err(), "repeated");
+        assert!(inbound.check(b["ts"].as_i64(), b["nonce"].as_str(), 1_000 + 60_001).is_err(), "stale");
+        assert!(inbound.check(event["ts"].as_i64(), event["nonce"].as_str(), 1_000).is_err(), "an old host without ts/nonce");
     }
 
     #[test]

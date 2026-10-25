@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 
-const installed = ['claude', 'codex', 'kimi', 'opencode', 'glm', 'grok', 'mimo', 'pi', 'deepseek', 'commandcode', 'cline', 'kilo', 'github-copilot', 'muse'];
+const installed = ['claude', 'codex', 'kimi', 'opencode', 'glm', 'grok', 'mimo', 'pi', 'deepseek', 'commandcode', 'cline', 'kilo', 'github-copilot', 'muse', 'devin'];
 const usageButton = (page: Page) => page.getByRole('button', { name: 'Agent usage', exact: true });
 const dialog = (page: Page) => page.getByRole('dialog', { name: 'Agent usage', exact: true });
 const card = (page: Page, name: string) => dialog(page).locator('.usage-card').filter({ hasText: name });
@@ -15,13 +15,13 @@ const ledger = () => ({
   sessions: [{ provider: 'claude', first: hourOn(3), last: hourOn(0) }, { provider: 'codex', first: hourOn(2), last: hourOn(2) }, { provider: 'claude', first: hourOn(60), last: hourOn(60) }],
 });
 
-async function openApp(page: Page, hold: string[] = [], failures: string[] = []): Promise<void> {
-  await page.addInitScript(({ hold, failures, ledgerFixture }) => {
+async function openApp(page: Page, hold: string[] = [], failures: string[] = [], connections: unknown = null): Promise<void> {
+  await page.addInitScript(({ hold, failures, ledgerFixture, connections }) => {
     const result = (provider: string, status: string, message: string | null = null) => ({
       provider, status, windows: [], plan: null, message, checkedAt: Date.now(), stale: false, source: null, dashboardUrl: null,
     });
     (window as any).__usageFixture = {
-      hold, failures, calls: [], pending: [], ledgerCalls: [], ledgerError: null, ledger: ledgerFixture,
+      hold, failures, calls: [], pending: [], ledgerCalls: [], ledgerError: null, ledger: ledgerFixture, connections,
       prompts: [[Math.floor(Date.now() / 3_600_000), 'kimi', 4]],
       responses: {
         claude: {
@@ -43,9 +43,10 @@ async function openApp(page: Page, hold: string[] = [], failures: string[] = [])
         kilo: result('kilo', 'unsupported', 'Kilo Code does not expose credits or limits through this agent.'),
         'github-copilot': result('github-copilot', 'unsupported', 'GitHub Copilot CLI does not expose usage limits through this agent.'),
         muse: result('muse', 'unsupported', 'Muse Code reports its usage windows only inside a running session.'),
+        devin: result('devin', 'unsupported', 'Devin does not expose plan limits through its ACP server.'),
       },
     };
-  }, { hold, failures, ledgerFixture: ledger() });
+  }, { hold, failures, ledgerFixture: ledger(), connections });
   await page.route('**/src/preview.ts*', async route => {
     const response = await route.fetch();
     const source = await response.text();
@@ -59,11 +60,14 @@ async function openApp(page: Page, hold: string[] = [], failures: string[] = [])
         return structuredClone(fixture.ledger);
       }
       if (command === 'prompt_activity') return structuredClone(window.__usageFixture.prompts);
+      if (command === 'connections_list' && window.__usageFixture.connections) return structuredClone(window.__usageFixture.connections);
       if (command === 'agent_usage') {
         const fixture = window.__usageFixture;
         fixture.calls.push(structuredClone(args));
         if (fixture.failures.includes(args.provider)) throw new Error('Usage service temporarily unavailable.');
         const result = structuredClone(fixture.responses[args.provider]);
+        if (args.connection === 'personal') result.windows = [{ label: '5-hour window', usedPercent: 97, resetsAt: null, detail: null }];
+        if (args.connection === 'work') return { ...result, status: 'unavailable', windows: [], message: 'Claude is configured with an API key, custom endpoint, or environment credentials.' };
         if (fixture.hold.includes(args.provider)) return new Promise(resolve => {
           fixture.pending.push({ provider: args.provider, resolve, result });
         });
@@ -319,4 +323,18 @@ test('Agent usage keeps limits working when local logs cannot be read', async ({
   await expect(dialog(page).locator('.usage-cost-hero').getByRole('alert')).toHaveText('Reading agent logs took too long. Try again later.');
   await expect(dialog(page).locator('.usage-limit-hero')).toContainText('45%');
   await expect(dialog(page).locator('.cost-chart')).toHaveCount(0);
+});
+
+test('each named connection shows its own limits under its harness', async ({ page }) => {
+  const connection = (id: string, name: string) => ({ id, provider: 'claude', name, args: [], env: {}, secretEnv: [], configDir: `/Users/sample/.claude-${id}`, revision: 1 });
+  await openApp(page, [], [], { connections: [connection('personal', 'Claude Personal'), connection('work', 'Claude Work')], tasks: {} });
+  await openUsage(page);
+  await tab(page, 'Claude').click();
+  const claude = card(page, 'Claude Code');
+  await expect(claude.locator('.usage-connection-default')).toHaveText('Default setup');
+  const personal = claude.getByRole('region', { name: 'Claude Personal', exact: true });
+  await expect(personal.getByRole('progressbar', { name: 'Claude Personal · 5-hour window' })).toHaveAttribute('aria-valuenow', '97');
+  await expect(claude.getByRole('region', { name: 'Claude Work', exact: true })).toContainText('API key');
+  // The default setup and each connection are separate checks, read by connection id.
+  await expect.poll(async () => (await calls(page)).filter(call => call.provider === 'claude').map(call => (call as any).connection ?? null)).toEqual([null, 'personal', 'work']);
 });

@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { METHODS, outdated, Pending, request } from '../src/connect/rpc.ts';
+import { METHODS, outdated, Pending, Replay, request } from '../src/connect/rpc.ts';
 
 test('requests carry id, ts and a fresh printable nonce', () => {
   const a = request('task.send', { sessionId: 's', text: 'hi' }, 1000);
@@ -49,4 +49,19 @@ test('the pull request, changes and bot methods are callable; older hosts get an
     assert.equal(request(method, {}).method, method);
   }
   assert.equal(outdated('Mac Studio'), 'Update PandaCode on Mac Studio to use this.');
+});
+
+test('replies and events are accepted once, inside the window, only with ts and nonce', () => {
+  const replay = new Replay();
+  const now = 1_000_000_000;
+  const nonce = '0123456789abcdef0123456789abcdef';
+  assert.equal(replay.check(now - 1000, nonce, now), true);
+  assert.equal(replay.check(now - 1000, nonce, now + 10), false, 'repeated');
+  assert.equal(replay.check(now - 60_001, 'fresh-nonce-000001', now), false, 'too old');
+  assert.equal(replay.check(now + 60_001, 'fresh-nonce-000002', now), false, 'too new');
+  assert.equal(replay.check(undefined, 'fresh-nonce-000003', now), false, 'an older host without ts');
+  assert.equal(replay.check(now, undefined, now), false);
+  assert.equal(replay.check(now, 'short', now), false);
+  // Pruned once its ts leaves the window.
+  assert.equal(replay.check(now + 61_500, 'fresh-nonce-000004', now + 61_500), true);
 });

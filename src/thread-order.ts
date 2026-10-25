@@ -71,7 +71,7 @@ export function bindThreadReordering(nav: HTMLElement, options: {
       event.preventDefault(); options.menu(row); return;
     }
     if (!event.altKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
-    event.preventDefault(); if (options.busy()) return;
+    event.preventDefault(); if (options.busy() || !row.draggable) return;
     const ids = threadGroupRows(row).map(item => item.dataset.id!), index = ids.indexOf(row.dataset.id!);
     const next = index + (event.key === 'ArrowUp' ? -1 : 1);
     if (next < 0 || next >= ids.length) return;

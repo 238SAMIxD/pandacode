@@ -2,7 +2,7 @@
 //! "Allow remote control" is on,
 //! and pushes the agent events of the tasks they mirror. Remote prompts run under the
 //! same approval policy as local ones.
-use super::{remote, socket, start, Subscriber};
+use super::{images, remote, socket, start, Subscriber};
 use crate::{message_queue, providers::AgentEvent, AppState, Result};
 use rusqlite::OptionalExtension;
 use base64::Engine;
@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Listener, Manager};
 
-pub(crate) const METHODS: [&str; 28] = ["subscribe", "tasks.list", "projects.icons", "providers.list", "providers.models", "task.start", "task.messages", "task.team", "task.workerMessages", "task.attachment", "task.workspaceImage", "task.send", "task.stop", "task.steer", "task.configure", "approval.respond", "input.respond", "task.pull", "task.pullDiff", "task.pullMerge", "task.pullDetect", "task.changes", "task.diff", "bots.list", "bot.thread", "bot.message", "bot.pause", "batch"];
+pub(crate) const METHODS: [&str; 29] = ["subscribe", "tasks.list", "projects.icons", "providers.list", "providers.models", "task.start", "task.messages", "task.team", "task.workerMessages", "task.attachment", "task.workspaceImage", "task.send", "task.stop", "task.steer", "task.configure", "approval.respond", "input.respond", "task.pull", "task.pullDiff", "task.pullMerge", "task.pullDetect", "task.changes", "task.diff", "bots.list", "bot.thread", "bot.message", "bot.pause", "image.put", "batch"];
 pub(crate) const OFF: &str = "Remote control is off on this computer";
 pub(crate) const MAX_TEXT: usize = 100 * 1024;
 const SUBSCRIPTION: Duration = Duration::from_secs(10 * 60);
@@ -52,7 +52,7 @@ const PAGE_ROWS: i64 = 400;
 const MAX_BUFFER: usize = 4096;
 const CUT: &str = "\n…[cut on the host to fit a remote page]";
 /// Harness ids `providers.models` accepts (the same list `storage` allows).
-pub(crate) const PROVIDERS: [&str; 16] = ["claude", "codex", "kimi", "opencode", "glm", "antigravity", "grok", "mimo", "pi", "deepseek", "commandcode", "cline", "kilo", "omp", "github-copilot", "muse"];
+pub(crate) const PROVIDERS: [&str; 17] = ["claude", "codex", "kimi", "opencode", "glm", "antigravity", "grok", "mimo", "pi", "deepseek", "commandcode", "cline", "kilo", "omp", "github-copilot", "muse", "devin"];
 
 /// Hosting must be on. The socket already limits frames to devices in presence.
 pub(crate) fn gate(host_enabled: bool) -> Result<()> {
@@ -109,7 +109,8 @@ pub(crate) enum Call {
     WorkerMessages { session_id: String, worker_id: String, after_id: i64, limit: i64 },
     Attachment { session_id: String, id: String, variant: crate::attachments::Variant, offset: u64 },
     WorkspaceImage { session_id: String, path: String, variant: crate::attachments::Variant, offset: u64 },
-    Send { session_id: String, text: String },
+    Send { session_id: String, text: String, image_ids: Vec<String> },
+    PutImage(images::Chunk),
     Stop { session_id: String },
     Steer { session_id: String, text: String },
     Configure { session_id: String, model: Option<(String, String)>, effort: Option<Option<String>>, mode: Option<String> },
@@ -143,6 +144,7 @@ impl Call {
             Self::Attachment { .. } => "task.attachment",
             Self::WorkspaceImage { .. } => "task.workspaceImage",
             Self::Send { .. } => "task.send",
+            Self::PutImage(_) => "image.put",
             Self::Stop { .. } => "task.stop",
             Self::Steer { .. } => "task.steer",
             Self::Configure { .. } => "task.configure",
@@ -401,7 +403,8 @@ pub(crate) fn parse(host_enabled: bool, method: &str, params: &Value) -> Result<
             let path = path_param(params, "path")?.ok_or("Missing path.")?;
             Call::WorkspaceImage { session_id: id_param(params, "sessionId")?, path, variant, offset }
         }
-        "task.send" => Call::Send { session_id: id_param(params, "sessionId")?, text: text_param(params, "text")? },
+        "task.send" => Call::Send { session_id: id_param(params, "sessionId")?, text: text_param(params, "text")?, image_ids: images::ids_param(params)? },
+        "image.put" => Call::PutImage(images::parse_chunk(params)?),
         "task.stop" => Call::Stop { session_id: id_param(params, "sessionId")? },
         "task.steer" => Call::Steer { session_id: id_param(params, "sessionId")?, text: text_param(params, "text")? },
         "task.configure" => configure(params)?,
@@ -455,18 +458,53 @@ fn fit_batch_results(results: Vec<Result<Value>>) -> Value {
     json!({"results": results})
 }
 
+/// Checked when a queued request is about to run, not when it arrived: remote control is
+/// still on, the sender is still in presence, and the request is fresh. Returns whether
+/// remote tasks may use Full access.
+fn admit(inner: &mut super::Inner, from: &str, message: &Value, now_ms: i64) -> Result<bool> {
+    gate(inner.settings.host_enabled)?;
+    inner.callable(from)?;
+    inner.replay.check(message["ts"].as_i64(), message["nonce"].as_str(), now_ms)?;
+    Ok(inner.settings.remote_full_access)
+}
+
+/// Without "Full access for remote tasks", an explicit `full` is refused and a start
+/// without a mode (which would default to full) asks for approvals.
+fn cap_mode(call: Call, full_access: bool) -> Result<Call> {
+    const SAFE: &str = "ask";
+    if full_access {
+        return Ok(call);
+    }
+    let refuse = || Err(full_access_off());
+    Ok(match call {
+        Call::Start(start) if start.mode.as_deref() == Some("full") => return refuse(),
+        Call::Start(start) => Call::Start(start::Start { mode: Some(start.mode.unwrap_or_else(|| SAFE.into())), ..start }),
+        Call::Configure { mode: Some(mode), .. } if mode == "full" => return refuse(),
+        other => other,
+    })
+}
+
+fn full_access_off() -> String {
+    format!("Full access is off for remote tasks on {}.", super::config::device_name())
+}
+
+/// Without "Full access for remote tasks", a prompt, steer or configure that would run a
+/// task stored in `full` is refused, unless it switches the task to another mode. The
+/// task's own mode is the user's and is never changed here.
+fn allow_task_mode(stored: &str, requested: Option<&str>, full_access: bool) -> Result<()> {
+    if !full_access && stored == "full" && requested.is_none_or(|mode| mode == "full") {
+        return Err(full_access_off());
+    }
+    Ok(())
+}
+
 /// The response to one request frame, or None when it has no usable id.
 pub(crate) async fn handle(app: &tauri::AppHandle, from: &str, message: &Value) -> Option<Value> {
     let id = message["id"].as_str().filter(|id| valid_id(id).is_ok())?;
-    let admitted = {
-        let state = remote(app);
-        let mut inner = state.lock();
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        let enabled = inner.settings.host_enabled;
-        gate(enabled).and_then(|_| inner.replay.check(message["ts"].as_i64(), message["nonce"].as_str(), now_ms)).map(|_| enabled)
-    };
-    let result = match admitted.and_then(|enabled| parse(enabled, message["method"].as_str().unwrap_or_default(), &message["params"])) {
-        Ok(call) => run(app, from, call).await,
+    let admitted = admit(&mut remote(app).lock(), from, message, chrono::Utc::now().timestamp_millis());
+    let call = admitted.and_then(|full_access| parse(true, message["method"].as_str().unwrap_or_default(), &message["params"]).and_then(|call| cap_mode(call, full_access)).map(|call| (call, full_access)));
+    let result = match call {
+        Ok((call, full_access)) => run(app, from, call, full_access).await,
         Err(error) => Err(error),
     };
     Some(match result {
@@ -476,12 +514,12 @@ pub(crate) async fn handle(app: &tauri::AppHandle, from: &str, message: &Value) 
 }
 
 /// The task must exist here; a mirror never forwards a second hop.
-async fn local_task(state: &AppState, session_id: &str) -> Result<()> {
+async fn local_task(state: &AppState, session_id: &str) -> Result<crate::storage::Session> {
     let store = state.store.clone();
     let session_id = session_id.to_owned();
     crate::blocking(move || {
         let store = store.lock().map_err(|e| e.to_string())?;
-        local_session_from(&store, &session_id).map(|_| ())
+        local_session_from(&store, &session_id)
     })
     .await
 }
@@ -531,7 +569,7 @@ async fn optional_pull(state: &AppState, session_id: &str) -> Result<Option<(Pat
     .await
 }
 
-async fn run(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
+async fn run(app: &tauri::AppHandle, from: &str, call: Call, full_access: bool) -> Result<Value> {
     match call {
         Call::Batch(calls) => {
             let mut results = Vec::with_capacity(calls.len());
@@ -539,7 +577,7 @@ async fn run(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
                 let method = call.as_ref().map(Call::method_name).unwrap_or("invalid");
                 let handling = Instant::now();
                 match call {
-                    Ok(call) => results.push(run_one(app, from, call).await),
+                    Ok(call) => results.push(run_one(app, from, call, full_access).await),
                     Err(error) => results.push(Err(error)),
                 }
                 if std::env::var_os("PANDACODE_CONNECT_TIMING").is_some() {
@@ -548,7 +586,7 @@ async fn run(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
             }
             Ok(fit_batch_results(results))
         }
-        call => run_one(app, from, call).await,
+        call => run_one(app, from, call, full_access).await,
     }
 }
 
@@ -1135,7 +1173,7 @@ fn watch_team_events(app: &tauri::AppHandle) {
     });
 }
 
-async fn run_one(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
+async fn run_one(app: &tauri::AppHandle, from: &str, call: Call, full_access: bool) -> Result<Value> {
     let state = app.state::<AppState>();
     match call {
         Call::Subscribe { session_ids } => {
@@ -1246,12 +1284,16 @@ async fn run_one(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value
                 crate::attachments::chunk_reply(&bytes, &mime, offset)
             }).await
         }
-        Call::Send { session_id, text } => {
-            local_task(&state, &session_id).await?;
+        Call::PutImage(chunk) => images::put(app, from, chunk).await,
+        Call::Send { session_id, text, image_ids } => {
+            allow_task_mode(&local_task(&state, &session_id).await?.mode, None, full_access)?;
+            // Only images this caller just sent; they are now this task's.
+            images::claim(app, from, &image_ids)?;
             // Like Enter in the composer: a running task queues the message.
             let busy = || state.agents.lock().map(|agents| agents.contains_key(&session_id)).map_err(|e| e.to_string());
             if busy()? {
-                let entry = message_queue::add(&*state.store.lock().map_err(|e| e.to_string())?, &session_id, &text, &json!([]))?;
+                let queued: Vec<Value> = image_ids.iter().map(|id| json!({"kind": "image", "id": id, "name": "Image", "width": 0, "height": 0, "thumbnail": "", "source": "file"})).collect();
+                let entry = message_queue::add(&*state.store.lock().map_err(|e| e.to_string())?, &session_id, &text, &json!(queued))?;
                 // If the run ended between the check and the add, nothing would deliver the
                 // entry: take it back (unless a run end already did) and send it now.
                 if busy()? || message_queue::take(&*state.store.lock().map_err(|e| e.to_string())?, &entry.id).is_err() {
@@ -1259,7 +1301,7 @@ async fn run_one(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value
                     return Ok(json!({"queued": true}));
                 }
             }
-            crate::send_message(app.clone(), state, session_id, text, None, None).await?;
+            crate::send_message(app.clone(), state, session_id, text, Some(image_ids), None).await?;
             let _ = app.emit("sessions-changed", ());
             Ok(json!({"queued": false}))
         }
@@ -1282,11 +1324,11 @@ async fn run_one(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value
             Ok(json!({}))
         }
         Call::Steer { session_id, text } => {
-            local_task(&state, &session_id).await?;
+            allow_task_mode(&local_task(&state, &session_id).await?.mode, None, full_access)?;
             message_queue::steer_task(app.clone(), state, session_id, text).await
         }
         Call::Configure { session_id, model, effort, mode } => {
-            local_task(&state, &session_id).await?;
+            allow_task_mode(&local_task(&state, &session_id).await?.mode, mode.as_deref(), full_access)?;
             if let Some((provider, _)) = &model {
                 start::require_installed(provider).await?;
             }
@@ -2699,7 +2741,13 @@ mod tests {
         assert!(parse(true, "subscribe", &json!({})).is_err());
         assert!(parse(true, "subscribe", &json!({"sessionIds": ["a b"]})).is_err());
         assert!(parse(true, "subscribe", &json!({"sessionIds": vec!["s"; MAX_IDS + 1]})).is_err());
-        assert_eq!(parse(true, "task.send", &json!({"sessionId": "s1", "text": " hi "})), Ok(Call::Send { session_id: "s1".into(), text: "hi".into() }));
+        assert_eq!(parse(true, "task.send", &json!({"sessionId": "s1", "text": " hi "})), Ok(Call::Send { session_id: "s1".into(), text: "hi".into(), image_ids: vec![] }));
+        let image = uuid::Uuid::new_v4().to_string();
+        assert_eq!(parse(true, "task.send", &json!({"sessionId": "s1", "text": "hi", "imageIds": [image]})), Ok(Call::Send { session_id: "s1".into(), text: "hi".into(), image_ids: vec![image.clone()] }));
+        assert!(parse(true, "task.send", &json!({"sessionId": "s1", "text": "hi", "imageIds": ["../x"]})).is_err());
+        assert!(parse(true, "task.send", &json!({"sessionId": "s1", "text": "hi", "imageIds": vec![image; 5]})).is_err());
+        assert!(parse(true, "image.put", &json!({"uploadId": "u1", "index": 0, "size": 3, "data": "iVBO"})).is_ok());
+        assert!(parse(true, "image.put", &json!({"uploadId": "u1", "index": 0, "size": 6 * 1024 * 1024, "data": "iVBO"})).is_err());
         assert_eq!(parse(true, "task.messages", &json!({"sessionId": "s1", "afterId": 7})), Ok(Call::Messages { session_id: "s1".into(), page: MessagePaging::After { after_id: 7, limit: PAGE_ROWS } }));
         assert_eq!(parse(true, "task.messages", &json!({"sessionId": "s1", "afterId": -3})), Ok(Call::Messages { session_id: "s1".into(), page: MessagePaging::After { after_id: 0, limit: PAGE_ROWS } }));
         assert_eq!(parse(true, "task.configure", &json!({"sessionId": "s1", "effort": null})), Ok(Call::Configure { session_id: "s1".into(), model: None, effort: Some(None), mode: None }));
@@ -3073,8 +3121,10 @@ mod tests {
     #[test]
     fn a_present_device_keeps_its_subscription_without_a_pin() {
         let now = Instant::now();
-        let mut subscriber = Subscriber::default();
-        subscriber.until = Some(now + Duration::from_secs(60));
+        let subscriber = Subscriber {
+            until: Some(now + Duration::from_secs(60)),
+            ..Default::default()
+        };
         let mut inner = super::super::Inner {
             devices: vec![super::super::Device {
                 id: "viewer".into(), name: "Phone".into(), platform: "iOS".into(), public_key: "current-key".into(),
@@ -3085,6 +3135,60 @@ mod tests {
         inner.subscribers.insert("viewer".into(), subscriber);
         assert!(prune_subscribers(&mut inner, now));
         assert!(inner.subscribers.contains_key("viewer"));
+    }
+
+    #[test]
+    fn access_is_checked_when_a_request_runs() {
+        let mut inner = super::super::Inner {
+            devices: vec![super::super::Device { id: "viewer".into(), name: String::new(), platform: String::new(), public_key: "k".into(), host: false, online: true, last_seen: Value::Null }],
+            ..Default::default()
+        };
+        let now = 1_000_000_000;
+        let request = |nonce: &str| json!({"ts": now, "nonce": nonce});
+        assert_eq!(admit(&mut inner, "viewer", &request("nonce-0000000000000001"), now), Err(OFF.to_string()));
+        inner.settings.host_enabled = true;
+        assert_eq!(admit(&mut inner, "viewer", &request("nonce-0000000000000002"), now), Ok(false));
+        inner.settings.remote_full_access = true;
+        assert_eq!(admit(&mut inner, "viewer", &request("nonce-0000000000000003"), now), Ok(true));
+        assert!(admit(&mut inner, "viewer", &request("nonce-0000000000000003"), now).is_err(), "replayed");
+        // Revoked (gone from presence) after the request was queued.
+        inner.devices.clear();
+        assert_eq!(admit(&mut inner, "viewer", &request("nonce-0000000000000004"), now), Err(super::super::UNKNOWN_DEVICE.to_string()));
+    }
+
+    #[test]
+    fn full_access_is_capped_for_remote_tasks() {
+        let start = |mode: Option<&str>| {
+            let mut params = json!({"projectId": "p", "prompt": "go", "provider": "claude", "model": "sonnet"});
+            if let Some(mode) = mode {
+                params["mode"] = json!(mode);
+            }
+            parse(true, "task.start", &params).unwrap()
+        };
+        let mode = |call: Call| match call {
+            Call::Start(start) => start.mode,
+            Call::Configure { mode, .. } => mode,
+            _ => unreachable!(),
+        };
+        assert_eq!(mode(cap_mode(start(None), false).unwrap()).as_deref(), Some("ask"), "the full default asks instead");
+        assert_eq!(mode(cap_mode(start(Some("auto")), false).unwrap()).as_deref(), Some("auto"));
+        assert!(cap_mode(start(Some("full")), false).unwrap_err().starts_with("Full access is off for remote tasks on "));
+        assert_eq!(mode(cap_mode(start(None), true).unwrap()), None);
+        assert_eq!(mode(cap_mode(start(Some("full")), true).unwrap()).as_deref(), Some("full"));
+        let configure = |mode: &str| parse(true, "task.configure", &json!({"sessionId": "s", "mode": mode})).unwrap();
+        assert!(cap_mode(configure("full"), false).is_err());
+        assert_eq!(mode(cap_mode(configure("plan"), false).unwrap()).as_deref(), Some("plan"));
+        assert_eq!(mode(cap_mode(configure("full"), true).unwrap()).as_deref(), Some("full"));
+    }
+
+    #[test]
+    fn a_full_task_takes_no_remote_prompts_without_full_access() {
+        let off = |stored, requested| allow_task_mode(stored, requested, false);
+        assert!(off("full", None).unwrap_err().starts_with("Full access is off for remote tasks on "), "send, steer, model-only configure");
+        assert!(off("full", Some("full")).is_err());
+        assert!(off("full", Some("ask")).is_ok(), "switching it to an approving mode");
+        assert!(off("ask", None).is_ok() && off("auto", None).is_ok());
+        assert!(allow_task_mode("full", None, true).is_ok());
     }
 
     #[test]

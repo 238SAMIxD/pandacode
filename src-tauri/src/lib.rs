@@ -2,6 +2,7 @@ mod agent_tools;
 mod agent_usage;
 mod agent_updates;
 mod agent_usage_providers;
+mod app_updates;
 mod appearance;
 mod architect;
 mod bots;
@@ -190,7 +191,7 @@ fn save_approval_with_pending(
     activity.request_id = Some(request_id.clone());
     let mut approvals = approvals.lock().map_err(|error| error.to_string())?;
     let mut pending_requests = pending_requests.map(|requests| requests.lock().map_err(|error| error.to_string())).transpose()?;
-    update_pending_request(&mut approvals, pending_requests.as_mut().map(|requests| &mut **requests), &request_id, activity);
+    update_pending_request(&mut approvals, pending_requests.as_deref_mut(), &request_id, activity);
     store.lock().map_err(|error| error.to_string())?.status(
         &activity.session_id,
         if approvals.is_empty() {
@@ -1220,6 +1221,23 @@ async fn prepare_command(
     }))
 }
 
+/// Where a prompt goes. A mirror goes to its host even when a team was saved on it (a
+/// default team applies to every new task): a team here would run in a checkout this
+/// computer does not have.
+#[derive(Debug, PartialEq)]
+pub(crate) enum SendTarget {
+    Mirror,
+    Team,
+    Local,
+}
+
+pub(crate) fn send_target(store: &Store, session_id: &str) -> Result<SendTarget> {
+    if remote::mirror::of(store, session_id)?.is_some() {
+        return Ok(SendTarget::Mirror);
+    }
+    Ok(if architect::load(store, session_id)?.is_some() { SendTarget::Team } else { SendTarget::Local })
+}
+
 #[tauri::command]
 async fn send_message(
     app: tauri::AppHandle,
@@ -1229,18 +1247,15 @@ async fn send_message(
     image_ids: Option<Vec<String>>,
     moodboard_ids: Option<Vec<String>>,
 ) -> Result<()> {
-    let (is_team, project_id) = {
+    let (target, project_id) = {
         let store = state.store.lock().map_err(|e| e.to_string())?;
         let task = store.session(&session_id)?;
         if let Some(ids) = moodboard_ids.as_deref().filter(|ids| !ids.is_empty()) {
             text.push_str(&moodboards::resolve_refs(&store, &task.project_id, ids)?);
         }
-        (
-            architect::load(&store, &session_id)?.is_some(),
-            task.project_id,
-        )
+        (send_target(&store, &session_id)?, task.project_id)
     };
-    if is_team {
+    if target == SendTarget::Team {
         return architect::architect_start_in_project(
             app,
             state,
@@ -1251,13 +1266,9 @@ async fn send_message(
         )
         .await;
     }
-    if remote::Mirror::is(&state, &session_id)? {
-        // Screenshots and images are files on this computer; the host cannot read them.
-        if image_ids.as_ref().is_some_and(|ids| !ids.is_empty()) {
-            return Err("Images can't be sent to a task on another computer yet.".into());
-        }
-        remote::route(&app, &state, &session_id, "task.send", serde_json::json!({"text": text})).await?;
-        return Ok(());
+    if target == SendTarget::Mirror {
+        // Screenshots and images are files on this computer: they are copied to the host first.
+        return remote::mirror::send(&app, &state, &session_id, text, image_ids.as_deref().unwrap_or_default()).await;
     }
     if image_ids.as_ref().is_some_and(|ids| !ids.is_empty()) && cloud_agents::transport::is_cloud(&session_id) {
         return Err("Images can't be sent to a cloud machine yet.".into());
@@ -2302,6 +2313,7 @@ pub(crate) async fn local_providers(force: bool) -> Vec<providers::ProviderInfo>
     if force {
         providers::acp_catalog::invalidate("antigravity");
         providers::acp_catalog::invalidate("grok");
+        providers::acp_catalog::invalidate("devin");
     }
     tauri::async_runtime::spawn_blocking(providers::discover)
         .await
@@ -2433,6 +2445,54 @@ async fn open_external_url(url: String) -> Result<()> {
     } else {
         Err("Could not open the browser.".into())
     }
+}
+
+/// A sent attachment outside the task's workspace, shown in the file manager. It is only
+/// revealed (selected), never opened, so nothing in it runs.
+#[tauri::command]
+async fn reveal_path(path: String) -> Result<()> {
+    let path = PathBuf::from(path);
+    if !path.is_absolute() || std::fs::symlink_metadata(&path).is_err() {
+        return Err("This attachment is no longer on this computer.".into());
+    }
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = tokio::process::Command::new("/usr/bin/open");
+        command.arg("-R").arg(&path);
+        command
+    };
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = tokio::process::Command::new("explorer");
+        command.arg(format!("/select,{}", path.display()));
+        command
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let mut command = {
+        let folder = if path.is_dir() { path.clone() } else { path.parent().map(PathBuf::from).unwrap_or_else(|| path.clone()) };
+        let mut command = tokio::process::Command::new("xdg-open");
+        child_env::sanitize(&mut command);
+        command.arg(folder);
+        command
+    };
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    // Explorer reports failure even when it showed the item, so only a launch error counts.
+    tokio::time::timeout(std::time::Duration::from_secs(5), command.status())
+        .await
+        .map_err(|_| "Showing the attachment timed out.")?
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// A sent image or screenshot from the shared capture registry, for the transcript's chips.
+#[tauri::command]
+async fn prompt_image(app: tauri::AppHandle, id: String) -> Result<Option<String>> {
+    let dir = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("browser-captures");
+    blocking(move || prompt_attachments::image_data_url(&dir, &id)).await
 }
 
 #[tauri::command]
@@ -3297,6 +3357,10 @@ pub fn run() {
         std::process::exit(local_signing::cli());
     }
     let app = tauri::Builder::default()
+        // First, as its docs require: a second launch focuses this window instead of opening another.
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            tray::show(app)
+        }))
         .plugin(tauri_plugin_dialog::init())
         // Updates come only from GitHub Releases, verified against the public key in tauri.conf.json.
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -3416,6 +3480,7 @@ pub fn run() {
                 support::open_support,
                 support::support_details,
                 local_sign_app,
+                app_updates::app_update_install_supported,
                 agent_updates::check_agent_updates,
                 agent_updates::update_agent,
                 moodboards::list_moodboards,
@@ -3643,6 +3708,8 @@ pub fn run() {
                 cloud::commands::cloud_connect,
                 cloud::commands::cloud_disconnect,
                 cloud::commands::cloud_setup_sandboxes,
+                cloud::commands::cloud_instabox_images,
+                cloud::commands::cloud_instabox_set_image,
                 cloud::commands::cloud_machines,
                 cloud::commands::cloud_create,
                 cloud::commands::cloud_power,
@@ -3670,6 +3737,8 @@ pub fn run() {
                 skills::skills_discover,
                 set_task_link,
                 import_prompt_image,
+                prompt_image,
+                reveal_path,
                 read_document,
                 describe_folder,
                 list_files,
@@ -3698,6 +3767,7 @@ pub fn run() {
                 list_local_servers,
                 jev::jev_configuration,
                 jev::jev_save_configuration,
+                jev::jev_decision_models,
                 jev::jev_doctor,
                 jev::jev_install_runtime,
                 jev::jev_start,
