@@ -19,6 +19,8 @@ export interface TaskSummary extends HostActivity {
   pending?: PendingRequest[];
   /** The newest message id, from hosts that send it (prefetch skips threads already current). */
   lastId?: number;
+  /** Set on rows drawn from the inbox cache at launch: when this state was last confirmed. A live list replaces them. */
+  seenAt?: number;
 }
 
 /** Newer hosts: when the run's newest event came and when it started (ms), and its subagents. */

@@ -33,7 +33,7 @@ function Inbox() {
   const backdrop = useBackdrop();
   const { connected } = useStatus();
   const insets = useSafeAreaInsets();
-  const { hosts, inbox, bots, minute, errors, load } = useInbox();
+  const { hosts, inbox, bots, minute, errors, load, updating } = useInbox();
   const [open, setOpen] = useState<Partial<Record<Section, boolean>>>({});
   const [refreshing, setRefreshing] = useState(false);
   const online = hosts.filter(h => h.online);
@@ -71,7 +71,8 @@ function Inbox() {
   };
 
   const offline = hosts.filter(h => !h.online).map(h => h.name);
-  const problems = [...Object.values(errors), ...(connected ? [] : ['Connecting to PandaCode Connect…'])];
+  // Cached rows show at once; until their live lists arrive a quiet note says so.
+  const problems = [...Object.values(errors), ...(updating ? ['Updating…'] : connected ? [] : ['Connecting to PandaCode Connect…'])];
   const empty = !hosts.length ? 'Turn on remote access on a computer signed in to the same GitHub account to see its tasks here.'
     : !online.length ? `${offline.join(', ')} ${offline.length > 1 ? 'are' : 'is'} offline.`
     : 'No tasks yet. Start one with New task.';

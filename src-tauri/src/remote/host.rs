@@ -11,10 +11,11 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
 
-pub(crate) const METHODS: [&str; 25] = ["subscribe", "tasks.list", "projects.icons", "providers.list", "providers.models", "task.start", "task.messages", "task.attachment", "task.workspaceImage", "task.send", "task.stop", "task.steer", "task.configure", "approval.respond", "input.respond", "task.pull", "task.pullDiff", "task.pullMerge", "task.pullDetect", "task.changes", "task.diff", "bots.list", "bot.thread", "bot.message", "bot.pause"];
+pub(crate) const METHODS: [&str; 26] = ["subscribe", "tasks.list", "projects.icons", "providers.list", "providers.models", "task.start", "task.messages", "task.attachment", "task.workspaceImage", "task.send", "task.stop", "task.steer", "task.configure", "approval.respond", "input.respond", "task.pull", "task.pullDiff", "task.pullMerge", "task.pullDetect", "task.changes", "task.diff", "bots.list", "bot.thread", "bot.message", "bot.pause", "batch"];
 pub(crate) const OFF: &str = "Remote control is off on this computer";
 pub(crate) const MAX_TEXT: usize = 100 * 1024;
 const SUBSCRIPTION: Duration = Duration::from_secs(10 * 60);
@@ -36,6 +37,9 @@ const SUBAGENT_SNAPSHOT_BUDGET: usize = 40 * 1024;
 const MAX_SUBAGENT_SNAPSHOT: usize = 64;
 const DIFF_BUDGET: usize = 120 * 1024;
 const MAX_PATH: usize = 4096;
+const MAX_BATCH_CALLS: usize = 8;
+const PULL_CACHE_TTL: Duration = Duration::from_secs(30);
+const MAX_PULL_CACHE_ENTRIES: usize = 64;
 /// A single message or event larger than this is cut, with [`CUT`] marking the cut.
 const MAX_MESSAGE: usize = 120 * 1024;
 /// Messages read per legacy `afterId` `task.messages` page before the budget trims it.
@@ -115,6 +119,62 @@ pub(crate) enum Call {
     BotThread { bot_id: String },
     BotMessage { bot_id: String, text: String },
     BotPause { bot_id: String, paused: bool },
+    Batch(Vec<std::result::Result<Call, String>>),
+}
+
+impl Call {
+    fn method_name(&self) -> &'static str {
+        match self {
+            Self::Subscribe { .. } => "subscribe",
+            Self::TasksList { .. } => "tasks.list",
+            Self::ProjectIcons { .. } => "projects.icons",
+            Self::Providers { .. } => "providers.list",
+            Self::Models { .. } => "providers.models",
+            Self::Start(_) => "task.start",
+            Self::Messages { .. } => "task.messages",
+            Self::Attachment { .. } => "task.attachment",
+            Self::WorkspaceImage { .. } => "task.workspaceImage",
+            Self::Send { .. } => "task.send",
+            Self::Stop { .. } => "task.stop",
+            Self::Steer { .. } => "task.steer",
+            Self::Configure { .. } => "task.configure",
+            Self::Approve { .. } => "approval.respond",
+            Self::Answer { .. } => "input.respond",
+            Self::Pull { .. } => "task.pull",
+            Self::PullDiff { .. } => "task.pullDiff",
+            Self::PullMerge { .. } => "task.pullMerge",
+            Self::PullDetect { .. } => "task.pullDetect",
+            Self::Changes { .. } => "task.changes",
+            Self::Diff { .. } => "task.diff",
+            Self::BotsList => "bots.list",
+            Self::BotThread { .. } => "bot.thread",
+            Self::BotMessage { .. } => "bot.message",
+            Self::BotPause { .. } => "bot.pause",
+            Self::Batch(_) => "batch",
+        }
+    }
+}
+
+/// These methods may be run concurrently because they do not change task state.
+/// `task.pullMerge` intentionally stays ordered because it changes the linked PR.
+pub(crate) fn is_read_only_method(method: &str) -> bool {
+    matches!(
+        method,
+        "subscribe"
+            | "tasks.list"
+            | "projects.icons"
+            | "providers.list"
+            | "providers.models"
+            | "task.messages"
+            | "task.attachment"
+            | "task.workspaceImage"
+            | "task.pull"
+            | "task.pullDiff"
+            | "task.pullDetect"
+            | "task.changes"
+            | "task.diff"
+            | "bots.list"
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -255,6 +315,25 @@ fn project_icon_ids(params: &Value) -> Result<Vec<String>> {
         .collect()
 }
 
+fn batch_calls(params: &Value) -> Result<Vec<std::result::Result<Call, String>>> {
+    let calls = params.get("calls").and_then(Value::as_array).ok_or("Missing calls.")?;
+    if calls.is_empty() || calls.len() > MAX_BATCH_CALLS {
+        return Err(format!("Batch 1 to {MAX_BATCH_CALLS} read-only calls at a time."));
+    }
+    calls
+        .iter()
+        .map(|entry| {
+            let entry = entry.as_object().ok_or("Each batch call must be an object.")?;
+            let method = entry.get("method").and_then(Value::as_str).ok_or("Each batch call needs a method.")?;
+            if !is_read_only_method(method) {
+                return Err("Batch only supports read-only methods.".into());
+            }
+            let params = entry.get("params").filter(|params| params.is_object()).ok_or("Each batch call needs object params.")?;
+            Ok(parse(true, method, params))
+        })
+        .collect()
+}
+
 fn configure(params: &Value) -> Result<Call> {
     let model = match (name_param(params, "provider")?, name_param(params, "model")?) {
         (Some(provider), Some(model)) => Some((provider, model)),
@@ -320,8 +399,38 @@ pub(crate) fn parse(host_enabled: bool, method: &str, params: &Value) -> Result<
         "bot.thread" => Call::BotThread { bot_id: id_param(params, "botId")? },
         "bot.message" => Call::BotMessage { bot_id: id_param(params, "botId")?, text: text_param(params, "text")? },
         "bot.pause" => Call::BotPause { bot_id: id_param(params, "botId")?, paused: params.get("paused").and_then(Value::as_bool).ok_or("Missing paused.")? },
+        "batch" => Call::Batch(batch_calls(params)?),
         _ => return Err("Unknown method.".into()),
     })
+}
+
+fn fit_batch_results(results: Vec<Result<Value>>) -> Value {
+    const OMITTED: &str = "Result omitted to keep the batch reply within 180 KiB; request it separately.";
+    let mut results: Vec<Value> = results
+        .into_iter()
+        .map(|result| match result {
+            Ok(result) => json!({"ok": true, "result": result}),
+            Err(error) => json!({"ok": false, "error": error.chars().take(1000).collect::<String>()}),
+        })
+        .collect();
+    let mut size = json!({"results": results}).to_string().len();
+    if size > PAGE_BUDGET {
+        let mut largest = results
+            .iter()
+            .enumerate()
+            .filter(|(_, result)| result["ok"] == true)
+            .map(|(index, result)| (index, result.to_string().len()))
+            .collect::<Vec<_>>();
+        largest.sort_by_key(|(_, size)| std::cmp::Reverse(*size));
+        for (index, _) in largest {
+            results[index] = json!({"ok": false, "error": OMITTED});
+            size = json!({"results": results}).to_string().len();
+            if size <= PAGE_BUDGET {
+                break;
+            }
+        }
+    }
+    json!({"results": results})
 }
 
 /// The response to one request frame, or None when it has no usable id.
@@ -345,43 +454,93 @@ pub(crate) async fn handle(app: &tauri::AppHandle, from: &str, message: &Value) 
 }
 
 /// The task must exist here; a mirror never forwards a second hop.
-fn local_task(state: &AppState, session_id: &str) -> Result<()> {
-    let _task = local_session(state, session_id)?;
-    Ok(())
+async fn local_task(state: &AppState, session_id: &str) -> Result<()> {
+    let store = state.store.clone();
+    let session_id = session_id.to_owned();
+    crate::blocking(move || {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        local_session_from(&store, &session_id).map(|_| ())
+    })
+    .await
 }
 
-fn local_session(state: &AppState, session_id: &str) -> Result<crate::storage::Session> {
-    let task = state.store.lock().map_err(|e| e.to_string())?.session(session_id)?;
+fn local_session_from(store: &crate::storage::Store, session_id: &str) -> Result<crate::storage::Session> {
+    let task = store.session(session_id)?;
     if task.remote_device.is_some() {
         return Err("That task runs on another computer.".into());
     }
     Ok(task)
 }
 
-fn task_root(state: &AppState, session_id: &str) -> Result<PathBuf> {
-    let task = local_session(state, session_id)?;
-    state.store.lock().map_err(|e| e.to_string())?.workspace_root(&task.project_id, Some(session_id))
+async fn task_root(state: &AppState, session_id: &str) -> Result<PathBuf> {
+    let store = state.store.clone();
+    let session_id = session_id.to_owned();
+    crate::blocking(move || {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        let task = local_session_from(&store, &session_id)?;
+        store.workspace_root(&task.project_id, Some(&session_id))
+    })
+    .await
 }
 
-fn linked_pull(state: &AppState, session_id: &str) -> Result<(PathBuf, i64)> {
-    let task = local_session(state, session_id)?;
-    let number = task.pull_request.as_ref().map(|link| link.number).ok_or("This task has no linked pull request.")?;
-    let root = state.store.lock().map_err(|e| e.to_string())?.workspace_root(&task.project_id, Some(session_id))?;
-    Ok((root, number))
+async fn linked_pull(state: &AppState, session_id: &str) -> Result<(PathBuf, i64)> {
+    let store = state.store.clone();
+    let session_id = session_id.to_owned();
+    crate::blocking(move || {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        let task = local_session_from(&store, &session_id)?;
+        let number = task.pull_request.as_ref().map(|link| link.number).ok_or("This task has no linked pull request.")?;
+        let root = store.workspace_root(&task.project_id, Some(&session_id))?;
+        Ok((root, number))
+    })
+    .await
 }
 
-fn optional_pull(state: &AppState, session_id: &str) -> Result<Option<(PathBuf, i64)>> {
-    let task = local_session(state, session_id)?;
-    let Some(number) = task.pull_request.map(|link| link.number) else { return Ok(None) };
-    let root = state.store.lock().map_err(|e| e.to_string())?.workspace_root(&task.project_id, Some(session_id))?;
-    Ok(Some((root, number)))
+async fn optional_pull(state: &AppState, session_id: &str) -> Result<Option<(PathBuf, i64)>> {
+    let store = state.store.clone();
+    let session_id = session_id.to_owned();
+    crate::blocking(move || {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        let task = local_session_from(&store, &session_id)?;
+        let Some(number) = task.pull_request.map(|link| link.number) else { return Ok(None) };
+        let root = store.workspace_root(&task.project_id, Some(&session_id))?;
+        Ok(Some((root, number)))
+    })
+    .await
 }
 
 async fn run(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
+    match call {
+        Call::Batch(calls) => {
+            let mut results = Vec::with_capacity(calls.len());
+            for call in calls {
+                let method = call.as_ref().map(Call::method_name).unwrap_or("invalid");
+                let handling = Instant::now();
+                match call {
+                    Ok(call) => results.push(run_one(app, from, call).await),
+                    Err(error) => results.push(Err(error)),
+                }
+                if std::env::var_os("PANDACODE_CONNECT_TIMING").is_some() {
+                    eprintln!("PandaCode Connect timing method={method} batch_call=true handle_ms={}", handling.elapsed().as_secs_f64() * 1000.0);
+                }
+            }
+            Ok(fit_batch_results(results))
+        }
+        call => run_one(app, from, call).await,
+    }
+}
+
+async fn run_one(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
     let state = app.state::<AppState>();
     match call {
         Call::Subscribe { session_ids } => {
-            let tasks = subscribed_tasks(&state, &session_ids)?;
+            let handle = app.clone();
+            let requested = session_ids.clone();
+            let tasks = crate::blocking(move || {
+                let state = handle.state::<AppState>();
+                subscribed_tasks(&state, &requested)
+            })
+            .await?;
             let state = remote(app);
             let mut inner = state.lock();
             let subscriber = inner.subscribers.entry(from.to_owned()).or_default();
@@ -425,26 +584,31 @@ async fn run(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
         }
         Call::Start(request) => start::run(app, from, request).await,
         Call::Messages { session_id, page } => {
-            local_task(&state, &session_id)?;
-            let store = state.store.lock().map_err(|e| e.to_string())?;
-            match page {
-                MessagePaging::After { after_id, limit } if limit == PAGE_ROWS => messages_page(&store.db, &session_id, after_id),
-                page => messages_page_with(&store.db, &session_id, page),
-            }
+            let handle = app.clone();
+            crate::blocking(move || {
+                let state = handle.state::<AppState>();
+                let store = state.store.lock().map_err(|e| e.to_string())?;
+                local_session_from(&store, &session_id)?;
+                match page {
+                    MessagePaging::After { after_id, limit } if limit == PAGE_ROWS => messages_page(&store.db, &session_id, after_id),
+                    page => messages_page_with(&store.db, &session_id, page),
+                }
+            })
+            .await
         }
         Call::Attachment { session_id, id, variant, offset } => {
-            local_task(&state, &session_id)?;
             let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
             let store = state.store.clone();
             crate::blocking(move || {
                 let store = store.lock().map_err(|error| error.to_string())?;
+                local_session_from(&store, &session_id)?;
                 let image = crate::attachments::load_attachment(&store.db, &app_data_dir, &session_id, &id)?;
                 let (mime, bytes) = crate::attachments::variant_bytes(&image.bytes, &image.metadata.mime, variant)?;
                 crate::attachments::chunk_reply(&bytes, &mime, offset)
             }).await
         }
         Call::WorkspaceImage { session_id, path, variant, offset } => {
-            let root = task_root(&state, &session_id)?;
+            let root = task_root(&state, &session_id).await?;
             crate::blocking(move || {
                 let data_url = crate::workspace::image_data_url(&root, &path)?;
                 let (header, encoded) = data_url.split_once(',').ok_or("Invalid workspace image.")?;
@@ -455,7 +619,7 @@ async fn run(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
             }).await
         }
         Call::Send { session_id, text } => {
-            local_task(&state, &session_id)?;
+            local_task(&state, &session_id).await?;
             // Like Enter in the composer: a running task queues the message.
             let busy = || state.agents.lock().map(|agents| agents.contains_key(&session_id)).map_err(|e| e.to_string());
             if busy()? {
@@ -472,16 +636,16 @@ async fn run(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
             Ok(json!({"queued": false}))
         }
         Call::Stop { session_id } => {
-            local_task(&state, &session_id)?;
+            local_task(&state, &session_id).await?;
             crate::stop_session(app.clone(), state, session_id).await?;
             Ok(json!({}))
         }
         Call::Steer { session_id, text } => {
-            local_task(&state, &session_id)?;
+            local_task(&state, &session_id).await?;
             message_queue::steer_task(app.clone(), state, session_id, text).await
         }
         Call::Configure { session_id, model, effort, mode } => {
-            local_task(&state, &session_id)?;
+            local_task(&state, &session_id).await?;
             if let Some((provider, _)) = &model {
                 start::require_installed(provider).await?;
             }
@@ -498,7 +662,7 @@ async fn run(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
             Ok(json!({}))
         }
         Call::Approve { session_id, request_id, approve } => {
-            local_task(&state, &session_id)?;
+            local_task(&state, &session_id).await?;
             crate::respond_approval(app.clone(), state, session_id.clone(), request_id.clone(), approve).await?;
             // Clear the card in this computer's window, as bot approvals do.
             let event = AgentEvent { session_id, kind: "approval_cancelled".into(), text: String::new(), request_id: Some(request_id), data: None, tool: None };
@@ -506,46 +670,41 @@ async fn run(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
             Ok(json!({}))
         }
         Call::Answer { session_id, request_id, response } => {
-            local_task(&state, &session_id)?;
+            local_task(&state, &session_id).await?;
             crate::respond_user_input(app.clone(), state, session_id, request_id, response).await?;
             Ok(json!({}))
         }
         Call::Pull { session_id } => {
-            let Some((root, number)) = optional_pull(&state, &session_id)? else { return Ok(json!({"pull": null })) };
-            let pull = crate::blocking(move || crate::github_pull::detail(&root, number)).await?;
-            let mut pull = serde_json::to_value(pull).map_err(|e| e.to_string())?;
-            fit_pull_detail(&mut pull);
+            let Some((root, number)) = optional_pull(&state, &session_id).await? else { return Ok(json!({"pull": null })) };
+            let pull = pull_detail_cached(&session_id, root, number).await?;
             Ok(json!({"pull": pull}))
         }
         Call::PullDiff { session_id, path } => {
-            let (root, number) = linked_pull(&state, &session_id)?;
+            let (root, number) = linked_pull(&state, &session_id).await?;
             if let Some(path) = path {
-                let patch = crate::blocking(move || {
-                    let diff = crate::github_pull::diff(&root, number)?;
-                    let (patch, truncated) = pull_file_patch(&diff.patch, &path, diff.truncated);
-                    Ok::<_, String>(bounded_diff(patch, truncated))
-                }).await?;
-                Ok(json!({"patch": patch.0, "truncated": patch.1}))
+                pull_diff_cached(&session_id, root, number, path).await
             } else {
-                let files = crate::blocking(move || crate::github_pull::detail(&root, number).map(|detail| detail.files)).await?;
-                Ok(fit_pull_files(serde_json::to_value(files).map_err(|e| e.to_string())?))
+                let pull = pull_detail_cached(&session_id, root, number).await?;
+                Ok(fit_pull_files(pull["files"].clone()))
             }
         }
         Call::PullMerge { session_id, method } => {
-            let (root, number) = linked_pull(&state, &session_id)?;
+            let (root, number) = linked_pull(&state, &session_id).await?;
             crate::github_pull::merge_flag(&method)?;
             let store = state.store.clone();
+            let cache_session_id = session_id.clone();
             crate::blocking(move || {
                 let link = crate::github_pull::merge(&root, number, &method)?;
                 store.lock().map_err(|e| e.to_string())?.set_task_link(&session_id, "pull", Some(&link)).map(|_| ())
             })
             .await?;
+            invalidate_pull_cache(&cache_session_id);
             let _ = app.emit("sessions-changed", ());
             Ok(json!({}))
         }
         Call::PullDetect { session_id } => detect_pull(app, &state, &session_id).await,
         Call::Changes { session_id } => {
-            let root = task_root(&state, &session_id)?;
+            let root = task_root(&state, &session_id).await?;
             crate::blocking(move || {
                 let status = crate::workspace::git_status(&root)?;
                 let (ahead, behind) = if status.is_repo { ahead_behind(&root)? } else { (0, 0) };
@@ -554,7 +713,7 @@ async fn run(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
             .await
         }
         Call::Diff { session_id, path, staged } => {
-            let root = task_root(&state, &session_id)?;
+            let root = task_root(&state, &session_id).await?;
             crate::blocking(move || {
                 let diff = crate::workspace::git_diff(&root, path, staged)?;
                 let underlying_truncated = diff.contains("[Preview truncated at 256 KiB]");
@@ -604,20 +763,138 @@ async fn run(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
             let _ = app.emit("bots-changed", ());
             Ok(json!({}))
         }
+        Call::Batch(_) => Err("Nested batch calls are not supported.".into()),
     }
 }
 
+#[derive(Clone)]
+struct PullCacheEntry {
+    expires: Instant,
+    value: Value,
+}
+
+#[derive(Clone, Hash, PartialEq, Eq)]
+enum PullFlightKey {
+    Detail(String, i64),
+    Diff(String, i64, String),
+    Detect(String, i64, Option<i64>),
+}
+
+#[derive(Default)]
+struct PullCache {
+    details: HashMap<(String, i64), PullCacheEntry>,
+    diffs: HashMap<(String, i64, String), PullCacheEntry>,
+    detects: HashMap<(String, i64, Option<i64>), PullCacheEntry>,
+    flights: HashMap<PullFlightKey, Arc<tokio::sync::Mutex<()>>>,
+}
+
+static PULL_CACHE: OnceLock<StdMutex<PullCache>> = OnceLock::new();
+
+fn with_pull_cache<T>(f: impl FnOnce(&mut PullCache) -> T) -> T {
+    let mut cache = PULL_CACHE
+        .get_or_init(|| StdMutex::new(PullCache::default()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    f(&mut cache)
+}
+
+fn trim_pull_cache<K: std::hash::Hash + Eq + Clone>(entries: &mut HashMap<K, PullCacheEntry>) {
+    let now = Instant::now();
+    entries.retain(|_, entry| entry.expires > now);
+    while entries.len() > MAX_PULL_CACHE_ENTRIES {
+        let Some(key) = entries.keys().next().cloned() else { break };
+        entries.remove(&key);
+    }
+}
+
+fn cached_pull_entry<K: std::hash::Hash + Eq + Clone>(entries: &mut HashMap<K, PullCacheEntry>, key: &K) -> Option<Value> {
+    trim_pull_cache(entries);
+    entries.get(key).map(|entry| entry.value.clone())
+}
+
+fn store_pull_entry<K: std::hash::Hash + Eq + Clone>(entries: &mut HashMap<K, PullCacheEntry>, key: K, value: Value) {
+    trim_pull_cache(entries);
+    entries.insert(key, PullCacheEntry { expires: Instant::now() + PULL_CACHE_TTL, value });
+    trim_pull_cache(entries);
+}
+
+fn pull_flight(key: PullFlightKey) -> Arc<tokio::sync::Mutex<()>> {
+    with_pull_cache(|cache| {
+        cache.flights.retain(|_, flight| Arc::strong_count(flight) > 1);
+        cache.flights.entry(key).or_default().clone()
+    })
+}
+
+async fn pull_detail_cached(session_id: &str, root: PathBuf, number: i64) -> Result<Value> {
+    let key = (session_id.to_owned(), number);
+    if let Some(value) = with_pull_cache(|cache| cached_pull_entry(&mut cache.details, &key)) {
+        return Ok(value);
+    }
+    let flight = pull_flight(PullFlightKey::Detail(key.0.clone(), key.1));
+    let _flight = flight.lock().await;
+    if let Some(value) = with_pull_cache(|cache| cached_pull_entry(&mut cache.details, &key)) {
+        return Ok(value);
+    }
+    let mut value = serde_json::to_value(crate::blocking(move || crate::github_pull::detail(&root, number)).await?)
+        .map_err(|error| error.to_string())?;
+    fit_pull_detail(&mut value);
+    with_pull_cache(|cache| store_pull_entry(&mut cache.details, key, value.clone()));
+    Ok(value)
+}
+
+async fn pull_diff_cached(session_id: &str, root: PathBuf, number: i64, path: String) -> Result<Value> {
+    let key = (session_id.to_owned(), number, path.clone());
+    if let Some(value) = with_pull_cache(|cache| cached_pull_entry(&mut cache.diffs, &key)) {
+        return Ok(value);
+    }
+    let flight = pull_flight(PullFlightKey::Diff(key.0.clone(), key.1, key.2.clone()));
+    let _flight = flight.lock().await;
+    if let Some(value) = with_pull_cache(|cache| cached_pull_entry(&mut cache.diffs, &key)) {
+        return Ok(value);
+    }
+    let value = crate::blocking(move || {
+        let diff = crate::github_pull::diff(&root, number)?;
+        let (patch, truncated) = pull_file_patch(&diff.patch, &path, diff.truncated);
+        let (patch, truncated) = bounded_diff(patch, truncated);
+        Ok(json!({"patch": patch, "truncated": truncated}))
+    })
+    .await?;
+    with_pull_cache(|cache| store_pull_entry(&mut cache.diffs, key, value.clone()));
+    Ok(value)
+}
+
+fn cached_pull_detect(session_id: &str, latest_message_id: i64, existing_number: Option<i64>) -> Option<Value> {
+    let key = (session_id.to_owned(), latest_message_id, existing_number);
+    with_pull_cache(|cache| cached_pull_entry(&mut cache.detects, &key))
+}
+
+fn store_pull_detect(session_id: &str, latest_message_id: i64, existing_number: Option<i64>, value: Value) {
+    let key = (session_id.to_owned(), latest_message_id, existing_number);
+    with_pull_cache(|cache| store_pull_entry(&mut cache.detects, key, value));
+}
+
+fn invalidate_pull_cache(session_id: &str) {
+    with_pull_cache(|cache| {
+        cache.details.retain(|(id, _), _| id != session_id);
+        cache.diffs.retain(|(id, _, _), _| id != session_id);
+        cache.detects.retain(|(id, _, _), _| id != session_id);
+    });
+}
+
 async fn detect_pull(app: &tauri::AppHandle, state: &AppState, session_id: &str) -> Result<Value> {
-    local_task(state, session_id)?;
-    let (root, turn, started, existing_number) = {
-        let store = state.store.lock().map_err(|e| e.to_string())?;
-        let task = store.session(session_id)?;
+    let store = state.store.clone();
+    let session_id_owned = session_id.to_owned();
+    let context = crate::blocking(move || {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        let task = local_session_from(&store, &session_id_owned)?;
         if task.pull_request.as_ref().is_some_and(|link| ["open", "draft"].contains(&link.state.as_str())) {
-            return Ok(json!({"pull": null}));
+            return Ok(None);
         }
+        let messages = store.messages(&session_id_owned, None)?;
+        let latest_message_id = messages.first().map(|message| message.id).unwrap_or_default();
         let mut turn = Vec::new();
         let mut started = 0;
-        for message in store.messages(session_id, None)? {
+        for message in messages {
             if message.role == "user" {
                 started = message.created_at;
                 break;
@@ -625,42 +902,61 @@ async fn detect_pull(app: &tauri::AppHandle, state: &AppState, session_id: &str)
             turn.push(message.content);
         }
         if !turn.iter().any(|text| text.contains("/pull/")) {
-            return Ok(json!({"pull": null}));
+            return Ok(None);
         }
-        (
-            store.workspace_root(&task.project_id, Some(session_id))?,
-            turn,
-            started,
-            task.pull_request.map(|link| link.number),
-        )
-    };
-    let store = state.store.clone();
-    let session_id = session_id.to_owned();
-    let pull = crate::blocking(move || {
-        let repo = match crate::github::repository(&root) {
+        let root = store.workspace_root(&task.project_id, Some(&session_id_owned))?;
+        Ok(Some((root, turn, started, task.pull_request.map(|link| link.number), latest_message_id)))
+    })
+    .await?;
+    let Some((root, turn, started, existing_number, latest_message_id)) = context else { return Ok(json!({"pull": null })) };
+    if let Some(value) = cached_pull_detect(session_id, latest_message_id, existing_number) {
+        return Ok(value);
+    }
+    let flight = pull_flight(PullFlightKey::Detect(session_id.to_owned(), latest_message_id, existing_number));
+    let _flight = flight.lock().await;
+    if let Some(value) = cached_pull_detect(session_id, latest_message_id, existing_number) {
+        return Ok(value);
+    }
+    let detect_root = root.clone();
+    let detection = crate::blocking(move || {
+        let repo = match crate::github::repository(&detect_root) {
             Ok(repo) => repo,
             Err(error) if error.is_empty() => return Ok(None),
             Err(error) => return Err(error),
         };
-        let branch = crate::workspace::git_status(&root).map(|status| status.branch).unwrap_or_default();
-        let Some(link) = crate::github_pull::detect(&root, &repo, &turn, &branch, started)? else { return Ok(None) };
-        if existing_number == Some(link.number) {
-            return Ok(None);
-        }
-        let mut pull = serde_json::to_value(crate::github_pull::detail(&root, link.number)?).map_err(|e| e.to_string())?;
-        fit_pull_detail(&mut pull);
-        let store = store.lock().map_err(|e| e.to_string())?;
-        if store.session(&session_id)?.pull_request.is_some_and(|current| current.number == link.number) {
-            return Ok(None);
-        }
-        store.set_task_link(&session_id, "pull", Some(&link))?;
-        Ok(Some(pull))
+        let branch = crate::workspace::git_status(&detect_root).map(|status| status.branch).unwrap_or_default();
+        crate::github_pull::detect(&detect_root, &repo, &turn, &branch, started)
     })
     .await?;
-    if pull.is_some() {
+    let Some(link) = detection else {
+        let value = json!({"pull": null});
+        store_pull_detect(session_id, latest_message_id, existing_number, value.clone());
+        return Ok(value);
+    };
+    if existing_number == Some(link.number) {
+        let value = json!({"pull": null});
+        store_pull_detect(session_id, latest_message_id, existing_number, value.clone());
+        return Ok(value);
+    }
+    let pull = pull_detail_cached(session_id, root, link.number).await?;
+    let store = state.store.clone();
+    let session_id_owned = session_id.to_owned();
+    let saved_link = link.clone();
+    let saved = crate::blocking(move || {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        if store.session(&session_id_owned)?.pull_request.is_some_and(|current| current.number == saved_link.number) {
+            return Ok(false);
+        }
+        store.set_task_link(&session_id_owned, "pull", Some(&saved_link))?;
+        Ok(true)
+    })
+    .await?;
+    if saved {
         let _ = app.emit("sessions-changed", ());
     }
-    Ok(json!({"pull": pull}))
+    let value = if saved { json!({"pull": pull}) } else { json!({"pull": null}) };
+    store_pull_detect(session_id, latest_message_id, existing_number, value.clone());
+    Ok(value)
 }
 
 fn bots_list(state: &AppState) -> Result<Value> {
@@ -1654,6 +1950,84 @@ mod tests {
         for bad in [json!({}), json!({"provider": "../bin/sh"}), json!({"provider": "gemini"}), json!({"provider": 3})] {
             assert!(parse(true, "providers.models", &bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn read_only_request_classification_is_explicit() {
+        for method in [
+            "tasks.list", "task.messages", "task.changes", "task.diff", "task.pull", "task.pullDiff",
+            "task.pullDetect", "task.attachment", "task.workspaceImage", "projects.icons", "providers.list",
+            "providers.models", "bots.list", "subscribe",
+        ] {
+            assert!(is_read_only_method(method), "{method}");
+        }
+        for method in [
+            "task.send", "task.steer", "task.stop", "task.configure", "approval.respond", "input.respond",
+            "bot.thread", "bot.message", "bot.pause", "task.pullMerge", "task.start", "unknown",
+        ] {
+            assert!(!is_read_only_method(method), "{method}");
+        }
+    }
+
+    #[test]
+    fn batches_accept_up_to_eight_read_only_calls_and_keep_call_errors_local() {
+        let parsed = parse(
+            true,
+            "batch",
+            &json!({"calls": [
+                {"method": "task.messages", "params": {"sessionId": "s", "tail": true}},
+                {"method": "task.messages", "params": {}},
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(
+            parsed,
+            Call::Batch(vec![
+                Ok(Call::Messages { session_id: "s".into(), page: MessagePaging::Tail { limit: MESSAGE_PAGE_DEFAULT } }),
+                Err("Missing sessionId.".into()),
+            ])
+        );
+        assert!(parse(true, "batch", &json!({"calls": []})).is_err());
+        let eight = std::iter::repeat(json!({"method": "tasks.list", "params": {}})).take(8).collect::<Vec<_>>();
+        assert!(parse(true, "batch", &json!({"calls": eight})).is_ok());
+        let too_many = std::iter::repeat(json!({"method": "tasks.list", "params": {}})).take(9).collect::<Vec<_>>();
+        assert!(parse(true, "batch", &json!({"calls": too_many})).is_err());
+        assert!(parse(true, "batch", &json!({"calls": [{"method": "task.send", "params": {"sessionId": "s", "text": "x"}}]})).is_err());
+        assert!(parse(true, "batch", &json!({"calls": [{"method": "batch", "params": {"calls": []}}]})).is_err());
+    }
+
+    #[test]
+    fn batch_results_stay_within_the_single_reply_budget() {
+        let reply = fit_batch_results(vec![
+            Ok(json!({"value": "small"})),
+            Ok(json!({"value": "x".repeat(PAGE_BUDGET)})),
+            Err("failed".into()),
+        ]);
+        assert!(reply.to_string().len() <= PAGE_BUDGET);
+        assert_eq!(reply["results"].as_array().unwrap().len(), 3);
+        assert_eq!(reply["results"][0]["ok"], true);
+        assert_eq!(reply["results"][1]["ok"], false);
+        assert_eq!(reply["results"][2]["error"], "failed");
+    }
+
+    #[test]
+    fn pull_cache_entries_are_scoped_and_expire_after_the_ttl() {
+        let key = ("task".to_owned(), 42);
+        let mut entries = HashMap::new();
+        store_pull_entry(&mut entries, key.clone(), json!({"number": 42}));
+        assert_eq!(cached_pull_entry(&mut entries, &key), Some(json!({"number": 42})));
+        assert_eq!(cached_pull_entry(&mut entries, &("other-task".into(), 42)), None);
+        entries.get_mut(&key).unwrap().expires = Instant::now() - Duration::from_secs(1);
+        assert_eq!(cached_pull_entry(&mut entries, &key), None);
+        assert_eq!(PULL_CACHE_TTL, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn concurrent_pull_misses_for_the_same_key_share_a_flight() {
+        let key = PullFlightKey::Detail("flight-test-task".into(), 101);
+        let first = pull_flight(key.clone());
+        let second = pull_flight(key);
+        assert!(Arc::ptr_eq(&first, &second));
     }
 
     #[test]

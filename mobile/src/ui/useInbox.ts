@@ -1,13 +1,19 @@
 // Inbox data for the inbox screen and the iPhone Duo sidebar: sections from src/store/inbox.ts
 // over the store, a minute clock for relative times, and `load`, which lists every online
 // computer's tasks (and with them its bots) now (client.ts also refreshes lists on presence, foreground, run ends and a timer).
+// `updating`: rows drawn from the inbox cache at launch are still waiting for their live list.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { connect, NOT_SIGNED_IN } from '../connect/client.ts';
+import { LOST, NOT_CONNECTED } from '../connect/rpc.ts';
+import { markStartup } from '../connect/perf.ts';
 import { botRows, glanceOf, inboxSections, type RunGlance } from '../store/inbox.ts';
 import { useConnect, useHosts, type ConnectState } from '../store/index.ts';
 import { useLocal } from '../store/local.ts';
 import type { Live } from '../store/reduce.ts';
+
+/** Connection errors are passing: the client lists again on presence. */
+const TRANSIENT = new Set([NOT_SIGNED_IN, NOT_CONNECTED, LOST]);
 
 /**
  * Only what the inbox shows from each live run (status, request counts, limit and its glance:
@@ -49,6 +55,7 @@ export function useInbox() {
   const hosts = useHosts();
   const tasks = useConnect(s => s.tasks);
   const allBots = useConnect(s => s.bots);
+  const updating = useConnect(s => Object.entries(s.tasks).some(([id, list]) => list.cachedAt !== undefined && (!s.connected || s.devices.some(d => d.id === id && d.online))));
   const { live, glances } = useLiteLive();
   const { snoozed, pins, outbox } = useLocal(useShallow(s => ({ snoozed: s.snoozed, pins: s.pins, outbox: s.outbox })));
   const minute = useMinute();
@@ -58,10 +65,11 @@ export function useInbox() {
   const load = useCallback(async () => {
     const ids = onlineKey ? onlineKey.split(',') : [];
     const results = await Promise.all(ids.map(id => connect.listTasks(id).then(() => '', (e: Error) => e.message)));
-    setErrors(Object.fromEntries(ids.map((id, i) => [id, results[i]]).filter(([, e]) => e && e !== NOT_SIGNED_IN)));
+    setErrors(Object.fromEntries(ids.map((id, i) => [id, results[i]]).filter(([, e]) => e && !TRANSIENT.has(e))));
   }, [onlineKey]);
 
   const inbox = useMemo(() => inboxSections({ hosts, tasks, live, glances, snoozed, pins, outbox, now: minute * 60_000 + 59_999 }), [hosts, tasks, live, glances, snoozed, pins, outbox, minute]);
   const bots = useMemo(() => botRows(hosts, allBots, tasks), [hosts, allBots, tasks]);
-  return { hosts, inbox, bots, minute, errors, load };
+  useEffect(() => { if (Object.values(inbox).some(rows => rows.length)) markStartup('paint'); }, [inbox]);
+  return { hosts, inbox, bots, minute, errors, load, updating };
 }

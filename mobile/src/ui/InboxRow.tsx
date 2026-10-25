@@ -21,6 +21,12 @@ import { mono, useColors, type Colors } from './theme.ts';
 
 const HOUR = 3600_000;
 
+/** Pin and snooze are this phone's own: they apply at once, with a tick. */
+const tap = (run: () => void) => () => {
+  void Haptics.selectionAsync();
+  run();
+};
+
 function actions(row: Row, snoozed: boolean): MenuItem[] {
   if (row.outboxId) {
     const id = row.outboxId;
@@ -30,12 +36,12 @@ function actions(row: Row, snoozed: boolean): MenuItem[] {
     ];
   }
   const items: MenuItem[] = snoozed
-    ? [{ label: 'Unsnooze', ios: 'bell', android: 'notifications', onPress: () => unsnooze(row.key) }]
+    ? [{ label: 'Unsnooze', ios: 'bell', android: 'notifications', onPress: tap(() => unsnooze(row.key)) }]
     : [
-      { label: 'Snooze 1 hour', ios: 'moon.zzz', android: 'snooze', onPress: () => snooze(row.key, Date.now() + HOUR) },
-      { label: 'Snooze until tomorrow', ios: 'sunrise', android: 'wb_twilight', onPress: () => snooze(row.key, tomorrowMorning(Date.now())) },
+      { label: 'Snooze 1 hour', ios: 'moon.zzz', android: 'snooze', onPress: tap(() => snooze(row.key, Date.now() + HOUR)) },
+      { label: 'Snooze until tomorrow', ios: 'sunrise', android: 'wb_twilight', onPress: tap(() => snooze(row.key, tomorrowMorning(Date.now()))) },
     ];
-  items.push({ label: row.pinned ? 'Unpin' : 'Pin', ios: row.pinned ? 'pin.slash' : 'pin', android: 'push_pin', onPress: () => togglePin(row.key) });
+  items.push({ label: row.pinned ? 'Unpin' : 'Pin', ios: row.pinned ? 'pin.slash' : 'pin', android: 'push_pin', onPress: tap(() => togglePin(row.key)) });
   if (row.badge === 'working' || row.badge === 'approval' || row.badge === 'question') {
     items.push({ label: 'Stop', ios: 'stop.circle', android: 'stop_circle', destructive: true, onPress: () => stop(row) });
   }
@@ -49,7 +55,16 @@ function stop(row: Row) {
 
 const clockTime = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 
+/** A row from the inbox cache that looked active: when it was last seen, never a live spinner. */
+const seenActive = (row: Row) => row.task.seenAt !== undefined && (row.badge === 'working' || row.badge === 'approval' || row.badge === 'question');
+
+function LastSeen({ at, colors }: { at: number; colors: Colors }) {
+  const when = ago(at);
+  return <Label ios="clock" android="schedule" color={colors.secondary} text={when === 'now' ? 'Last seen just now' : `Last seen ${when} ago`} />;
+}
+
 function Status({ row, colors }: { row: Row; colors: Colors }) {
+  if (seenActive(row)) return <LastSeen at={row.task.seenAt!} colors={colors} />;
   switch (row.badge) {
     case 'working': return <RunClock row={row} colors={colors} />;
     case 'approval': return <Label ios="hand.raised.fill" android="front_hand" color={colors.orange} text="Approval" />;
@@ -97,7 +112,7 @@ function Elapsed({ prefix, since, color }: { prefix: string; since: number; colo
 
 /** The sidebar's status: waiting time on approvals and questions, otherwise as in the inbox. */
 function SidebarStatus({ row, colors }: { row: Row; colors: Colors }) {
-  if (row.badge === 'approval' || row.badge === 'question') {
+  if (!seenActive(row) && row.badge === 'approval' || row.badge === 'question') {
     return <View style={styles.status}><Icon ios={row.badge === 'approval' ? 'hand.raised.fill' : 'questionmark.bubble.fill'} android={row.badge === 'approval' ? 'front_hand' : 'help'} size={12} color={colors.orange} /><Elapsed prefix="Waiting" since={row.at} color={colors.orange} /></View>;
   }
   return <Status row={row} colors={colors} />;

@@ -30,7 +30,7 @@ export function Sidebar() {
   const wallpaper = useWallpaperShown();
   const insets = useSafeAreaInsets();
   const width = useSidebarWidth();
-  const { hosts, inbox, bots, minute, load } = useInbox();
+  const { hosts, inbox, bots, minute, load, updating } = useInbox();
   const [query, setQuery] = useState('');
   const pathname = usePathname();
   const { device, session } = useGlobalSearchParams<{ device?: string; session?: string }>();
@@ -55,6 +55,7 @@ export function Sidebar() {
           <Image source={require('../../assets/images/icon.png')} style={styles.mark} />
           <Text style={[styles.brandText, { color: colors.text }]}>PandaCode</Text>
         </View>
+        {updating && <Text style={[styles.updating, { color: colors.secondary }]} accessibilityLiveRegion="polite">Updating…</Text>}
       </View>
       <FlatList
         data={items}
@@ -85,6 +86,7 @@ const styles = StyleSheet.create({
   brand: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   mark: { width: 26, height: 26, borderRadius: 7 },
   brandText: { fontSize: 21, fontWeight: '700', letterSpacing: -0.4 },
+  updating: { fontSize: 13 },
   list: { gap: 2, paddingTop: 4 },
   empty: { fontSize: 15, textAlign: 'center', marginTop: 40, paddingHorizontal: 24 },
   search: { position: 'absolute', right: 12, height: SEARCH, borderRadius: SEARCH / 2, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16 },

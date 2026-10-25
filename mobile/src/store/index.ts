@@ -21,8 +21,8 @@ export interface ConnectState {
   account: Account | null;
   deviceId: string;
   devices: Device[];
-  /** tasks.list per host. */
-  tasks: Record<string, TasksList & { loadedAt: number }>;
+  /** tasks.list per host. `cachedAt`: restored from the inbox cache (src/store/inbox-cache.ts), not yet listed live. */
+  tasks: Record<string, TasksList & { loadedAt: number; cachedAt?: number }>;
   /** Messages per taskKey, oldest first: the newest window (tail page or disk cache), grown by afterId and beforeId pages. Absent until first loaded. */
   messages: Record<string, Message[]>;
   /** Per taskKey: the host has messages before the first one held ('more'), or they are loading. */

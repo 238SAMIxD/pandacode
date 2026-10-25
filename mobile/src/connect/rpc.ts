@@ -72,3 +72,30 @@ export class Pending {
 
   get size() { return this.calls.size; }
 }
+
+/**
+ * Background calls (prefetch, icons, attachments, glance subscribes, bots) take turns per host:
+ * the host answers one phone's requests in order, so at most one waits ahead of anything the
+ * user does. User calls skip this and go at once. FIFO; `turn` resolves with the release.
+ */
+export class BackgroundGate {
+  private readonly queues = new Map<string, (() => void)[]>();
+
+  turn(host: string): Promise<() => void> {
+    const release = () => {
+      const queue = this.queues.get(host) ?? [];
+      const next = queue.shift();
+      if (next) next();
+      else this.queues.delete(host);
+    };
+    const queue = this.queues.get(host);
+    if (!queue) {
+      this.queues.set(host, []);
+      return Promise.resolve(release);
+    }
+    return new Promise(resolve => queue.push(() => resolve(release)));
+  }
+
+  /** Background calls waiting (not the one in flight). */
+  waiting(host: string) { return this.queues.get(host)?.length ?? 0; }
+}

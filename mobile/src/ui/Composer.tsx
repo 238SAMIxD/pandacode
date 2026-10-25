@@ -6,10 +6,11 @@
 import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
 import { frame } from '@expo/ui/swift-ui/modifiers';
-import { useState } from 'react';
+import { useEffect, useRef, useState, type ComponentRef } from 'react';
 import { Alert, Pressable, StyleSheet, Text, TextInput, View, type ColorValue } from 'react-native';
 import { connect } from '../connect/client.ts';
 import type { Bot } from '../connect/types.ts';
+import { draftKey, setDraft, useDrafts } from '../store/draft.ts';
 import { useConnect } from '../store/index.ts';
 import { markSteered, sendOrQueue } from '../store/local.ts';
 import { Glass } from './Glass.tsx';
@@ -24,7 +25,13 @@ export const SIZE = 36;
 export function Composer({ deviceId, sessionId, running, bot }: { deviceId: string; sessionId: string; running: boolean; bot?: Pick<Bot, 'id' | 'name'> }) {
   const botId = bot?.id;
   const colors = useColors();
-  const [text, setText] = useState('');
+  // The text lives in the draft store, so generative UI can fill it (fillDraft) and it survives leaving the task.
+  const key = draftKey(deviceId, sessionId);
+  const text = useDrafts(s => s.text[key] ?? '');
+  const setText = (t: string) => setDraft(key, t);
+  const focus = useDrafts(s => s.focus[key] ?? 0);
+  const input = useRef<ComponentRef<typeof TextInput>>(null);
+  useEffect(() => { if (focus) input.current?.focus(); }, [focus]);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [steer, setSteer] = useState(false);
@@ -68,6 +75,7 @@ export function Composer({ deviceId, sessionId, running, bot }: { deviceId: stri
   return (
     <Glass style={styles.bar}>
       <TextInput
+        ref={input}
         value={text}
         onChangeText={t => { setText(t); if (note) setNote(''); }}
         placeholder={note || (bot ? `Message ${bot.name}…` : running && steer ? 'Steer the agent…' : 'Ask the agent…')}

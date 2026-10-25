@@ -34,6 +34,7 @@ function Button({ icon, label, onPress, color }: { icon: IconName; label: string
   );
 }
 
+/** "Stopping…" shows at once (the client rolls it back if the host refuses). */
 export function stopTask(deviceId: string, sessionId: string) {
   void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
   connect.stopTask(deviceId, sessionId).catch(error => Alert.alert('Could not stop', (error as Error).message));
@@ -62,7 +63,9 @@ export function HeaderBlur({ height }: { height: number }) {
   );
 }
 
+/** Pause/Resume shows at once (the client rolls it back if the host refuses). */
 export function pauseBot(deviceId: string, bot: Bot) {
+  void Haptics.selectionAsync();
   connect.pauseBot(deviceId, bot.id, !bot.paused).catch(error => Alert.alert(bot.paused ? 'Could not resume' : 'Could not pause', (error as Error).message));
 }
 

@@ -361,7 +361,81 @@ Known limit: a message the host rewrites in place after it was copied (a tool's 
 is not copied again.
 
 Responses and events are handled as soon as they arrive and never wait behind a slow request.
-Requests from one peer are answered in order, except `task.start` (above).
+Each peer can have up to four read requests in flight. The read lane includes `subscribe`,
+`tasks.list`, `projects.icons`, `providers.list`, `providers.models`, `task.messages`,
+`task.attachment`, `task.workspaceImage`, `task.pull`, `task.pullDiff`, `task.pullDetect`,
+`task.changes`, `task.diff` and `bots.list`. Replies may arrive out of order; both the phone
+and desktop client match them by request id. The desktop mirror still copies messages by its
+`afterId` cursor and commits each page before advancing it.
+
+State-changing requests from one peer remain serial and keep their arrival order relative to one
+another. This includes `task.start`, `task.send`, `task.steer`, `task.stop`, `task.configure`,
+`approval.respond`, `input.respond`, `bot.thread`, `bot.message`, `bot.pause` and `task.pullMerge`.
+Read requests may run while that ordered lane is busy. The 100 ms event flush only batches mirror
+events; an RPC reply is placed directly on the socket outbox and does not wait for an event tick.
+
+### Batch requests
+
+`batch` combines 1–8 read-only calls into one request. Calls are validated before running; a
+write method or malformed batch shape rejects the batch, while invalid parameters for one allowed
+call become that call's error. Calls run in the listed order and results stay in the same order.
+The `calls` list cannot contain another `batch`.
+
+For example, opening a task can fetch its newest messages, subscribe for live updates and check
+for a pull request in one phone round trip:
+
+```json
+{
+  "type": "req",
+  "id": "request-id",
+  "method": "batch",
+  "params": {
+    "calls": [
+      { "method": "task.messages", "params": { "sessionId": "task-id", "tail": true } },
+      { "method": "subscribe", "params": { "sessionIds": ["task-id"] } },
+      { "method": "task.pullDetect", "params": { "sessionId": "task-id" } }
+    ]
+  }
+}
+```
+
+The response uses the ordinary outer request id and returns one `{ok, result|error}` entry per
+call:
+
+```json
+{
+  "type": "res",
+  "id": "request-id",
+  "ok": true,
+  "result": {
+    "results": [
+      { "ok": true, "result": { "messages": [], "lastId": null } },
+      { "ok": true, "result": { "tasks": [] } },
+      { "ok": false, "error": "..." }
+    ]
+  }
+}
+```
+
+The combined results fit within the 180 KiB JSON budget. If successful results would exceed it,
+the largest entries are returned as per-call errors asking the client to request them separately.
+
+### Host timing and slow paths
+
+Set `PANDACODE_CONNECT_TIMING=1` before launching the desktop app to emit one debug timing line
+per handled request. It includes method, time waiting in the peer queue, handler time, JSON
+serialization time, sealing time, and payload/frame byte counts. `task.start` also reports any
+wait for the global four-start limit. A batch logs its outer queue wait and per-call handler times.
+It logs no task or peer ids.
+
+The request path previously did message-page queries, subscription snapshots, and session/root
+lookups while polling on the async socket worker. Those database operations now use the blocking
+pool; the existing `(session_id, id)` message index already supports paging. Icon generation,
+image reads/transforms, git changes/diff and GitHub detail/diff work already used blocking
+workers. Pull detail and file-diff results are now cached for 30 seconds per session and PR;
+pull-detection results are keyed by the latest message id and linked PR number, and a merge
+invalidates that session's cache. This avoids repeated GitHub CLI work while the inspected task
+state is unchanged.
 
 ## Tauri commands (UI contract)
 
