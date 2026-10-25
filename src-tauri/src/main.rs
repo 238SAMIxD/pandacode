@@ -9,5 +9,9 @@ fn main() {
     if pandacode_lib::handle_cloud_bridge() {
         return;
     }
+    // The headless host (docs/headless.md): `pandacode serve` never returns on its own.
+    if pandacode_lib::handle_serve() {
+        return;
+    }
     pandacode_lib::run()
 }

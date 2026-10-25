@@ -30,6 +30,14 @@ fn key(service: &str, account: &str) -> String {
     format!("{service}/{account}")
 }
 
+/// Linux/Windows: `PANDACODE_SECRETS_FILE=1` keeps secrets in the same 0600 file macOS
+/// uses. A server has no Secret Service agent to unlock, and Secret Service cannot answer
+/// noninteractive reads; `pandacode serve` sets the variable itself. Off by default.
+#[cfg(all(not(test), any(target_os = "linux", target_os = "windows")))]
+fn file_mode() -> bool {
+    std::env::var_os("PANDACODE_SECRETS_FILE").is_some_and(|value| value == "1")
+}
+
 #[cfg(test)]
 fn memory() -> &'static Mutex<std::collections::HashMap<String, String>> {
     static STORE: OnceLock<Mutex<std::collections::HashMap<String, String>>> = OnceLock::new();
@@ -52,7 +60,11 @@ pub(crate) fn set(service: &str, account: &str, value: &str) -> crate::Result<()
     }
     #[cfg(all(not(test), any(target_os = "linux", target_os = "windows")))]
     {
-        keyring::Entry::new(service, account).and_then(|entry| entry.set_password(value)).map_err(|_| "Could not save the secret in secure storage.".into())
+        if file_mode() {
+            file_set(app_dir()?, service, account, Some(value))
+        } else {
+            keyring::Entry::new(service, account).and_then(|entry| entry.set_password(value)).map_err(|_| "Could not save the secret in secure storage.".into())
+        }
     }
     #[cfg(all(not(test), not(any(target_os = "macos", target_os = "linux", target_os = "windows"))))]
     {
@@ -73,7 +85,12 @@ pub(crate) fn get(service: &str, account: &str) -> Option<String> {
     }
     #[cfg(all(not(test), any(target_os = "linux", target_os = "windows")))]
     {
-        keyring::Entry::new(service, account).and_then(|entry| entry.get_password()).ok()
+        if file_mode() {
+            let dir = app_dir().map_err(|error| eprintln!("{error}")).ok()?;
+            file_get(dir, service, account, &legacy::NoStore)
+        } else {
+            keyring::Entry::new(service, account).and_then(|entry| entry.get_password()).ok()
+        }
     }
     #[cfg(all(not(test), not(any(target_os = "macos", target_os = "linux", target_os = "windows"))))]
     {
@@ -109,7 +126,12 @@ pub(crate) fn remove(service: &str, account: &str) {
     }
     #[cfg(all(not(test), any(target_os = "linux", target_os = "windows")))]
     {
-        if let Ok(entry) = keyring::Entry::new(service, account) {
+        if file_mode() {
+            match app_dir().and_then(|dir| file_set(dir, service, account, None)) {
+                Ok(()) => legacy::forget(&legacy::NoStore, service, account),
+                Err(error) => eprintln!("{error}"),
+            }
+        } else if let Ok(entry) = keyring::Entry::new(service, account) {
             let _ = entry.delete_credential();
         }
     }
@@ -119,7 +141,7 @@ pub(crate) fn remove(service: &str, account: &str) {
     }
 }
 
-#[cfg(all(not(test), target_os = "macos"))]
+#[cfg(all(not(test), any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn app_dir() -> crate::Result<&'static Path> {
     dir().ok_or_else(|| "PandaCode secrets are not available yet.".into())
 }
@@ -257,6 +279,21 @@ mod legacy {
         if keychain.exists(service, account) {
             keychain.delete(service, account);
         }
+    }
+
+    /// File mode away from macOS: there is no legacy store to migrate from or forget.
+    #[cfg(all(not(test), any(target_os = "linux", target_os = "windows")))]
+    pub(super) struct NoStore;
+
+    #[cfg(all(not(test), any(target_os = "linux", target_os = "windows")))]
+    impl Legacy for NoStore {
+        fn exists(&self, _: &str, _: &str) -> bool {
+            false
+        }
+        fn read(&self, _: &str, _: &str) -> Option<String> {
+            None
+        }
+        fn delete(&self, _: &str, _: &str) {}
     }
 
     #[cfg(all(not(test), target_os = "macos"))]

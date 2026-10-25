@@ -19,7 +19,7 @@ use crate::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Instant;
 use tauri::{Emitter, Manager};
@@ -476,9 +476,164 @@ fn targets(inner: &Inner) -> Vec<Value> {
         .collect()
 }
 
+// Headless host support (`pandacode serve`, docs/headless.md): the sign-in, settings and
+// status paths a server needs, without a webview to click through.
+
+/// Full headless sign-in: the GitHub device flow on stdout, then [`headless_register`].
+pub(crate) async fn headless_sign_in(dir: &Path, name: Option<String>) -> Result<String> {
+    let build = config::build().ok_or(
+        "Remote access is not configured in this build (PANDACODE_RELAY_URL / PANDACODE_GITHUB_CLIENT_ID).",
+    )?;
+    let (flow, view) = auth::start(&build).await?;
+    println!(
+        "PandaCode Connect sign-in: open {} and enter the code {}.",
+        view["verificationUri"].as_str().unwrap_or_default(),
+        view["userCode"].as_str().unwrap_or_default()
+    );
+    let github_token = auth::github_token(&build, flow).await?;
+    let settings = headless_register(&build, &github_token, dir, name).await?;
+    let login = settings.account.as_ref().map(|account| account.login.clone()).unwrap_or_default();
+    println!("Signed in as {login} — this server is now hosting for your devices.");
+    Ok(login)
+}
+
+/// Registers this device for `github_token` and enables hosting on disk. The last half of
+/// [`headless_sign_in`], separate so tests can run it against a mock relay.
+async fn headless_register(build: &config::Build, github_token: &str, dir: &Path, name: Option<String>) -> Result<config::Settings> {
+    let mut settings = config::load(dir);
+    let secret = config::load_or_create_key(secrets::read(dir).key, |text| secrets::set_key(dir, text))?;
+    let public_key = crypto::public_key(&secret);
+    let name = name.unwrap_or_else(config::device_name);
+    let device = |id: String| json!({"id": id, "name": name, "platform": std::env::consts::OS, "publicKey": public_key});
+    let (token, account) = match auth::register(build, github_token, device(settings.device_id.clone())).await {
+        // This id is registered with another key (the key file was lost, say): become a new device once.
+        Err(error) if error == auth::KEY_CHANGED => {
+            settings.device_id = uuid::Uuid::new_v4().to_string();
+            config::save(dir, &settings)?;
+            auth::register(build, github_token, device(settings.device_id.clone())).await?
+        }
+        other => other?,
+    };
+    if config::parse_token(&token).is_none_or(|claims| claims.dev != settings.device_id) {
+        return Err("The relay returned an unexpected sign-in token.".into());
+    }
+    secrets::set_token(dir, &token)?;
+    settings.host_enabled = true;
+    settings.account = Some(account);
+    config::save(dir, &settings)?;
+    Ok(settings)
+}
+
+/// Headless sign-out: leaves the account's device list, then clears the local sign-in.
+pub(crate) async fn headless_sign_out(app: &tauri::AppHandle) {
+    let (build, token, me) = {
+        let state = remote(app);
+        let inner = state.lock();
+        (config::build(), inner.token.clone(), inner.settings.device_id.clone())
+    };
+    if let (Some(build), Some(token)) = (build, token) {
+        let _ = auth::relay(&build, &token, reqwest::Method::DELETE, &format!("/v1/devices/{me}")).await;
+    }
+    sign_out_local(app, None);
+}
+
+/// Persists the Full access toggle for remote tasks (headless settings command).
+pub(crate) fn headless_set_full_access(dir: &Path, enabled: bool) -> Result<()> {
+    let mut settings = config::load(dir);
+    settings.remote_full_access = enabled;
+    config::save(dir, &settings)
+}
+
+/// Whether saved Connect credentials exist (serve requires them before serving).
+pub(crate) fn signed_in(dir: &Path) -> bool {
+    let settings = config::load(dir);
+    settings.account.is_some()
+        && secrets::read(dir).token.as_deref().is_some_and(|token| config::token_valid(token, chrono::Utc::now().timestamp()))
+}
+
+/// Whether this build can reach a relay at all (plain `serve` refuses without it).
+pub(crate) fn configured() -> bool {
+    config::build().is_some()
+}
+
+/// Whether the saved settings turn hosting on.
+pub(crate) fn host_enabled(dir: &Path) -> bool {
+    config::load(dir).host_enabled
+}
+
+/// Persists "Allow remote control" (headless settings command).
+pub(crate) fn headless_set_host_enabled(dir: &Path, enabled: bool) -> Result<()> {
+    let mut settings = config::load(dir);
+    settings.host_enabled = enabled;
+    config::save(dir, &settings)
+}
+
+/// After a CLI sign-in on disk: load it into the managed state and connect the socket.
+pub(crate) fn headless_reload(app: &tauri::AppHandle, dir: &Path) {
+    let settings = config::load(dir);
+    let token = secrets::read(dir).token.filter(|token| config::token_valid(token, chrono::Utc::now().timestamp()));
+    {
+        let state = remote(app);
+        let mut inner = state.lock();
+        inner.settings = settings;
+        inner.token = token;
+    }
+    socket::start(app);
+    emit_status(app);
+}
+
+/// One-line serve status for journald, logged only when it changes.
+pub(crate) fn headless_status(app: &tauri::AppHandle) -> String {
+    let state = remote(app);
+    let inner = state.lock();
+    format!(
+        "pandacode serve: {} · hosting {} · relay {} · {} device(s) online",
+        inner.settings.account.as_ref().map(|account| account.login.as_str()).unwrap_or("signed out"),
+        if inner.settings.host_enabled { "on" } else { "off" },
+        if inner.connected { "connected" } else { "disconnected" },
+        inner.devices.iter().filter(|device| device.online).count(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A relay token the client accepts: signed-shaped, `dev` naming its device.
+    fn relay_token(dev: &str) -> String {
+        use base64::Engine;
+        let engine = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        format!("{}.{}", engine.encode(format!(r#"{{"acct":"gh:1","dev":"{dev}","iat":1,"exp":9999999999}}"#)), engine.encode([7u8; 32]))
+    }
+
+    /// The serve sign-in's register half: enables hosting, and a 409 becomes a new device.
+    #[test]
+    fn headless_register_enables_hosting_and_survives_a_key_change() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let calls = AtomicUsize::new(0);
+        let (relay, seen) = crate::cloud::http::mock::serve(move |request, _| {
+            let body: Value = serde_json::from_str(&request.body).unwrap_or(Value::Null);
+            let dev = body["device"]["id"].as_str().unwrap_or_default().to_owned();
+            let n = calls.fetch_add(1, Ordering::SeqCst);
+            if n == 0 {
+                (409, r#"{"error":"key changed"}"#.to_owned())
+            } else {
+                (200, json!({"token": relay_token(&dev), "account": {"id": "gh:1", "login": "octocat", "avatarUrl": "u"}}).to_string())
+            }
+        });
+        let build = config::Build { relay, client_id: "Iv1.test".into() };
+        let dir = std::env::temp_dir().join(format!("pandacode-headless-signin-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = config::load(&dir).device_id;
+        let settings = crate::cloud::http::block(async { headless_register(&build, "gh-token", &dir, Some("Build server".into())).await }).unwrap();
+        assert!(settings.host_enabled && !settings.remote_full_access);
+        assert_eq!(settings.account.as_ref().unwrap().login, "octocat");
+        assert_ne!(settings.device_id, first, "a 409 made this a new device");
+        assert_eq!(secrets::read(&dir).token.as_deref(), Some(relay_token(&settings.device_id).as_str()));
+        assert_eq!(config::load(&dir).host_enabled, true);
+        assert_eq!(seen.lock().unwrap().len(), 2, "the 409 retried once");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     fn device(id: &str, name: &str, key: &str) -> Device {
         Device { id: id.into(), name: name.into(), platform: String::new(), public_key: key.into(), host: true, online: true, last_seen: Value::Null }

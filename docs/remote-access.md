@@ -4,7 +4,8 @@ Opt-in. Off by default. Signing in lets a task *run on another computer*: one of
 computers signed in to the same GitHub account, with **Allow remote control of this computer**
 turned on. The task stays an ordinary task in the local sidebar and conversation pane, with the
 same streaming, composer, approvals and model picker as a local one; there is no separate remote
-view. Nothing is sent anywhere until the user signs in.
+view. Nothing is sent anywhere until the user signs in. A computer can also be an always-on
+server with no screen or desktop app: `pandacode serve` ([headless](headless.md)).
 
 ## Pieces
 

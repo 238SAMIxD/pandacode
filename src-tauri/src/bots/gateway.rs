@@ -246,7 +246,8 @@ pub(crate) async fn run_finished(app: &tauri::AppHandle, session_id: &str, succe
 }
 
 /// Prompt text and image ids for queued attachments, as the window's composer builds them.
-fn queued_prompt(attachments: &Value) -> (String, Vec<String>) {
+/// Serve's native queue drain (headless.rs) reuses it for non-bot tasks.
+pub(crate) fn queued_prompt(attachments: &Value) -> (String, Vec<String>) {
     let items = attachments.as_array().map(Vec::as_slice).unwrap_or_default();
     let field = |item: &Value, key: &str| item.get(key).map(|v| v.as_str().map(str::to_owned).unwrap_or_else(|| v.to_string())).unwrap_or_default();
     let context = items
