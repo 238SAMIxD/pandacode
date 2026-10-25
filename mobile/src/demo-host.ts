@@ -52,9 +52,16 @@ export function replied(s: ConnectState, deviceId: string, sessionId: string, no
   };
 }
 
+/** Stop ends the run and, as on the host, pauses an architect's team. */
 export function stopped(s: ConnectState, deviceId: string, sessionId: string, now: number): Patch {
   const k = key(deviceId, sessionId);
-  return { live: { ...s.live, [k]: { ...idleLive(), status: 'stopped' } }, tasks: withTask(s, deviceId, sessionId, { status: 'stopped', updatedAt: now, pending: [] }) };
+  const team = s.tasks[deviceId]?.tasks.find(t => t.sessionId === sessionId)?.team;
+  const loaded = s.teams[k];
+  return {
+    live: { ...s.live, [k]: { ...idleLive(), status: 'stopped' } },
+    tasks: withTask(s, deviceId, sessionId, { status: 'stopped', updatedAt: now, pending: [], ...(team !== undefined && { team: { status: 'paused', activeWorkers: 0 } }) }),
+    ...(loaded && loaded !== 'outdated' && { teams: { ...s.teams, [k]: { ...loaded, status: 'paused' } } }),
+  };
 }
 
 export function started(s: ConnectState, deviceId: string, sessionId: string, params: StartParams, now: number): Patch {

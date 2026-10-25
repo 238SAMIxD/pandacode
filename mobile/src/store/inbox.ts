@@ -2,6 +2,7 @@
 // Pure (tested in node): screens pass store slices in and render the result.
 import type { Bot, TaskSummary, TasksList } from '../connect/types.ts';
 import type { Live } from './reduce.ts';
+import { decodeTeamRun, teamBusy, teamRun, waitingOn, type Team, type TeamRun } from './team.ts';
 import { describeTool, subagentActive, traceText } from './trace.ts';
 
 export const SETTLED_MS = 24 * 3600_000;
@@ -52,14 +53,21 @@ export interface InboxInput {
   now: number;
   /** Precomputed glanceOf per taskKey (useInbox keeps them out of per-delta work); computed from `live` when absent. */
   glances?: Readonly<Record<string, RunGlance | undefined>>;
+  /** Loaded task.team per taskKey (store `teams`), for older hosts whose rows carry no `team`. */
+  teams?: Readonly<Record<string, Team | null | 'outdated' | undefined>>;
 }
 
 export type Inbox = Record<Section, InboxRow[]>;
 
 const CURRENT_TOOL_MAX = 80;
 
-/** The run's activity line, as the desktop's working row: a running tool's sentence, else thinking, else the status. */
-export function glanceOf(live: Live | undefined, task?: TaskSummary): RunGlance {
+/** The task's team: the row's own (newer hosts), else the loaded task.team (older hosts). */
+export const rowTeam = (task: TaskSummary | undefined, loaded?: Team | null | 'outdated'): TeamRun | undefined =>
+  (task?.team !== undefined ? decodeTeamRun(task.team) : teamRun(loaded));
+
+/** The run's activity line, as the desktop's working row: a running tool's sentence, else thinking,
+ * else a subagent's running tool, else the status, else what a busy team leaves it waiting on. */
+export function glanceOf(live: Live | undefined, task?: TaskSummary, team: TeamRun | undefined = rowTeam(task)): RunGlance {
   const subagents = live?.subagents ?? [];
   const agents = subagents.filter(subagentActive).length;
   const tool = live?.items.findLast(i => i.kind === 'tool' && i.tool.status === 'running');
@@ -71,7 +79,8 @@ export function glanceOf(live: Live | undefined, task?: TaskSummary): RunGlance 
   const activity = tool?.kind === 'tool' ? sentence(tool.tool)
     : live?.thinking ? 'Thinking'
     : childTool ? sentence(childTool)
-    : live?.activity && live.activity !== 'Working…' ? live.activity : '';
+    : live?.activity && live.activity !== 'Working…' ? live.activity
+    : teamBusy(team) && (!live || live.status === 'idle' || live.held) ? waitingOn(team!.activeWorkers) : '';
   const limitedUntil = live?.limited ? live.limited.resetsAt : undefined;
   return { activity, agents, startedAt: live?.startedAt ?? task?.runStartedAt ?? undefined, lastEventAt: live?.lastEventAt ?? task?.lastEventAt ?? undefined, limitedUntil };
 }
@@ -83,7 +92,8 @@ export function stalledFor(lastEventAt: number | null | undefined, now: number):
   return quiet > STALL_MS ? quiet : null;
 }
 
-function badgeOf(task: TaskSummary, live: Live | undefined, now: number): Badge {
+/** `team`: the task's team (rowTeam); `agents`: its active subagents. Either keeps it working. */
+function badgeOf(task: TaskSummary, live: Live | undefined, now: number, team?: TeamRun, agents = 0): Badge {
   const approvals = live?.approvals.length ?? task.pending?.filter(p => p.kind === 'approval').length ?? 0;
   const inputs = live?.inputs.length ?? task.pending?.filter(p => p.kind === 'input_request').length ?? 0;
   if (approvals) return 'approval';
@@ -91,7 +101,7 @@ function badgeOf(task: TaskSummary, live: Live | undefined, now: number): Badge 
   // A live view that went idle (run.finished) is newer than the last list.
   const status = live && live.status !== 'idle' ? live.status : task.status;
   if (status === 'waiting') return 'approval';
-  if (status === 'running') return 'working';
+  if (status === 'running' || teamBusy(team) || agents > 0) return 'working';
   if (live?.limited && (live.limited.resetsAt == null || live.limited.resetsAt > now)) return 'limited';
   if (status === 'failed') return 'failed';
   if (status === 'stopped') return 'stopped';
@@ -103,16 +113,18 @@ const waitingOnYou = (row: InboxRow) => row.badge === 'approval' || row.badge ==
 /** Needs you: approvals and questions first, then failures and limits. */
 const byNeed = (a: InboxRow, b: InboxRow) => Number(waitingOnYou(b)) - Number(waitingOnYou(a)) || byTime(a, b);
 
-export function inboxSections({ hosts, tasks, live, snoozed, pins, outbox, now, glances }: InboxInput): Inbox {
+export function inboxSections({ hosts, tasks, live, snoozed, pins, outbox, now, glances, teams }: InboxInput): Inbox {
   const out: Inbox = { running: [], needs: [], recent: [], unsent: [], snoozed: [], settled: [] };
   const index = new Map<string, InboxRow>();
   for (const host of hosts) {
     for (const task of tasks[host.id]?.tasks ?? []) {
       if (task.botId) continue; // under Bots (botRows)
       const key = `${host.id}/${task.sessionId}`;
-      const badge = badgeOf(task, live[key], now);
+      const team = rowTeam(task, teams?.[key]);
+      const run = glances?.[key] ?? glanceOf(live[key], task, team);
+      const badge = badgeOf(task, live[key], now, team, run.agents);
       const at = Math.max(task.lastPromptAt ?? 0, task.updatedAt);
-      const row: InboxRow = { key, deviceId: host.id, computer: host.name, task, badge, run: glances?.[key] ?? glanceOf(live[key], task), at, pinned: !!pins[key] || task.pinned };
+      const row: InboxRow = { key, deviceId: host.id, computer: host.name, task, badge, run, at, pinned: !!pins[key] || task.pinned };
       index.set(key, row);
       const old = !row.pinned && now - at > SETTLED_MS;
       if ((snoozed[key] ?? 0) > now) out.snoozed.push(row);

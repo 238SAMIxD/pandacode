@@ -24,7 +24,7 @@ export function seedDemo() {
   });
   const studio: TaskSummary[] = [
     t('auth', 'Add passkey sign-in to the account page', 'pandacode-web', 'claude', 'feat/passkeys', 2, { status: 'waiting', pending: [{ kind: 'approval', requestId: 'r1', text: 'Run `npm install @simplewebauthn/server`?' }] }),
-    t(DEMO_TEAM_TASK, 'Agents view on the phone', 'pandacode', 'claude', 'feat/agents-view', 1, { status: 'running', runStartedAt: now - 19 * MIN, model: 'opus' }),
+    t(DEMO_TEAM_TASK, 'Agents view on the phone', 'pandacode', 'claude', 'feat/agents-view', 1, { status: 'running', runStartedAt: now - 19 * MIN, model: 'opus', team: { status: 'running', activeWorkers: 1 } }),
     t('flaky', 'Fix the flaky upload test on CI', 'relay', 'codex', 'fix/upload-retry', 6, { status: 'running' }),
     t('icons', 'Which icon set should the toolbar use?', 'design-system', 'opencode', 'main', 14, { status: 'waiting', pending: [{ kind: 'input_request', requestId: 'q1', text: 'Pick one' }] }),
     t('docs', 'Document the Connect relay protocol', 'pandacode', 'claude', 'docs/relay', 9),
@@ -126,13 +126,9 @@ export function seedDemo() {
         { kind: 'tool', tool: tool('f2', 'Bash', json({ command: 'npm test -- upload --repeat 50' }), '', 'running'), startedAt: now - 40_000 },
       ],
     },
+    // The architect's turn has ended while its mobile worker still runs: held for the team.
     [`studio/${DEMO_TEAM_TASK}`]: {
-      ...idleLive(), status: 'running', activity: 'Working…', startedAt: now - 19 * MIN,
-      items: [
-        { kind: 'tool', tool: tool('tl1', 'mcp__pandacode_architect__pandacode_read_team_mailbox', json({}), json({ messages: [], nextCursor: 4 })), startedAt: now - 2 * MIN, endedAt: now - 2 * MIN },
-        { kind: 'tool', tool: tool('tl2', 'mcp__pandacode_architect__pandacode_simulator_control', json({ action: 'tap', x: 200, y: 618 }), 'Tapped.'), startedAt: now - 70_000, endedAt: now - 68_000 },
-        { kind: 'tool', tool: tool('tl3', 'mcp__pandacode_architect__pandacode_simulator_screenshot', json({}), '', 'running'), startedAt: now - 5000 },
-      ],
+      ...idleLive(), status: 'running', activity: 'Waiting on 1 worker', startedAt: now - 19 * MIN, held: 'idle', team: { status: 'running', activeWorkers: 1 },
     },
     // The running worker's own session, so the Agents view shows what it is doing.
     'studio/demo-w-mobile': {

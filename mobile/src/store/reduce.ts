@@ -1,6 +1,7 @@
 // Pure state transitions for messages and live runs; no React Native imports (tested in node).
 import type { AgentEvent, HostActivity, Message, PendingRequest, TaskStatus, ToolActivity } from '../connect/types.ts';
-import { decodeSubagent, describeTool, parseFields, todosOf, toolKind, traceText, type Subagent, type Todo } from './trace.ts';
+import { decodeTeamRun, teamBusy, waitingOn, type TeamRun } from './team.ts';
+import { decodeSubagent, describeTool, parseFields, subagentActive, todosOf, toolKind, traceText, type Subagent, type Todo } from './trace.ts';
 
 const MAX_TEXT = 262_144;
 const MAX_ITEMS = 200;
@@ -35,6 +36,11 @@ export interface Live {
   todos?: Todo[];
   /** A "Thinking…" status line, until text or a tool follows. */
   thinking?: string;
+  /** The main agent's turn ended with this status while team workers or subagents still run:
+   * the task stays working (status 'running') until they settle. */
+  held?: TaskStatus;
+  /** The architect's team while it keeps the task working (`held`). */
+  team?: TeamRun;
 }
 
 export const idleLive = (): Live => ({ status: 'idle', activity: '', items: [], approvals: [], inputs: [] });
@@ -85,7 +91,14 @@ function reduce(live: Live, event: AgentEvent, now: number): Live {
   switch (event.kind) {
     case 'subagent': {
       const agent = decodeSubagent(event.data);
-      return agent ? { ...live, subagents: upsertSubagents(live.subagents, [agent]) } : live;
+      if (!agent) return live;
+      const next = { ...live, subagents: upsertSubagents(live.subagents, [agent]) };
+      // The last subagent a finished turn waited on is done.
+      return next.held && !teamBusy(next.team) && !next.subagents.some(subagentActive) ? ended(next, next.held) : next;
+    }
+    case 'team': {
+      const run = decodeTeamRun(event.data);
+      return run && (event.data as { teamStatus?: unknown }).teamStatus !== undefined ? withTeamRun(live, run) : live;
     }
     case 'usage':
       return { ...live, usage: event.data };
@@ -99,10 +112,11 @@ function reduce(live: Live, event: AgentEvent, now: number): Live {
       return waiting(next) ? next : { ...next, status: live.status === 'idle' ? 'idle' : 'running', activity: live.status === 'waiting' ? 'Continuing task' : live.activity };
     }
   }
-  // A run starting: a limit from the last one no longer applies.
+  // A run starting: a limit from the last one no longer applies. The main agent working again
+  // ends any hold for its team (the next run.finished says whether it still runs).
   const running: Live = active(live.status)
-    ? { ...live, status: 'running' }
-    : { ...live, status: 'running', limited: undefined, startedAt: live.startedAt ?? now };
+    ? { ...live, status: 'running', held: undefined, team: undefined }
+    : { ...live, status: 'running', limited: undefined, startedAt: live.startedAt ?? now, held: undefined, team: undefined };
   switch (event.kind) {
     case 'message_start':
       return { ...running, items: cap([...live.items, { kind: 'text', text: '' }]) };
@@ -174,19 +188,53 @@ export function withHostActivity(live: Live, host: HostActivity | undefined): Li
   };
 }
 
-/** A subscribe reply's status and pending requests (when the host sends them) replace the live view's.
- * An ended run keeps only its limit, so the inbox can still say when it resets. */
-export function fromSubscribe(live: Live, status: TaskStatus, pending?: readonly PendingRequest[], host?: HostActivity): Live {
-  if (status !== 'running' && status !== 'waiting') return ended(live, status);
+/** The row's own `team` (newer hosts, even when null), else `loaded` (from task.team, for older hosts). */
+const teamOf = (host: HostActivity | undefined, loaded: TeamRun | undefined) => (host?.team !== undefined ? decodeTeamRun(host.team) : loaded);
+
+/** Active subagents a host row reports (older hosts report none). */
+const hostSubagents = (host: HostActivity | undefined) => withHostActivity(idleLive(), host).subagents?.filter(subagentActive) ?? [];
+
+/**
+ * A subscribe reply's status and pending requests (when the host sends them) replace the live view's.
+ * An ended run keeps only its limit, so the inbox can still say when it resets, unless its team
+ * (the row's `team`, else `loaded`) or subagents the host lists as active keep it working.
+ */
+export function fromSubscribe(live: Live, status: TaskStatus, pending?: readonly PendingRequest[], host?: HostActivity, loaded?: TeamRun): Live {
+  const team = teamOf(host, loaded);
+  if (status !== 'running' && status !== 'waiting') return ended(live, status, team, hostSubagents(host));
   const valid = pending?.filter(p => typeof p?.requestId === 'string' && p.requestId && typeof p.text === 'string');
   const approvals = valid ? valid.filter(p => p.kind === 'approval') : live.approvals;
   const inputs = valid ? valid.filter(p => p.kind === 'input_request') : live.inputs;
-  return withHostActivity({ ...live, status: approvals.length + inputs.length ? 'waiting' : status, approvals, inputs }, host);
+  const next = withHostActivity({ ...live, status: approvals.length + inputs.length ? 'waiting' : status, approvals, inputs }, host);
+  // Newer hosts list an architect as running while its team works: show what it waits on.
+  return teamBusy(team) && (live.held || !active(live.status)) && !approvals.length && !inputs.length
+    ? { ...next, held: live.held ?? 'idle', team, activity: waitingOn(team!.activeWorkers) }
+    : next;
 }
 
-/** The live view after its run ended with `status`: empty but for the account limit it hit. */
-export const ended = (live: Live | undefined, status: TaskStatus): Live =>
-  (live?.limited ? { ...idleLive(), status, limited: live.limited } : { ...idleLive(), status });
+/**
+ * The live view after its run ended with `status`: empty but for the account limit it hit. While
+ * its team is busy, or any of `subagents` (by default the live view's own) is still active, the task
+ * stays working instead: status 'running', held with the final status, keeping those subagents.
+ */
+export function ended(live: Live | undefined, status: TaskStatus, team?: TeamRun, subagents: readonly Subagent[] = live?.subagents ?? []): Live {
+  const busy = teamBusy(team);
+  // The newer snapshot of each one wins (a subagent the phone saw finish stays finished).
+  const children = status === 'stopped' ? [] : upsertSubagents(live?.subagents?.filter(a => subagents.some(s => s.id === a.id)), subagents).filter(subagentActive);
+  if (!busy && !children.length) return live?.limited ? { ...idleLive(), status, limited: live.limited } : { ...idleLive(), status };
+  return {
+    ...idleLive(), status: 'running', activity: busy ? waitingOn(team!.activeWorkers) : '', held: status, team: busy ? team : undefined,
+    subagents: children, todos: live?.todos, limited: live?.limited, startedAt: live?.startedAt, lastEventAt: live?.lastEventAt,
+  };
+}
+
+/** A team update for a task: a busy team updates what a held task waits on; a settled one ends the hold. */
+export function withTeamRun(live: Live, run: TeamRun): Live {
+  if (!live.held) return live;
+  if (teamBusy(run)) return { ...live, team: run, activity: waitingOn(run.activeWorkers) };
+  const status = run.status === 'failed' || run.status === 'stopped' ? run.status : live.held;
+  return ended({ ...live, team: undefined }, status);
+}
 
 const active = (status: TaskStatus) => status === 'running' || status === 'waiting';
 
@@ -195,14 +243,17 @@ const active = (status: TaskStatus) => status === 'running' || status === 'waiti
  * the host lists as ended (it finished while the phone slept or was offline) is settled, and
  * pending requests listed for a task the phone has no live view of are seeded. Otherwise the
  * live view is kept (undefined when there is none), since events are newer than any list.
+ * A task held for its team or subagents settles once the list shows neither still working.
  */
-export function fromList(live: Live | undefined, status: TaskStatus, pending?: readonly PendingRequest[], host?: HostActivity): Live | undefined {
-  if (live && active(live.status) && !active(status)) return fromSubscribe(live, status, pending);
+export function fromList(live: Live | undefined, status: TaskStatus, pending?: readonly PendingRequest[], host?: HostActivity, loaded?: TeamRun): Live | undefined {
+  if (live && active(live.status) && !active(status)) return fromSubscribe(live, status, pending, host, loaded);
   if (!live && (pending?.length || active(status))) {
-    const seeded = fromSubscribe(idleLive(), status, pending, host);
-    return pending?.length || seeded.lastEventAt || seeded.startedAt || seeded.subagents?.length ? seeded : undefined;
+    const seeded = fromSubscribe(idleLive(), status, pending, host, loaded);
+    return pending?.length || seeded.lastEventAt || seeded.startedAt || seeded.subagents?.length || seeded.team ? seeded : undefined;
   }
-  return live && active(live.status) ? withHostActivity(live, host) : live;
+  if (!live || !active(live.status)) return live;
+  const team = teamOf(host, loaded);
+  return withHostActivity(live.held && teamBusy(team) ? withTeamRun(live, team!) : live, host);
 }
 
 /** Hosts whose task list is missing or older than `maxAgeMs`. */

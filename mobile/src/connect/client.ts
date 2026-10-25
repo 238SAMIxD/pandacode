@@ -9,8 +9,8 @@ import { File, Paths } from 'expo-file-system';
 import { BUILD_DEMO, DEMO_FILE, demoAtStart } from '../demo.ts';
 import { demoCall, type DemoHost } from '../demo-host.ts';
 import { delivering, settled, unmatched, type Sent } from '../store/sent.ts';
-import { applyTeamEvent, decodeTeam, type Team } from '../store/team.ts';
-import { applyEvent, ended, fromList, fromSubscribe, idleLive, lastId, mergeMessages, prependMessages, staleLists } from '../store/reduce.ts';
+import { applyTeamEvent, decodeTeam, decodeTeamRun, teamBusy, teamRun, type Team } from '../store/team.ts';
+import { applyEvent, ended, fromList, fromSubscribe, idleLive, lastId, mergeMessages, prependMessages, staleLists, withTeamRun } from '../store/reduce.ts';
 import { cachedLastId, clearThreads, readThread, saveThread } from '../store/threads.ts';
 import { PrefetchQueue, prefetchOrder } from '../store/prefetch.ts';
 import { clearBlobs } from '../store/attachment-files.ts';
@@ -447,7 +447,11 @@ function events(host: string, list: unknown) {
       const key = taskKey(host, event.sessionId);
       const team = teams[key] === 'outdated' ? undefined : teams[key];
       const next = applyTeamEvent(team, event.data);
-      if (next !== team && next !== undefined) teams = { ...teams, [key]: next };
+      if (next === team || next === undefined) continue;
+      teams = { ...teams, [key]: next };
+      // Older hosts send no team-settled event: a loaded team's workers say when a held task is done.
+      const run = team ? teamRun(next) : undefined;
+      if (run && live[key]?.held) live[key] = withTeamRun(live[key], run);
     }
     let sent = s.sent;
     for (const id of started) if (sent[taskKey(host, id)]) sent = { ...sent, [taskKey(host, id)]: delivering(sent[taskKey(host, id)]) };
@@ -476,14 +480,24 @@ function withStatuses(s: ConnectState, host: string, live: ConnectState['live'])
 async function finished(host: string, data: RunFinished) {
   if (typeof data?.sessionId !== 'string') return;
   void listTasks(host).catch(() => undefined); // titles, statuses and order
-  if (!watched.get(host)?.has(data.sessionId)) return;
-  await loadMessages(host, data.sessionId).catch(() => undefined); // the next subscribe retries
   const key = taskKey(host, data.sessionId);
-  // The turn may have opened a pull request (or changed the linked one).
-  if (key in state().pulls) void loadPull(host, data.sessionId, true).catch(() => undefined);
-  const status = data.stopped ? 'stopped' : data.successful ? 'idle' : 'failed';
+  if (watched.get(host)?.has(data.sessionId)) {
+    await loadMessages(host, data.sessionId).catch(() => undefined); // the next subscribe retries
+    // The turn may have opened a pull request (or changed the linked one).
+    if (key in state().pulls) void loadPull(host, data.sessionId, true).catch(() => undefined);
+  } else if (!state().live[key]) return;
+  // A glanced task (no open thread) ends now too: a newer host keeps listing an architect with a
+  // busy team as running, so its list row alone would not settle the finished turn's activity.
+  // Newer hosts send the row's status: 'running' while the team works (hold), the final one when
+  // it settles (`teamSettled`, possibly after an ordinary run.finished: ending twice is harmless).
+  const hold = active(data.status);
+  const status = data.teamSettled === true && typeof data.status === 'string' && data.status && !hold ? data.status : data.stopped ? 'stopped' : data.successful ? 'idle' : 'failed';
   patch(s => {
-    const live = { ...s.live, [key]: ended(s.live[key], status) };
+    // A team still working (newer hosts say so; else the loaded team) keeps the task working.
+    const listed = data.team !== undefined ? decodeTeamRun(data.team) : teamRun(s.teams[key]);
+    const team = hold && !teamBusy(listed) ? { status: 'running', activeWorkers: listed?.activeWorkers ?? 0 } : listed;
+    // The host's run ends with its process, background subagents included: only the team holds.
+    const live = { ...s.live, [key]: ended(s.live[key], status, team, []) };
     return { live, sent: editSent(s.sent, key, settled), tasks: withStatuses(s, host, live) };
   });
 }
@@ -557,7 +571,10 @@ async function subscribeOnce(deviceId: string): Promise<void> {
   const tasks = Array.isArray(reply?.tasks) ? reply.tasks : [];
   patch(s => {
     const live = { ...s.live };
-    for (const t of tasks) live[taskKey(deviceId, t.sessionId)] = fromSubscribe(live[taskKey(deviceId, t.sessionId)] ?? idleLive(), t.status, t.pending, t);
+    for (const t of tasks) {
+      const key = taskKey(deviceId, t.sessionId);
+      live[key] = fromSubscribe(live[key] ?? idleLive(), t.status, t.pending, t, teamRun(s.teams[key]));
+    }
     return { live, tasks: withStatuses(s, deviceId, live) };
   });
   for (const t of tasks) if (watched.get(deviceId)?.has(t.sessionId) && t.lastId > lastId(state().messages[taskKey(deviceId, t.sessionId)])) void loadMessages(deviceId, t.sessionId).catch(() => undefined);
@@ -750,7 +767,7 @@ async function fetchList(deviceId: string, limit?: number): Promise<TasksList> {
     const live = { ...s.live };
     for (const t of list.tasks) {
       const key = taskKey(deviceId, t.sessionId);
-      const next = fromList(live[key], t.status, Array.isArray(t.pending) ? t.pending : undefined, t);
+      const next = fromList(live[key], t.status, Array.isArray(t.pending) ? t.pending : undefined, t, teamRun(s.teams[key]));
       if (next) live[key] = next;
     }
     return { live, tasks: { ...s.tasks, [deviceId]: { ...list, loadedAt: Date.now() } } };

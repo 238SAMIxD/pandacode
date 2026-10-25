@@ -191,8 +191,8 @@ approval policy: remote prompts get no more power than local ones.
 
 | Method | Params | Result |
 |---|---|---|
-| `subscribe` | `{ sessionIds: [...] }` (≤ 500) | `{ tasks: [{ sessionId, status, lastId, title, pending, lastEventAt?, runStartedAt?, subagents?, subagentsTruncated? }] }` for those that exist. `pending` is the current `[{ kind: "approval" \| "input_request", requestId, text, data, tool? }]` for requests the viewer can still answer; large payloads are cut to fit. Answered, cancelled and ended-run requests are removed. While a host run is active (including waiting for input or approval), `lastEventAt` is the unix-millisecond time of the harness's last event, `runStartedAt` is the latest saved prompt time when known, and `subagents` is a snapshot in the desktop `SubagentActivity` shape: `[{ id, parentId, name, prompt, status, response, tools: [{ id, name, status, input, output, writePaths? }], startedAt, updatedAt }]`. The phone can derive active/total child counts and tool counts from the array and each item's status and tools. `subagentsTruncated: true` appears only when entries or activity text were cut to fit the 40 KiB per-task subagent budget. These live-run fields are absent when the task is not active. Adds the ids to this device's subscription for 10 minutes; the viewer renews every 9 minutes and on every presence frame. An expired subscription starts over. |
-| `tasks.list` | `{ limit?: 0..500 }` (default 200) | `{ tasks: [{ sessionId, title, status, projectId, projectName, provider, model, effort, mode, pinned, updatedAt, lastPromptAt, lastEventAt?, runStartedAt?, branch?, chat?, botId?, botName?, pending }], projects: [{ id, name, repo: "owner/name" \| null }] }`. `pending` has the same shape and meaning as for `subscribe`. `lastEventAt` and `runStartedAt` use the same definitions as `subscribe` and are included only for an active host run. Tasks are ordered by latest prompt or response and omit drafts and mirrors. Bot workspace tasks include `botId` and `botName`; other tasks may include chats (`chat: true`). Projects omit bot workspaces. The tail is dropped to keep the reply under 180 KiB. |
+| `subscribe` | `{ sessionIds: [...] }` (≤ 500) | `{ tasks: [{ sessionId, status, lastId, title, pending, lastEventAt?, runStartedAt?, subagents?, subagentsTruncated?, team? }] }` for those that exist. `status` and `team` follow [Team tasks](#team-tasks). `pending` is the current `[{ kind: "approval" \| "input_request", requestId, text, data, tool? }]` for requests the viewer can still answer; large payloads are cut to fit. Answered, cancelled and ended-run requests are removed. While a host run is active (including waiting for input or approval), `lastEventAt` is the unix-millisecond time of the harness's last event, `runStartedAt` is the latest saved prompt time when known, and `subagents` is a snapshot in the desktop `SubagentActivity` shape: `[{ id, parentId, name, prompt, status, response, tools: [{ id, name, status, input, output, writePaths? }], startedAt, updatedAt }]`. The phone can derive active/total child counts and tool counts from the array and each item's status and tools. `subagentsTruncated: true` appears only when entries or activity text were cut to fit the 40 KiB per-task subagent budget. These live-run fields are absent when the task is not active. Adds the ids to this device's subscription for 10 minutes; the viewer renews every 9 minutes and on every presence frame. An expired subscription starts over. |
+| `tasks.list` | `{ limit?: 0..500 }` (default 200) | `{ tasks: [{ sessionId, title, status, projectId, projectName, provider, model, effort, mode, pinned, updatedAt, lastPromptAt, lastEventAt?, runStartedAt?, branch?, chat?, botId?, botName?, pending, team? }], projects: [{ id, name, repo: "owner/name" \| null }] }`. `pending` has the same shape and meaning as for `subscribe`; `status` and `team` follow [Team tasks](#team-tasks). `lastEventAt` and `runStartedAt` use the same definitions as `subscribe` and are included only for an active host run. Tasks are ordered by latest prompt or response and omit drafts and mirrors. Bot workspace tasks include `botId` and `botName`; other tasks may include chats (`chat: true`). Projects omit bot workspaces. The tail is dropped to keep the reply under 180 KiB. |
 | `projects.icons` | `{ projectIds: string[] }` (1..=50; use project ids from `tasks.list`) | `{ icons: { [projectId]: string \| null } }`. Known non-bot local projects map to their icon `data:` URL, or `null` when no icon exists or it exceeds 64 KiB. Unknown ids are omitted. Icons stop being added before the result exceeds 180 KiB, so omitted ids can be requested again. |
 | `providers.list` | `{ force?: boolean }` | the host's `list_providers` result: `[{ id, name, installed, path, version, models }]`. `force` drops the same ACP catalog caches. If it would not fit one reply, the longest `models` lists are halved until it does. |
 | `providers.models` | `{ provider, force?: boolean }` | the host's `list_provider_models` result: `[{ id, name, description, reasoningEfforts, defaultReasoningEffort, contextWindow }]`, its tail dropped to fit one reply. `provider` must be a known harness id (`Unknown provider.`). |
@@ -204,7 +204,7 @@ approval policy: remote prompts get no more power than local ones.
 | `task.workspaceImage` | `{ sessionId, path, variant: "thumb" | "full", offset? }` | The same chunk shape as `task.attachment`. Uses the local task's workspace image checks: relative paths only, no traversal or escaping symlinks, image types only, and a maximum source size of 8 MiB. Mirrors are refused. |
 
 | `task.send` | `{ sessionId, text }` | `{ queued: boolean }`. Queued if the task is running, like Enter. If the run ended between the check and the queue add, the host takes the entry back and sends it. |
-| `task.stop` | `{ sessionId }` | `{}` |
+| `task.stop` | `{ sessionId }` | `{}`. For a task whose team is running or waiting this is the desktop Stop button (`architect_control` with `stop`): the team is paused, unsettled workers are marked stopped, and the architect's and workers' runs are stopped, also between architect turns when no agent of the task itself runs. Otherwise it stops the task's run (`stop_session`). |
 | `task.steer` | `{ sessionId, text }` | `{}` (as `steer_task`) |
 | `task.configure` | `{ sessionId, provider?, model?, effort?, mode? }` | `{}`. `provider` and `model` together (a provider not installed there is refused as in `task.start`); `effort: null` clears it; `mode` changes permissions. |
 | `task.pull` | `{ sessionId }` | `{ pull: PullDetail \| null }`. `PullDetail` is `{ number, title, body, bodyTruncated, state, url, author, base, head, additions, deletions, changedFiles, createdAt, updatedAt, mergedAt, mergeable, reviewDecision, labels: string[], checks: [{ name, state, url }], files: [{ path, additions, deletions }], commits: [{ oid, headline, author, date }], timeline: [{ kind, author, body, state, createdAt }], truncated }`. `truncated` is true if Connect trimmed the detail's body, timeline, files or other fields (or the GitHub body was already truncated); the whole result fits under 180 KiB. |
@@ -337,9 +337,37 @@ For example, a live child update is an ordinary `agent.events` item:
 }
 ```
 
-At a run end the host queues `run.finished { sessionId, successful, stopped, text }` after that
-run's last events. The viewer copies the new messages, ends the local turn, then emits the
+At a run end the host queues `run.finished { sessionId, successful, stopped, text, status?, team? }`
+after that run's last events. The viewer copies the new messages, ends the local turn, then emits the
 `done` agent event with `text`, so the transcript reloads with everything in it.
+
+#### Team tasks
+
+An architect task can be working while no agent of its own runs: the architect ends its turn
+(the team becomes `waiting`) while its workers carry on, and the desktop still shows the task as
+running. Connect reports it the same way. Every task row of `tasks.list` and `subscribe`, and every
+`run.finished`, of a task that leads a team carries
+`team: { status, activeWorkers }`, where `status` is the team snapshot's status (`ready`,
+`running`, `waiting`, `paused`, `failed`, `completed`) and `activeWorkers` counts workers that are
+not abandoned and are `queued`, `running` or `waiting`. Other tasks have no `team`. The values are
+read in one query from the saved team, on the blocking pool.
+
+- While the team is `running` or `waiting`, the row's `status` is `running`, whatever the saved
+  status (`completed`, `idle`, or `interrupted` because no agent is registered). The one exception
+  is a row whose own architect run is registered and `waiting` for input or approval: it stays
+  `waiting`. Once the team is paused, failed or completed, `status` is what it would be without a
+  team.
+- A `run.finished` whose team is still running or waiting has `status: "running"`: the run ended,
+  but the task did not, so the phone keeps it under Running. Without `status`, `run.finished`
+  means what it always did.
+- When a team the host has reported or seen as active stops being `running` or `waiting` and no
+  agent of the architect task is registered, the host sends a further `run.finished`:
+  `{ sessionId, successful: team.status == "completed", stopped: team.status == "paused", text:
+  "Team completed" | "Team paused" | "Team failed" | "Team stopped", status, team, teamSettled: true }`,
+  with `status` as a task row would show it then. If the architect itself still runs, its own run
+  end reports the settled team instead. A settling `run.finished` is skipped while the same task's
+  `run.finished` is still waiting in the buffer, but it can follow one already sent; viewers treat
+  a repeated `run.finished` as a no-op (the desktop mirror ends a turn only once).
 
 The viewer re-emits each event as the window's ordinary `agent-event` with the mirror's *local*
 session id (events for tasks it doesn't mirror from that host are dropped), and moves the row's

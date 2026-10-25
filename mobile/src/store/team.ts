@@ -67,6 +67,7 @@ export function applyTeamEvent(team: Team | null | undefined, data: unknown): Te
   if (!data || typeof data !== 'object') return team;
   const d = data as Record<string, unknown>;
   if (d.removed === true) return typeof d.id === 'string' && team ? withWorkers(team, team.workers.filter(w => w.id !== d.id)) : null;
+  if (typeof d.teamStatus === 'string') return team ? { ...team, status: str(d.teamStatus, 40) } : team;
   if (Array.isArray(d.workers) || (d.team && typeof d.team === 'object')) return decodeTeam(d);
   const row = worker(d);
   if (!row) return team;
@@ -80,6 +81,33 @@ const withWorkers = (team: Team, workers: TeamWorker[]): Team =>
 
 export const teamActive = (team: Team | null | undefined) => team?.status === 'running' || team?.status === 'waiting';
 export const workerActive = (w: TeamWorker) => !w.abandoned && (w.status === 'running' || w.status === 'waiting' || w.status === 'queued');
+
+/** An architect task's team as newer hosts send it on list rows, subscribe rows and run.finished
+ * (`team: { status, activeWorkers }`), or as a `team` event's `{ teamStatus, activeWorkers }`. */
+export interface TeamRun { status: string; activeWorkers: number }
+
+export function decodeTeamRun(value: unknown): TeamRun | undefined {
+  if (!value || typeof value !== 'object') return;
+  const v = value as Record<string, unknown>;
+  const status = typeof v.status === 'string' ? v.status : typeof v.teamStatus === 'string' ? v.teamStatus : undefined;
+  if (status === undefined) return;
+  const n = Number(v.activeWorkers);
+  return { status: status.slice(0, 40), activeWorkers: Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), 999) : 0 };
+}
+
+/** The team keeps its task working (as the desktop does while it is running or waiting). */
+export const teamBusy = (run: TeamRun | null | undefined) => run?.status === 'running' || run?.status === 'waiting';
+
+/** A loaded task.team (older hosts send no TeamRun): busy while it is active and a worker still runs.
+ * Workers are checked too since an older host's stored status is not updated by worker events. */
+export function teamRun(team: Team | null | 'outdated' | undefined): TeamRun | undefined {
+  if (!team || team === 'outdated') return;
+  const activeWorkers = team.workers.filter(workerActive).length;
+  return teamActive(team) && activeWorkers ? { status: team.status, activeWorkers } : { status: teamActive(team) ? 'completed' : team.status, activeWorkers };
+}
+
+/** The status line while only workers run: "Waiting on 2 workers". */
+export const waitingOn = (n: number) => (n > 0 ? `Waiting on ${n} worker${n === 1 ? '' : 's'}` : 'Waiting on the team');
 
 /** A teammate id as a name: Architect, the worker's name, else Worker. */
 export const memberName = (team: Team | null | undefined, id: string) => (id === 'architect' ? 'Architect' : team?.workers.find(w => w.id === id)?.name ?? 'Worker');

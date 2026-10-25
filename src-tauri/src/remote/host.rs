@@ -947,6 +947,141 @@ fn changed_worker_rows(
     changed
 }
 
+/// The part of an architect team a task row needs: the desktop shows the task as
+/// running while its team is running or waiting, even between architect turns.
+#[derive(Clone, Debug, PartialEq)]
+struct TeamState {
+    status: String,
+    active_workers: i64,
+    revision: u64,
+}
+
+impl TeamState {
+    fn of(team: &crate::architect::TeamSnapshot) -> Self {
+        let active_workers = team
+            .workers
+            .iter()
+            .filter(|w| !w.abandoned && matches!(w.status.as_str(), "queued" | "running" | "waiting"))
+            .count() as i64;
+        Self { status: team.status.clone(), active_workers, revision: team.revision }
+    }
+
+    fn active(&self) -> bool {
+        matches!(self.status.as_str(), "running" | "waiting")
+    }
+
+    fn value(&self) -> Value {
+        json!({"status": self.status, "activeWorkers": self.active_workers})
+    }
+}
+
+/// Team states for those of `ids` that lead a team, read in one query without
+/// deserializing the saved snapshots.
+fn team_states(db: &rusqlite::Connection, ids: &[&str]) -> Result<HashMap<String, TeamState>> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let mut query = db.prepare("SELECT session_id,COALESCE(json_extract(content,'$.status'),''),COALESCE(json_extract(content,'$.revision'),0),(SELECT COUNT(*) FROM json_each(content,'$.workers') w WHERE COALESCE(json_extract(w.value,'$.abandoned'),0)=0 AND json_extract(w.value,'$.status') IN ('queued','running','waiting')) FROM architect_teams WHERE session_id IN (SELECT value FROM json_each(?1))").map_err(|e| e.to_string())?;
+    let rows = query
+        .query_map([json!(ids).to_string()], |row| {
+            Ok((row.get::<_, String>(0)?, TeamState { status: row.get(1)?, revision: row.get::<_, i64>(2)?.max(0) as u64, active_workers: row.get(3)? }))
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<_>>().map_err(|e| e.to_string())
+}
+
+/// The newest team state reported or seen per architect task, so a team the phone was
+/// told is active gets a settling `run.finished` when it stops.
+fn team_status_cache() -> &'static StdMutex<HashMap<String, TeamState>> {
+    static CACHE: OnceLock<StdMutex<HashMap<String, TeamState>>> = OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// Records `team` unless a newer revision was already seen. Returns the newest state and
+/// whether this observation settled a team last seen active.
+fn observe_team(cache: &mut HashMap<String, TeamState>, session_id: &str, team: TeamState) -> (TeamState, bool) {
+    match cache.get(session_id) {
+        Some(seen) if seen.revision > team.revision => (seen.clone(), false),
+        previous => {
+            let settled = previous.is_some_and(TeamState::active) && !team.active();
+            cache.insert(session_id.to_owned(), team.clone());
+            (team, settled)
+        }
+    }
+}
+
+/// Reads and records the team states of `ids`.
+fn observed_team_states(db: &rusqlite::Connection, ids: &[&str]) -> Result<HashMap<String, TeamState>> {
+    let states = team_states(db, ids)?;
+    let mut cache = team_status_cache().lock().unwrap_or_else(|error| error.into_inner());
+    Ok(states.into_iter().map(|(id, team)| {
+        let newest = observe_team(&mut cache, &id, team).0;
+        (id, newest)
+    }).collect())
+}
+
+/// A row's status as the desktop shows it. Only a registered agent is really running, so a
+/// stale running row reads as interrupted, but an active team keeps its task running.
+/// A team task's row also carries `team`.
+fn shape_task_status(row: &mut Value, has_agent: bool, team: Option<&TeamState>) {
+    let saved = row["status"].as_str().unwrap_or_default().to_owned();
+    let mut status = if !has_agent && matches!(saved.as_str(), "running" | "waiting") { "interrupted".to_owned() } else { saved };
+    if let Some(team) = team {
+        if team.active() && !(has_agent && status == "waiting") {
+            status = "running".into();
+        }
+        row["team"] = team.value();
+    }
+    row["status"] = json!(status);
+}
+
+/// An architect run can end while its workers carry on: then the phone must not settle it.
+fn shape_finished(data: &mut Value, team: Option<&TeamState>) {
+    if let Some(team) = team {
+        if team.active() {
+            data["status"] = json!("running");
+        }
+        data["team"] = team.value();
+    }
+}
+
+/// `run.finished` for a team that settled after its architect's last run ended.
+fn settled_finished(session_id: &str, saved_status: &str, team: &TeamState) -> Value {
+    let mut data = json!({
+        "sessionId": session_id,
+        "successful": team.status == "completed",
+        "stopped": team.status == "paused",
+        "text": match team.status.as_str() { "completed" => "Team completed", "paused" => "Team paused", "failed" => "Team failed", _ => "Team stopped" },
+        "status": saved_status,
+        "teamSettled": true,
+    });
+    shape_task_status(&mut data, false, Some(team));
+    data
+}
+
+/// Queues the settling `run.finished` unless the architect itself still runs (its own
+/// run end reports the team) or that run end is still waiting in the buffer.
+async fn queue_team_settled(app: tauri::AppHandle, session_id: String, team: TeamState) {
+    let handle = app.clone();
+    let id = session_id.clone();
+    let data = crate::blocking(move || {
+        let state = handle.state::<AppState>();
+        if state.agents.lock().map_err(|e| e.to_string())?.contains_key(&id) {
+            return Ok(None);
+        }
+        let store = state.store.lock().map_err(|e| e.to_string())?;
+        let status: Option<String> = store.db.query_row("SELECT status FROM sessions WHERE id=?1 AND remote_device IS NULL", [&id], |r| r.get(0)).optional().map_err(|e| e.to_string())?;
+        Ok(status.map(|status| settled_finished(&id, &status, &team)))
+    })
+    .await;
+    let Ok(Some(data)) = data else { return };
+    buffer(&app, &session_id, |subscriber| {
+        if !subscriber.finished.iter().any(|item| item["sessionId"] == session_id.as_str()) {
+            subscriber.finished.push(data.clone());
+        }
+    });
+}
+
 /// Architect state is a Tauri app event on desktop. Translate it once the first
 /// Connect viewer subscribes, and feed only changed worker rows through the same
 /// per-subscriber 100 ms event buffer used for agent deltas.
@@ -962,6 +1097,10 @@ fn watch_team_events(app: &tauri::AppHandle) {
             if value["removed"] == true {
                 if let Some(session_id) = value["sessionId"].as_str() {
                     team_event_cache()
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .remove(session_id);
+                    team_status_cache()
                         .lock()
                         .unwrap_or_else(|error| error.into_inner())
                         .remove(session_id);
@@ -981,6 +1120,16 @@ fn watch_team_events(app: &tauri::AppHandle) {
             };
             for worker in changed {
                 queue_team_event(&listener_app, &team.session_id, worker);
+            }
+            // This runs inside the emit, possibly under the agent and store locks: only the
+            // cache is touched here, and the settle check runs on the blocking pool.
+            let (state, settled) = observe_team(
+                &mut team_status_cache().lock().unwrap_or_else(|error| error.into_inner()),
+                &team.session_id,
+                TeamState::of(&team),
+            );
+            if settled {
+                tauri::async_runtime::spawn(queue_team_settled(listener_app.clone(), team.session_id.clone(), state));
             }
         });
     });
@@ -1116,7 +1265,20 @@ async fn run_one(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value
         }
         Call::Stop { session_id } => {
             local_task(&state, &session_id).await?;
-            crate::stop_session(app.clone(), state, session_id).await?;
+            // Like the desktop Stop button: a task leading an active team stops the whole
+            // team (architect and workers), which also covers the gap between architect turns.
+            let store = state.store.clone();
+            let id = session_id.clone();
+            let team_active = crate::blocking(move || {
+                let store = store.lock().map_err(|e| e.to_string())?;
+                Ok(team_states(&store.db, &[id.as_str()])?.get(&id).is_some_and(TeamState::active))
+            })
+            .await?;
+            if team_active {
+                crate::architect::architect_control(app.clone(), state, session_id, "stop".into()).await?;
+            } else {
+                crate::stop_session(app.clone(), state, session_id).await?;
+            }
             Ok(json!({}))
         }
         Call::Steer { session_id, text } => {
@@ -1760,17 +1922,20 @@ fn tasks_list(state: &AppState, limit: usize) -> Result<Value> {
         .filter(|task| task.remote_device.is_none() && (project_names.contains_key(&task.project_id) || bot_projects.contains(&task.project_id)))
         .collect();
     sessions.sort_by(|a, b| activity_at(b).cmp(&activity_at(a)).then_with(|| a.id.cmp(&b.id)));
+    sessions.truncate(limit);
+    let teams = {
+        let ids: Vec<&str> = sessions.iter().map(|task| task.id.as_str()).collect();
+        observed_team_states(&state.store.lock().map_err(|e| e.to_string())?.db, &ids)?
+    };
     let tasks: Vec<Value> = sessions
         .into_iter()
-        .take(limit)
         .map(|task| {
-            let status = if matches!(task.status.as_str(), "running" | "waiting") && !last_event_by_session.contains_key(&task.id) { "interrupted" } else { task.status.as_str() };
             let project_name = project_names.get(&task.project_id).or_else(|| bots_by_project.get(&task.project_id).map(|(_, name)| name)).cloned().unwrap_or_default();
             let run_started_at = task.last_prompt_at;
             let mut item = json!({
                 "sessionId": task.id,
                 "title": task.title,
-                "status": status,
+                "status": task.status,
                 "projectId": task.project_id,
                 "projectName": project_name,
                 "provider": task.provider,
@@ -1782,6 +1947,7 @@ fn tasks_list(state: &AppState, limit: usize) -> Result<Value> {
                 "lastPromptAt": task.last_prompt_at,
                 "pending": pending_by_session.get(&task.id).cloned().unwrap_or_default(),
             });
+            shape_task_status(&mut item, last_event_by_session.contains_key(&task.id), teams.get(&task.id));
             if let Some(&last_event_at) = last_event_by_session.get(&task.id) {
                 add_live_timing(&mut item, Some(LiveTiming { last_event_at, run_started_at }));
             }
@@ -1870,6 +2036,7 @@ fn subscribed_tasks(state: &AppState, ids: &[String]) -> Result<Vec<Value>> {
         (active_runs, pending)
     };
     let store = state.store.lock().map_err(|e| e.to_string())?;
+    let teams = observed_team_states(&store.db, &ids.iter().map(String::as_str).collect::<Vec<_>>())?;
     let mut tasks = Vec::new();
     for id in ids {
         let row: Option<(String, String, i64, Option<i64>)> = store
@@ -1878,10 +2045,9 @@ fn subscribed_tasks(state: &AppState, ids: &[String]) -> Result<Vec<Value>> {
             .optional()
             .map_err(|e| e.to_string())?;
         let Some((status, title, last_id, last_prompt_at)) = row else { continue };
-        // Only a registered agent is really running; a stale row reads as interrupted.
-        let status = if active_runs.contains_key(id) || !matches!(status.as_str(), "running" | "waiting") { status } else { "interrupted".into() };
         let pending = pending_by_session.get(id).cloned().unwrap_or_default();
         let mut task = json!({"sessionId": id, "status": status, "lastId": last_id, "title": title, "pending": pending});
+        shape_task_status(&mut task, active_runs.contains_key(id), teams.get(id));
         if let Some(run) = active_runs.get(id) {
             add_live_timing(
                 &mut task,
@@ -2164,7 +2330,26 @@ async fn flush(app: tauri::AppHandle) {
         let hosting = inner.settings.host_enabled;
         inner.subscribers.iter_mut().filter(|_| hosting).map(|(id, s)| (id.clone(), std::mem::take(&mut s.events), std::mem::take(&mut s.finished))).filter(|(_, events, finished)| !events.is_empty() || !finished.is_empty()).collect()
     };
-    for (device, events, finished) in batches {
+    // Read after the run end has settled its team (architect::completed follows it), so a
+    // team whose workers carry on reports the run's task as still running.
+    let ids: Vec<String> = batches.iter().flat_map(|(_, _, finished)| finished.iter().filter(|data| data.get("team").is_none()).filter_map(|data| data["sessionId"].as_str().map(str::to_owned))).collect::<HashSet<_>>().into_iter().collect();
+    let teams = if ids.is_empty() {
+        HashMap::new()
+    } else {
+        let handle = app.clone();
+        crate::blocking(move || {
+            let state = handle.state::<AppState>();
+            let store = state.store.lock().map_err(|e| e.to_string())?;
+            observed_team_states(&store.db, &ids.iter().map(String::as_str).collect::<Vec<_>>())
+        })
+        .await
+        .unwrap_or_default()
+    };
+    for (device, events, mut finished) in batches {
+        for data in finished.iter_mut().filter(|data| data.get("team").is_none()) {
+            let team = data["sessionId"].as_str().and_then(|id| teams.get(id));
+            shape_finished(data, team);
+        }
         for frame in frames(events) {
             let _ = socket::send_to_device(&app, &device, &json!({"type": "event", "name": "agent.events", "data": {"events": frame}}));
         }
@@ -2330,6 +2515,86 @@ mod tests {
         assert_eq!(event["kind"], "team");
         assert_eq!(event["data"]["id"], "w1");
         assert_eq!(event["data"]["sessionId"], "session-w1");
+    }
+
+    fn team_state(status: &str, active_workers: i64, revision: u64) -> TeamState {
+        TeamState { status: status.into(), active_workers, revision }
+    }
+
+    #[test]
+    fn team_states_count_unsettled_workers_in_one_query() {
+        let mut team = team_fixture(vec![worker_fixture("w1", "running"), worker_fixture("w2", "queued"), worker_fixture("w3", "completed"), worker_fixture("w4", "waiting")]);
+        team.workers[3].abandoned = true;
+        team.status = "waiting".into();
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute("CREATE TABLE architect_teams(session_id TEXT PRIMARY KEY, content TEXT NOT NULL)", []).unwrap();
+        db.execute("INSERT INTO architect_teams VALUES(?1,?2)", rusqlite::params![team.session_id, serde_json::to_string(&team).unwrap()]).unwrap();
+        let states = team_states(&db, &["team-session", "plain-task"]).unwrap();
+        assert_eq!(states.len(), 1, "only architect parents get a team");
+        assert_eq!(states["team-session"], team_state("waiting", 2, 9));
+        assert_eq!(states["team-session"], TeamState::of(&team), "SQL and snapshot agree");
+        assert!(team_states(&db, &[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_active_team_keeps_its_task_running() {
+        for (saved, has_agent) in [("completed", false), ("idle", false), ("running", false), ("waiting", false), ("running", true)] {
+            let mut row = json!({"sessionId": "team-session", "status": saved});
+            shape_task_status(&mut row, has_agent, Some(&team_state("waiting", 2, 1)));
+            assert_eq!(row["status"], "running", "{saved} with agent {has_agent}");
+            assert_eq!(row["team"], json!({"status": "waiting", "activeWorkers": 2}));
+        }
+        let mut row = json!({"status": "waiting"});
+        shape_task_status(&mut row, true, Some(&team_state("running", 1, 1)));
+        assert_eq!(row["status"], "waiting", "an architect asking for input still needs the user");
+    }
+
+    #[test]
+    fn a_settled_team_leaves_the_status_unchanged() {
+        for team in ["paused", "failed", "completed", "ready"] {
+            let mut row = json!({"status": "completed"});
+            shape_task_status(&mut row, false, Some(&team_state(team, 0, 1)));
+            assert_eq!(row["status"], "completed");
+            assert_eq!(row["team"], json!({"status": team, "activeWorkers": 0}));
+            let mut row = json!({"status": "running"});
+            shape_task_status(&mut row, false, Some(&team_state(team, 0, 1)));
+            assert_eq!(row["status"], "interrupted");
+        }
+        let mut row = json!({"status": "running"});
+        shape_task_status(&mut row, false, None);
+        assert_eq!(row, json!({"status": "interrupted"}), "plain tasks get no team");
+        let mut row = json!({"status": "waiting"});
+        shape_task_status(&mut row, true, None);
+        assert_eq!(row["status"], "waiting");
+    }
+
+    #[test]
+    fn run_finished_carries_the_team_and_settles_once_it_stops() {
+        let mut data = json!({"sessionId": "team-session", "successful": true, "stopped": false, "text": "Turn complete"});
+        shape_finished(&mut data, Some(&team_state("waiting", 3, 4)));
+        assert_eq!(data["status"], "running");
+        assert_eq!(data["team"], json!({"status": "waiting", "activeWorkers": 3}));
+
+        let mut data = json!({"sessionId": "s", "successful": false, "stopped": true, "text": "Turn stopped"});
+        shape_finished(&mut data, Some(&team_state("paused", 0, 5)));
+        assert!(data.get("status").is_none(), "a settled team keeps the old payload");
+        assert_eq!(data["team"]["status"], "paused");
+        let mut plain = json!({"sessionId": "s", "successful": true, "stopped": false, "text": "Turn complete"});
+        shape_finished(&mut plain, None);
+        assert_eq!(plain, json!({"sessionId": "s", "successful": true, "stopped": false, "text": "Turn complete"}));
+
+        let mut cache = HashMap::new();
+        assert_eq!(observe_team(&mut cache, "t", team_state("paused", 0, 1)), (team_state("paused", 0, 1), false), "nothing was reported active");
+        assert!(!observe_team(&mut cache, "t", team_state("running", 1, 2)).1);
+        assert!(!observe_team(&mut cache, "t", team_state("waiting", 1, 3)).1);
+        assert_eq!(observe_team(&mut cache, "t", team_state("running", 1, 2)), (team_state("waiting", 1, 3), false), "an older read never wins");
+        assert!(observe_team(&mut cache, "t", team_state("completed", 0, 4)).1);
+        assert!(!observe_team(&mut cache, "t", team_state("completed", 0, 5)).1, "settles once");
+
+        let settled = settled_finished("t", "completed", &team_state("completed", 0, 4));
+        assert_eq!(settled, json!({"sessionId": "t", "successful": true, "stopped": false, "text": "Team completed", "status": "completed", "teamSettled": true, "team": {"status": "completed", "activeWorkers": 0}}));
+        let paused = settled_finished("t", "running", &team_state("paused", 0, 6));
+        assert_eq!((paused["status"].as_str(), paused["stopped"].as_bool(), paused["text"].as_str()), (Some("interrupted"), Some(true), Some("Team paused")));
     }
 
     #[test]

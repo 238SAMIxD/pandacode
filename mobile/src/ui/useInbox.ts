@@ -55,6 +55,8 @@ export function useInbox() {
   const hosts = useHosts();
   const tasks = useConnect(s => s.tasks);
   const allBots = useConnect(s => s.bots);
+  // Older hosts' rows carry no `team`: a loaded team's working workers keep its task under Running.
+  const teams = useConnect(s => s.teams);
   const updating = useConnect(s => Object.entries(s.tasks).some(([id, list]) => list.cachedAt !== undefined && (!s.connected || s.devices.some(d => d.id === id && d.online))));
   const { live, glances } = useLiteLive();
   const { snoozed, pins, outbox } = useLocal(useShallow(s => ({ snoozed: s.snoozed, pins: s.pins, outbox: s.outbox })));
@@ -68,7 +70,7 @@ export function useInbox() {
     setErrors(Object.fromEntries(ids.map((id, i) => [id, results[i]]).filter(([, e]) => e && !TRANSIENT.has(e))));
   }, [onlineKey]);
 
-  const inbox = useMemo(() => inboxSections({ hosts, tasks, live, glances, snoozed, pins, outbox, now: minute * 60_000 + 59_999 }), [hosts, tasks, live, glances, snoozed, pins, outbox, minute]);
+  const inbox = useMemo(() => inboxSections({ hosts, tasks, live, glances, teams, snoozed, pins, outbox, now: minute * 60_000 + 59_999 }), [hosts, tasks, live, glances, teams, snoozed, pins, outbox, minute]);
   const bots = useMemo(() => botRows(hosts, allBots, tasks), [hosts, allBots, tasks]);
   useEffect(() => { if (Object.values(inbox).some(rows => rows.length)) markStartup('paint'); }, [inbox]);
   return { hosts, inbox, bots, minute, errors, load, updating };

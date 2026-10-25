@@ -8,7 +8,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { connect } from '../../../connect/client.ts';
 import { markOpen } from '../../../connect/perf.ts';
 import type { PendingRequest } from '../../../connect/types.ts';
-import { botOf } from '../../../store/inbox.ts';
+import { botOf, rowTeam } from '../../../store/inbox.ts';
+import { teamBusy } from '../../../store/team.ts';
 import { taskKey, useConnect } from '../../../store/index.ts';
 import { duration, type TurnRow } from '../../../store/turns.ts';
 import { Composer } from '../../../ui/Composer.tsx';
@@ -118,7 +119,8 @@ export default function TaskScreen() {
   }, [device, session]);
 
   const requests = approvals.length + inputs.length > 0;
-  const running = isActive(status);
+  // A team still working keeps Stop (which pauses it on the host) and queued sends.
+  const running = isActive(status) || teamBusy(rowTeam(task, team));
   return (
     <WorkerNamesContext.Provider value={names}>
     <View style={[styles.screen, { backgroundColor: backdrop.background }]}>

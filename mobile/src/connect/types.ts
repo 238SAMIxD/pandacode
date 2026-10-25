@@ -23,8 +23,9 @@ export interface TaskSummary extends HostActivity {
   seenAt?: number;
 }
 
-/** Newer hosts: when the run's newest event came and when it started (ms), and its subagents. */
-export interface HostActivity { lastEventAt?: number | null; runStartedAt?: number | null; subagents?: unknown }
+/** Newer hosts: when the run's newest event came and when it started (ms), and its subagents.
+ * `team` (architect tasks only, checked by decodeTeamRun in src/store/team.ts): `{ status, activeWorkers }`. */
+export interface HostActivity { lastEventAt?: number | null; runStartedAt?: number | null; subagents?: unknown; team?: unknown }
 
 export interface TasksList { tasks: TaskSummary[]; projects: Project[] }
 
@@ -47,7 +48,9 @@ export interface ToolActivity { id: string; name: string; status: 'running' | 'c
 /** The host's raw AgentEvent (src/types.ts). */
 export interface AgentEvent { sessionId: string; kind: string; text: string; requestId?: string; data?: unknown; tool?: ToolActivity }
 
-export interface RunFinished { sessionId: string; successful: boolean; stopped: boolean; text: string }
+/** Newer hosts, architect tasks: `status` as tasks.list shows it ('running' while the team works),
+ * `team` (`{ status, activeWorkers }`), and `teamSettled` on the extra run.finished sent when the team settles. */
+export interface RunFinished { sessionId: string; successful: boolean; stopped: boolean; text: string; status?: TaskStatus; team?: unknown; teamSettled?: boolean }
 
 export interface StartParams {
   repo?: string; projectId?: string; branch?: string; worktree: boolean; prompt: string;
