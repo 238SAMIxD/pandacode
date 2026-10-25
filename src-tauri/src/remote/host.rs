@@ -2531,7 +2531,7 @@ mod tests {
         let team = team_fixture(vec![worker_fixture("w1", "waiting")]);
         let worker = remote_worker(&team.workers[0]);
         let mut previous = HashMap::new();
-        assert_eq!(changed_worker_rows(&team, &mut previous), [worker.clone()]);
+        assert_eq!(changed_worker_rows(&team, &mut previous), std::slice::from_ref(&worker));
         assert!(
             changed_worker_rows(&team, &mut previous).is_empty(),
             "unchanged rows are not resent"
@@ -2986,9 +2986,9 @@ mod tests {
             ])
         );
         assert!(parse(true, "batch", &json!({"calls": []})).is_err());
-        let eight = std::iter::repeat(json!({"method": "tasks.list", "params": {}})).take(8).collect::<Vec<_>>();
+        let eight = std::iter::repeat_n(json!({"method": "tasks.list", "params": {}}), 8).collect::<Vec<_>>();
         assert!(parse(true, "batch", &json!({"calls": eight})).is_ok());
-        let too_many = std::iter::repeat(json!({"method": "tasks.list", "params": {}})).take(9).collect::<Vec<_>>();
+        let too_many = std::iter::repeat_n(json!({"method": "tasks.list", "params": {}}), 9).collect::<Vec<_>>();
         assert!(parse(true, "batch", &json!({"calls": too_many})).is_err());
         assert!(parse(true, "batch", &json!({"calls": [{"method": "task.send", "params": {"sessionId": "s", "text": "x"}}]})).is_err());
         assert!(parse(true, "batch", &json!({"calls": [{"method": "batch", "params": {"calls": []}}]})).is_err());
