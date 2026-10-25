@@ -1,5 +1,5 @@
-//! `task.start` on the host: find (or clone) the project for a GitHub repository, check
-//! out the viewer's branch, then start an ordinary task there.
+//! `task.start` on the host: use a local project or find (or clone) a GitHub repository,
+//! check out the viewer's branch, then start an ordinary task there.
 use super::host::{name_param, text_param};
 use crate::{github_hub, storage::Project, workspace, AppState, Result};
 use serde_json::{json, Value};
@@ -29,7 +29,7 @@ const PROGRESS_EVENT: &str = "task.progress";
 pub(crate) struct Start {
     /// The viewer's id for this start, echoed in its progress events.
     pub start_id: Option<String>,
-    pub repo: String,
+    pub target: Target,
     pub branch: Option<String>,
     pub worktree: bool,
     pub prompt: String,
@@ -41,14 +41,28 @@ pub(crate) struct Start {
     pub image_ids: Vec<String>,
 }
 
+#[derive(Debug, PartialEq)]
+pub(crate) enum Target {
+    Repo(String),
+    ProjectId(String),
+}
+
 pub(crate) fn parse(params: &Value) -> Result<Start> {
+    let repo = params.get("repo").filter(|value| !value.is_null());
+    let project_id = params.get("projectId").filter(|value| !value.is_null());
+    let target = match (repo, project_id) {
+        (Some(_), Some(_)) => return Err("Send either repo or projectId, not both.".into()),
+        (Some(repo), None) => Target::Repo(github_hub::valid_repo(repo.as_str().ok_or("Invalid repo.")?)?),
+        (None, Some(_)) => Target::ProjectId(super::host::id_param(params, "projectId")?),
+        (None, None) => return Err("Missing repo or projectId.".into()),
+    };
     let branch = name_param(params, "branch")?;
     if let Some(branch) = &branch {
         valid_branch(branch)?;
     }
     Ok(Start {
         start_id: name_param(params, "startId")?,
-        repo: github_hub::valid_repo(params["repo"].as_str().unwrap_or_default())?,
+        target,
         branch,
         worktree: params["worktree"].as_bool().unwrap_or(false),
         prompt: text_param(params, "prompt")?,
@@ -71,6 +85,10 @@ fn valid_branch(branch: &str) -> Result<()> {
 /// The first project whose origin is `repo` (GitHub names ignore case).
 pub(crate) fn find_project(projects: Vec<(Project, Option<String>)>, repo: &str) -> Option<Project> {
     projects.into_iter().find(|(_, origin)| origin.as_deref().is_some_and(|origin| origin.eq_ignore_ascii_case(repo))).map(|(project, _)| project)
+}
+
+fn find_project_id(projects: Vec<Project>, id: &str) -> Option<Project> {
+    projects.into_iter().find(|project| project.id == id)
 }
 
 /// `<home>/PandaCode/<name>`, or `<name>-2`, `-3`… when taken.
@@ -239,7 +257,7 @@ impl Progress {
             *last = Some((stage.to_owned(), percent, now));
         }
         let data = json!({"startId": self.start, "repo": self.repo, "stage": stage, "percent": percent, "detail": detail.map(|d| d.chars().take(300).collect::<String>())});
-        let _ = super::socket::send_trusted(&self.app, &self.to, &json!({"type": "event", "name": PROGRESS_EVENT, "data": data}));
+        let _ = super::socket::send_to_device(&self.app, &self.to, &json!({"type": "event", "name": PROGRESS_EVENT, "data": data}));
     }
 }
 
@@ -264,21 +282,34 @@ pub(crate) fn progress(app: &tauri::AppHandle, from: &str, data: &Value) {
 
 /// The project checking out `repo`, cloned into `~/PandaCode` when there is none, and
 /// whether it was cloned just now.
-fn project_for(state: &AppState, repo: &str, progress: &Progress) -> Result<(Project, bool)> {
-    let projects = state.store.lock().map_err(|e| e.to_string())?.projects()?;
-    let origins = projects.into_iter().map(|project| {
-        let origin = github_hub::project_repo(Path::new(&project.path));
-        (project, origin)
-    });
-    if let Some(project) = find_project(origins.collect(), repo) {
-        return Ok((project, false));
+fn project_for(state: &AppState, target: &Target, progress: &Progress) -> Result<(Project, bool)> {
+    let (projects, bot_projects) = {
+        let store = state.store.lock().map_err(|e| e.to_string())?;
+        (store.projects()?, crate::bots::project_ids(&store)?)
+    };
+    match target {
+        Target::ProjectId(id) => {
+            if bot_projects.iter().any(|bot_project| bot_project == id) {
+                return Err("Bot workspaces cannot be used for remote tasks.".into());
+            }
+            find_project_id(projects, id).map(|project| (project, false)).ok_or_else(|| "Project not found.".into())
+        }
+        Target::Repo(repo) => {
+            let origins = projects.into_iter().map(|project| {
+                let origin = github_hub::project_repo(Path::new(&project.path));
+                (project, origin)
+            });
+            if let Some(project) = find_project(origins.collect(), repo) {
+                return Ok((project, false));
+            }
+            let home = crate::agent_usage_providers::home().ok_or("This computer has no home folder to clone into.")?;
+            let destination = clone_path(&home, repo, Path::exists);
+            std::fs::create_dir_all(home.join(CLONE_FOLDER)).map_err(|e| e.to_string())?;
+            progress.report("downloading", None, None);
+            clone_with_progress(repo, &destination, CLONE, |percent| progress.report("downloading", Some(percent), None))?;
+            Ok((state.store.lock().map_err(|e| e.to_string())?.add_project(&destination)?, true))
+        }
     }
-    let home = crate::agent_usage_providers::home().ok_or("This computer has no home folder to clone into.")?;
-    let destination = clone_path(&home, repo, Path::exists);
-    std::fs::create_dir_all(home.join(CLONE_FOLDER)).map_err(|e| e.to_string())?;
-    progress.report("downloading", None, None);
-    clone_with_progress(repo, &destination, CLONE, |percent| progress.report("downloading", Some(percent), None))?;
-    Ok((state.store.lock().map_err(|e| e.to_string())?.add_project(&destination)?, true))
 }
 
 /// Fetches and picks the viewer's branch when origin has it, else the default branch.
@@ -349,7 +380,7 @@ pub(crate) async fn require_installed(provider: &str) -> Result<()> {
 
 /// Starts the task, reporting each stage to the viewer, and the failure as `error`.
 pub(crate) async fn run(app: &tauri::AppHandle, from: &str, start: Start) -> Result<Value> {
-    let progress = Arc::new(Progress { app: app.clone(), to: from.to_owned(), start: start.start_id.clone(), repo: start.repo.clone(), last: Mutex::new(None) });
+    let progress = Arc::new(Progress { app: app.clone(), to: from.to_owned(), start: start.start_id.clone(), repo: match &start.target { Target::Repo(repo) => repo.clone(), Target::ProjectId(_) => String::new() }, last: Mutex::new(None) });
     let result = start_task(app, from, start, &progress).await;
     if let Err(error) = &result {
         progress.report("error", None, Some(error));
@@ -363,10 +394,10 @@ async fn start_task(app: &tauri::AppHandle, from: &str, start: Start, progress: 
     super::images::claim(app, from, &start.image_ids)?;
     require_installed(&start.provider).await?;
     let handle = app.clone();
-    let (repo, wanted, worktree, reporter) = (start.repo.clone(), start.branch.clone(), start.worktree, progress.clone());
+    let (target, wanted, worktree, reporter) = (start.target, start.branch.clone(), start.worktree, progress.clone());
     let (project, branch) = tauri::async_runtime::spawn_blocking(move || -> Result<(Project, String)> {
         let state = handle.state::<AppState>();
-        let (project, cloned) = project_for(&state, &repo, &reporter)?;
+        let (project, cloned) = project_for(&state, &target, &reporter)?;
         reporter.report("preparing", None, None);
         let root = PathBuf::from(&project.path);
         let branch = pick_branch(&root, wanted.as_deref())?;
@@ -430,6 +461,13 @@ mod tests {
     }
 
     #[test]
+    fn a_project_id_selects_its_registered_project() {
+        let projects = vec![project("a"), project("b")];
+        assert_eq!(find_project_id(projects.clone(), "b").map(|p| p.id), Some("b".into()));
+        assert!(find_project_id(projects, "missing").is_none());
+    }
+
+    #[test]
     fn clones_take_the_first_free_folder() {
         let home = Path::new("/Users/me");
         assert_eq!(clone_path(home, "orbit-labs/orbit", |_| false), PathBuf::from("/Users/me/PandaCode/orbit"));
@@ -457,7 +495,7 @@ mod tests {
         assert_eq!(parse(&with_id).unwrap().start_id.as_deref(), Some("3f2a-local"));
         with_id["startId"] = json!("has space");
         assert!(parse(&with_id).is_err());
-        assert_eq!((start.repo.as_str(), start.branch.as_deref(), start.worktree, start.prompt.as_str(), start.mode), ("orbit-labs/orbit", Some("feature/x"), true, "go", None));
+        assert_eq!((start.target, start.branch.as_deref(), start.worktree, start.prompt.as_str(), start.mode), (Target::Repo("orbit-labs/orbit".into()), Some("feature/x"), true, "go", None));
         assert!(start.image_ids.is_empty());
         let image = uuid::Uuid::new_v4().to_string();
         let mut with_image = ok.clone();
@@ -504,6 +542,20 @@ mod tests {
         assert_eq!((failed["percent"].is_null(), failed["repo"].is_null(), failed["detail"].as_str().map(str::len)), (true, true, Some(300)));
         assert!(progress_payload("dev-studio", &json!({"stage": "hacking"})).is_none());
         assert!(progress_payload("dev-studio", &json!({})).is_none());
+    }
+
+    #[test]
+    fn start_requests_accept_either_a_repo_or_host_project_id() {
+        let base = json!({"branch": "feature/x", "worktree": true, "prompt": " go ", "provider": "claude", "model": "sonnet"});
+        let mut project = base.clone();
+        project["projectId"] = json!("host-project-1");
+        assert_eq!(parse(&project).unwrap().target, Target::ProjectId("host-project-1".into()));
+        let mut both = project.clone();
+        both["repo"] = json!("orbit-labs/orbit");
+        assert!(parse(&both).is_err());
+        assert!(parse(&base).is_err());
+        project["projectId"] = json!("bad id");
+        assert!(parse(&project).is_err());
     }
 
     /// Picks a pushed branch, falls back to origin's default, and checks it out.

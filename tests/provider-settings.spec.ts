@@ -1,5 +1,33 @@
 import { expect, test, type Page } from '@playwright/test';
 
+test('provider connections expose Kilo models, approval modes and executable settings', async ({ page }, testInfo) => {
+  await page.goto('/');
+  await page.locator('.new-task-button').click();
+  const trigger = page.getByRole('button', { name: 'Choose harness and model', exact: true });
+  await trigger.click();
+  const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
+  await expect(picker.locator('.model-menu-option[data-provider="kilo"][data-model="default"]')).toBeVisible();
+  const model = picker.locator('.model-menu-option[data-provider="kilo"][data-model="kilo/anthropic/claude-sonnet-4.6"]');
+  await expect(model).toContainText('Kilo Gateway/Anthropic: Claude Sonnet 4.6');
+  await model.click();
+  await expect(trigger).toContainText('Kilo');
+  await page.locator('#mode-picker-trigger').click();
+  const permissions = page.getByRole('dialog', { name: 'Permissions', exact: true });
+  await expect(permissions.getByRole('menuitemradio')).toHaveCount(4);
+  await permissions.getByRole('menuitemradio', { name: /Plan mode/ }).click();
+  await expect(page.locator('#mode-picker-trigger')).toContainText('Plan mode');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const settings = page.getByRole('region', { name: 'Settings', exact: true });
+  await settings.getByRole('tab', { name: 'Providers', exact: true }).click();
+  const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Kilo Code', exact: false }) });
+  await expect(card).toContainText('kilo auth login');
+  await expect(card.getByRole('link', { name: 'Kilo CLI docs' })).toHaveAttribute('href', 'https://kilo.ai/docs/code-with-ai/platforms/cli');
+  await card.locator('summary').click();
+  await expect(card.getByLabel('Kilo executable', { exact: true })).toBeVisible();
+  await card.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath('kilo-provider-settings.png') });
+});
+
 test('provider connections show Claude credential conflicts and let users prefer the saved login', async ({ page }) => {
   await page.route('**/src/preview.ts*', async route => {
     const response = await route.fetch();
@@ -50,7 +78,7 @@ async function delayedConnections(page: Page): Promise<void> {
   await expect(page.locator('.task-item.selected .task-title')).toHaveText('Make search feel instant');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('tab', { name: 'Providers', exact: true }).click();
-  await expect(page.locator('#settings-panel-providers details summary')).toHaveCount(9);
+  await expect(page.getByLabel('OpenCode executable', { exact: true })).toHaveCount(1);
   for (const summary of await page.locator('#settings-panel-providers details summary').all()) await summary.click();
 }
 
@@ -108,6 +136,10 @@ test('provider connections are grouped in Providers and never accept secrets in 
   await expect(dialog.getByLabel('Z.ai API key', { exact: true })).toBeDisabled();
   await expect(dialog.locator('#glm-key-form').getByRole('button', { name: 'Save key', exact: true })).toBeDisabled();
   await expect(dialog.getByText('opencode auth login', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('Each sign-in, key or plan here is used only by the agent it belongs to.')).toBeVisible();
+  await expect(dialog.getByRole('img', { name: 'How providers relate to agents', exact: true })).toHaveAttribute('data-tip', /Nothing here is applied to every agent/);
+  // OpenCode models are chosen once, in Settings → Agents.
+  await expect(dialog.getByRole('button', { name: 'Choose models', exact: true })).toHaveCount(0);
   await expect(dialog.getByText('agy', { exact: true })).toBeVisible();
   await expect(dialog.getByText('grok login', { exact: true })).toBeVisible();
   const paths = dialog.locator('details').filter({ has: page.getByLabel('Grok executable', { exact: true }) });
@@ -157,7 +189,7 @@ test('provider connections expose all harnesses and real GLM model names', async
   await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
   await expect(page.getByText('OpenCode', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('GLM Coding Plan', { exact: true }).first()).toBeVisible();
-  await expect(page.getByText('Antigravity', { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Harness and model', exact: true })).not.toContainText('Antigravity'); // not installed in the preview
   await expect(page.getByText('Grok Build', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('MiMo Token Plan', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('GitHub Copilot CLI', { exact: true }).first()).toBeVisible();
@@ -165,7 +197,7 @@ test('provider connections expose all harnesses and real GLM model names', async
   await expect(page.getByText('GLM-5.3', { exact: true }).first()).toBeVisible();
 });
 
-for (const providerId of ['claude', 'codex', 'kimi', 'opencode', 'glm', 'antigravity', 'grok', 'mimo', 'pi', 'deepseek', 'commandcode', 'cline', 'omp', 'github-copilot', 'muse']) {
+for (const providerId of ['claude', 'codex', 'kimi', 'opencode', 'glm', 'antigravity', 'grok', 'mimo', 'pi', 'deepseek', 'commandcode', 'cline', 'kilo', 'omp', 'github-copilot', 'muse', 'devin']) {
   test(`provider connections start ${providerId} tasks with Full access and retain explicit restrictions when switching`, async ({ page }) => {
     await page.addInitScript(provider => localStorage.setItem('pandacode.provider', provider), providerId);
     await page.route('**/src/preview.ts*', async route => {
@@ -239,6 +271,59 @@ test('GitHub Copilot CLI has CLI sign-in guidance, a path override, Default mode
   const defaultMenu = page.getByRole('dialog', { name: 'Default agent', exact: true });
   await defaultMenu.getByRole('menuitemradio', { name: 'GitHub Copilot CLI', exact: true }).click();
   await expect(settings.getByRole('button', { name: 'Default agent for new tasks', exact: true })).toContainText('GitHub Copilot CLI');
+});
+
+test('Devin CLI lists its models with their own thinking levels, Devin modes, and CLI sign-in guidance', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('pandacode.provider', 'devin'));
+  await page.goto('/');
+  await expect(page.locator('.task-item.selected .task-title')).toHaveText('Make search feel instant');
+  await page.locator('.new-task-button').click();
+  await expect(page.locator('#model-picker-trigger .provider-logo[data-provider="devin"]')).toBeVisible();
+  // Devin's Code mode already accepts edits, so Accept edits is not a separate choice.
+  await page.locator('#mode-picker-trigger').click();
+  const modes = page.getByRole('dialog', { name: 'Permissions', exact: true }).getByRole('menuitemradio');
+  await expect(modes).toHaveCount(3);
+  await expect(modes.filter({ hasText: 'Accept edits' })).toHaveCount(0);
+  await expect(modes.filter({ hasText: 'Plan mode' })).toContainText('edits wait until you approve the plan');
+  await page.keyboard.press('Escape');
+
+  const model = page.getByRole('button', { name: 'Choose harness and model', exact: true });
+  const search = page.getByRole('searchbox', { name: 'Search harnesses and models' });
+  const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
+  const group = picker.getByRole('region', { name: 'Devin CLI', exact: true });
+  await model.click();
+  // A long catalog opens as a short list; search covers every model, and custom IDs are not offered.
+  await expect(group.locator('.model-menu-option[data-model="adaptive"]')).toBeVisible();
+  await expect(group.locator('.model-menu-option[data-model^="fusion-"]')).toHaveCount(0);
+  await search.fill('fusion');
+  await expect(group.locator('.model-menu-option[data-model="fusion-claude-opus-5-5-medium-sidekick-swe-2-medium"]')).toBeVisible();
+  await search.fill('custom-devin-model');
+  await expect(picker.locator('.model-menu-option[data-provider="devin"][data-model="custom-devin-model"]')).toHaveCount(0);
+  await search.fill('');
+  await group.locator('.model-menu-option[data-model="claude-opus-5-5-medium"]').click();
+  await expect(model).toContainText('Claude Opus 5.5');
+
+  // Each model carries its own thinking levels.
+  await model.click();
+  const effort = picker.getByRole('slider', { name: 'Reasoning effort' });
+  await expect(effort).toHaveAttribute('max', '4');
+  await search.fill('glm');
+  await expect(group.locator('.model-menu-option[data-model="glm-5-2"]')).toContainText('Text only');
+  await group.locator('.model-menu-option[data-model="glm-5-2"]').click();
+  await model.click();
+  await expect(effort).toHaveAttribute('max', '2');
+  await page.keyboard.press('Escape');
+
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const settings = page.getByRole('region', { name: 'Settings', exact: true });
+  await settings.getByRole('tab', { name: 'Providers', exact: true }).click();
+  const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Devin CLI', exact: false }) });
+  await expect(card).toContainText('devin auth login');
+  await expect(card.getByRole('link', { name: 'Install and sign in' })).toHaveAttribute('href', 'https://docs.devin.ai/cli');
+  await card.locator('summary').click();
+  await expect(card.getByLabel('Devin executable', { exact: true })).toBeVisible();
+  await settings.getByRole('tab', { name: 'Agents', exact: true }).click();
+  await expect(settings.locator('.provider-diagnostic[data-provider="devin"]')).toContainText('devin 3000.11.216');
 });
 
 test('GitHub Copilot model discovery does not crash the picker in an existing chat', async ({ page }) => {
@@ -322,10 +407,13 @@ test('Command Code has a key card, four approval modes and its own model list', 
 });
 
 test('Cline has a sign-in card, four approval modes and thinking levels', async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem('pandacode.provider', 'cline'));
+  await page.addInitScript(() => {
+    localStorage.setItem('pandacode.defaultProvider', 'cline');
+    localStorage.setItem('pandacode.provider', 'cline');
+  });
   await page.goto('/');
   await page.locator('.new-task-button').click();
-  await expect(page.locator('#model-picker-trigger .provider-logo[data-provider="cline"]')).toBeVisible();
+  await expect(page.locator('.new-task-welcome')).toBeVisible();
   await page.locator('#mode-picker-trigger').click();
   const items = page.getByRole('dialog', { name: 'Permissions', exact: true }).getByRole('menuitemradio');
   await expect(items).toHaveCount(4);
@@ -336,7 +424,9 @@ test('Cline has a sign-in card, four approval modes and thinking levels', async 
   await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('tab', { name: 'Providers', exact: true }).click();
   const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Cline', exact: false }) });
   await expect(card).toContainText('cline auth');
-  await expect(card.getByRole('link', { name: 'Cline CLI docs' })).toHaveAttribute('href', 'https://docs.cline.bot/cline-cli/overview');
+  await expect(card.getByRole('link', { name: 'Cline CLI docs' })).toHaveAttribute('href', 'https://docs.cline.bot/usage/cli-overview');
+  await expect(card.getByRole('link', { name: 'ACP details' })).toHaveAttribute('href', 'https://docs.cline.bot/usage/acp');
+  await expect(card.getByRole('link', { name: 'TUI docs' })).toHaveAttribute('href', 'https://docs.cline.bot/usage/tui');
   await card.locator('summary').click();
   await expect(card.getByLabel('Cline executable', { exact: true })).toBeVisible();
 });

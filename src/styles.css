@@ -64,7 +64,7 @@ button .icon{pointer-events:none}
 .task-indicator.running{background:#ac8100;box-shadow:none;animation:breathe 1.5s infinite}
 .task-indicator.attention{background:#a45e13;box-shadow:0 0 0 3px rgb(var(--accent-rgb) / .3)}
 .provider-logo{width:20px;height:20px;display:inline-block;object-fit:contain;flex-shrink:0;vertical-align:middle;pointer-events:none}
-.provider-logo[data-provider="github-copilot"],.provider-logo[data-provider="cline"]{color:var(--text)}
+.provider-logo[data-provider="github-copilot"],.provider-logo[data-provider="cline"],.provider-logo[data-provider="devin"]{color:var(--text)}
 .provider-logo[data-provider="codex"]{transform:scale(1.25)}
 .provider-logo[data-provider="pi"]{image-rendering:pixelated}
 .task-provider{width:18px;height:18px;opacity:.8;flex-shrink:0;align-self:center}
@@ -103,7 +103,7 @@ button .icon{pointer-events:none}
 .conversation-pane{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0}
 .provider-avatar{width:23px;height:23px;border-radius:2px;color:var(--text);display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}
 .provider-avatar .provider-logo{width:20px;height:20px}
-.transcript{flex:1;min-height:0;overflow-y:auto;padding:28px 36px 25px;scroll-behavior:auto;scrollbar-gutter:stable}
+.transcript{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:28px 36px 25px;scroll-behavior:auto;scrollbar-gutter:stable}
 .transcript:focus{outline:none}
 .transcript>*,#stream-region>*{max-width:830px;margin-left:auto;margin-right:auto}
 .message{margin-bottom:20px}
@@ -324,9 +324,10 @@ mark{background:color-mix(in srgb,var(--accent) 45%,transparent);color:inherit;b
 .file-list{padding:4px 9px}
 .file-row{display:flex;align-items:center;border-radius:2px}
 .file-row:hover{background:var(--raised)}
-.file-row>button:first-child{flex:1;min-width:0;justify-content:flex-start;padding:9px 10px;color:var(--text);font-size:.83rem;gap:9px}
+.file-row>button:first-child{flex:1;min-width:0;justify-content:flex-start;padding:5px 8px 5px calc(4px + var(--depth, 0) * 14px);color:var(--text);font-size:.83rem;gap:6px}
 .file-row>button:first-child>.icon{width:14px;height:14px;color:var(--muted)}
-.file-row>button:first-child>.icon:last-child:not(:first-child){width:11px;height:11px;margin-left:auto}
+.file-row>button:first-child>.file-twisty{flex:none;width:12px;height:12px}
+.file-row [aria-expanded="true"]>.file-twisty{rotate:90deg}
 .file-row>button:first-child>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .file-attach{width:23px;height:23px;opacity:0;margin-right:5px}
 .file-attach .icon{width:12px;height:12px}
@@ -927,6 +928,16 @@ html[data-theme="dark"] body .dialog-plate{box-shadow:0 40px 100px -30px rgb(0 0
 .remote-start-dismiss{justify-content:center;width:24px}
 .remote-start-retry:hover,.remote-start-dismiss:hover{background:var(--raised);color:var(--text)}
 :is(.remote-start-retry,.remote-start-dismiss) .icon{width:13px;height:13px}
+/* Sent attachments: the composer's chips, read-only, each opening what it carried. */
+.message-attachments{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;white-space:normal;text-align:left}
+.message-attachments>.prompt-chip{cursor:pointer;font:inherit;font-size:.72rem;padding-right:8px}
+.message-attachments>.prompt-chip:hover{background:var(--raised);border-color:var(--muted)}
+.message-attachments>.prompt-chip:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+.message-attachments>.prompt-chip:active{scale:.97}
+.message-attachments>.prompt-chip-image>.icon{margin:0 2px}
+.message-attachment-dialog{max-width:min(92vw,960px)}
+.message-attachment-image{display:block;max-width:100%;max-height:70vh;margin:0 auto;border-radius:4px;background:#fff;object-fit:contain}
+.message-attachment-raw{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:.74rem;line-height:1.55;color:var(--muted);max-height:60vh;overflow:auto;padding:10px 12px;border-radius:3px;background:var(--raised)}
 /* PandaCode is instant: no transitions anywhere. Looping status indicators (spinners,
    working pulses) are animations, not transitions, so they keep running. */
 *,*::before,*::after{transition:none!important}

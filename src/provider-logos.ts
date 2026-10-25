@@ -2,6 +2,7 @@ import type { ProviderId } from './types';
 import { escape } from './dom';
 import githubCopilotLogo from './assets/providers/github-copilot.svg?raw';
 import clineLogo from './assets/providers/cline.svg?raw';
+import devinLogo from './assets/providers/devin.svg?raw';
 
 // Original provider assets; see docs/brand-assets.md for provenance.
 // Harnesses without an asset (omp) show no mark; their name stands alone.
@@ -24,7 +25,7 @@ const logos: Partial<Record<ProviderId, string>> = {
 export function providerLogo(id: ProviderId, cls = ''): string {
   const className = `provider-logo${cls ? ` ${escape(cls)}` : ''}`;
   // Monochrome marks are inlined and drawn in the theme's text color.
-  const inline = id === 'github-copilot' ? githubCopilotLogo : id === 'cline' ? clineLogo.replaceAll('#1C1C24', 'currentColor') : '';
+  const inline = id === 'github-copilot' ? githubCopilotLogo : id === 'cline' ? clineLogo.replaceAll('#1C1C24', 'currentColor') : id === 'devin' ? devinLogo.replace('fill="black"', 'fill="currentColor"') : '';
   if (inline) {
     return inline.replace('<svg ', `<svg class="${className}" data-provider="${id}" aria-hidden="true" focusable="false" `);
   }

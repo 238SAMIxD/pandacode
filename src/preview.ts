@@ -17,7 +17,7 @@ import { recipesCommand } from './preview-recipes';
 import { openCodePreviewKey, openCodePreviewModels, previewOpenCodeChoices, previewOpenCodeSelection } from './preview-opencode';
 const turnChanges = createPreviewTurnChanges();
 const now = Date.now();
-const sampleReadme = '# Orbit\n\nA tiny search index for the browser preview.\n\n## Usage\n\n- Build the index with `createSearchIndex`.\n- Call `search(query)`.\n\n> Results are case-insensitive.\n';
+const sampleReadme = '<div align="center">\n\n<img src="docs/banner.png" alt="Orbit banner" width="100%" onerror="alert(1)"/>\n\n[![Build](https://img.shields.io/badge/build-passing-green)](https://example.com/ci)\n\n<script>alert(1)</script>\n\n<a href="https://example.com/x" download class="toast">Get</a>\n\n</div>\n\n# Orbit\n\nA tiny search index for the browser preview.\n\n## Usage\n\n- Build the index with `createSearchIndex`.\n- Call `search(query)`.\n\n> Results are case-insensitive.\n';
 const sampleSource = '// Browser preview — sample source\nexport function createSearchIndex(items) {\n  return {\n    search(query) {\n      return items.filter(item =>\n        item.title.toLowerCase().includes(query.toLowerCase())\n      );\n    }\n  };\n}\n';
 const previewWorkspaceFiles = ['index.html', '.gitignore', 'README.md', 'package.json', 'tsconfig.json', 'src/main.ts', 'src/style.css', 'src/components/search.ts', 'src/components/search.test.ts', 'src/lib/search-index.ts', 'public/favicon.svg', 'docs/design notes.md'];
 const sampleTestOutput = 'PASS src/components/search.test.ts\n  ✓ filters results as the query changes\n  ✓ preserves keyboard selection\n\nTests: 12 passed, 12 total\nTime: 0.8s\nSample output — no command was executed.';
@@ -119,9 +119,11 @@ const providers: Provider[] = [
   { id: 'deepseek', name: 'DeepSeek', installed: true, path: '/sample/bin/dsh', version: 'Sample provider', models: [] },
   { id: 'commandcode', name: 'Command Code', installed: true, path: '/sample/bin/command-code', version: '1.87.1 (sample)', models: [] },
   { id: 'cline', name: 'Cline', installed: true, path: '/sample/bin/cline', version: '3.0.73 (sample)', models: [] },
+  { id: 'kilo', name: 'Kilo Code', installed: true, path: '/sample/bin/kilo', version: '7.3.41 (sample)', models: [] },
   { id: 'omp', name: 'Oh My Pi', installed: false, path: null, version: '', models: [] },
   { id: 'github-copilot', name: 'GitHub Copilot CLI', installed: true, path: '/sample/bin/copilot', version: 'GitHub Copilot CLI 1.0.82 (sample)', models: [] },
   { id: 'muse', name: 'Muse Code', installed: true, path: '/sample/bin/muse', version: 'Muse Code 1.4.7 (sample)', models: [] },
+  { id: 'devin', name: 'Devin CLI', installed: true, path: '/sample/bin/devin', version: 'devin 3000.11.216 (sample)', models: [] },
 ];
 // Mirrors providers::mimo::ENDPOINTS; the native side is the authority.
 const previewMimoEndpoints = [
@@ -153,6 +155,11 @@ function remoteCatalog(id: ProviderId): ProviderModel[] {
   return id === 'codex' ? ['gpt-5-codex', 'gpt-5'].map(model => fallbackModel('codex', model)) : [];
 }
 const catalogs: Record<ProviderId, ProviderModel[]> = {
+  // Recorded from `kilo acp` 7.3.41; efforts belong to its current model only.
+  kilo: [
+    { id: 'kilo/stealth/claude-sonnet-4.6', name: 'Kilo Gateway/Stealth: Claude Sonnet 4.6 (20% off)', description: '', reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'].map(id => ({ id, name: id, description: '' })), defaultReasoningEffort: 'none' },
+    { id: 'kilo/anthropic/claude-sonnet-4.6', name: 'Kilo Gateway/Anthropic: Claude Sonnet 4.6', description: '' },
+  ],
   pi: [{ id: 'anthropic/claude-sonnet-4-5', name: 'Claude Sonnet 4.5', description: 'Sample Pi model.', reasoningEfforts: [{ id: 'low', name: 'Low', description: '' }, { id: 'high', name: 'High', description: '' }], contextWindow: 200000 }],
   omp: [{ id: 'anthropic/claude-sonnet-4-5', name: 'Claude Sonnet 4.5', description: 'Sample omp model.', reasoningEfforts: [{ id: 'low', name: 'Low', description: '' }, { id: 'high', name: 'High', description: '' }], contextWindow: 200000 }],
   deepseek: [
@@ -170,6 +177,14 @@ const catalogs: Record<ProviderId, ProviderModel[]> = {
   // Recorded from `cline --acp` 3.0.73; efforts are its --thinking levels.
   cline: ['anthropic/claude-sonnet-5.5', 'anthropic/claude-opus-5.5', 'openai/gpt-6-sol'].map((id, index) => ({ id, name: ['Claude Sonnet 5.5', 'Claude Opus 5.5', 'GPT-6 Sol'][index], description: '', reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh'].map(effort => ({ id: effort, name: effort === 'xhigh' ? 'Extra high' : effort[0].toUpperCase() + effort.slice(1), description: '' })) })),
   'github-copilot': [{ id: 'default', name: 'Default', description: 'Use the model configured in GitHub Copilot CLI.' }],
+  // Recorded from `devin acp` 3000.11.216: each model lists its own thinking levels.
+  devin: ([
+    ['adaptive', 'Adaptive', [], ''], ['swe-2-high', 'SWE-2', ['medium', 'high', 'max'], 'high'],
+    ['claude-opus-5-5-medium', 'Claude Opus 5.5', ['low', 'medium', 'high', 'xhigh', 'max'], 'medium'],
+    ['gpt-6-sol-medium', 'GPT-6 Sol', ['none', 'low', 'medium', 'high', 'xhigh', 'max'], 'medium'],
+    ['glm-5-2', 'GLM-5.2 High', ['none', 'high', 'max'], 'high'],
+    ['fusion-claude-opus-5-5-medium-sidekick-swe-2-medium', 'Fusion (Claude Opus 5.5 Medium + SWE-2 Medium)', ['low', 'medium', 'high', 'xhigh', 'max'], 'medium'],
+  ] as [string, string, string[], string][]).map(([id, name, efforts, effort]) => ({ id, name, description: id === 'glm-5-2' ? 'Text only' : '', reasoningEfforts: efforts.map(value => ({ id: value, name: value === 'xhigh' ? 'Extra high' : value[0].toUpperCase() + value.slice(1), description: '' })), ...(effort ? { defaultReasoningEffort: effort } : {}) })),
   muse: ['muse-wonder-1.0', 'muse-spark-1.3'].map(id => ({ id, name: id, description: '', reasoningEfforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map(effort => ({ id: effort, name: effort === 'xhigh' ? 'Extra high' : effort[0].toUpperCase() + effort.slice(1), description: '' })), defaultReasoningEffort: 'high', contextWindow: 1007997 })),
   opencode: openCodePreviewModels,
   glm: [
@@ -634,7 +649,30 @@ const architect = createPreviewArchitect({
   agent,
 });
 
+/** Menu bar popover data; `window.__trayCalls` records what it asked for. */
+function trayCommand(command: string, args: Record<string, any>): unknown {
+  ((window as any).__trayCalls ??= []).push({ command, args });
+  if (command !== 'tray_snapshot') return undefined;
+  const now = Date.now(), minutes = (m: number) => now - m * 60_000, hours = (h: number) => new Date(now + h * 3_600_000).toISOString();
+  return {
+    running: [
+      { id: 'tray-running-1', title: 'Polish the new onboarding flow and keyboard navigation', project: 'PandaCode', provider: 'claude', at: minutes(4) },
+      { id: 'tray-running-2', title: 'Build search indexing', project: 'website', provider: 'codex', at: minutes(27) },
+    ],
+    waiting: [{ id: 'tray-waiting', title: 'Run the database migration', project: 'api', provider: 'opencode', at: minutes(12) }],
+    finished: [
+      { id: 'tray-done', title: 'Review the API changes', project: 'api', provider: 'kimi', at: minutes(8) },
+      { id: 'tray-failed', title: 'Fix flaky login test', project: 'PandaCode', provider: 'codex', at: minutes(65), failed: true },
+    ],
+    usage: [
+      { provider: 'claude', status: 'ready', plan: 'Max', stale: false, checkedAt: now, windows: [{ label: '5 hours', usedPercent: 42, resetsAt: hours(2.17) }, { label: 'Weekly', usedPercent: 83, resetsAt: hours(70) }] },
+      { provider: 'codex', status: 'ready', plan: 'Pro', stale: false, checkedAt: now, windows: [{ label: '5 hours', usedPercent: 97, resetsAt: hours(0.6) }] },
+    ],
+    checking: false,
+  };
+}
 export async function invoke<T>(command: string, args: Record<string, any>): Promise<T> {
+  if (command.startsWith('tray_')) return trayCommand(command, args) as T;
   if (command.startsWith('jj_')) return (await import('./preview-jj')).invokeJj<T>(command, args);
   if (command.includes('moodboard')) return (await import('./preview-moodboards')).invokeMoodboards<T>(command, args);
   if (command === 'bots_list' || command.startsWith('bot_')) return invokeBots<T>(command, args, {
@@ -700,8 +738,9 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       return { provider: provider.id, name: provider.name, providers: provider.id === 'claude' ? ['claude', 'glm', 'mimo'] : [provider.id], installedVersion: version, latestVersion: version, status: 'current', method: null, canUpdate: false, message: 'Browser preview · installed agents are checked in the desktop app.', checkedAt: Date.now(), docsUrl: null };
     }); break;
     case 'update_agent': throw new Error('Agent updates are available in the desktop app.');
-    case 'jev_configuration': result = { enabled: false, decisionsEnabled: false, pythonPath: '', chromePath: '', textModel: 'inception/mercury-2.5', textBaseUrl: 'https://openrouter.ai/api/v1', typesafeKeySaved: false, textKeySaved: false }; break;
+    case 'jev_configuration': result = { enabled: false, decisionsEnabled: false, decisionProvider: 'typesafe', decisionModel: '', openrouterKeySaved: false, pythonPath: '', chromePath: '', textModel: 'inception/mercury-2.5', textBaseUrl: 'https://openrouter.ai/api/v1', typesafeKeySaved: false, textKeySaved: false }; break;
     case 'jev_doctor': result = { ready: false, pythonVersion: '', jevVersion: '', chromePath: '', issues: ['Jev runs in the desktop app. This browser preview does not launch browsers or contact model APIs.'] }; break;
+    case 'jev_decision_models': result = args?.provider === 'openrouter' ? [{ id: 'openai/gpt-4o-mini', name: 'OpenAI: GPT-4o mini' }, { id: 'anthropic/claude-haiku-4.5', name: 'Anthropic: Claude Haiku 4.5' }] : [{ id: 'jev-1.13.0', name: 'jev-1.13.0' }]; break;
     case 'jev_list_runs': case 'jev_assist_list': result = []; break;
     case 'jev_watch_run': break; // Preview never starts Chrome or contacts model providers.
     case 'jev_assist_prepare': {
@@ -736,7 +775,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       result = { provider, status: supported ? 'ready' : 'unsupported', checkedAt: Date.now(), stale: false,
         plan: provider === 'codex' ? 'Pro' : provider === 'opencode' ? 'Go' : null,
         windows: supported ? [
-          { label: provider === 'opencode' ? 'Go rolling window' : '5-hour window', usedPercent: provider === 'codex' ? 38 : 22, resetsAt: new Date(Date.now() + 7200000).toISOString() },
+          { label: provider === 'opencode' ? 'Go rolling window' : '5-hour window', usedPercent: args.connection ? 91 : provider === 'codex' ? 38 : 22, resetsAt: new Date(Date.now() + 7200000).toISOString() },
           { label: provider === 'opencode' ? 'Go weekly' : 'Weekly', usedPercent: 64, resetsAt: new Date(Date.now() + 3 * 86400000).toISOString() },
         ] : [], source: 'Sample limits for the browser preview. No provider request was made.',
         message: supported ? null : 'This harness does not expose account limits. Check its account dashboard.' };
@@ -813,7 +852,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       if (!Number.isSafeInteger(args.messageId) || args.messageId <= 0 || boundary < 0 || !['user', 'assistant'].includes(history[boundary].role)) throw new Error('Choose a saved user message or assistant response to fork.');
       const boundaryProvider = historicalProvider(history[boundary], history, source.provider);
       const created: Session = { ...structuredClone(source), id: crypto.randomUUID(), pinned: false, sidebarOrder: null, title: [...source.title].slice(0, 193).join('') + ' (fork)', resumeId: null, status: 'idle', archived: false, goalState: null, contextUsage: null, taskStage: 'in_progress', completedAt: null, lastResponseAt: null, lastPromptAt: null, createdAt: Date.now(), updatedAt: Date.now() };
-      const copied: Message[] = history.slice(0, boundary + 1).filter(message => !['internal', 'changes'].includes(message.role)).map(message => {
+      const copied: Message[] = history.slice(0, boundary + (args.exclusive ? 0 : 1)).filter(message => !['internal', 'changes'].includes(message.role)).map(message => {
         let content = message.content;
         if (message.role === 'tool') {
           try {
@@ -862,6 +901,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       if (args.enabled && !(s.limitedAt && s.limitedUntil)) throw new Error('This task has no usage limit with a known reset time.');
       s.resumeAtReset = Boolean(args.enabled) && Boolean(s.limitedAt); result = s; break;
     }
+    case 'tray_seen': result = null; break;
     case 'clear_usage_limit': { const s = session(args.sessionId); s.limitedAt = null; s.limitedUntil = null; s.resumeAtReset = false; result = null; break; }
     case 'queue_list': result = previewQueue().filter(entry => !args.sessionId || entry.sessionId === args.sessionId); break;
     case 'queue_add': {
@@ -900,9 +940,9 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'steer_task': {
       const s = session(args.sessionId);
       if (!timers.has(s.id) && s.status !== 'running') throw new Error('The agent is not running; the message stays queued.');
-      // Claude-family, Codex, Pi and Muse take it live; others hold it for the next turn of the same run.
+      // Claude-family, Codex, Pi, Muse and Devin take it live; others hold it for the next turn of the same run.
       const text = String(args.text).trim(), steerId = `steer-${++id}`;
-      const mode = ['claude', 'glm', 'mimo', 'codex', 'pi', 'muse'].includes(s.provider) ? 'live' : 'next-turn';
+      const mode = ['claude', 'glm', 'mimo', 'codex', 'pi', 'muse', 'devin'].includes(s.provider) ? 'live' : 'next-turn';
       const report = (status: string) => agent({ sessionId: s.id, kind: 'steer' as AgentEvent['kind'], text, data: { id: steerId, status, mode } });
       window.setTimeout(() => report('pending'));
       window.setTimeout(() => {
@@ -980,6 +1020,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'open_external_url': { const url = new URL(args.url); if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Use an HTTP or HTTPS URL.'); window.open(url.href, '_blank', 'noopener,noreferrer'); break; }
     case 'open_support': window.open('https://github.com/aicodeking/pandacode/issues', '_blank', 'noopener,noreferrer'); break;
     case 'local_sign_app': break;
+    case 'app_update_install_supported': result = true; break;
     case 'support_details': result = { version: 'Preview', platform: 'Browser preview', architecture: 'Not reported' }; break;
     case 'browser_inspect': result = args.action === 'read' ? { url: browserState.url, title: browserState.title, text: 'Browser preview sample page', elements: [] } : { dispatched: true }; break;
     case 'list_provider_models': result = args.deviceId ? remoteCatalog(args.provider as ProviderId) : args.provider === 'opencode' ? previewOpenCodeChoices() : catalogs[args.provider as ProviderId] ?? []; break;
@@ -1286,6 +1327,8 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'cloud_connect': result = previewCloud.connect(args.provider, args.key, args.options ?? {}); emit('vm-changed', {}); break;
     case 'cloud_disconnect': result = previewCloud.disconnect(args.provider); emit('vm-changed', {}); break;
     case 'cloud_setup_sandboxes': result = previewCloud.setupSandboxes(); emit('vm-changed', {}); break;
+    case 'cloud_instabox_images': result = previewCloud.instaboxImages(); break;
+    case 'cloud_instabox_set_image': result = previewCloud.setInstaboxImage(args.image); break;
     case 'cloud_machines': result = previewCloud.list(); break;
     case 'cloud_create': result = previewCloud.create(args.provider, args.name); break;
     case 'cloud_power': result = previewCloud.power(args.id, args.action); break;
@@ -1305,6 +1348,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'design_save_comments': result = previewDesign.saveComments(args.comments); break;
     case 'skills_list': case 'skills_import_folder': case 'skills_import_github': case 'skills_activate':
     case 'skills_deactivate': case 'skills_matrix': case 'skills_scan': case 'skills_remove':
+    case 'skills_catalogs': case 'skills_catalog_add': case 'skills_catalog_refresh': case 'skills_catalog_state': case 'skills_catalog_import': case 'skills_discover':
       result = previewSkills.call(command, args); break;
     case 'simulator_status': result = previewSimulator.status(); break;
     case 'simulator_pose': result = await previewSimulator.pose(args.udid, args.pose); break;
@@ -1315,7 +1359,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'simulator_input': result = previewSimulator.input(args.udid, args.input); break;
     case 'simulator_appearance': result = previewSimulator.appearance(args.mode); break;
     case 'simulator_capture': result = await previewSimulator.capture(args.udid); break;
-    case 'list_files': result = (args.path ? args.path === 'public' ? [{ name: 'favicon.svg', isDir: false }] : args.path === 'src' ? [{ name: 'components', isDir: true }, { name: 'lib', isDir: true }, { name: 'main.ts', isDir: false }, { name: 'style.css', isDir: false }] : [{ name: 'search.ts', isDir: false }, { name: 'search.test.ts', isDir: false }] : [{ name: 'src', isDir: true }, { name: 'public', isDir: true }, { name: 'index.html', isDir: false }, { name: 'package.json', isDir: false }, { name: 'README.md', isDir: false }, { name: 'tsconfig.json', isDir: false }]).map(f => ({ ...f, path: [args.path, f.name].filter(Boolean).join('/') })) satisfies FileEntry[]; break;
+    case 'list_files': result = (args.path ? args.path === 'public' ? [{ name: 'favicon.svg', isDir: false }] : args.path === 'src' ? [{ name: 'components', isDir: true }, { name: 'lib', isDir: true }, { name: 'main.ts', isDir: false }, { name: 'style.css', isDir: false }] : [{ name: 'search.ts', isDir: false }, { name: 'search.test.ts', isDir: false }] : [{ name: 'src', isDir: true }, { name: 'public', isDir: true }, { name: 'index.html', isDir: false }, { name: 'package.json', isDir: false }, { name: 'README.md', isDir: false }, { name: 'tsconfig.json', isDir: false }, { name: 'report.pdf', isDir: false }, { name: 'proposal.docx', isDir: false }, { name: 'budget.xlsx', isDir: false }, { name: 'screenshot.png', isDir: false }]).map(f => ({ ...f, path: [args.path, f.name].filter(Boolean).join('/') })) satisfies FileEntry[]; break;
     case 'search_files': {
       const query = String(args.query ?? '').trim().toLocaleLowerCase().replace(/\/$/, '');
       const files = previewWorkspaceFiles.map(path => ({ path, isDir: false }));
@@ -1355,6 +1399,9 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       result = { id: crypto.randomUUID(), name, width: 1280, height: 800, thumbnail: String(args.dataUrl ?? '').startsWith('data:image/png') ? args.dataUrl : 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==' };
       break;
     }
+    // Any registry ID shows the yellow swatch; native reads browser-captures/<id>.png.
+    case 'prompt_image': result = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(String(args.id)) ? 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==' : null; break;
+    case 'reveal_path': if (!String(args.path ?? '').startsWith('/')) throw new Error('This attachment is no longer on this computer.'); break;
     case 'read_document': {
       const path = String(args.path ?? ''), name = path.split('/').pop() || 'Document';
       if (!path.startsWith('/')) throw new Error('Choose the document with the picker or drop it onto the message.');
@@ -1391,9 +1438,17 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><defs><linearGradient id="g" x1="0" x2="1"><stop stop-color="#2e513b"/><stop offset="1" stop-color="#ffd43b"/></linearGradient></defs><rect width="320" height="180" rx="12" fill="url(#g)"/><text x="160" y="96" fill="#fffcef" font-family="sans-serif" font-size="18" text-anchor="middle">${String(args.path).split('/').pop()}</text></svg>`;
       result = `data:image/svg+xml;base64,${btoa(svg)}`; break;
     }
+    // Sample documents are the test fixtures, served by the dev server.
+    case 'read_document_file': {
+      const sample = ({ pdf: 'sample.pdf', docx: 'sample.docx', xlsx: 'sample.xlsx', png: 'sample.png', svg: 'sample.svg' } as Record<string, string>)[String(args.path).split('.').pop()!.toLowerCase()];
+      const response = sample && await fetch(`/tests/fixtures/${sample}`);
+      if (!response || !response.ok) throw new Error('Only PDF, Word (.docx) and spreadsheet files can be shown');
+      result = await response.arrayBuffer();
+      break;
+    }
     // Like `Store::workspace_root`: a task on another computer has no checkout here.
     case 'read_file': { const mirror = args.sessionId ? sessions.find(s => s.id === args.sessionId)?.remoteDevice : null; if (mirror) throw new Error(`This task runs on ${mirror.name}.`); }
-      result = /\.(md|markdown)$/i.test(args.path) ? sampleReadme : args.path.endsWith('.json') ? '{\n  "name": "orbit",\n  "private": true,\n  "type": "module"\n}' : args.path.endsWith('.html') ? '<!doctype html>\n<html><head><title>Orbit</title></head><body><h1>Orbit</h1></body></html>' : sampleSource; break;
+      result = /\.(md|markdown)$/i.test(args.path) ? sampleReadme : args.path.endsWith('.json') ? '{\n  "name": "orbit",\n  "private": true,\n  "type": "module"\n}' : args.path.endsWith('.html') ? '<!doctype html>\n<html><head><title>Orbit</title></head><body><h1>Orbit</h1></body></html>' : args.path.endsWith('.svg') ? '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/></svg>' : sampleSource; break;
     case 'get_metrics': result = { coreRssBytes: 0, activeAgents: timers.size, activeTerminals: 0, databaseBytes: 0 }; break;
     case 'get_terminal_activity': result = { running: false, processNames: [], uncertain: false }; break;
     case 'get_run_script': result = null; break;
