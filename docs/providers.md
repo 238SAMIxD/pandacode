@@ -1,7 +1,7 @@
 # Provider integrations
 
 PandaCode launches each installed CLI directly. Claude, Codex, Kimi, OpenCode,
-Antigravity, Grok Build, and Devin CLI own their authentication; sign in using their official
+Antigravity, Grok Build, Devin CLI, and Hermes Agent own their authentication; sign in using their official
 CLI or extension.
 The optional Z.AI Coding Plan and MiMo Token Plan API keys are stored as separate
 entries in PandaCode's secrets store (see [secret storage](#secret-storage)) and injected only into their isolated Claude subprocesses. The app discovers executable paths
@@ -743,6 +743,20 @@ command, a Plan turn and a live steer). The recorded frames back the unit tests 
 `providers/devin.rs`, and an ignored smoke test
 (`installed_devin_lists_models_with_efforts`) reads the real catalog and command list
 without sending a prompt.
+
+## Hermes Agent
+
+Hermes Agent (`hermes`; install with `curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash`
+or from [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)) serves ACP v1 with `hermes acp`, so PandaCode
+drives it with the shared ACP adapter (`providers/hermes.rs`). Official docs: [hermes-agent.org](https://hermes-agent.org) and [GitHub repository](https://github.com/NousResearch/hermes-agent).
+
+**Configuration and sign-in.** Hermes stores its credentials and LLM provider settings in `~/.hermes/config.yaml` or `.env` (configure with `hermes acp --setup` or by editing `~/.hermes/config.yaml`). The agent supports Nous, OpenRouter, OpenAI, Anthropic, Together, Fireworks, and local endpoints. If `session/new` returns ACP `-32000`, PandaCode reports that Hermes is not configured and suggests running `hermes acp --setup`.
+
+**Models.** Hermes is model-agnostic. The model picker offers **Default** (which delegates model selection to Hermes' own `~/.hermes/config.yaml` configuration) alongside any models Hermes advertises through ACP `configOptions`. Custom model identifiers (such as `nous/hermes-3-llama-3.1-405b` or `anthropic/claude-sonnet-4`) can also be entered directly.
+
+**Approvals.** Standard (`ask`) requests approval for shell commands and dangerous actions; Accept edits (`auto`) automatically allows file edits while prompting for commands; Plan mode (`plan`) enforces read-only investigation and declines state-changing actions; Full access (`full`) skips approvals (equivalent to Hermes' `--yolo` flag).
+
+**Interactive console.** Click Open terminal to start `hermes` in an interactive terminal session. PandaCode passes `--resume <session>` when continuing a task, and `--yolo` when the task is in Full access mode.
 
 ## Kilo Code
 
