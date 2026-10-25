@@ -151,6 +151,16 @@ computer use that computer's environment instead. Saving a variable refreshes
 the affected provider's cached catalogs and usage, so the next query runs with
 the new setting.
 
+On cloud machines nothing is inherited by default. Settings → Agents → Cloud
+sandboxes has a per-provider **Include provider environment variables** switch
+(off), and when it is on, a task on that cloud carries the harness's saved
+variables with it — a proxy the cloud machine can reach, for example, such as a
+corporate proxy reachable from an AWS VPC. A proxy pointing at this computer
+(`127.0.0.1`, `localhost`) refuses to start the task: the machine cannot reach
+it, and the harness would lose all its API traffic. The harness's own
+credentials and endpoints still win over inherited variables, and mirroring a
+task to another computer stays untouched — that computer uses its own settings.
+
 ## GitHub Copilot CLI
 
 Install GitHub Copilot CLI using [GitHub's installation guide](https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli), then sign in in a terminal with `copilot login`. PandaCode discovers or uses the configured `copilot` executable and starts its local ACP stdio server with `copilot --no-auto-update --acp --stdio`. The CLI owns GitHub authentication; PandaCode does not store GitHub credentials or add a separate login flow. ACP support is a public preview; see [GitHub's ACP reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/acp-server).

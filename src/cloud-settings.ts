@@ -6,7 +6,7 @@ import './cloud-settings.css';
 import { escape } from './dom';
 import { infoMark } from './tooltip';
 
-export type CloudConnection = { provider: 'daytona' | 'cloudflare' | 'aws' | 'vercel' | 'railway' | 'gcloud' | KeyedProvider; connected: boolean; detail: string | null; sandboxes?: boolean };
+export type CloudConnection = { provider: 'daytona' | 'cloudflare' | 'aws' | 'vercel' | 'railway' | 'gcloud' | KeyedProvider; connected: boolean; detail: string | null; sandboxes?: boolean; inheritEnvironment?: boolean };
 export type CloudSettingsHost = {
   call<T>(command: string, args?: Record<string, unknown>): Promise<T>;
   listen(name: 'cloud-setup', callback: (event: { provider: string; label: string }) => void): Promise<() => void>;
@@ -72,6 +72,7 @@ const PROVIDERS: Record<CloudConnection['provider'], { name: string; summary: st
 type InstaboxImages = { images: { value: string; label: string }[]; selected: string };
 const IMAGE_HELP = 'New InstaBox machines start from this image. Snapshots are listed once they are ready; to run agents without the desktop tool agent-browser includes, make a snapshot as docs/cloud-agents.md describes.';
 const CLAUDE_TOKEN_HELP = 'Run `claude setup-token` and paste the long-lived token it prints. Without one, PandaCode copies this computer’s Claude Code login to the machine before each run.';
+const INHERIT_HELP = 'When on, cloud agents this provider runs also get the environment variables saved for the harness in Settings → Providers — a proxy the cloud machine can reach, for example. Off by default: nothing is sent to this cloud. Variables that point at this computer (a localhost HTTP_PROXY) are refused when a task starts, because a cloud machine cannot reach them.';
 
 export function mountCloudSettings(host: HTMLElement, options: CloudSettingsHost): () => void {
   host.innerHTML = `<div class="settings-group cloud-settings" aria-label="Cloud sandboxes"><div class="cloud-provider cloud-claude">
@@ -87,7 +88,8 @@ export function mountCloudSettings(host: HTMLElement, options: CloudSettingsHost
     const fields = [...(provider.key ? [provider.key] : []), ...provider.fields];
     return `<div class="cloud-provider" data-provider="${id}">
       <div class="setting-row"><div><strong>${escape(provider.name)}</strong><small class="cloud-detail">${escape(provider.summary)}</small></div><div class="cloud-buttons">${id === 'cloudflare' ? '<button type="button" class="secondary-button" data-cloud="sandboxes" hidden>Set up sandboxes</button>' : ''}<button type="button" class="secondary-button" data-cloud="toggle">Connect</button></div></div>
-      <p class="cloud-progress cloud-row-status" role="status" hidden></p>${id === 'instabox' ? `
+      <p class="cloud-progress cloud-row-status" role="status" hidden></p>
+      <label class="cloud-inherit" data-inherit-row hidden><input type="checkbox" data-cloud-inherit> Include provider environment variables${infoMark(INHERIT_HELP, 'About inheriting environment variables')}</label>${id === 'instabox' ? `
       <div class="cloud-image" hidden>
         <div class="cloud-image-row"><label><span>Machine image</span><select aria-label="InstaBox machine image" disabled></select></label>${infoMark(IMAGE_HELP, 'About machine images')}</div>
         <p class="cloud-image-status" role="status" hidden></p>
@@ -120,6 +122,14 @@ export function mountCloudSettings(host: HTMLElement, options: CloudSettingsHost
       toggle.disabled = Boolean(busy);
       toggle.setAttribute('aria-label', `${toggle.textContent} ${PROVIDERS[id].name}`);
       form.querySelector<HTMLButtonElement>('[type="submit"]')!.disabled = Boolean(busy);
+      const inheritRow = root.querySelector<HTMLElement>('[data-inherit-row]')!;
+      const supported = connection?.inheritEnvironment !== undefined;
+      inheritRow.hidden = !supported || !connection?.connected;
+      if (supported) {
+        const box = inheritRow.querySelector<HTMLInputElement>('[data-cloud-inherit]')!;
+        box.checked = Boolean(connection?.inheritEnvironment);
+        box.disabled = Boolean(busy);
+      }
     }
   }
   async function load(): Promise<void> {
@@ -226,7 +236,26 @@ export function mountCloudSettings(host: HTMLElement, options: CloudSettingsHost
     void connect(id, form);
   });
   host.addEventListener('change', event => {
-    if (event.target instanceof HTMLSelectElement && event.target.closest('.cloud-image')) void saveImage(event.target);
+    const target = event.target;
+    if (target instanceof HTMLInputElement && target.matches('[data-cloud-inherit]')) {
+      const root = target.closest<HTMLElement>('.cloud-provider[data-provider]')!;
+      const id = root.dataset.provider as CloudConnection['provider'];
+      if (busy) { target.checked = !target.checked; return; }
+      const inherit = target.checked;
+      // Optimistic: render() must not read the checkbox back to the old state mid-save.
+      const previous = connections;
+      connections = connections.map(connection => connection.provider === id ? { ...connection, inheritEnvironment: inherit } : connection);
+      busy = id; render();
+      void options.call<CloudConnection[]>('cloud_set_inherit_environment', { provider: id, inherit }).then(next => {
+        connections = next;
+        say(root, 'progress', inherit ? 'Saved. Cloud agents on this provider include the saved environment variables.' : 'Saved. Nothing from the provider environment is sent to this cloud.');
+      }).catch(error => {
+        connections = previous; target.checked = !inherit;
+        say(root, 'error', error instanceof Error ? error.message : String(error));
+      }).finally(() => { busy = ''; if (!disposed) render(); });
+      return;
+    }
+    if (target instanceof HTMLSelectElement && target.closest('.cloud-image')) void saveImage(target);
   });
   host.addEventListener('keydown', event => {
     const form = (event.target as Element).closest?.('.cloud-provider[data-provider] form.cloud-form') as HTMLFormElement | null;
