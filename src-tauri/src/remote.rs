@@ -7,12 +7,13 @@ mod client;
 mod config;
 mod crypto;
 mod host;
+mod images;
 pub(crate) mod mirror;
 mod secrets;
 mod socket;
 mod start;
 
-pub(crate) use mirror::{route, Mirror};
+pub(crate) use mirror::route;
 
 use crate::Result;
 use serde::{Deserialize, Serialize};
@@ -94,6 +95,8 @@ pub(crate) struct Inner {
     cancel: Option<tokio::sync::oneshot::Sender<()>>,
     /// Other computers' harnesses and models, for their mirrors' model pickers.
     catalog: catalog::Cache,
+    /// Images other computers are sending for their next message here.
+    uploads: images::Uploads,
 }
 
 impl Inner {
@@ -138,6 +141,7 @@ impl Inner {
         self.presence = false;
         self.subscribers.clear();
         self.catalog = Default::default();
+        self.uploads = Default::default();
         true
     }
 }
@@ -400,6 +404,7 @@ pub async fn remote_set_host_enabled(app: tauri::AppHandle, enabled: Option<bool
             inner.settings.host_enabled = enabled;
             if !enabled {
                 inner.subscribers.clear();
+                inner.uploads = Default::default();
             }
             if let Some(outbox) = &inner.outbox {
                 let _ = outbox.send(json!({"kind": "host", "enabled": enabled}).to_string());

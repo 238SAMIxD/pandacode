@@ -911,6 +911,23 @@ html[data-theme="dark"] body .dialog-plate{box-shadow:0 40px 100px -30px rgb(0 0
 .steer-state .icon{width:13px;height:13px}
 :is(.steer-state,.queue-status,.queue-next) .support-spinner{width:11px;height:11px}
 .queue-status{margin-left:auto;font-size:.74rem;color:var(--muted)}
+/* A New task starting on another computer (src/remote-progress.ts), like .cloud-strip. */
+.remote-start-strip{display:flex;align-items:center;gap:8px;min-width:0;margin:0 0 6px;padding:4px 4px 4px 10px;min-height:32px;border-radius:6px;background:rgb(var(--accent-rgb) / .08);color:var(--text);font-size:12px}
+.remote-start-status{display:inline-flex;align-items:center;gap:7px;min-width:0;flex:1}
+.remote-start-status>.support-spinner{width:12px;height:12px;color:var(--accent)}
+.remote-start-status>.icon{width:14px;height:14px;flex-shrink:0;color:var(--danger)}
+.remote-start-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.remote-start-device{font-weight:600}
+.remote-start-bar{appearance:none;-webkit-appearance:none;flex:0 1 120px;min-width:48px;height:4px;margin-right:6px;border:0;border-radius:2px;background:rgb(var(--accent-rgb) / .18);color:var(--accent);overflow:hidden}
+.remote-start-bar::-webkit-progress-bar{background:transparent}
+.remote-start-bar::-webkit-progress-value{background:var(--accent);border-radius:2px}
+.remote-start-bar::-moz-progress-bar{background:var(--accent);border-radius:2px}
+.remote-start-strip[data-stage="error"]{background:color-mix(in srgb,var(--danger) 12%,transparent)}
+.remote-start-retry,.remote-start-dismiss{display:inline-flex;align-items:center;gap:5px;height:24px;border-radius:4px;color:var(--muted)}
+.remote-start-retry{padding:0 8px;color:var(--text);font-size:12px}
+.remote-start-dismiss{justify-content:center;width:24px}
+.remote-start-retry:hover,.remote-start-dismiss:hover{background:var(--raised);color:var(--text)}
+:is(.remote-start-retry,.remote-start-dismiss) .icon{width:13px;height:13px}
 /* Sent attachments: the composer's chips, read-only, each opening what it carried. */
 .message-attachments{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;white-space:normal;text-align:left}
 .message-attachments>.prompt-chip{cursor:pointer;font:inherit;font-size:.72rem;padding-right:8px}

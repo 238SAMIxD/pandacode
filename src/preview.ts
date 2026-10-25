@@ -9,7 +9,7 @@ import { createPreviewCloud, createPreviewVm } from './preview-vm';
 import { createPreviewTurnChanges } from './preview-turn-changes';
 // Bundled with the preview, not lazily imported: a late module load during a paused test clock stalled startup.
 import { invokeBots } from './preview-bots';
-import { invokeRemote } from './preview-remote';
+import { invokeRemote, previewRemoteStart } from './preview-remote';
 import { createPreviewDesign } from './preview-design';
 import { createPreviewSkills } from './preview-skills';
 import { previewCapabilities } from './preview-capabilities';
@@ -705,9 +705,11 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     const target = targets.find(item => item.deviceId === args.deviceId && item.online);
     if (!target) throw new Error('That computer is offline.');
     ((window as any).__remoteStarts ??= []).push(args);
+    // The host's stages (finding, downloading…), shown by src/remote-progress.ts; may fail on request.
+    await previewRemoteStart({ ...args, repo: previewGithub.status(args.projectId).repo?.nameWithOwner }, emit);
     const s = args.sessionId ? session(args.sessionId) : await invoke<Session>('create_session', { projectId: args.projectId, provider: args.provider, model: args.model, mode: args.mode });
     Object.assign(session(s.id), { projectId: args.projectId, provider: args.provider, model: args.model, mode: args.mode, reasoningEffort: args.effort, remoteDevice: { id: target.deviceId, name: target.name }, worktreeBranch: args.branch });
-    await invoke('send_message', { sessionId: s.id, text: args.prompt });
+    await invoke('send_message', { sessionId: s.id, text: args.prompt, imageIds: args.imageIds ?? [] });
     emit('sessions-changed', {});
     return { sessionId: s.id } as T;
   }
@@ -1459,7 +1461,9 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       result = await response.arrayBuffer();
       break;
     }
-    case 'read_file': result = /\.(md|markdown)$/i.test(args.path) ? sampleReadme : args.path.endsWith('.json') ? '{\n  "name": "orbit",\n  "private": true,\n  "type": "module"\n}' : args.path.endsWith('.html') ? '<!doctype html>\n<html><head><title>Orbit</title></head><body><h1>Orbit</h1></body></html>' : args.path.endsWith('.svg') ? '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/></svg>' : sampleSource; break;
+    // Like `Store::workspace_root`: a task on another computer has no checkout here.
+    case 'read_file': { const mirror = args.sessionId ? sessions.find(s => s.id === args.sessionId)?.remoteDevice : null; if (mirror) throw new Error(`This task runs on ${mirror.name}.`); }
+      result = /\.(md|markdown)$/i.test(args.path) ? sampleReadme : args.path.endsWith('.json') ? '{\n  "name": "orbit",\n  "private": true,\n  "type": "module"\n}' : args.path.endsWith('.html') ? '<!doctype html>\n<html><head><title>Orbit</title></head><body><h1>Orbit</h1></body></html>' : args.path.endsWith('.svg') ? '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/></svg>' : sampleSource; break;
     case 'get_metrics': result = { coreRssBytes: 0, activeAgents: timers.size, activeTerminals: 0, databaseBytes: 0 }; break;
     case 'get_terminal_activity': result = { running: false, processNames: [], uncertain: false }; break;
     case 'get_run_script': result = null; break;

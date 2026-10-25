@@ -36,6 +36,21 @@ function handle(command: string, args: Record<string, any>, emit: (name: string,
     default: throw new Error(`Unknown preview command: ${command}`);
   }
 }
+/** The host's start stages as `remote://start-progress` events, like `remote/start.rs` sends them.
+ * Tests steer it: `__remoteStartStep` (ms per step, default 250), `__remoteStartManual` (each
+ * step waits for `__remoteStartNext()`), `__remoteStartFail` (an error text sent at preparing). */
+export async function previewRemoteStart(args: Record<string, any>, emit: (name: string, payload: unknown) => void): Promise<void> {
+  const w = window as any, repo = args.repo ?? 'orbit-labs/orbit';
+  const step = () => new Promise<void>(resolve => { if (w.__remoteStartManual) w.__remoteStartNext = resolve; else setTimeout(resolve, w.__remoteStartStep ?? 250); });
+  const send = (stage: string, percent: number | null = null, detail: string | null = null) => emit('remote://start-progress', { deviceId: args.deviceId, startId: args.startId ?? null, repo, stage, percent, detail });
+  await step();
+  for (const [stage, percent] of [['finding', null], ['downloading', null], ['downloading', 12], ['downloading', 58], ['downloading', 100], ['preparing', null]] as const) {
+    send(stage, percent); await step();
+  }
+  const failure = w.__remoteStartFail;
+  if (failure) { w.__remoteStartFail = undefined; send('error', null, failure); throw new Error(failure); }
+  send('starting'); await step();
+}
 /** Test hook: a computer going offline or coming back. */
 export function setPreviewOnline(id: string, online: boolean, emit: (name: string, payload: unknown) => void): void {
   if (online) offline.delete(id); else offline.add(id);

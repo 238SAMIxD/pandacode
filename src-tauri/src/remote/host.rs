@@ -2,7 +2,7 @@
 //! "Allow remote control" is on,
 //! and pushes the agent events of the tasks they mirror. Remote prompts run under the
 //! same approval policy as local ones.
-use super::{remote, socket, start, Subscriber};
+use super::{images, remote, socket, start, Subscriber};
 use crate::{message_queue, providers::AgentEvent, AppState, Result};
 use rusqlite::OptionalExtension;
 use serde_json::{json, Value};
@@ -11,7 +11,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
 
-pub(crate) const METHODS: [&str; 13] = ["subscribe", "tasks.list", "projects.icons", "providers.list", "providers.models", "task.start", "task.messages", "task.send", "task.stop", "task.steer", "task.configure", "approval.respond", "input.respond"];
+pub(crate) const METHODS: [&str; 14] = ["subscribe", "tasks.list", "projects.icons", "providers.list", "providers.models", "task.start", "task.messages", "task.send", "task.stop", "task.steer", "task.configure", "approval.respond", "input.respond", "image.put"];
 pub(crate) const OFF: &str = "Remote control is off on this computer";
 pub(crate) const MAX_TEXT: usize = 100 * 1024;
 const SUBSCRIPTION: Duration = Duration::from_secs(10 * 60);
@@ -88,7 +88,8 @@ pub(crate) enum Call {
     Models { provider: String, force: bool },
     Start(start::Start),
     Messages { session_id: String, after_id: i64 },
-    Send { session_id: String, text: String },
+    Send { session_id: String, text: String, image_ids: Vec<String> },
+    PutImage(images::Chunk),
     Stop { session_id: String },
     Steer { session_id: String, text: String },
     Configure { session_id: String, model: Option<(String, String)>, effort: Option<Option<String>>, mode: Option<String> },
@@ -185,7 +186,8 @@ pub(crate) fn parse(host_enabled: bool, method: &str, params: &Value) -> Result<
         }
         "task.start" => Call::Start(start::parse(params)?),
         "task.messages" => Call::Messages { session_id: id_param(params, "sessionId")?, after_id: params["afterId"].as_i64().unwrap_or(0).max(0) },
-        "task.send" => Call::Send { session_id: id_param(params, "sessionId")?, text: text_param(params, "text")? },
+        "task.send" => Call::Send { session_id: id_param(params, "sessionId")?, text: text_param(params, "text")?, image_ids: images::ids_param(params)? },
+        "image.put" => Call::PutImage(images::parse_chunk(params)?),
         "task.stop" => Call::Stop { session_id: id_param(params, "sessionId")? },
         "task.steer" => Call::Steer { session_id: id_param(params, "sessionId")?, text: text_param(params, "text")? },
         "task.configure" => configure(params)?,
@@ -311,12 +313,16 @@ async fn run(app: &tauri::AppHandle, from: &str, call: Call, full_access: bool) 
             let store = state.store.lock().map_err(|e| e.to_string())?;
             messages_page(&store.db, &session_id, after_id)
         }
-        Call::Send { session_id, text } => {
+        Call::PutImage(chunk) => images::put(app, from, chunk).await,
+        Call::Send { session_id, text, image_ids } => {
             allow_task_mode(&local_task(&state, &session_id)?.mode, None, full_access)?;
+            // Only images this caller just sent; they are now this task's.
+            images::claim(app, from, &image_ids)?;
             // Like Enter in the composer: a running task queues the message.
             let busy = || state.agents.lock().map(|agents| agents.contains_key(&session_id)).map_err(|e| e.to_string());
             if busy()? {
-                let entry = message_queue::add(&*state.store.lock().map_err(|e| e.to_string())?, &session_id, &text, &json!([]))?;
+                let queued: Vec<Value> = image_ids.iter().map(|id| json!({"kind": "image", "id": id, "name": "Image", "width": 0, "height": 0, "thumbnail": "", "source": "file"})).collect();
+                let entry = message_queue::add(&*state.store.lock().map_err(|e| e.to_string())?, &session_id, &text, &json!(queued))?;
                 // If the run ended between the check and the add, nothing would deliver the
                 // entry: take it back (unless a run end already did) and send it now.
                 if busy()? || message_queue::take(&*state.store.lock().map_err(|e| e.to_string())?, &entry.id).is_err() {
@@ -324,7 +330,7 @@ async fn run(app: &tauri::AppHandle, from: &str, call: Call, full_access: bool) 
                     return Ok(json!({"queued": true}));
                 }
             }
-            crate::send_message(app.clone(), state, session_id, text, None, None).await?;
+            crate::send_message(app.clone(), state, session_id, text, Some(image_ids), None).await?;
             let _ = app.emit("sessions-changed", ());
             Ok(json!({"queued": false}))
         }
@@ -764,7 +770,13 @@ mod tests {
         assert!(parse(true, "subscribe", &json!({})).is_err());
         assert!(parse(true, "subscribe", &json!({"sessionIds": ["a b"]})).is_err());
         assert!(parse(true, "subscribe", &json!({"sessionIds": vec!["s"; MAX_IDS + 1]})).is_err());
-        assert_eq!(parse(true, "task.send", &json!({"sessionId": "s1", "text": " hi "})), Ok(Call::Send { session_id: "s1".into(), text: "hi".into() }));
+        assert_eq!(parse(true, "task.send", &json!({"sessionId": "s1", "text": " hi "})), Ok(Call::Send { session_id: "s1".into(), text: "hi".into(), image_ids: vec![] }));
+        let image = uuid::Uuid::new_v4().to_string();
+        assert_eq!(parse(true, "task.send", &json!({"sessionId": "s1", "text": "hi", "imageIds": [image]})), Ok(Call::Send { session_id: "s1".into(), text: "hi".into(), image_ids: vec![image.clone()] }));
+        assert!(parse(true, "task.send", &json!({"sessionId": "s1", "text": "hi", "imageIds": ["../x"]})).is_err());
+        assert!(parse(true, "task.send", &json!({"sessionId": "s1", "text": "hi", "imageIds": vec![image; 5]})).is_err());
+        assert!(parse(true, "image.put", &json!({"uploadId": "u1", "index": 0, "size": 3, "data": "iVBO"})).is_ok());
+        assert!(parse(true, "image.put", &json!({"uploadId": "u1", "index": 0, "size": 6 * 1024 * 1024, "data": "iVBO"})).is_err());
         assert_eq!(parse(true, "task.messages", &json!({"sessionId": "s1", "afterId": 7})), Ok(Call::Messages { session_id: "s1".into(), after_id: 7 }));
         assert_eq!(parse(true, "task.messages", &json!({"sessionId": "s1", "afterId": -3})), Ok(Call::Messages { session_id: "s1".into(), after_id: 0 }));
         assert_eq!(parse(true, "task.configure", &json!({"sessionId": "s1", "effort": null})), Ok(Call::Configure { session_id: "s1".into(), model: None, effort: Some(None), mode: None }));

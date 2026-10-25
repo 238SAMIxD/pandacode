@@ -3,9 +3,11 @@
 use super::host::{name_param, text_param};
 use crate::{github_hub, storage::Project, workspace, AppState, Result};
 use serde_json::{json, Value};
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::Duration;
+use std::process::{Command, Stdio};
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::Manager;
 
 /// Worst case for a start: clone 6 min + fetch 90 s + 8 local git steps of 15 s ≈ 9.5 min.
@@ -16,9 +18,17 @@ const GIT: Duration = Duration::from_secs(15);
 pub(crate) const WORST_CASE: Duration = Duration::from_secs(6 * 60 + 90 + 8 * 15);
 /// Clones land in `~/PandaCode/<name>`.
 const CLONE_FOLDER: &str = "PandaCode";
+/// The stages a host reports to the viewer while it readies a start (`task.progress`),
+/// in order, then `error` when it fails. The viewer adds its own `connecting` first.
+pub(crate) const STAGES: [&str; 5] = ["finding", "downloading", "preparing", "starting", "error"];
+/// Percent updates within one stage are sent at most this often (stage changes at once).
+const PROGRESS_EVERY: Duration = Duration::from_millis(400);
+const PROGRESS_EVENT: &str = "task.progress";
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Start {
+    /// The viewer's id for this start, echoed in its progress events.
+    pub start_id: Option<String>,
     pub target: Target,
     pub branch: Option<String>,
     pub worktree: bool,
@@ -27,6 +37,8 @@ pub(crate) struct Start {
     pub model: String,
     pub mode: Option<String>,
     pub effort: Option<String>,
+    /// Images the viewer sent with `image.put` for the first prompt.
+    pub image_ids: Vec<String>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -49,6 +61,7 @@ pub(crate) fn parse(params: &Value) -> Result<Start> {
         valid_branch(branch)?;
     }
     Ok(Start {
+        start_id: name_param(params, "startId")?,
         target,
         branch,
         worktree: params["worktree"].as_bool().unwrap_or(false),
@@ -57,6 +70,7 @@ pub(crate) fn parse(params: &Value) -> Result<Start> {
         model: name_param(params, "model")?.ok_or("Missing model.")?,
         mode: name_param(params, "mode")?,
         effort: name_param(params, "effort")?,
+        image_ids: super::images::ids_param(params)?,
     })
 }
 
@@ -95,9 +109,180 @@ fn on_origin(root: &Path, branch: &str) -> bool {
     git(root, &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/origin/{branch}")], GIT).is_ok()
 }
 
+/// One `git clone --progress` line as overall clone progress: receiving is 0–80 %,
+/// resolving deltas 80–95 %, checking out files 95–100 %. Other lines are None.
+pub(crate) fn clone_percent(line: &str) -> Option<u8> {
+    let (phase, rest) = line.trim().split_once(':')?;
+    let percent: u32 = rest.split_once('%')?.0.trim().parse().ok()?;
+    let (from, span) = match phase {
+        "Receiving objects" => (0, 80),
+        "Resolving deltas" => (80, 15),
+        "Updating files" => (95, 5),
+        _ => return None,
+    };
+    Some((from + span * percent.min(100) / 100) as u8)
+}
+
+/// Whether a `gh repo clone` stderr line is progress chatter rather than an error.
+fn progress_line(line: &str) -> bool {
+    let line = line.trim();
+    line.is_empty() || line.starts_with("Cloning into") || line.contains('%') || line.ends_with(", done.")
+}
+
+/// Reads git's progress from `stderr` (lines end in `\r` or `\n`), sending each new
+/// percent, and returns the last few other lines for an error message.
+fn read_progress(mut stderr: impl Read, percents: mpsc::Sender<u8>) -> String {
+    let (mut buffer, mut line, mut tail, mut last) = ([0u8; 4096], Vec::new(), Vec::<String>::new(), None);
+    let mut take = |line: &mut Vec<u8>, tail: &mut Vec<String>| {
+        let text = String::from_utf8_lossy(line).trim().to_owned();
+        line.clear();
+        if let Some(percent) = clone_percent(&text) {
+            if last != Some(percent) {
+                last = Some(percent);
+                let _ = percents.send(percent);
+            }
+        } else if !progress_line(&text) {
+            tail.push(text.chars().take(300).collect());
+            if tail.len() > 4 {
+                tail.remove(0);
+            }
+        }
+    };
+    while let Ok(read) = stderr.read(&mut buffer) {
+        if read == 0 {
+            break;
+        }
+        for &byte in &buffer[..read] {
+            if byte == b'\r' || byte == b'\n' {
+                take(&mut line, &mut tail);
+            } else if line.len() < 4096 {
+                line.push(byte);
+            }
+        }
+    }
+    take(&mut line, &mut tail);
+    tail.join("\n")
+}
+
+fn stop_group(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    // The clone owns a fresh process group, so this stops the git that gh runs too.
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = Command::new("taskkill.exe").creation_flags(0x08000000).args(["/PID", &child.id().to_string(), "/T", "/F"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// `gh repo clone` like [`github_hub::clone_to`], with git's `--progress` read as it
+/// arrives so the viewer sees a percentage. Same timeout, stops the whole group.
+fn clone_with_progress(repo: &str, destination: &Path, timeout: Duration, mut progress: impl FnMut(u8)) -> Result<()> {
+    let repo = github_hub::valid_repo(repo)?;
+    let parent = destination.parent().filter(|parent| parent.is_dir()).ok_or("Choose an existing folder to clone into.")?;
+    let mut command = Command::new(crate::providers::tool_path("gh").unwrap_or_else(|| "gh".into()));
+    command.current_dir(parent).args(["repo", "clone", &repo]).arg(destination).args(["--", "--progress"]);
+    if let Ok(path) = crate::providers::executable_path() {
+        command.env("PATH", path);
+    }
+    command.env("GH_PROMPT_DISABLED", "1").env("GH_NO_UPDATE_NOTIFIER", "1").env("GH_PAGER", "cat").env("NO_COLOR", "1").env("CLICOLOR", "0").env("GIT_TERMINAL_PROMPT", "0");
+    crate::child_env::sanitize(&mut command);
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(&mut command, 0x08000000);
+    command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|e| format!("Could not run the GitHub CLI: {e}"))?;
+    let stderr = child.stderr.take().ok_or("Could not read the GitHub CLI.")?;
+    let (sender, percents) = mpsc::channel();
+    let reader = std::thread::spawn(move || read_progress(stderr, sender));
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match percents.recv_timeout(Duration::from_millis(100)) {
+            Ok(percent) => progress(percent),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            // The reader is done, so stderr closed: the clone is ending.
+            Err(mpsc::RecvTimeoutError::Disconnected) => std::thread::sleep(Duration::from_millis(50)),
+        }
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            stop_group(&mut child);
+            let _ = reader.join();
+            return Err(format!("Cloning {repo} took longer than {} minutes.", timeout.as_secs() / 60));
+        }
+    };
+    let tail = reader.join().unwrap_or_default();
+    percents.try_iter().for_each(&mut progress);
+    if status.success() {
+        return Ok(());
+    }
+    Err(if tail.is_empty() { format!("Could not clone {repo}.") } else { tail })
+}
+
+/// Whether a progress update is worth a frame: a new stage always, a new percent at most
+/// every [`PROGRESS_EVERY`] (100 % always).
+fn due(last: Option<&(String, Option<u8>, Instant)>, stage: &str, percent: Option<u8>, now: Instant) -> bool {
+    match last {
+        None => true,
+        Some((old, _, _)) if old != stage => true,
+        Some((_, old, _)) if *old == percent => false,
+        Some((_, _, at)) => percent == Some(100) || now.duration_since(*at) >= PROGRESS_EVERY,
+    }
+}
+
+/// Reports a start's stages to the viewer that asked for it, best effort: a lost frame
+/// only leaves the viewer on the previous stage.
+struct Progress {
+    app: tauri::AppHandle,
+    to: String,
+    start: Option<String>,
+    repo: String,
+    last: Mutex<Option<(String, Option<u8>, Instant)>>,
+}
+
+impl Progress {
+    fn report(&self, stage: &str, percent: Option<u8>, detail: Option<&str>) {
+        let now = Instant::now();
+        {
+            let Ok(mut last) = self.last.lock() else { return };
+            if !due(last.as_ref(), stage, percent, now) {
+                return;
+            }
+            *last = Some((stage.to_owned(), percent, now));
+        }
+        let data = json!({"startId": self.start, "repo": self.repo, "stage": stage, "percent": percent, "detail": detail.map(|d| d.chars().take(300).collect::<String>())});
+        let _ = super::socket::send_to_device(&self.app, &self.to, &json!({"type": "event", "name": PROGRESS_EVENT, "data": data}));
+    }
+}
+
+/// A host's `task.progress` as the window's `remote://start-progress` payload, or None
+/// when it is malformed. Only a host trusted here may send one (socket.rs checks).
+pub(crate) fn progress_payload(from: &str, data: &Value) -> Option<Value> {
+    let stage = data["stage"].as_str().filter(|stage| STAGES.contains(stage))?;
+    let percent = data["percent"].as_u64().filter(|percent| *percent <= 100);
+    let start = data["startId"].as_str().filter(|id| super::host::valid_id(id).is_ok());
+    let repo = data["repo"].as_str().and_then(|repo| github_hub::valid_repo(repo).ok());
+    let detail = data["detail"].as_str().filter(|_| stage == "error").map(|detail| detail.chars().take(300).collect::<String>());
+    Some(json!({"deviceId": from, "startId": start, "repo": repo, "stage": stage, "percent": percent, "detail": detail}))
+}
+
+/// `task.progress` from a trusted host, on the viewer: shown by `src/remote-progress.ts`.
+pub(crate) fn progress(app: &tauri::AppHandle, from: &str, data: &Value) {
+    use tauri::Emitter;
+    if let Some(payload) = progress_payload(from, data) {
+        let _ = app.emit("remote://start-progress", payload);
+    }
+}
+
 /// The project checking out `repo`, cloned into `~/PandaCode` when there is none, and
 /// whether it was cloned just now.
-fn project_for(state: &AppState, target: &Target) -> Result<(Project, bool)> {
+fn project_for(state: &AppState, target: &Target, progress: &Progress) -> Result<(Project, bool)> {
     let (projects, bot_projects) = {
         let store = state.store.lock().map_err(|e| e.to_string())?;
         (store.projects()?, crate::bots::project_ids(&store)?)
@@ -120,7 +305,8 @@ fn project_for(state: &AppState, target: &Target) -> Result<(Project, bool)> {
             let home = crate::agent_usage_providers::home().ok_or("This computer has no home folder to clone into.")?;
             let destination = clone_path(&home, repo, Path::exists);
             std::fs::create_dir_all(home.join(CLONE_FOLDER)).map_err(|e| e.to_string())?;
-            github_hub::clone_to(repo, &destination, CLONE)?;
+            progress.report("downloading", None, None);
+            clone_with_progress(repo, &destination, CLONE, |percent| progress.report("downloading", Some(percent), None))?;
             Ok((state.store.lock().map_err(|e| e.to_string())?.add_project(&destination)?, true))
         }
     }
@@ -192,13 +378,27 @@ pub(crate) async fn require_installed(provider: &str) -> Result<()> {
     Ok(())
 }
 
+/// Starts the task, reporting each stage to the viewer, and the failure as `error`.
 pub(crate) async fn run(app: &tauri::AppHandle, from: &str, start: Start) -> Result<Value> {
+    let progress = Arc::new(Progress { app: app.clone(), to: from.to_owned(), start: start.start_id.clone(), repo: match &start.target { Target::Repo(repo) => repo.clone(), Target::ProjectId(_) => String::new() }, last: Mutex::new(None) });
+    let result = start_task(app, from, start, &progress).await;
+    if let Err(error) = &result {
+        progress.report("error", None, Some(error));
+    }
+    result
+}
+
+async fn start_task(app: &tauri::AppHandle, from: &str, start: Start, progress: &Arc<Progress>) -> Result<Value> {
+    progress.report("finding", None, None);
+    // Before any clone: the images must be ones this caller just sent.
+    super::images::claim(app, from, &start.image_ids)?;
     require_installed(&start.provider).await?;
     let handle = app.clone();
-    let (target, wanted, worktree) = (start.target, start.branch.clone(), start.worktree);
+    let (target, wanted, worktree, reporter) = (start.target, start.branch.clone(), start.worktree, progress.clone());
     let (project, branch) = tauri::async_runtime::spawn_blocking(move || -> Result<(Project, String)> {
         let state = handle.state::<AppState>();
-        let (project, cloned) = project_for(&state, &target)?;
+        let (project, cloned) = project_for(&state, &target, &reporter)?;
+        reporter.report("preparing", None, None);
         let root = PathBuf::from(&project.path);
         let branch = pick_branch(&root, wanted.as_deref())?;
         if !worktree {
@@ -236,9 +436,10 @@ pub(crate) async fn run(app: &tauri::AppHandle, from: &str, start: Start) -> Res
             return Err(error);
         }
     }
+    progress.report("starting", None, None);
     // The caller mirrors the task from its first event.
     super::host::follow(app, from, &task.id);
-    crate::send_message(app.clone(), state, task.id.clone(), start.prompt, None, None).await?;
+    crate::send_message(app.clone(), state, task.id.clone(), start.prompt, Some(start.image_ids), None).await?;
     use tauri::Emitter;
     let _ = app.emit("sessions-changed", ());
     Ok(json!({"sessionId": task.id}))
@@ -288,12 +489,59 @@ mod tests {
     fn start_requests_are_validated() {
         let ok = json!({"repo": "orbit-labs/orbit", "branch": "feature/x", "worktree": true, "prompt": " go ", "provider": "claude", "model": "sonnet", "effort": "high"});
         let start = parse(&ok).unwrap();
+        assert_eq!(start.start_id, None);
+        let mut with_id = ok.clone();
+        with_id["startId"] = json!("3f2a-local");
+        assert_eq!(parse(&with_id).unwrap().start_id.as_deref(), Some("3f2a-local"));
+        with_id["startId"] = json!("has space");
+        assert!(parse(&with_id).is_err());
         assert_eq!((start.target, start.branch.as_deref(), start.worktree, start.prompt.as_str(), start.mode), (Target::Repo("orbit-labs/orbit".into()), Some("feature/x"), true, "go", None));
-        for (key, bad) in [("repo", json!("../etc")), ("branch", json!("--upload-pack=x")), ("branch", json!("a..b")), ("prompt", json!(" ")), ("provider", json!("a b")), ("model", Value::Null)] {
+        assert!(start.image_ids.is_empty());
+        let image = uuid::Uuid::new_v4().to_string();
+        let mut with_image = ok.clone();
+        with_image["imageIds"] = json!([image]);
+        assert_eq!(parse(&with_image).unwrap().image_ids, vec![image]);
+        for (key, bad) in [("repo", json!("../etc")), ("branch", json!("--upload-pack=x")), ("branch", json!("a..b")), ("prompt", json!(" ")), ("provider", json!("a b")), ("model", Value::Null), ("imageIds", json!(["/etc/passwd"]))] {
             let mut params = ok.clone();
             params[key] = bad;
             assert!(parse(&params).is_err(), "{key}");
         }
+    }
+
+    #[test]
+    fn clone_progress_is_read_from_git() {
+        assert_eq!(clone_percent("Receiving objects:  50% (500/1000), 1.20 MiB | 2.00 MiB/s"), Some(40));
+        assert_eq!(clone_percent("Receiving objects: 100% (1000/1000), 2.40 MiB | 2.00 MiB/s, done."), Some(80));
+        assert_eq!(clone_percent("Resolving deltas: 100% (300/300), done."), Some(95));
+        assert_eq!(clone_percent("Updating files:  60% (6/10)"), Some(98));
+        assert_eq!(clone_percent("remote: Counting objects:  10% (1/10)"), None);
+        assert_eq!(clone_percent("fatal: repository not found"), None);
+        let stderr = b"Cloning into '/x'...\nremote: Enumerating objects: 9, done.\nReceiving objects:  10% (1/10)\rReceiving objects:  10% (1/10)\rReceiving objects: 100% (10/10), done.\nfatal: could not read from remote\n";
+        let (sender, percents) = mpsc::channel();
+        assert_eq!(read_progress(&stderr[..], sender), "fatal: could not read from remote");
+        assert_eq!(percents.try_iter().collect::<Vec<_>>(), vec![8, 80]);
+    }
+
+    #[test]
+    fn progress_frames_are_throttled_within_a_stage() {
+        let now = Instant::now();
+        let last = ("downloading".to_owned(), Some(10), now);
+        assert!(due(None, "finding", None, now));
+        assert!(due(Some(&last), "preparing", None, now));
+        assert!(!due(Some(&last), "downloading", Some(10), now + Duration::from_secs(5)));
+        assert!(!due(Some(&last), "downloading", Some(20), now + Duration::from_millis(100)));
+        assert!(due(Some(&last), "downloading", Some(20), now + PROGRESS_EVERY));
+        assert!(due(Some(&last), "downloading", Some(100), now));
+    }
+
+    #[test]
+    fn progress_events_are_validated_on_the_viewer() {
+        let payload = progress_payload("dev-studio", &json!({"startId": "s1", "repo": "orbit-labs/orbit", "stage": "downloading", "percent": 42, "detail": "ignored"})).unwrap();
+        assert_eq!(payload, json!({"deviceId": "dev-studio", "startId": "s1", "repo": "orbit-labs/orbit", "stage": "downloading", "percent": 42, "detail": null}));
+        let failed = progress_payload("dev-studio", &json!({"stage": "error", "percent": 500, "repo": "../x", "detail": "x".repeat(400)})).unwrap();
+        assert_eq!((failed["percent"].is_null(), failed["repo"].is_null(), failed["detail"].as_str().map(str::len)), (true, true, Some(300)));
+        assert!(progress_payload("dev-studio", &json!({"stage": "hacking"})).is_none());
+        assert!(progress_payload("dev-studio", &json!({})).is_none());
     }
 
     #[test]

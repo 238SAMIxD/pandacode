@@ -53,7 +53,7 @@ import { changeUiScale, initializeUiSizing, setUiScale } from './ui-size';
 import { approvalBarHtml } from './approval-bar';
 import { createThreadFind } from './thread-find';
 import type { RemoteHost, RemoteRepoCheck, RemoteStatus, RemoteTarget } from './remote-types';
-import { CONNECT_SETUP, LOCAL, behindDialog, behindText, computerControl, computerItems } from './remote-target';
+import { CONNECT_SETUP, LOCAL, behindDialog, behindText, clearRemoteStart, computerControl, computerItems, remoteStartStrip, trackRemoteStart } from './remote-target';
 import './cloud-agents.css';
 import { SETUP_CHOICE, cloudActionItems, cloudIcon, cloudProvider, cloudStrip, deleteMachineDialog, harnessRefusal, type CloudStage, type CloudTarget } from './cloud-agents';
 import { botsBarHtml, botsListHtml, botsPanelHeadHtml, storedSidebarView, storeSidebarView, syncSeen, type SidebarView } from './sidebar-bots';
@@ -200,7 +200,8 @@ function onArchitect(team: TeamEvent): void {
 }
 async function loadTeam(id: string): Promise<TeamSnapshot | null> {
   const known = teams.has(id), before = teams.get(id);
-  const loaded = await call<TeamSnapshot | null>('architect_get', { sessionId: id });
+  // A task on another computer is one agent there; a team saved on it (a default team) never runs here.
+  const loaded = state.sessions.find(task => task.id === id)?.remoteDevice ? null : await call<TeamSnapshot | null>('architect_get', { sessionId: id });
   if (deletedSessions.has(id)) return null;
   // An update or a removal that arrived during the fetch is newer than this snapshot.
   if (teams.has(id) !== known || teams.get(id) !== before) return teams.get(id) ?? null;
@@ -240,6 +241,7 @@ async function showArchitectSetup(anchor: HTMLElement): Promise<void> {
 const TEAM_TIP = 'Team mode: your selected model becomes the lead. It plans the work, starts other agents in parallel, picks a model for each worker on its own, and reviews their results. To choose the workers yourself, just say so in your prompt, like "use Sonnet 5.5 workers" or "have Codex review it". Click to turn Team on or off.';
 /** Team toggles an automatic team, or with Settings → Classic team setup opens Architect & workers. */
 function teamButton(s: Session): string {
+  if (s.remoteDevice) return '';
   const on = Boolean(teams.get(s.id));
   return classicTeamSetup()
     ? `<button type="button" class="composer-team-button" data-action="architect-setup" aria-label="Architect & workers" aria-pressed="${on}" title="Architect & workers">${icon('worktree')}<span>Team</span></button>`
@@ -1535,7 +1537,7 @@ function renderComposer(): void {
   $('#composer-area').insertAdjacentHTML('afterbegin', worktrees.contextBar(s, newTaskView()));
   // Approvals sit above everything that rides on the prompt, the context bar included.
   $('#composer-area').insertAdjacentHTML('afterbegin', '<div id="approval-bar"></div>');
-  $('#composer').insertAdjacentHTML('beforebegin', cloudStrip(s) + (running ? '' : limitBanner(s, Date.now(), limitAlternatives(s))) + queuePanel({ entries: state.queues.get(s.id) ?? [], hold: state.queueHolds.get(s.id) ?? null, running, steerable: !team, sendable: !botProjects.has(s.projectId) && !s.archived, editingId: state.queueEditing || null, busy: state.queueBusy.has(s.id), steering: steeringQueued }));
+  $('#composer').insertAdjacentHTML('beforebegin', cloudStrip(s) + remoteStartStrip(s.id) + (running ? '' : limitBanner(s, Date.now(), limitAlternatives(s))) + queuePanel({ entries: state.queues.get(s.id) ?? [], hold: state.queueHolds.get(s.id) ?? null, running, steerable: !team, sendable: !botProjects.has(s.projectId) && !s.archived, editingId: state.queueEditing || null, busy: state.queueBusy.has(s.id), steering: steeringQueued }));
   renderApprovalBar(); resizePrompt();
   $('#transcript').toggleAttribute('data-running', running);
   void github.status(s.projectId);
@@ -2090,7 +2092,7 @@ async function performSlashAction(action: string, argumentsText: string, task: S
     case 'agents': showCommands(); break;
     case 'subagents': { const trigger = document.querySelector<HTMLButtonElement>('.subagents-trigger'); if (trigger) trigger.click(); else modal('Subagents', '<p class="dialog-description">No subagents have been reported for this task yet.</p>'); break; }
     case 'mention':
-      if (argumentsText) { await call('read_file', { ...workspaceContext(task), path: argumentsText }); if (task.id === state.sessionId) attachFile(argumentsText); }
+      if (argumentsText) { await projectFileText(task, argumentsText); if (task.id === state.sessionId) attachFile(argumentsText); }
       else { state.inspector = true; state.inspectorTab = 'files'; renderInspector(); }
       break;
     case 'cd': {
@@ -2324,13 +2326,13 @@ async function deliverQueued(task: Session, entry: QueuedMessage): Promise<void>
   const promptItems = entry.attachments.filter(item => item.kind !== 'path') as unknown as ReturnType<typeof attachments.list>;
   const paths = entry.attachments.flatMap(item => item.kind === 'path' ? [item.path] : []);
   try {
-    const files = await Promise.all(paths.map(async path => { const content = await call<string>('read_file', { ...workspaceContext(task), path }); return `\n\nFile context: ${path}\n\`\`\`\n${content.slice(0, 32768)}\n\`\`\``; }));
+    const files = await Promise.all(paths.map(async path => { const content = await projectFileText(task, path); return `\n\nFile context: ${path}\n\`\`\`\n${content.slice(0, 32768)}\n\`\`\``; }));
     const content = entry.text + files.join('') + attachments.contextFor(promptItems);
     const sentAt = Date.now();
     task.lastPromptAt = sentAt; task.draft = false; pendingPromptActivity.set(task.id, sentAt);
     stream(task.id).lastPromptAt = sentAt; stream(task.id).status = 'Starting agent'; task.status = 'running'; task.taskStage = 'in_progress'; task.completedAt = null;
     if (task.id === state.sessionId) { state.messages = [...state.messages, { id: transientId--, sessionId: task.id, role: 'user', content, createdAt: sentAt }]; render(); } else renderNavigation();
-    await call(teams.get(task.id) ? 'architect_start' : 'send_message', { sessionId: task.id, text: content, imageIds: attachments.imageIds(promptItems), moodboardIds: [] });
+    await call(teams.get(task.id) && !task.remoteDevice ? 'architect_start' : 'send_message', { sessionId: task.id, text: content, imageIds: attachments.imageIds(promptItems), moodboardIds: [] });
   } catch (error) {
     // Put it back at the front and hold, so nothing is lost or sent out of order.
     pendingPromptActivity.delete(task.id); state.streams.delete(task.id); task.status = 'idle';
@@ -2397,8 +2399,15 @@ async function limitAction(action: string, element: HTMLElement): Promise<void> 
     finally { scheduleLimitResumes(); renderComposer(); }
   }
 }
+/** A project file's text as it is here. A task on another computer has no checkout here, so its
+ * files are read from this computer's copy of the project, which the host cloned the same repo of. */
+async function projectFileText(s: Session, path: string): Promise<string> {
+  if (!s.remoteDevice) return call<string>('read_file', { ...workspaceContext(s), path });
+  try { return await call<string>('read_file', { projectId: s.projectId, path }); }
+  catch { throw new Error(`${path} can’t be read on this computer, so it can’t go to ${s.remoteDevice.name}. Remove it, or paste the part you need.`); }
+}
 async function fileContext(s: Session, path: string): Promise<string> {
-  const content = await call<string>('read_file', { ...workspaceContext(s), path });
+  const content = await projectFileText(s, path);
   return `\n\nFile context: ${path}\n\`\`\`\n${content.slice(0, 32768)}${content.length > 32768 ? '\n[Context truncated at 32 KiB]' : ''}\n\`\`\``;
 }
 async function send(): Promise<void> {
@@ -2406,6 +2415,8 @@ async function send(): Promise<void> {
   if (!text || !s || s.archived || taskStage(s) === 'completed' || isRunning() || finishingStreams.has(s.id) || state.messagesLoading || state.messagesError || configuringSessions.has(s.id)) return;
   const target = !s.remoteDevice && newTaskView() ? remoteTargets.find(item => item.deviceId === remoteChoice) : undefined;
   if (target) return sendRemote(s, target, draft, text);
+  // A failed start elsewhere no longer applies once this task is sent another way.
+  clearRemoteStart(s.id);
   const cloud = !s.remoteDevice && !s.cloud && newTaskView() ? cloudTargets.find(item => item.ready && item.provider === cloudProvider(remoteChoice)) : undefined;
   if (cloud) return sendCloud(s, cloud, draft, text);
   // Preparing attachments or awaiting admission blocks only this task.
@@ -2475,7 +2486,7 @@ async function send(): Promise<void> {
     // A bot's own conversation goes through the bot, which adds its brief and memories.
     const bot = sidebarBots.find(item => item.desktopSession === s.id);
     if (bot && !imageIds.length && !moodboardItems.length && !teams.get(s.id)) await call('bot_message', { botId: bot.id, text: content });
-    else await call(teams.get(s.id) && !moodboardItems.length ? 'architect_start' : 'send_message', { sessionId: s.id, text: content, imageIds, moodboardIds: moodboardItems.map(item => item.id) });
+    else await call(teams.get(s.id) && !s.remoteDevice && !moodboardItems.length ? 'architect_start' : 'send_message', { sessionId: s.id, text: content, imageIds, moodboardIds: moodboardItems.map(item => item.id) });
   } catch (error) {
     pendingPromptActivity.delete(s.id);
     state.streams.delete(s.id); s.status = 'idle';
@@ -3932,8 +3943,11 @@ function confirmBehind(name: string, check: RemoteRepoCheck): Promise<boolean> {
 }
 /** A New task sent with another computer chosen: check GitHub, then start it there with the same settings. */
 async function sendRemote(s: Session, target: RemoteTarget, draft: string, text: string): Promise<void> {
-  const filePaths = [...state.attachments], promptItems = attachments.list(s.id);
-  if ((state.browserAttachments.get(s.id) ?? []).length || (state.moodboardAttachments.get(s.id) ?? []).length || attachments.imageIds(promptItems).length) throw new Error(`Images and browser captures can’t be sent to ${target.name} yet. Remove them, or run on this computer.`);
+  const filePaths = [...state.attachments], promptItems = attachments.list(s.id), browserItems = state.browserAttachments.get(s.id) ?? [];
+  if ((state.moodboardAttachments.get(s.id) ?? []).length) throw new Error(`Moodboards can’t be sent to ${target.name} yet. Remove them, or run on this computer.`);
+  // Images and screenshots are copied to the other computer natively (remote/images.rs).
+  const imageIds = [...browserItems.filter(a => a.kind === 'screenshot').map(a => a.id), ...attachments.imageIds(promptItems)];
+  if (imageIds.length > MAX_IMAGES) throw new Error(`Attach up to ${MAX_IMAGES} images per message, including browser screenshots.`);
   configuringSessions.add(s.id);
   try {
     const check = await call<RemoteRepoCheck>('remote_repo_check', { projectId: s.projectId });
@@ -3942,13 +3956,18 @@ async function sendRemote(s: Session, target: RemoteTarget, draft: string, text:
     const prompt = () => document.querySelector<HTMLTextAreaElement>('#prompt');
     if (state.sessionId !== s.id || prompt()?.value !== draft) throw new Error('Your task or message changed. Send it again.');
     const contexts = await Promise.all(filePaths.map(path => fileContext(s, path)));
-    const content = text + contexts.join('') + attachments.contextFor(promptItems) + await github.contextFor(s.projectId, s.id, text) + tokenSaver.contextFor(s.id);
-    const { sessionId } = await call<{ sessionId: string }>('remote_start_task', {
+    const content = text + contexts.join('') + browserContextText(browserItems) + attachments.contextFor(promptItems) + await github.contextFor(s.projectId, s.id, text) + tokenSaver.contextFor(s.id);
+    // The strip above the composer shows the start's stages, and its failure with Retry, so a failure is not also a toast.
+    const started = await trackRemoteStart(s.id, target, startId => call<{ sessionId: string }>('remote_start_task', {
       // The empty New task draft becomes the mirror, so no stray draft is left behind.
       sessionId: s.id, deviceId: target.deviceId, projectId: s.projectId, prompt: content, provider: s.provider, model: s.model, mode: s.mode,
-      effort: s.reasoningEffort ?? null, worktree: Boolean(s.worktreePath), branch: s.worktreeBranch || state.git?.branch || check.branch || null,
-    });
+      effort: s.reasoningEffort ?? null, worktree: Boolean(s.worktreePath), branch: s.worktreeBranch || state.git?.branch || check.branch || null, startId, imageIds,
+    })).catch((error: unknown) => { console.error(error); return undefined; });
+    if (!started) return;
+    const { sessionId } = started;
     attachments.consume(s.id, promptItems);
+    const sentIds = new Set(browserItems.map(item => item.id)), remaining = (state.browserAttachments.get(s.id) ?? []).filter(item => !sentIds.has(item.id));
+    if (remaining.length) state.browserAttachments.set(s.id, remaining); else state.browserAttachments.delete(s.id);
     state.attachments = state.attachments.filter(path => !filePaths.includes(path));
     const field = prompt(); if (field?.dataset.sessionId === s.id) field.value = '';
     state.drafts.delete(s.id);
