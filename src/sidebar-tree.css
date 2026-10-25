@@ -95,6 +95,42 @@ html:not([data-theme=dark]) .sidebar .task-link.pull{color:#7c3aed}
 .sidebar .task-item.selected{font-weight:500}
 .sidebar .task-project{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 
+/* Sections: Active and Needs review above the tree, Completed (closed by default) below it. */
+.sidebar .sidebar-section{margin-bottom:8px}
+.sidebar .sidebar-section.completed-group{margin:8px 0 0}
+.sidebar .section-heading>.section-count{margin-left:auto}
+.sidebar .section-toggle{width:100%;border-radius:3px;justify-content:flex-start;--press:1}
+.sidebar .section-toggle:hover{color:var(--text);background:var(--raised)}
+.sidebar .section-toggle>.icon{width:11px;height:11px;color:var(--muted);rotate:90deg}
+.sidebar .section-toggle[aria-expanded=false]>.icon{rotate:0deg}
+
+/* Row actions are the row button's siblings, over its right edge: shown on hover or focus,
+   where the row's age and status step aside for them. A completed row keeps its tick. */
+.sidebar .task-row{position:relative;--row-actions:0px}
+.sidebar .task-row[data-actions="1"]{--row-actions:26px}
+.sidebar .task-row[data-actions="2"]{--row-actions:49px}
+.sidebar .task-row[data-actions="3"]{--row-actions:72px}
+.sidebar .task-row:hover>.task-item:not(.selected){background:var(--raised)}
+.sidebar .task-actions{position:absolute;z-index:1;top:5px;right:5px;display:flex;align-items:center;gap:1px;opacity:0;pointer-events:none}
+.sidebar .task-row-oneline>.task-actions{top:0;bottom:0}
+.sidebar .task-row:is(:hover,:focus-within)>.task-actions{opacity:1;pointer-events:auto}
+.sidebar .task-row:is(:hover,:focus-within)>.task-item>.task-line:first-child{padding-right:var(--row-actions)}
+.sidebar .task-row:is(:hover,:focus-within)>.task-item>.task-line:first-child>:is(.task-age,.task-indicator,.task-provider){position:absolute;opacity:0;pointer-events:none}
+.sidebar .task-action{display:grid;place-items:center;width:22px;height:22px;padding:0;border-radius:4px;color:var(--muted);--press:.9}
+.sidebar .task-action .icon{width:13px;height:13px}
+.sidebar .task-more{--press:1}
+.sidebar .task-action:hover{color:var(--text);background:color-mix(in srgb,var(--text) 8%,transparent)}
+.sidebar .task-action:disabled{opacity:.4}
+.sidebar .task-delete:not(:disabled):hover{color:var(--danger)}
+.sidebar .task-check .icon{width:11px;height:11px;padding:1px;border-radius:50%;box-shadow:inset 0 0 0 1.25px currentColor;box-sizing:content-box}
+.sidebar .task-check.checked .icon{background:var(--accent);color:var(--on-accent);box-shadow:none}
+.sidebar .task-check.checked:hover .icon{background:var(--accent-hover)}
+.sidebar .completed-group .task-row>.task-actions{opacity:1;pointer-events:auto}
+.sidebar .completed-group .task-row:not(:hover,:focus-within) :is(.task-archive,.task-more){visibility:hidden}
+.sidebar .completed-group .task-row>.task-item>.task-line:first-child{padding-right:var(--row-actions)}
+.sidebar .completed-group .task-row>.task-item>.task-line:first-child>:is(.task-age,.task-indicator,.task-provider){position:absolute;opacity:0;pointer-events:none}
+.sidebar .completed-group .task-title{color:var(--muted)}
+
 .folder-more{display:block;width:100%;height:26px;padding:0 8px 0 29px;border-radius:3px;text-align:left;font-size:.76rem;color:var(--muted);--press:1}
 .folder-more:hover{color:var(--text);background:var(--raised)}
 .sidebar .folder-tasks>.no-tasks{padding:5px 8px 6px;font-size:.74rem}
