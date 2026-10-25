@@ -113,15 +113,16 @@ async function sendToStudio(page: Page, text: string) {
 
 test('sending a New task to another computer shows its start stages, then opens the task', async ({ page }) => {
   await sendToStudio(page, 'Run the slow suite over there');
-  const strip = page.locator('#composer-area .remote-start-strip'), status = strip.getByRole('status');
-  await expect(status).toHaveText('Studio iMac · Connecting to computer');
-  for (let step = 0; step < 3; step++) await next(page);
-  await expect(status).toHaveText(/^Studio iMac · Downloading .* · 12%$/);
-  await expect(strip.getByRole('progressbar', { name: 'Download progress' })).toHaveAttribute('value', '12');
-  for (let step = 0; step < 4; step++) await next(page);
-  await expect(status).toHaveText('Studio iMac · Starting agent');
-  await next(page);
+  // The stages are the sent prompt's turn status (tests/remote-first-message.spec.ts), so the strip stays away.
+  const strip = page.locator('#composer-area .remote-start-strip'), status = page.locator('#stream-region .live-status');
+  await expect(status).toHaveText('Connecting to Studio iMac…');
   await expect(strip).toHaveCount(0);
+  for (let step = 0; step < 3; step++) await next(page);
+  await expect(status).toHaveText(/^Downloading .* · 12%$/);
+  for (let step = 0; step < 4; step++) await next(page);
+  await expect(status).toHaveText('Starting agent');
+  await expect(strip).toHaveCount(0);
+  await next(page);
   await expect(page.locator('#composer-area .composer-computer-fixed')).toHaveText('on Studio iMac');
   await expect(page.getByRole('log', { name: 'Conversation' })).toContainText('Run the slow suite over there');
   const started = await page.evaluate(() => (window as any).__remoteStarts);
@@ -141,7 +142,8 @@ test('a failed start shows in the strip, not as a toast, and Retry sends it agai
   await expect(page.getByRole('textbox', { name: 'Message your coding agent' })).toHaveValue('Try the flaky build');
 
   await strip.getByRole('button', { name: 'Retry' }).click();
-  await expect(strip.getByRole('status')).toHaveText('Studio iMac · Connecting to computer');
+  await expect(strip).toHaveCount(0);
+  await expect(page.locator('#stream-region .live-status')).toHaveText('Connecting to Studio iMac…');
   for (let step = 0; step < 8; step++) await next(page);
   await expect(strip).toHaveCount(0);
   await expect(page.locator('#composer-area .composer-computer-fixed')).toHaveText('on Studio iMac');

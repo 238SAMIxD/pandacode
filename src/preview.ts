@@ -462,7 +462,11 @@ function finishTiming(sessionId: string): void {
   turnChanges.finish(marker); history.push(marker);
   agent({ sessionId, kind: 'turn_changes', text: '', data: { messageId: marker.id, turnChanges: marker.turnChanges } });
 }
-function finish(sessionId: string, content: string) { const time = Date.now(); messages[sessionId].push({ id: ++id, sessionId, role: 'assistant', content, createdAt: time }); finishTiming(sessionId); const s = session(sessionId); if (content.trim()) s.lastResponseAt = time; s.status = 'idle'; s.taskStage = 'review'; s.updatedAt = time; timers.delete(sessionId); activeTools.delete(sessionId); agent({ sessionId, kind: 'done', text: '' }); }
+/* A task on another computer: like remote/mirror.rs, its history here is what was copied
+ * from the host, which happens when a run ends (just before its `done`). */
+const mirrorSynced = new Map<string, number>();
+function syncMirror(sessionId: string): void { if (mirrorSynced.has(sessionId)) mirrorSynced.set(sessionId, id); }
+function finish(sessionId: string, content: string) { const time = Date.now(); messages[sessionId].push({ id: ++id, sessionId, role: 'assistant', content, createdAt: time }); finishTiming(sessionId); const s = session(sessionId); if (content.trim()) s.lastResponseAt = time; s.status = 'idle'; s.taskStage = 'review'; s.updatedAt = time; timers.delete(sessionId); activeTools.delete(sessionId); syncMirror(sessionId); agent({ sessionId, kind: 'done', text: '' }); }
 const codexPreferences: Record<string, string | boolean> = { personality: 'none', memory: false };
 const previewImports = [{ id: 'preview-instructions', title: 'Project instructions', description: 'Sample project instructions from Claude Code.', source: 'Claude Code' }, { id: 'preview-skills', title: 'Project skills', description: 'Sample coding skills.', source: 'Kimi Code' }];
 const importedPreviewItems = new Set<string>();
@@ -694,6 +698,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     await previewRemoteStart({ ...args, repo: previewGithub.status(args.projectId).repo?.nameWithOwner }, emit);
     const s = args.sessionId ? session(args.sessionId) : await invoke<Session>('create_session', { projectId: args.projectId, provider: args.provider, model: args.model, mode: args.mode });
     Object.assign(session(s.id), { projectId: args.projectId, provider: args.provider, model: args.model, mode: args.mode, reasoningEffort: args.effort, remoteDevice: { id: target.deviceId, name: target.name }, worktreeBranch: args.branch });
+    mirrorSynced.set(s.id, id);
     await invoke('send_message', { sessionId: s.id, text: args.prompt, imageIds: args.imageIds ?? [] });
     emit('sessions-changed', {});
     return { sessionId: s.id } as T;
@@ -1118,7 +1123,8 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       s.projectId = projectId; s.provider = args.provider; s.model = args.model; s.updatedAt = Date.now(); result = s; break;
     }
     case 'get_messages': {
-      const history = messages[args.sessionId] ?? [];
+      const synced = mirrorSynced.get(args.sessionId);
+      const history = (messages[args.sessionId] ?? []).filter(message => synced == null || message.id <= synced);
       const current = session(args.sessionId).provider;
       const eligible = history.filter(m => args.beforeId == null || m.id < args.beforeId);
       result = { messages: eligible.slice(-100).map(message => message.role === 'assistant'
@@ -1173,7 +1179,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
         agent({ sessionId: args.sessionId, kind: 'tool', text: 'Bash canceled', tool: { ...pending.activity } });
         activeTools.delete(args.sessionId);
       }
-      const stopped = session(args.sessionId); stopped.status = 'idle'; if (stopped.goalState?.status === 'active') { stopped.goalState.status = 'paused'; emitGoal(stopped); } agent({ sessionId: args.sessionId, kind: 'done', text: 'Stopped' }); break;
+      const stopped = session(args.sessionId); stopped.status = 'idle'; if (stopped.goalState?.status === 'active') { stopped.goalState.status = 'paused'; emitGoal(stopped); } syncMirror(args.sessionId); agent({ sessionId: args.sessionId, kind: 'done', text: 'Stopped' }); break;
     }
     case 'respond_approval': case 'respond_user_input': break;
     case 'git_status': result = checkoutGit(args.sessionId); break;

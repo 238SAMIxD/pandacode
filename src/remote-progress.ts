@@ -10,7 +10,7 @@ import { escape, icon } from './dom';
 export type RemoteStartStage = 'connecting' | 'finding' | 'downloading' | 'preparing' | 'starting' | 'error';
 /** `remote://start-progress`, validated natively (`remote/start.rs` `progress_payload`). */
 export interface RemoteStartProgress { deviceId: string; startId?: string | null; repo?: string | null; stage: Exclude<RemoteStartStage, 'connecting'>; percent?: number | null; detail?: string | null }
-export interface RemoteStart { sessionId: string; deviceId: string; device: string; repo: string | null; stage: RemoteStartStage; percent: number | null; detail: string | null; retry?: () => void }
+export interface RemoteStart { sessionId: string; deviceId: string; device: string; repo: string | null; stage: RemoteStartStage; percent: number | null; detail: string | null; retry?: () => void; onStage?: (start: RemoteStart) => void }
 
 const EVENT = 'remote://start-progress';
 const STAGES: readonly RemoteStartStage[] = ['connecting', 'finding', 'downloading', 'preparing', 'starting', 'error'];
@@ -32,9 +32,10 @@ export function startStageText(start: Pick<RemoteStart, 'stage' | 'repo' | 'perc
 
 export const remoteStart = (sessionId: string): RemoteStart | undefined => starts.get(sessionId);
 
-/** The strip above a New task's composer while it starts on another computer, or ''. */
+/** The strip above a New task's composer while it starts on another computer, or ''.
+ * A start whose stages show in the transcript's turn (`onStage`) shows here only its failure. */
 export function remoteStartStrip(sessionId: string): string {
-  const start = starts.get(sessionId); if (!start) return '';
+  const start = starts.get(sessionId); if (!start || (start.onStage && start.stage !== 'error')) return '';
   const failed = start.stage === 'error', determinate = start.stage === 'downloading' && start.percent != null;
   const lead = failed ? icon('alert') : '<span class="support-spinner" aria-hidden="true"></span>';
   const step = failed ? '' : ` aria-description="Step ${STAGES.indexOf(start.stage) + 1} of ${STAGES.length - 1}"`;
@@ -73,6 +74,7 @@ export function onRemoteStartProgress(event: RemoteStartProgress): void {
   // A frame that arrives late never moves a start backwards, except into an error.
   if (event.stage !== 'error' && STAGES.indexOf(event.stage) < STAGES.indexOf(start.stage)) return;
   Object.assign(start, { stage: event.stage, repo: event.repo ?? start.repo, percent: event.stage === 'downloading' ? event.percent ?? null : null, detail: event.stage === 'error' ? event.detail ?? null : null });
+  start.onStage?.(start);
   syncRemoteStartStrip();
 }
 
@@ -85,10 +87,11 @@ const message = (error: unknown): string => error instanceof Error ? error.messa
 
 /** Runs `start` (the `remote_start_task` call, given the start id to pass as `startId`)
  * with progress shown for `sessionId`. Resolves or rejects like `start`; a failure stays
- * as the strip's error, whose Retry calls `retry` (default: send the composer again). */
-export async function trackRemoteStart<T>(sessionId: string, target: { deviceId: string; name: string }, start: (startId: string) => Promise<T>, retry?: () => void): Promise<T> {
+ * as the strip's error, whose Retry calls `retry` (default: send the composer again).
+ * With `onStage`, each stage goes to it instead of the strip, which then shows only a failure. */
+export async function trackRemoteStart<T>(sessionId: string, target: { deviceId: string; name: string }, start: (startId: string) => Promise<T>, retry?: () => void, onStage?: (start: RemoteStart) => void): Promise<T> {
   await listen();
-  starts.set(sessionId, { sessionId, deviceId: target.deviceId, device: target.name, repo: null, stage: 'connecting', percent: null, detail: null, retry });
+  starts.set(sessionId, { sessionId, deviceId: target.deviceId, device: target.name, repo: null, stage: 'connecting', percent: null, detail: null, retry, onStage });
   syncRemoteStartStrip();
   try {
     const result = await start(sessionId);

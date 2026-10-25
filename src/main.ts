@@ -52,7 +52,8 @@ import { changeUiScale, initializeUiSizing, setUiScale } from './ui-size';
 import { approvalBarHtml } from './approval-bar';
 import { createThreadFind } from './thread-find';
 import type { RemoteHost, RemoteRepoCheck, RemoteStatus, RemoteTarget } from './remote-types';
-import { CONNECT_SETUP, LOCAL, behindDialog, behindText, clearRemoteStart, computerControl, computerItems, remoteStartStrip, trackRemoteStart } from './remote-target';
+import type { RemoteStart } from './remote-progress';
+import { CONNECT_SETUP, LOCAL, behindDialog, behindText, clearRemoteStart, computerControl, computerItems, remoteStartStrip, startStageText, trackRemoteStart } from './remote-target';
 import './cloud-agents.css';
 import { SETUP_CHOICE, cloudActionItems, cloudIcon, cloudProvider, cloudStrip, deleteMachineDialog, harnessRefusal, type CloudStage, type CloudTarget } from './cloud-agents';
 import { botsBarHtml, botsListHtml, botsPanelHeadHtml, storedSidebarView, storeSidebarView, syncSeen, type SidebarView } from './sidebar-bots';
@@ -1790,8 +1791,25 @@ function render(): void { renderNavigation(); renderHeader(); renderTranscript()
 function setMessagePage(page: MessagePage): void {
   const firstId = page.messages[0]?.id;
   const earlier = firstId && page.hasOlder ? state.messages.filter(message => message.id > 0 && message.id < firstId) : [];
-  state.messages = [...earlier, ...page.messages];
+  state.messages = withMirrorPrompt(state.sessionId, [...earlier, ...page.messages]);
   if (!earlier.length) state.hasOlder = page.hasOlder;
+}
+/* A task on another computer gets its messages copied from the host when a run ends
+ * (remote/mirror.rs), so saved history lacks a prompt just sent there. The prompt stays
+ * in the transcript until a saved user message newer than `after` (the host's copy) arrives. */
+const mirrorPrompts = new Map<string, { message: Message; after: number }>();
+const latestUserId = (messages: readonly Message[]): number => messages.reduce((max, message) => message.role === 'user' && message.id > max ? message.id : max, 0);
+function withMirrorPrompt(id: string, messages: Message[]): Message[] {
+  const pending = mirrorPrompts.get(id); if (!pending) return messages;
+  if (latestUserId(messages) > pending.after) { mirrorPrompts.delete(id); return messages.filter(message => message !== pending.message); }
+  return messages.includes(pending.message) ? messages : [...messages, pending.message];
+}
+/** The transient user message for a prompt being sent, remembered while it runs on another computer. */
+function sentPrompt(task: Session, content: string, createdAt: number): Message {
+  const message: Message = { id: transientId--, sessionId: task.id, role: 'user', content, createdAt };
+  const known = task.id === state.sessionId ? state.messages : threadPages.get(task.id)?.messages;
+  if (task.remoteDevice && known) mirrorPrompts.set(task.id, { message, after: latestUserId(known) });
+  return message;
 }
 
 async function latestMessagePage(sessionId: string): Promise<MessagePage> {
@@ -1894,7 +1912,7 @@ async function selectSession(id: string, focusComposer = false): Promise<void> {
   if (state.collapsedFolders.delete(s.projectId)) saveCollapsedFolders();
   state.sessionId = s.id; markTraySeen(s.id); activateProject(s.projectId, false); if (changingTask) restoreThreadPanel(s); state.archived = s.archived; state.attachments = [];
   const remembered = changingTask ? threadPages.get(id) : undefined;
-  state.messages = remembered ? [...remembered.messages] : []; state.messagesLoading = !remembered; state.messagesError = ''; state.hasOlder = remembered?.hasOlder ?? false;
+  state.messages = withMirrorPrompt(id, remembered ? [...remembered.messages] : []); state.messagesLoading = !remembered; state.messagesError = ''; state.hasOlder = remembered?.hasOlder ?? false;
   const generation = ++state.generation;
   renderInspector();
   if (changingTask) run(restoreSelectedFile());
@@ -2281,11 +2299,12 @@ async function deliverQueued(task: Session, entry: QueuedMessage): Promise<void>
     const sentAt = Date.now();
     task.lastPromptAt = sentAt; task.draft = false; pendingPromptActivity.set(task.id, sentAt);
     stream(task.id).lastPromptAt = sentAt; stream(task.id).status = 'Starting agent'; task.status = 'running'; task.taskStage = 'in_progress'; task.completedAt = null;
-    if (task.id === state.sessionId) { state.messages = [...state.messages, { id: transientId--, sessionId: task.id, role: 'user', content, createdAt: sentAt }]; render(); } else renderNavigation();
+    const sent = sentPrompt(task, content, sentAt);
+    if (task.id === state.sessionId) { state.messages = [...state.messages, sent]; render(); } else renderNavigation();
     await call(teams.get(task.id) && !task.remoteDevice ? 'architect_start' : 'send_message', { sessionId: task.id, text: content, imageIds: attachments.imageIds(promptItems), moodboardIds: [] });
   } catch (error) {
     // Put it back at the front and hold, so nothing is lost or sent out of order.
-    pendingPromptActivity.delete(task.id); state.streams.delete(task.id); task.status = 'idle';
+    pendingPromptActivity.delete(task.id); state.streams.delete(task.id); task.status = 'idle'; mirrorPrompts.delete(task.id);
     // A synthetic entry (no id, e.g. continuing after a limit) was never queued.
     if (entry.id) {
       const restored = await call<QueuedMessage>('queue_restore', { entry }).catch(() => null);
@@ -2427,7 +2446,7 @@ async function send(): Promise<void> {
     if (state.drafts.get(s.id) === draft) state.drafts.delete(s.id);
     if (isCurrent()) {
       stickToBottom = true;
-      state.messages = [...state.messages, { id: transientId--, sessionId: s.id, role: 'user', content, createdAt: Date.now() }];
+      state.messages = [...state.messages, sentPrompt(s, content, Date.now())];
       state.attachments = state.attachments.filter(path => !filePaths.includes(path)); render();
       const sent = $('#transcript').querySelectorAll<HTMLElement>('.user-message');
       if (sent.length) enterView(sent[sent.length - 1], 12);
@@ -2438,7 +2457,7 @@ async function send(): Promise<void> {
     if (bot && !imageIds.length && !moodboardItems.length && !teams.get(s.id)) await call('bot_message', { botId: bot.id, text: content });
     else await call(teams.get(s.id) && !s.remoteDevice && !moodboardItems.length ? 'architect_start' : 'send_message', { sessionId: s.id, text: content, imageIds, moodboardIds: moodboardItems.map(item => item.id) });
   } catch (error) {
-    pendingPromptActivity.delete(s.id);
+    pendingPromptActivity.delete(s.id); mirrorPrompts.delete(s.id);
     state.streams.delete(s.id); s.status = 'idle';
     // A rejected first prompt may not have been saved; follow native storage on whether the task is listed.
     if (wasDraft) void call<Session>('get_task', { sessionId: s.id }).then(saved => { listed.draft = saved.draft; renderNavigation(); }).catch(() => undefined);
@@ -2477,7 +2496,7 @@ async function finishResponse(sessionId: string, finishing: FinishingStream): Pr
     if (!current()) return;
     finishingStreams.delete(sessionId);
     if (sessionId !== state.sessionId || generation !== state.generation) return;
-    setMessagePage(saved); state.messagesLoading = false; state.messagesError = '';
+    setMessagePage(saved); state.messagesLoading = false; state.messagesError = ''; mirrorPrompts.delete(sessionId);
     renderTranscript(); renderComposer(); await refreshInspector();
   } catch (error) {
     if (!current()) return;
@@ -2503,6 +2522,8 @@ function completeTurnChanges(event: AgentEvent): void {
   if (current) { current.text = ''; current.retainedMessageKey = undefined; current.tools = []; current.omittedActivity = false; current.revision++; current.startedAt = Date.now(); current.turnKey = 'turn:live:' + transientId--; }
   if (event.sessionId === state.sessionId) {
     renderTranscript();
+    // A task on another computer has its messages copied when the run ends; its `done` reloads them.
+    if (session()?.remoteDevice) return;
     // Reconcile once at completion with persisted IDs and full text. This also
     // wins over an older history request made while switching to a busy task.
     const request = ++completedHistoryRequest, generation = state.generation;
@@ -3832,20 +3853,54 @@ async function sendRemote(s: Session, target: RemoteTarget, draft: string, text:
     if (state.sessionId !== s.id || prompt()?.value !== draft) throw new Error('Your task or message changed. Send it again.');
     const contexts = await Promise.all(filePaths.map(path => fileContext(s, path)));
     const content = text + contexts.join('') + browserContextText(browserItems) + attachments.contextFor(promptItems) + await github.contextFor(s.projectId, s.id, text) + tokenSaver.contextFor(s.id);
-    // The strip above the composer shows the start's stages, and its failure with Retry, so a failure is not also a toast.
+    // Shown at once, like send(): the prompt, and a turn below it that reports the start's
+    // stages until the host's events stream in. Saved history gets the host's copy of the
+    // prompt after the run (remote/mirror.rs); until then `mirrorPrompts` keeps this one.
+    const sentAt = Date.now(), sent: Message = { id: transientId--, sessionId: s.id, role: 'user', content, createdAt: sentAt };
+    const before = { status: s.status, taskStage: s.taskStage };
+    mirrorPrompts.set(s.id, { message: sent, after: 0 });
+    const live = stream(s.id); live.lastPromptAt = sentAt; live.status = `Connecting to ${target.name}…`;
+    s.status = 'running'; s.taskStage = 'in_progress';
+    const sentField = prompt(); if (sentField?.dataset.sessionId === s.id && sentField.value === draft) sentField.value = '';
+    if (state.drafts.get(s.id) === draft) state.drafts.delete(s.id);
+    if (state.sessionId === s.id) {
+      stickToBottom = true; state.messages = [...state.messages, sent]; render();
+      const shown = $('#transcript').querySelectorAll<HTMLElement>('.user-message');
+      if (shown.length) enterView(shown[shown.length - 1], 12);
+    }
+    const onStage = (start: RemoteStart) => {
+      // Once the agent has said or done something, its own status wins over a late stage.
+      if (start.stage === 'error' || state.streams.get(s.id) !== live || live.text || live.tools.length) return;
+      updateStreamStatus(live, startStageText(start)); live.revision++;
+      if (state.sessionId === s.id) renderStream();
+    };
+    // A failure shows in the strip above the composer with Retry, so it is not also a toast.
     const started = await trackRemoteStart(s.id, target, startId => call<{ sessionId: string }>('remote_start_task', {
       // The empty New task draft becomes the mirror, so no stray draft is left behind.
       sessionId: s.id, deviceId: target.deviceId, projectId: s.projectId, prompt: content, provider: s.provider, model: s.model, mode: s.mode,
       effort: s.reasoningEffort ?? null, worktree: Boolean(s.worktreePath), branch: s.worktreeBranch || state.git?.branch || check.branch || null, startId, imageIds,
-    })).catch((error: unknown) => { console.error(error); return undefined; });
-    if (!started) return;
+    }), undefined, onStage).catch((error: unknown) => { console.error(error); return undefined; });
+    if (!started || started.sessionId !== s.id) {
+      // The prompt leaves the transcript: back to the composer on failure, to the mirror's own row otherwise.
+      mirrorPrompts.delete(s.id);
+      if (state.streams.get(s.id) === live) state.streams.delete(s.id);
+      // A sessions reload meanwhile may have replaced the draft's object.
+      for (const task of new Set([s, state.sessions.find(task => task.id === s.id)])) if (task) Object.assign(task, before);
+      if (state.sessionId === s.id) state.messages = state.messages.filter(message => message !== sent);
+      if (!started) {
+        const field = prompt(); if (field?.dataset.sessionId === s.id && !field.value) field.value = draft;
+        if (!state.drafts.get(s.id)) state.drafts.set(s.id, draft);
+        if (state.sessionId === s.id) render(); else renderNavigation();
+        return;
+      }
+      mirrorPrompts.set(started.sessionId, { message: { ...sent, sessionId: started.sessionId }, after: 0 });
+      if (!state.streams.has(started.sessionId)) state.streams.set(started.sessionId, live);
+    }
     const { sessionId } = started;
     attachments.consume(s.id, promptItems);
     const sentIds = new Set(browserItems.map(item => item.id)), remaining = (state.browserAttachments.get(s.id) ?? []).filter(item => !sentIds.has(item.id));
     if (remaining.length) state.browserAttachments.set(s.id, remaining); else state.browserAttachments.delete(s.id);
     state.attachments = state.attachments.filter(path => !filePaths.includes(path));
-    const field = prompt(); if (field?.dataset.sessionId === s.id) field.value = '';
-    state.drafts.delete(s.id);
     await reloadSessions();
     state.query = ''; await selectSession(sessionId, true);
   } finally { configuringSessions.delete(s.id); }
