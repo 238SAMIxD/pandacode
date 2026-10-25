@@ -1118,6 +1118,23 @@ async fn prepare_command(
     }))
 }
 
+/// Where a prompt goes. A mirror goes to its host even when a team was saved on it (a
+/// default team applies to every new task): a team here would run in a checkout this
+/// computer does not have.
+#[derive(Debug, PartialEq)]
+pub(crate) enum SendTarget {
+    Mirror,
+    Team,
+    Local,
+}
+
+pub(crate) fn send_target(store: &Store, session_id: &str) -> Result<SendTarget> {
+    if remote::mirror::of(store, session_id)?.is_some() {
+        return Ok(SendTarget::Mirror);
+    }
+    Ok(if architect::load(store, session_id)?.is_some() { SendTarget::Team } else { SendTarget::Local })
+}
+
 #[tauri::command]
 async fn send_message(
     app: tauri::AppHandle,
@@ -1127,18 +1144,15 @@ async fn send_message(
     image_ids: Option<Vec<String>>,
     moodboard_ids: Option<Vec<String>>,
 ) -> Result<()> {
-    let (is_team, project_id) = {
+    let (target, project_id) = {
         let store = state.store.lock().map_err(|e| e.to_string())?;
         let task = store.session(&session_id)?;
         if let Some(ids) = moodboard_ids.as_deref().filter(|ids| !ids.is_empty()) {
             text.push_str(&moodboards::resolve_refs(&store, &task.project_id, ids)?);
         }
-        (
-            architect::load(&store, &session_id)?.is_some(),
-            task.project_id,
-        )
+        (send_target(&store, &session_id)?, task.project_id)
     };
-    if is_team {
+    if target == SendTarget::Team {
         return architect::architect_start_in_project(
             app,
             state,
@@ -1149,13 +1163,9 @@ async fn send_message(
         )
         .await;
     }
-    if remote::Mirror::is(&state, &session_id)? {
-        // Screenshots and images are files on this computer; the host cannot read them.
-        if image_ids.as_ref().is_some_and(|ids| !ids.is_empty()) {
-            return Err("Images can't be sent to a task on another computer yet.".into());
-        }
-        remote::route(&app, &state, &session_id, "task.send", serde_json::json!({"text": text})).await?;
-        return Ok(());
+    if target == SendTarget::Mirror {
+        // Screenshots and images are files on this computer: they are copied to the host first.
+        return remote::mirror::send(&app, &state, &session_id, text, image_ids.as_deref().unwrap_or_default()).await;
     }
     if image_ids.as_ref().is_some_and(|ids| !ids.is_empty()) && cloud_agents::transport::is_cloud(&session_id) {
         return Err("Images can't be sent to a cloud machine yet.".into());

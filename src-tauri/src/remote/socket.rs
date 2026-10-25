@@ -240,6 +240,7 @@ fn frame(app: &tauri::AppHandle, text: &str, peers: &mut HashMap<String, mpsc::S
                 Some("event") if trusted => match message["name"].as_str() {
                     Some("agent.events") => mirror::events(app, from, &message["data"]),
                     Some("run.finished") => mirror::finished(app, from, &message["data"]),
+                    Some("task.progress") => super::start::progress(app, from, &message["data"]),
                     _ => {}
                 },
                 _ => {}

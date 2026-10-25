@@ -23,13 +23,6 @@ pub(crate) struct Mirror {
     pub session: String,
 }
 
-impl Mirror {
-    /// Whether a local task is a mirror (an error while it is still starting there).
-    pub(crate) fn is(state: &AppState, local: &str) -> Result<bool> {
-        Ok(of(&*lock(state)?, local)?.is_some())
-    }
-}
-
 fn lock(state: &AppState) -> Result<std::sync::MutexGuard<'_, Store>> {
     state.store.lock().map_err(|e| e.to_string())
 }
@@ -55,6 +48,15 @@ pub(crate) async fn route(app: &tauri::AppHandle, state: &AppState, local: &str,
         lock(state)?.status(local, &status)?;
     }
     result.map(Some)
+}
+
+/// A prompt for a mirror: its images (this computer's captures) go to the host first, then
+/// the message names the ids the host stored them under.
+pub(crate) async fn send(app: &tauri::AppHandle, state: &AppState, local: &str, text: String, image_ids: &[String]) -> Result<()> {
+    let device = of(&*lock(state)?, local)?.ok_or("That task does not run on another computer.")?.device;
+    let image_ids = super::images::send(app, &device, image_ids).await?;
+    route(app, state, local, "task.send", json!({"text": text, "imageIds": image_ids})).await?;
+    Ok(())
 }
 
 /// A command bound for a host: where it goes, its params, and the status to restore if
@@ -97,13 +99,16 @@ pub(crate) fn relabel(events: &[Value], mut local: impl FnMut(&str) -> Option<St
         .collect()
 }
 
-/// The status an event moves a mirror to, if any.
+/// The status an event moves a mirror to, if any. Only signs of work start a run: usage,
+/// settings or change summaries the host sends after its `run.finished` must not leave an
+/// idle mirror running with nothing to end it.
 fn status_after(current: &str, kind: &str) -> Option<&'static str> {
+    let active = matches!(current, "running" | "waiting");
     let next = match kind {
         "approval" | "input_request" => "waiting",
-        "approval_cancelled" | "input_cancelled" => "running",
-        _ if matches!(current, "running" | "waiting") => return None,
-        _ => "running",
+        "approval_cancelled" | "input_cancelled" if active => "running",
+        "turn_start" | "message_start" | "text" | "tool" | "status" if !active => "running",
+        _ => return None,
     };
     (next != current).then_some(next)
 }
@@ -372,6 +377,8 @@ pub async fn remote_start_task(
     worktree: Option<bool>,
     branch: Option<String>,
     session_id: Option<String>,
+    start_id: Option<String>,
+    image_ids: Option<Vec<String>>,
 ) -> Result<Value> {
     super::valid_device_id(&device_id)?;
     {
@@ -390,8 +397,12 @@ pub async fn remote_start_task(
     let check = project_status(&state, &project_id).await?;
     let repo = check["repo"].as_str().ok_or(NO_REPO)?.to_owned();
     let branch = branch.filter(|b| !b.trim().is_empty()).or_else(|| check["branch"].as_str().filter(|b| !b.is_empty()).map(str::to_owned));
+    // Images go first, before any row exists: a failed upload leaves the New task as it was.
+    let image_ids = super::images::send(&app, &device_id, image_ids.as_deref().unwrap_or_default()).await?;
     let (local, created) = mirror_row(&*lock(&state)?, &device_id, &project_id, &provider, &model, mode.as_deref(), effort.as_deref(), session_id.as_deref())?;
-    let request = json!({"repo": repo, "branch": branch, "worktree": worktree.unwrap_or(false), "prompt": prompt, "provider": provider, "model": model, "mode": mode, "effort": effort});
+    // The host echoes `startId` in its `task.progress` events (remote/start.rs).
+    let start_id = start_id.filter(|id| host::valid_id(id).is_ok());
+    let request = json!({"repo": repo, "branch": branch, "worktree": worktree.unwrap_or(false), "prompt": prompt, "provider": provider, "model": model, "mode": mode, "effort": effort, "startId": start_id, "imageIds": image_ids});
     let started = client::call_within(&app, &device_id, "task.start", request, START_TIMEOUT).await.and_then(|reply| reply["sessionId"].as_str().filter(|id| host::valid_id(id).is_ok()).map(str::to_owned).ok_or_else(|| "The other computer did not start the task.".to_string()));
     let saved = started.and_then(|session| {
         lock(&state)?.db.execute("UPDATE sessions SET remote_session=?2 WHERE id=?1", params![local, session]).map_err(|e| e.to_string())
@@ -434,6 +445,9 @@ fn mirror_row(store: &Store, device: &str, project_id: &str, provider: &str, mod
         store.set_reasoning_effort(&id, effort)?;
     }
     store.db.execute("UPDATE sessions SET remote_device=?2,remote_session=NULL,remote_synced_id=0,draft=0 WHERE id=?1", params![id, device]).map_err(|e| e.to_string())?;
+    // A default team was saved on the new task (or the draft); its agents would need this
+    // computer's checkout, so the mirror is a single agent on the host.
+    store.db.execute("DELETE FROM architect_teams WHERE session_id=?1", [&id]).map_err(|e| e.to_string())?;
     start_turn(store, &id)?;
     transaction.commit().map_err(|e| e.to_string())?;
     Ok((id, created))
@@ -508,6 +522,33 @@ mod tests {
     }
 
     #[test]
+    fn a_follow_up_on_a_mirror_with_a_saved_team_goes_to_its_host() {
+        // A default team is saved on every new task. The first prompt starts the mirror on
+        // the host; a follow-up must not start that team here, in a checkout this computer
+        // does not have ("This task runs on …").
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let project = store.add_project(&std::env::temp_dir()).unwrap();
+        let draft = store.create_session(&project.id, "claude", "sonnet", "full").unwrap();
+        store.mark_draft(&draft.id).unwrap();
+        let team = |id: &str| json!({"sessionId": id, "config": {"auto": true, "workers": [], "maxParallel": 0, "maxRounds": 8, "maxAssignments": 24, "workspace": "shared", "summaryLimit": 3072}, "status": "idle", "round": 0, "revision": 1, "workers": [], "error": null, "summary": null, "updatedAt": 0}).to_string();
+        store.db.execute("INSERT INTO architect_teams(session_id,content) VALUES (?1,?2)", params![draft.id, team(&draft.id)]).unwrap();
+        let (local, _) = mirror_row(&store, "host", &project.id, "claude", "sonnet", None, None, Some(&draft.id)).unwrap();
+        let teams: i64 = store.db.query_row("SELECT COUNT(*) FROM architect_teams WHERE session_id=?1", [&local], |r| r.get(0)).unwrap();
+        assert_eq!(teams, 0, "the mirror is a single agent on the host");
+        store.db.execute("UPDATE sessions SET remote_session='h1' WHERE id=?1", [&local]).unwrap();
+        store.finish_task_turn(&local, true, false).unwrap();
+        // A mirror made before this fix still has its team row: it is routed anyway.
+        store.db.execute("INSERT INTO architect_teams(session_id,content) VALUES (?1,?2)", params![local, team(&local)]).unwrap();
+        assert!(crate::architect::load(&store, &local).unwrap().is_some());
+        assert_eq!(crate::send_target(&store, &local), Ok(crate::SendTarget::Mirror));
+        assert!(store.workspace_root(&project.id, Some(&local)).is_err(), "nothing local may run it");
+        let second = prepare(&store, &local, "task.send", json!({"text": "and now the tests"})).unwrap().unwrap();
+        assert_eq!(second.params, json!({"text": "and now the tests", "sessionId": "h1"}));
+        let plain = store.create_session(&project.id, "claude", "sonnet", "full").unwrap();
+        assert_eq!(crate::send_target(&store, &plain.id), Ok(crate::SendTarget::Local));
+    }
+
+    #[test]
     fn events_take_the_local_id() {
         let events = [
             json!({"sessionId": "h1", "kind": "text", "text": "Hel", "requestId": null, "data": null}),
@@ -563,6 +604,11 @@ mod tests {
         assert_eq!(status_after("running", "approval"), Some("waiting"));
         assert_eq!(status_after("waiting", "tool"), None);
         assert_eq!(status_after("waiting", "approval_cancelled"), Some("running"));
+        // What a host sends after its run ended never restarts an idle mirror.
+        for kind in ["usage", "session", "task_settings", "turn_changes", "turn_complete", "commands_changed", "goal", "approval_cancelled"] {
+            assert_eq!(status_after("idle", kind), None, "{kind}");
+        }
+        assert_eq!(status_after("review", "turn_start"), Some("running"));
         assert_eq!(reconcile("idle", "running"), Reconcile::Set("running".into()));
         assert_eq!(reconcile("running", "running"), Reconcile::Same);
         assert_eq!(reconcile("running", "idle"), Reconcile::Ended { successful: true, stopped: false });
