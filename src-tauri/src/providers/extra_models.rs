@@ -98,7 +98,7 @@ async fn discover(
     args: &[&str],
     parse: fn(&[u8]) -> Result<Vec<ModelInfo>, String>,
 ) -> Result<Vec<ModelInfo>, String> {
-    let mut command = super::command(path)?;
+    let mut command = super::provider_command("opencode", path)?;
     command
         .args(args)
         .current_dir(std::env::temp_dir())

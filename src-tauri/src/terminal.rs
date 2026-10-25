@@ -239,6 +239,7 @@ fn harness_command(context: &HarnessContext<'_>) -> Result<CommandBuilder, Strin
     let executable = crate::providers::executable(context.provider)
         .ok_or("Install this harness before opening its console.")?;
     let mut cmd = crate::providers::pty_command(&executable)?;
+    crate::provider_settings::apply_environment(context.provider, &mut cmd);
     for name in crate::providers::claude_auth::removed_environment(context.provider) { cmd.env_remove(name); }
     cmd.args(args);
     if matches!(context.provider, "claude" | "glm" | "mimo") {

@@ -19,10 +19,19 @@
 .connection-endpoint-hint{display:block;font-size:.7rem;color:var(--muted);margin:.35rem 0 0;font-family:var(--mono,ui-monospace,monospace);overflow-wrap:anywhere}
 .connection-endpoint-hint.error{color:var(--red,#ff908b);font-family:inherit}
 .connection-path{margin-top:.9rem}
-.connection-path summary{display:flex;align-items:center;justify-content:space-between;list-style:none;font-size:.78rem;color:var(--muted);cursor:pointer}
-.connection-path summary::-webkit-details-marker{display:none}
-.connection-path summary>.icon{width:.85rem;height:.85rem;transition:transform 130ms}
-.connection-path[open] summary>.icon{transform:rotate(180deg)}
+.connection-env{margin-top:.9rem}
+.connection-env summary,.connection-path summary{display:flex;align-items:center;justify-content:space-between;list-style:none;font-size:.78rem;color:var(--muted);cursor:pointer}
+.connection-env summary::-webkit-details-marker,.connection-path summary::-webkit-details-marker{display:none}
+.connection-env summary>.icon,.connection-path summary>.icon{width:.85rem;height:.85rem;transition:transform 130ms}
+.connection-env[open] summary>.icon,.connection-path[open] summary>.icon{transform:rotate(180deg)}
+.connection-env small{display:block;font-size:.7rem;color:var(--muted);margin-top:.5rem;line-height:1.5}
+.connection-env-global{display:flex;align-items:center;gap:.45rem;font-size:.76rem}
+.connection-env-global input{width:auto;flex:none}
+.connection-env-list{display:flex;flex-direction:column;gap:.35rem;margin:.6rem 0}
+.connection-env-list:empty{display:none}
+.connection-env-var{display:flex;align-items:center;justify-content:space-between;gap:.5rem;font-size:.76rem;padding:.35rem .55rem;border:1px solid var(--border);border-radius:.24rem}
+.connection-env-var code{font-family:var(--mono,ui-monospace,monospace);font-size:.72rem;overflow-wrap:anywhere}
+.connection-env-var button{font-size:.68rem;padding:.25rem .5rem}
 .connection-path small{display:block;font-size:.7rem;color:var(--muted);margin-top:.4rem}
 .connection-feedback{font-size:.8rem;margin:0;line-height:1.5;color:var(--muted)}
 .connection-feedback.error{color:var(--red,#ff908b)}
@@ -33,4 +42,4 @@
 #claude-connection .claude-auth-endpoint{font-family:var(--mono,ui-monospace,monospace);font-size:.72rem;overflow-wrap:anywhere}
 #claude-connection .claude-auth-conflict{color:var(--accent-ink)}
 @media(max-width:500px){.connection-card{padding:.85rem}.connection-input-row{flex-wrap:wrap}.connection-input-row input{flex-basis:100%}.connection-key-status{align-items:flex-start;flex-direction:column}.connection-card h3{flex-wrap:wrap}}
-@media(prefers-reduced-motion:reduce){.connection-path summary>.icon{transition:none}}
+@media(prefers-reduced-motion:reduce){.connection-env summary>.icon,.connection-path summary>.icon{transition:none}}

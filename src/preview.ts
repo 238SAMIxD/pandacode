@@ -87,6 +87,18 @@ if (typeof location !== 'undefined' && new URLSearchParams(location.search).has(
 }
 let id = 10;
 let previewClaudeMode: 'inherit' | 'subscription' = 'inherit';
+// Provider environment in the preview lives in memory so the Settings UI can be tested in a browser.
+const previewEnvState = { global: [] as [string, string][], providers: {} as Record<string, [string, string][]>, useGlobal: {} as Record<string, boolean> };
+const previewEnvNames = (vars: [string, string][]) => vars.map(([name]) => name);
+function previewProviderConfiguration(): Record<string, unknown> {
+  return {
+    executablePaths: {}, claudeConnectionMode: previewClaudeMode,
+    globalEnvironment: previewEnvNames(previewEnvState.global),
+    environment: Object.fromEntries(Object.entries(previewEnvState.providers).map(([provider, vars]) => [provider, previewEnvNames(vars)])),
+    useGlobalEnvironment: previewEnvState.useGlobal,
+    glmKeySaved: false, glmKeyFromEnvironment: false, deepseekKeySaved: false, deepseekKeyFromEnvironment: false, commandcodeKeySaved: false, commandcodeKeyFromEnvironment: false, mimoKeySaved: false, mimoKeyFromEnvironment: false, mimoEndpoint: previewMimoEndpoint, mimoEndpoints: previewMimoEndpoints, secureStorageAvailable: false,
+  };
+}
 const traceRoot = '/Users/you/Projects/orbit';
 const traceIndex = `${traceRoot}/src/lib/search-index.ts`;
 const traceJson = (value: unknown) => JSON.stringify(value, null, 2);
@@ -801,11 +813,31 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
         message: supported ? null : 'This harness does not expose account limits. Check its account dashboard.' };
       break;
     }
-    case 'provider_configuration': result = { executablePaths: {}, claudeConnectionMode: previewClaudeMode, glmKeySaved: false, glmKeyFromEnvironment: false, deepseekKeySaved: false, deepseekKeyFromEnvironment: false, commandcodeKeySaved: false, commandcodeKeyFromEnvironment: false, mimoKeySaved: false, mimoKeyFromEnvironment: false, mimoEndpoint: previewMimoEndpoint, mimoEndpoints: previewMimoEndpoints, secureStorageAvailable: false }; break;
+    case 'provider_configuration': result = previewProviderConfiguration(); break;
+    case 'provider_set_environment_variable': case 'provider_set_global_environment_variable': {
+      const name = String(args.name ?? ''), value = String(args.value ?? '');
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || name.length > 128) throw new Error('Environment variable names use letters, digits and underscores, and do not start with a digit.');
+      if (value.includes('\0') || value.length > 4096) throw new Error(`The value of ${name} is too long or contains NUL.`);
+      const vars = args.provider ? previewEnvState.providers[String(args.provider)] ??= [] : previewEnvState.global;
+      const existing = vars.find(entry => entry[0] === name);
+      if (existing) existing[1] = value; else vars.push([name, value]);
+      return invoke<T>('provider_configuration', {});
+    }
+    case 'provider_remove_environment_variable': case 'provider_remove_global_environment_variable': {
+      const name = String(args.name ?? '');
+      const vars = args.provider ? previewEnvState.providers[String(args.provider)] : previewEnvState.global;
+      const index = vars?.findIndex(entry => entry[0] === name) ?? -1;
+      if (index >= 0) vars!.splice(index, 1);
+      return invoke<T>('provider_configuration', {});
+    }
+    case 'provider_set_use_global_environment':
+      if (args.useGlobal) delete previewEnvState.useGlobal[String(args.provider)];
+      else previewEnvState.useGlobal[String(args.provider)] = false;
+      return invoke<T>('provider_configuration', {});
     case 'provider_set_mimo_endpoint':
       if (!previewMimoEndpoints.some(entry => entry.id === args.endpoint)) throw new Error('Choose one of the MiMo endpoints listed in Settings.');
       previewMimoEndpoint = args.endpoint;
-      result = { executablePaths: {}, claudeConnectionMode: previewClaudeMode, glmKeySaved: false, glmKeyFromEnvironment: false, deepseekKeySaved: false, deepseekKeyFromEnvironment: false, commandcodeKeySaved: false, commandcodeKeyFromEnvironment: false, mimoKeySaved: false, mimoKeyFromEnvironment: false, mimoEndpoint: previewMimoEndpoint, mimoEndpoints: previewMimoEndpoints, secureStorageAvailable: false }; break;
+      result = previewProviderConfiguration(); break;
     case 'provider_save_glm_key': case 'provider_remove_glm_key': case 'provider_save_deepseek_key': case 'provider_remove_deepseek_key': case 'provider_save_commandcode_key': case 'provider_remove_commandcode_key': case 'provider_save_mimo_key': case 'provider_remove_mimo_key': case 'provider_set_executable': throw new Error('Provider connections can only be changed in the desktop app.');
     case 'turn_change_summary': {
       session(args.sessionId);

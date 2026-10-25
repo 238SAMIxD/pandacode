@@ -298,7 +298,7 @@ pub(super) async fn models(path: &Path) -> Result<Vec<ModelInfo>, String> {
             models
         } else {
             let discovery = acp_catalog::begin("cline", path);
-            let mut command = super::command(path)?;
+            let mut command = super::provider_command("cline", path)?;
             configure_environment(&mut command);
             command.arg("--acp");
             let (metadata, _) = acp::inspect(command, &std::env::temp_dir(), false)

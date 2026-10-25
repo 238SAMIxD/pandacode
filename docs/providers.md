@@ -43,11 +43,13 @@ API keys (DeepSeek, Command Code), and the key-based plans **GLM Coding Plan** a
 installed Claude Code with its own key and endpoint, and appears as its own group
 in the model selector. They are set up only under Providers.
 
-Nothing on the Providers page is applied to every agent. A key or plan is used
-only by the harness it belongs to, and only for tasks where you pick it in the
-model selector. Named connections (below) are extra setups of one harness that a
-task opts into. Each harness's own models stay in that harness; OpenCode's model
-list is chosen once, in Settings → Agents → OpenCode models.
+Nothing on the Providers page is applied to every agent, with one exception:
+the **global environment variables** at the top of the page (below) travel with
+every harness. A key or plan is used only by the harness it belongs to, and only
+for tasks where you pick it in the model selector. Named connections (below) are
+extra setups of one harness that a task opts into. Each harness's own models
+stay in that harness; OpenCode's model list is chosen once, in Settings → Agents
+→ OpenCode models.
 
 ### What PandaCode uses itself
 
@@ -109,6 +111,45 @@ harness has other connections, the usage-limit banner offers **Continue on
 <connection>** for each. It assigns that connection and sends “Continue where
 you left off.” with a note naming the new connection and the one that reached
 its limit, so the transcript shows the move. PandaCode never switches on its own.
+
+## Environment variables
+
+Some networks and some providers need environment variables on the harness — a
+proxy behind `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` is the common case.
+Settings → Providers has two places for them, both in `provider-settings.json`
+(`provider_settings.rs`):
+
+- **Global environment variables** are added to every harness PandaCode starts.
+- Each provider's card has its own **Environment variables** list, plus a
+  **Use global environment variables** switch (on by default) that leaves the
+  global set out for just that harness.
+
+Variable names use letters, digits and underscores and cannot start with a
+digit (the same rule named connections use), values stay under 4096 characters
+with no NUL, and there are at most 64 variables per provider and in the global
+set. Values are plain settings: they live in the settings file on this computer
+and are never sent back to the interface — the page lists only their names, and
+a saved value is replaced by typing it again. A variable that carries a
+credential belongs to a [named connection](#named-connections), whose Secret
+values go to the secure store.
+
+At launch the layers are applied in order, each winning over the last: the
+environment PandaCode inherited, then the global set (unless the provider opted
+out), then the provider's own variables, then the harness's sign-in and
+endpoint configuration (a GLM or MiMo key always configures its Claude Code
+process), then a named connection's environment. For Claude Code, "Prefer
+saved Claude login" still scrubs inherited credential variables after all of
+this.
+
+The effective set is applied to everything that spawns the harness: tasks
+(`run_inner` in `providers.rs`), warm Claude agents (`providers/warm.rs`, whose
+adoption key carries a fingerprint of the saved variables, so an edit always
+starts the next turn cold), the harness console in the terminal panel
+(`terminal.rs`), model catalogs and slash command discovery, Claude login and
+usage probes, and Codex integration discovery. Tasks running on another
+computer use that computer's environment instead. Saving a variable refreshes
+the affected provider's cached catalogs and usage, so the next query runs with
+the new setting.
 
 ## GitHub Copilot CLI
 

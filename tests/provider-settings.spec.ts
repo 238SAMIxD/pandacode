@@ -1,5 +1,55 @@
 import { expect, test, type Page } from '@playwright/test';
 
+test('global and per-provider environment variables are added, toggled, removed, and never echoed', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const settings = page.getByRole('region', { name: 'Settings', exact: true });
+  await settings.getByRole('tab', { name: 'Providers', exact: true }).click();
+
+  // The global set applies to every harness and its values are never shown again.
+  const global = page.locator('#global-environment');
+  await global.getByLabel('Variable name').fill('HTTPS_PROXY');
+  await global.getByLabel('Variable value').fill('http://127.0.0.1:7890');
+  await global.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(global.locator('.connection-env-var code')).toHaveText('HTTPS_PROXY');
+  await expect(global).not.toContainText('127.0.0.1:7890');
+  await expect(global.getByLabel('Variable name')).toHaveValue('');
+
+  // A second variable on the same set; an invalid name is refused with the reason.
+  await global.getByLabel('Variable name').fill('NO_PROXY');
+  await global.getByLabel('Variable value').fill('localhost,127.0.0.1');
+  await global.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(global.locator('.connection-env-var')).toHaveCount(2);
+  await global.getByLabel('Variable name').fill('BAD-NAME');
+  await global.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(page.locator('.connection-feedback')).toContainText('letters, digits and underscores');
+
+  // A provider card carries its own variables and the global toggle (on by default).
+  const claude = page.locator('#claude-connection');
+  await claude.locator('details.connection-env > summary').click();
+  await expect(claude.getByRole('checkbox', { name: 'Use global environment variables' })).toBeChecked();
+  await claude.getByLabel('Variable name').fill('CLAUDE_CODE_EXTRA');
+  await claude.getByLabel('Variable value').fill('1');
+  await claude.locator('form[data-env-provider="claude"]').getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(claude.locator('.connection-env-var')).toHaveCount(1);
+  await expect(claude.locator('.connection-env-var code')).toHaveText('CLAUDE_CODE_EXTRA');
+
+  // Toggling the global set off for one provider leaves the others alone.
+  await claude.getByRole('checkbox', { name: 'Use global environment variables' }).uncheck();
+  await expect(claude.getByRole('checkbox', { name: 'Use global environment variables' })).not.toBeChecked();
+  const glm = page.locator('#claude-connection + .connection-card');
+  await glm.locator('details.connection-env > summary').click();
+  await expect(glm.getByRole('checkbox', { name: 'Use global environment variables' })).toBeChecked();
+
+  // Removing a variable takes it off the list again.
+  await claude.getByRole('button', { name: 'Remove CLAUDE_CODE_EXTRA' }).click();
+  await expect(claude.locator('.connection-env-var')).toHaveCount(0);
+  await global.getByRole('button', { name: 'Remove HTTPS_PROXY' }).click();
+  await expect(global.locator('.connection-env-var')).toHaveCount(1);
+  expect(errors).toEqual([]);
+});
+
 test('provider connections expose Kilo models, approval modes and executable settings', async ({ page }, testInfo) => {
   await page.goto('/');
   await page.locator('.new-task-button').click();
@@ -22,7 +72,7 @@ test('provider connections expose Kilo models, approval modes and executable set
   const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Kilo Code', exact: false }) });
   await expect(card).toContainText('kilo auth login');
   await expect(card.getByRole('link', { name: 'Kilo CLI docs' })).toHaveAttribute('href', 'https://kilo.ai/docs/code-with-ai/platforms/cli');
-  await card.locator('summary').click();
+  await card.locator('details.connection-path > summary').click();
   await expect(card.getByLabel('Kilo executable', { exact: true })).toBeVisible();
   await card.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath('kilo-provider-settings.png') });
@@ -263,7 +313,7 @@ test('GitHub Copilot CLI has CLI sign-in guidance, a path override, Default mode
   const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'GitHub Copilot CLI', exact: false }) });
   await expect(card).toContainText('copilot login');
   await expect(card.getByRole('link', { name: 'Install and sign in' })).toHaveAttribute('href', 'https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli');
-  await card.locator('summary').click();
+  await card.locator('details.connection-path > summary').click();
   await expect(card.getByLabel('GitHub Copilot CLI executable', { exact: true })).toBeVisible();
   await settings.getByRole('tab', { name: 'Agents', exact: true }).click();
   await expect(settings.locator('.provider-diagnostic[data-provider="github-copilot"]')).toContainText('GitHub Copilot CLI 1.0.82');
@@ -320,7 +370,7 @@ test('Devin CLI lists its models with their own thinking levels, Devin modes, an
   const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Devin CLI', exact: false }) });
   await expect(card).toContainText('devin auth login');
   await expect(card.getByRole('link', { name: 'Install and sign in' })).toHaveAttribute('href', 'https://docs.devin.ai/cli');
-  await card.locator('summary').click();
+  await card.locator('details.connection-path > summary').click();
   await expect(card.getByLabel('Devin executable', { exact: true })).toBeVisible();
   await settings.getByRole('tab', { name: 'Agents', exact: true }).click();
   await expect(settings.locator('.provider-diagnostic[data-provider="devin"]')).toContainText('devin 3000.11.216');
@@ -366,7 +416,7 @@ test('settings organization supports Pi models and executable settings', async (
   await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('tab', { name: 'Providers', exact: true }).click();
   const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Pi', exact: true }) });
   await expect(card.getByRole('link', { name: 'Install Pi' })).toHaveAttribute('href', 'https://github.com/earendil-works/pi');
-  await card.locator('summary').click();
+  await card.locator('details.connection-path > summary').click();
   await expect(card.getByLabel('Pi executable', { exact: true })).toBeVisible();
 });
 
@@ -384,7 +434,7 @@ test('DeepSeek has a key card, four approval modes and effort levels', async ({ 
   const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'DeepSeek', exact: false }) });
   await expect(card.getByRole('link', { name: 'Get an API key' })).toHaveAttribute('href', 'https://platform.deepseek.com/api_keys');
   await expect(card.getByLabel('DeepSeek API key', { exact: true })).toHaveAttribute('type', 'password');
-  await card.locator('summary').click();
+  await card.locator('details.connection-path > summary').click();
   await expect(card.getByLabel('DeepSeek executable', { exact: true })).toBeVisible();
 });
 
@@ -402,7 +452,7 @@ test('Command Code has a key card, four approval modes and its own model list', 
   const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Command Code', exact: false }) });
   await expect(card.getByRole('link', { name: 'Command Code docs' })).toHaveAttribute('href', 'https://commandcode.ai/docs/acp');
   await expect(card.getByLabel('Command Code API key', { exact: true })).toHaveAttribute('type', 'password');
-  await card.locator('summary').click();
+  await card.locator('details.connection-path > summary').click();
   await expect(card.getByLabel('Command Code executable', { exact: true })).toBeVisible();
 });
 
@@ -427,6 +477,6 @@ test('Cline has a sign-in card, four approval modes and thinking levels', async 
   await expect(card.getByRole('link', { name: 'Cline CLI docs' })).toHaveAttribute('href', 'https://docs.cline.bot/usage/cli-overview');
   await expect(card.getByRole('link', { name: 'ACP details' })).toHaveAttribute('href', 'https://docs.cline.bot/usage/acp');
   await expect(card.getByRole('link', { name: 'TUI docs' })).toHaveAttribute('href', 'https://docs.cline.bot/usage/tui');
-  await card.locator('summary').click();
+  await card.locator('details.connection-path > summary').click();
   await expect(card.getByLabel('Cline executable', { exact: true })).toBeVisible();
 });

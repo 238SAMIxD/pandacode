@@ -528,6 +528,15 @@ pub(crate) fn executable(name: &str) -> Option<PathBuf> {
     launch::find(executable_name(name)).or_else(|| if name == "devin" { devin::bundled() } else { None })
 }
 
+/// Starts a provider CLI with the provider's saved environment variables applied.
+/// Everything else a launch adds (credentials, endpoints, a named connection)
+/// is applied later and wins.
+pub(crate) fn provider_command(provider: &str, path: &Path) -> Result<Command, String> {
+    let mut command = command(path)?;
+    crate::provider_settings::apply_environment(provider, &mut command);
+    Ok(command)
+}
+
 fn executable_name(name: &str) -> &str {
     match name {
         "glm" | "mimo" => "claude",
@@ -923,7 +932,7 @@ fn parse_claude_models(result: &Value) -> Result<Vec<ModelInfo>, String> {
 }
 
 async fn claude_models(path: &Path) -> Result<Vec<ModelInfo>, String> {
-    let mut command = command(path)?;
+    let mut command = provider_command("claude", path)?;
     claude_auth::configure(&mut command, "claude");
     command
         .args([
@@ -989,7 +998,7 @@ async fn claude_models(path: &Path) -> Result<Vec<ModelInfo>, String> {
 }
 
 async fn codex_models(path: &Path) -> Result<Vec<ModelInfo>, String> {
-    let mut command = command(path)?;
+    let mut command = provider_command("codex", path)?;
     command
         .arg("app-server")
         .current_dir(std::env::temp_dir())
@@ -2810,7 +2819,7 @@ async fn run_inner(
         .ok_or_else(|| format!("{} CLI is not installed or is not on PATH", config.provider))?;
     config.cwd = external_path(&config.cwd);
     let image_blocks = attachments::load(&config.provider, &config.images).await?;
-    let mut command = command(&path)?;
+    let mut command = provider_command(&config.provider, &path)?;
     configure_command(&mut command, &config);
     // A named connection's arguments and environment win over the global setup.
     if let Some(connection) = &connection {

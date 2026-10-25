@@ -95,7 +95,7 @@ fn saved_login(value: &Value) -> &'static str {
 
 fn inspect_saved_login() -> &'static str {
     let Some(path) = super::executable("claude") else { return "unknown"; };
-    let Ok(command) = super::command(&path) else { return "unknown"; };
+    let Ok(command) = super::provider_command("claude", &path) else { return "unknown"; };
     inspect_saved_login_command(command)
 }
 
