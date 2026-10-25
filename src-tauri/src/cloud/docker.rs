@@ -24,14 +24,17 @@ const IMAGE: &str = "ubuntu:24.04";
 /// A fresh container pulls its image on first run, which can take minutes.
 const CREATE_TIMEOUT: u64 = 600;
 
-/// The local container engine; all three CLIs are docker-shaped, differing in flag spelling,
-/// list output and the delete verb. The `lxc` client (LXD; Incus uses the same commands) is
-/// local-only here too — it selects its own remote, so endpoints do not apply.
+/// The local container engine; the CLIs are docker-shaped, differing in flag spelling, list
+/// output and the delete verb. The `lxc` client (LXD; Incus uses the same commands) is local
+/// only here too — it selects its own remote, so endpoints do not apply. Podman's remote
+/// flag is `--url` and its TLS flags differ from Docker's, so it takes local, `unix://` and
+/// `ssh://` endpoints (the SSH path runs the remote binary directly, no socket needed).
 #[derive(Clone, Copy, PartialEq)]
 enum Engine {
     Docker,
     Apple,
     Lxc,
+    Podman,
 }
 
 pub struct Docker {
@@ -68,6 +71,7 @@ impl Docker {
         let engine = match options.get("engine").map(String::as_str) {
             Some("apple") => Engine::Apple,
             Some("lxc") => Engine::Lxc,
+            Some("podman") => Engine::Podman,
             _ => Engine::Docker,
         };
         Ok(Docker::new(options.get("endpoint").cloned(), options.get("image").cloned(), tls, engine))
@@ -79,6 +83,7 @@ impl Docker {
             Engine::Docker => "docker",
             Engine::Apple => "container",
             Engine::Lxc => "lxc",
+            Engine::Podman => "podman",
         }
     }
     fn label(&self) -> &'static str {
@@ -86,16 +91,21 @@ impl Docker {
             Engine::Docker => SERVICE,
             Engine::Apple => "Apple Containers",
             Engine::Lxc => "LXC",
+            Engine::Podman => "Podman",
         }
     }
 
-    /// `docker` arguments selecting the endpoint: `-H` and, for TLS, the certificate flags —
-    /// never environment variables, so the bounded runner's sanitized environment is enough.
+    /// `docker`/`podman` arguments selecting the endpoint: Docker's `-H` (plus, for TLS, the
+    /// certificate flags) or Podman's `--url` — never environment variables, so the bounded
+    /// runner's sanitized environment is enough.
     fn docker_args(&self) -> Vec<String> {
         let mut args = Vec::new();
         if let Some(endpoint) = &self.endpoint {
             if !endpoint.starts_with("ssh://") {
-                args.extend(["-H".into(), endpoint.clone()]);
+                args.extend(match self.engine {
+                    Engine::Podman => vec!["--url".into(), endpoint.clone()],
+                    _ => vec!["-H".into(), endpoint.clone()],
+                });
             }
         }
         if let Some(tls) = &self.tls {
@@ -160,7 +170,7 @@ fn run_cli(command: Command, timeout: Duration) -> Result<GitOutput> {
     run_process(command, "docker", OUTPUT, timeout).map_err(|error| {
         let lowered = error.to_lowercase();
         if lowered.contains("no such file") || lowered.contains("not found") || lowered.contains("cannot find") {
-            "The selected container engine is needed for this cloud provider. Install it (Docker, Apple Containers on macOS, or the lxc client) and try again.".into()
+            "The selected container engine is needed for this cloud provider. Install it (Docker, Podman, Apple Containers on macOS, or the lxc client) and try again.".into()
         } else {
             error
         }
@@ -213,6 +223,21 @@ fn apple_machine(item: &Value) -> Option<Machine> {
 /// LXC list entries (`lxc list <prefix> --format json`): `name`, Title-case `status`
 /// ("Running", "Stopped", …) and `type` ("container" or "virtual-machine"). The prefix was
 /// applied server-side; ownership is the name, since LXC has no labels.
+/// Podman list entries (`podman ps --format json`): one JSON array with `Id`, `Names` as an
+/// array, lowercase `State` ("running", "exited", …) and `Image`. The label filter ran
+/// server-side; the first name is the native ID, as with Docker.
+fn podman_machine(item: &Value) -> Option<Machine> {
+    let name = item["Names"].as_array()?.first()?.as_str()?.to_string();
+    let image = item["Image"].as_str().unwrap_or("image");
+    let state = match item["State"].as_str() {
+        Some("running") => "running",
+        Some("created" | "initialized" | "exited" | "stopped" | "paused") => "stopped",
+        Some("stopping") => "stopping",
+        _ => "error",
+    };
+    Some(Machine { id: format!("docker:{name}"), provider: "docker".into(), name: name.clone(), state: state.into(), os: "linux".into(), desktop: false, detail: format!("Podman · {image}") })
+}
+
 fn lxc_machine(item: &Value) -> Option<Machine> {
     let name = item["name"].as_str()?.to_string();
     if !name.starts_with("pc-") {
@@ -244,7 +269,8 @@ pub fn connect(options: &Value) -> Result<()> {
         None | Some("docker") => Engine::Docker,
         Some("apple") => Engine::Apple,
         Some("lxc") => Engine::Lxc,
-        Some(other) => return Err(format!("The engine is docker, apple or lxc, not {other}.")),
+        Some("podman") => Engine::Podman,
+        Some(other) => return Err(format!("The engine is docker, apple, lxc or podman, not {other}.")),
     };
     let endpoint = options["endpoint"].as_str().map(str::trim).filter(|e| !e.is_empty()).map(|e| e.trim_end_matches('/').to_string());
     if let Some(endpoint) = &endpoint {
@@ -252,20 +278,26 @@ pub fn connect(options: &Value) -> Result<()> {
             return Err("Docker hosts are ssh://user@host, tcp://host:port (with TLS) or unix:///path — or empty for this machine.".into());
         }
     }
-    if engine != Engine::Docker && endpoint.is_some() {
-        return Err(match engine {
-            Engine::Apple => "Apple Containers run only on this machine — leave the Docker host empty.".into(),
-            // The lxc client picks its own remote; PandaCode does not point it anywhere.
-            Engine::Lxc => "The lxc client manages its own remotes — leave the Docker host empty (configure one with `lxc remote add`).".into(),
-            Engine::Docker => unreachable!(),
-        });
+    if let Some(endpoint) = &endpoint {
+        if engine == Engine::Apple || engine == Engine::Lxc {
+            return Err(match engine {
+                Engine::Apple => "Apple Containers run only on this machine — leave the Docker host empty.".into(),
+                // The lxc client picks its own remote; PandaCode does not point it anywhere.
+                Engine::Lxc => "The lxc client manages its own remotes — leave the Docker host empty (configure one with `lxc remote add`).".into(),
+                _ => unreachable!(),
+            });
+        }
+        // Podman's own TLS transport differs from Docker's; its remote hosts take ssh://.
+        if engine == Engine::Podman && endpoint.starts_with("tcp://") {
+            return Err("Podman remote hosts take an ssh:// endpoint (PandaCode runs the remote podman directly); tcp:// with Docker-style TLS flags is not supported for Podman.".into());
+        }
     }
     let tls = match (options["tlsCa"].as_str(), options["tlsCert"].as_str(), options["tlsKey"].as_str()) {
         (None | Some(""), None | Some(""), None | Some("")) => None,
         (Some(ca), Some(cert), Some(key)) => Some(Tls { ca: ca.trim().into(), cert: cert.trim().into(), key: key.trim().into() }),
         _ => return Err("TLS needs all three certificate paths (CA, cert, key).".into()),
     };
-    if tls.is_some() && !endpoint.as_deref().is_some_and(|e| e.starts_with("tcp://")) {
+    if tls.is_some() && (!endpoint.as_deref().is_some_and(|e| e.starts_with("tcp://")) || engine == Engine::Podman) {
         return Err("TLS certificates apply to tcp:// Docker hosts.".into());
     }
     let image = options["image"].as_str().map(str::trim).filter(|i| !i.is_empty()).map(str::to_string);
@@ -292,12 +324,9 @@ pub fn connect(options: &Value) -> Result<()> {
     } else {
         entry.remove("image");
     }
-    if engine == Engine::Apple {
-        entry.insert("engine".into(), "apple".into());
-    } else if engine == Engine::Lxc {
-        entry.insert("engine".into(), "lxc".into());
-    } else {
-        entry.remove("engine");
+    match engine {
+        Engine::Docker => { entry.remove("engine"); }
+        other => { entry.insert("engine".into(), match other { Engine::Apple => "apple", Engine::Lxc => "lxc", Engine::Podman => "podman", Engine::Docker => unreachable!() }.into()); }
     }
     for (name, path) in [("tlsCa", docker.tls.as_ref().map(|t| &t.ca)), ("tlsCert", docker.tls.as_ref().map(|t| &t.cert)), ("tlsKey", docker.tls.as_ref().map(|t| &t.key))] {
         match path {
@@ -305,7 +334,7 @@ pub fn connect(options: &Value) -> Result<()> {
             None => { entry.remove(name); }
         }
     }
-    entry.insert("detail".into(), docker.endpoint.clone().unwrap_or_else(|| match engine { Engine::Docker => "this machine".into(), Engine::Apple => "this machine (Apple Containers)".into(), Engine::Lxc => "the lxc client's remote".into() }));
+    entry.insert("detail".into(), docker.endpoint.clone().unwrap_or_else(|| match engine { Engine::Apple => "this machine (Apple Containers)".into(), Engine::Lxc => "the lxc client's remote".into(), Engine::Podman => "this machine (Podman)".into(), Engine::Docker => "this machine".into() }));
     super::save_settings(&settings)
 }
 
@@ -322,22 +351,22 @@ impl Docker {
     /// The daemon answers.
     fn version(&self) -> Result<()> {
         let args: &[&str] = match self.engine {
-            Engine::Docker => &["version", "--format", "{{.Server.Version}}"],
+            Engine::Docker | Engine::Podman => &["version", "--format", "{{.Server.Version}}"],
             Engine::Apple | Engine::Lxc => &["version"],
         };
         self.checked(args, Duration::from_secs(60))
     }
-    /// The arguments that start a labelled, always-on task machine. Docker and Apple keep a
-    /// sleeping shell alive by label; an LXC instance runs its image's own init, and has no
-    /// labels — ownership is the `pc-` name prefix (the run pipeline names every machine one).
+    /// The arguments that start a labelled, always-on task machine. Docker and Podman label
+    /// with `--label`, Apple with `-l`; both keep a sleeping shell alive. An LXC instance
+    /// runs its image's own init and has no labels — ownership is the `pc-` name prefix (the
+    /// run pipeline names every machine one).
     fn create_args(&self, name: &str) -> Vec<String> {
         match self.engine {
             Engine::Lxc => vec!["launch".into(), self.image.clone(), name.into()],
             _ => {
                 let label_flag = match self.engine {
-                    Engine::Docker => "--label",
                     Engine::Apple => "-l",
-                    Engine::Lxc => unreachable!(),
+                    _ => "--label",
                 };
                 vec!["run".into(), "-d".into(), "--name".into(), name.into(), label_flag.into(), LABEL.into(), self.image.clone(), "sh".into(), "-c".into(), "sleep infinity".into()]
             }
@@ -360,11 +389,11 @@ impl Sandbox for Docker {
         Info { persistent: true, max_unattended_minutes: 24 * 60 }
     }
     fn list(&self) -> Result<Vec<Machine>> {
+        let filter = format!("label={LABEL}");
         let (code, output) = match self.engine {
-            Engine::Docker => {
-                let filter = format!("label={LABEL}");
-                self.call(&["ps", "-a", "--filter", filter.as_str(), "--format", "{{json .}}"], Duration::from_secs(60))?
-            }
+            Engine::Docker => self.call(&["ps", "-a", "--filter", filter.as_str(), "--format", "{{json .}}"], Duration::from_secs(60))?,
+            // Podman's JSON list is one array with lowercase states and array names.
+            Engine::Podman => self.call(&["ps", "-a", "--filter", filter.as_str(), "--format", "json"], Duration::from_secs(60))?,
             // Apple's list is one JSON array; filtering by the label happens in code.
             Engine::Apple => self.call(&["ls", "--all", "--format", "json"], Duration::from_secs(60))?,
             // The lxc client filters by name prefix server-side ("pc-" is ours) and returns
@@ -376,9 +405,12 @@ impl Sandbox for Docker {
         }
         match self.engine {
             Engine::Docker => Ok(parse_list(&output)),
-            Engine::Apple => {
+            Engine::Podman | Engine::Apple => {
                 let items: Vec<Value> = serde_json::from_str(&output).map_err(|_| format!("{} returned an unreadable container list.", self.label()))?;
-                Ok(items.iter().filter_map(apple_machine).collect())
+                Ok(items.iter().filter_map(|item| match self.engine {
+                    Engine::Podman => podman_machine(item),
+                    _ => apple_machine(item),
+                }).collect())
             }
             Engine::Lxc => {
                 let items: Vec<Value> = serde_json::from_str(&output).map_err(|_| "LXC returned an unreadable instance list.".to_string())?;
@@ -401,11 +433,13 @@ impl Sandbox for Docker {
             "delete" => {
                 let args: &[&str] = match self.engine {
                     Engine::Docker => &["rm", "-f", native],
+                    // Podman's --ignore makes a missing container a no-op by flag.
+                    Engine::Podman => &["rm", "-f", "--ignore", native],
                     Engine::Apple | Engine::Lxc => &["delete", "--force", native],
                 };
                 match self.checked(args, Duration::from_secs(120)) {
                     // A machine that is already gone did what was asked.
-                    Err(e) if e.contains("No such container") || e.contains("not found") => Ok(()),
+                    Err(e) if e.contains("No such container") || e.contains("no such container") || e.contains("not found") => Ok(()),
                     result => result,
                 }
             }
@@ -486,16 +520,37 @@ mod tests {
         assert_eq!(docker(None, None).binary(), "docker");
         assert_eq!(apple().binary(), "container");
         assert_eq!(lxc().binary(), "lxc");
+        assert_eq!(podman().binary(), "podman");
         assert!(docker(None, None).create_args("pc-x").contains(&"--label".to_string()));
+        assert!(podman().create_args("pc-x").contains(&"--label".to_string()));
         assert!(apple().create_args("pc-x").contains(&"-l".to_string()));
         assert_eq!(apple().create_args("pc-x").last().unwrap(), "sleep infinity");
         // LXC has no labels and keeps its own init alive: just launch by name.
         assert_eq!(lxc().create_args("pc-x"), vec!["launch".to_string(), "ubuntu:24.04".to_string(), "pc-x".to_string()]);
         assert_eq!(apple().label(), "Apple Containers");
         assert_eq!(lxc().label(), "LXC");
+        assert_eq!(podman().label(), "Podman");
         // LXC's exec separates the command with `--`.
         assert_eq!(lxc().exec_prefix("pc-x"), vec!["exec".to_string(), "pc-x".to_string(), "--".to_string()]);
         assert_eq!(docker(None, None).exec_prefix("pc-x"), vec!["exec".to_string(), "pc-x".to_string()]);
+        assert_eq!(podman().exec_prefix("pc-x"), vec!["exec".to_string(), "pc-x".to_string()]);
+        // Podman selects endpoints with --url, not Docker's -H.
+        assert_eq!(Docker::new(Some("unix:///run/podman.sock".into()), None, None, Engine::Podman).docker_args(), vec!["--url".to_string(), "unix:///run/podman.sock".to_string()]);
+    }
+
+    fn podman() -> Docker {
+        Docker::new(None, None, None, Engine::Podman)
+    }
+
+    #[test]
+    fn podman_lists_its_array_shape_with_lowercase_states() {
+        let item = serde_json::json!({"Id":"abc123def","Names":["pc-abc123def"],"State":"running","Image":"ubuntu:24.04"});
+        let mine = podman_machine(&item).unwrap();
+        assert_eq!((mine.id.as_str(), mine.name.as_str(), mine.state.as_str()), ("docker:pc-abc123def", "pc-abc123def", "running"));
+        assert_eq!(mine.detail, "Podman · ubuntu:24.04");
+        assert_eq!(podman_machine(&serde_json::json!({"Names":["pc-x"],"State":"exited","Image":"i"})).unwrap().state, "stopped");
+        assert_eq!(podman_machine(&serde_json::json!({"Names":["pc-x"],"State":"weird","Image":"i"})).unwrap().state, "error");
+        assert_eq!(podman_machine(&serde_json::json!({"Id":"x","State":"running"})), None);
     }
 
     #[test]
@@ -589,15 +644,17 @@ mod tests {
         assert!(connect(&serde_json::json!({"engine": "podman"})).is_err());
         assert!(connect(&serde_json::json!({"engine": "apple", "endpoint": "ssh://box"})).is_err());
         assert!(connect(&serde_json::json!({"engine": "lxc", "endpoint": "ssh://box"})).is_err());
+        // Podman takes ssh:// and unix:// endpoints; only tcp:// is refused, by name.
+        assert!(connect(&serde_json::json!({"engine": "podman", "endpoint": "tcp://box:2376"})).unwrap_err().contains("Podman remote hosts take an ssh:// endpoint"));
         // The happy paths reach for the daemon, which CI cannot run; only shape checks here.
     }
 
     #[test]
     fn connected_rebuilds_the_saved_engine() {
         let mut settings = super::super::settings();
-        settings.providers.insert("docker".into(), std::collections::BTreeMap::from([("engine".into(), "lxc".into())]));
+        settings.providers.insert("docker".into(), std::collections::BTreeMap::from([("engine".into(), "podman".into())]));
         super::super::save_settings(&settings).unwrap();
-        assert_eq!(Docker::connected().unwrap().binary(), "lxc");
+        assert_eq!(Docker::connected().unwrap().binary(), "podman");
         // Restore for the other tests sharing the memory store.
         let mut settings = super::super::settings();
         settings.providers.remove("docker");
