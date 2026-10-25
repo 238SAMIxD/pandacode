@@ -165,7 +165,9 @@ test.describe('thread order', () => {
     await expect(page.locator('#transcript')).toContainText('The response keeps streaming.');
     const stream = await page.locator('.streaming-content').last().elementHandle();
     await page.evaluate(() => (window as any).__releaseThreadOrder());
-    await expect(group(page, 'pinned').locator('.task-item')).toHaveAttribute('data-id', 'session-1');
+    await expect(row(page, 'session-1')).toHaveAttribute('data-pinned', 'true');
+    // A running agent is listed under Active, pinned or not.
+    await expect.poll(() => ids(page, 'active')).toEqual(['session-1']);
     await expect(page.getByRole('button', { name: 'Stop task', exact: true })).toBeVisible();
     expect(await stream!.evaluate(node => node.isConnected)).toBe(true);
     await expect(row(page, 'session-1')).toHaveAttribute('aria-current', 'page');

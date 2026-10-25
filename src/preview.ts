@@ -70,6 +70,21 @@ for (const s of sessions) {
 loadThreadOrder();
 // One sample task already tracks a GitHub issue so chips have something to show.
 sessions[2].issue = { kind: 'issue', number: 131, url: 'https://github.com/orbit-labs/orbit/issues/131', title: 'Keyboard shortcut cheat sheet', state: 'open', checkedAt: now };
+// Sidebar sections showcase: opt in with ?sections so default session counts stay unchanged.
+if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('sections')) {
+  const sample = (id: string, projectId: string, title: string, extra: Partial<Session>): Session => ({ id, projectId, title, provider: 'claude', model: 'sonnet', mode: 'ask', status: 'idle', createdAt: now - 7200000, updatedAt: now - 60000, archived: false, worktreePath: null, resumeId: null, lastResponseAt: null, pinned: false, sidebarOrder: null, taskStage: 'review', taskDescription: '', completedAt: null, ...extra });
+  sessions.push(
+    sample('sections-running', 'project-1', 'Speed up the search index', { status: 'running', taskStage: 'in_progress', lastPromptAt: now - 95000 }),
+    sample('sections-approval', 'project-2', 'Migrate settings storage', { provider: 'codex', model: '', status: 'waiting_approval', taskStage: 'in_progress', lastPromptAt: now - 240000 }),
+    sample('sections-review-1', 'project-1', 'Fix the flaky filter test', { lastPromptAt: now - 1500000, lastResponseAt: now - 1200000 }),
+    sample('sections-review-2', 'project-2', 'Write the release notes', { provider: 'codex', model: '', lastPromptAt: now - 11000000, lastResponseAt: now - 10800000 }),
+    sample('sections-done-1', 'project-1', 'Add dark mode tokens', { taskStage: 'completed', lastResponseAt: now - 90000000, completedAt: now - 86000000 }),
+    sample('sections-done-2', 'project-2', 'Remove the old onboarding', { taskStage: 'completed', lastResponseAt: now - 200000000, completedAt: now - 190000000 }),
+    sample('sections-done-3', 'project-1', 'Document the keyboard map', { provider: 'kimi', model: '', taskStage: 'completed', lastResponseAt: now - 300000000, completedAt: now - 290000000 }),
+  );
+  // These two finished while another thread was open, so they wait in Needs review.
+  localStorage.setItem('pandacode.sidebar.unreviewed', JSON.stringify(['sections-review-1', 'sections-review-2']));
+}
 let id = 10;
 let previewClaudeMode: 'inherit' | 'subscription' = 'inherit';
 const traceRoot = '/Users/you/Projects/orbit';

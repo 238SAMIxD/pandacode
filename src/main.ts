@@ -1,6 +1,7 @@
 import { decodeHandoff, historicalProvider } from './provider-handoff';
 import { bindThreadReordering, compareThreadOrder, threadGroupRows } from './thread-order';
 import { FOLDER_LIMIT, PROJECT_LIMIT, folderGroups, readCollapsed, shownTasks } from './sidebar-tree';
+import { COMPLETED_OPEN_KEY, REVIEW_WINDOW, UNREVIEWED_KEY, needsReview, readOpen, sidebarSections } from './sidebar-sections';
 import './styles.css';
 import './smooth.css';
 import './wallpapers.css';
@@ -77,6 +78,8 @@ import type { ArchitectView } from './architect';
 import { syncOverlayContext } from './overlay-client';
 import { initializeAgentUpdates } from './agent-updates';
 import { isChatProject, NO_PROJECT } from './chats';
+import { mountChangesView, type ChangesView } from './changes-view';
+import { INSPECTOR_VIEWS, closeTab, closedViews, loadTabs, openTab, sameTabs, saveTabs, threadDefault, type InspectorView } from './inspector-tabs';
 
 /* Visual thesis: calm surfaces, system typography, yellow selection, and bamboo details.
  * Content: project navigation → conversation → contextual source review.
@@ -84,12 +87,20 @@ import { isChatProject, NO_PROJECT } from './chats';
 type WorkspaceView = 'conversation' | 'board' | 'github';
 type LiveTool = { key: string; content: string | ToolActivity; statusOnly?: boolean; commentary?: boolean };
 type Stream = { text: string; retainedMessageKey?: string; tools: LiveTool[]; status: string; approvals: Map<string, string>; inputs: Map<string, AgentInput>; revision: number; lastPromptAt?: number; lastResponseAt: number | null; startedAt: number; turnKey: string; omittedActivity: boolean; contextUsage?: ContextUsage };
+/** Views this platform can show; the inspector's open tabs and selection persist across launches. */
+const INSPECTOR_AVAILABLE = INSPECTOR_VIEWS.filter(view => view === 'simulator' ? isMac || isWindows : view === 'vm' ? isMac : true);
+let inspectorTabs = loadTabs(localStorage, INSPECTOR_AVAILABLE);
+const INSPECTOR_TITLES: Record<InspectorView, string> = { files: 'Files', search: 'Search', changes: 'Changes', browser: 'Browser', pull: 'Pull request', simulator: 'Simulators', vm: 'Virtual machines', design: 'Design' };
+const INSPECTOR_TIPS: Partial<Record<InspectorView, string>> = { simulator: 'iOS & Android simulators', design: 'Design canvas' };
+const INSPECTOR_ICONS: Record<InspectorView, string> = { files: 'file', search: 'search', changes: 'branch', browser: 'globe', pull: 'pull', simulator: 'phone', vm: 'monitor', design: 'sketch' };
+/** Tab buttons keep the actions the old icon bar used, so every handler and shortcut still applies. */
+const INSPECTOR_ACTIONS: Record<InspectorView, string> = { files: 'tab-files', search: 'tab-search', changes: 'tab-changes', browser: 'browser', pull: 'tab-pull', simulator: 'tab-simulator', vm: 'tab-vm', design: 'tab-design' };
 const state = {
   projects: [] as Project[], sessions: [] as Session[], providers: [] as Provider[],
   projectId: '', sessionId: '', messages: [] as Message[], messagesLoading: false, messagesError: '', streams: new Map<string, Stream>(),
   view: (({ board: 'board', github: 'github' } as Record<string, 'board' | 'github'>)[localStorage.getItem('pandacode.view') ?? ''] ?? 'conversation') as WorkspaceView, boardPanel: false,
   sidebarCollapsed: localStorage.getItem('pandacode.sidebarCollapsed') === 'true',
-  query: '', archived: false, inspector: false, inspectorTab: 'files' as 'changes' | 'files' | 'search' | 'browser' | 'pull' | 'simulator' | 'vm' | 'design',
+  query: '', archived: false, inspector: false, inspectorTab: threadDefault(inspectorTabs),
   projectFilter: localStorage.getItem('pandacode.projectFilter') ?? '', collapsedFolders: readCollapsed(localStorage, 'pandacode.collapsedFolders'), expandedFolders: new Set<string>(),
   /** Follow-ups typed while an agent works, per task, in delivery order; mirrored from native storage. */
   queues: new Map<string, QueuedMessage[]>(), queueHolds: new Map<string, HoldReason>(), queueEditing: '', queueBusy: new Set<string>(),
@@ -289,7 +300,7 @@ $app.innerHTML = `<div class="workspace">
     <div id="terminal-drawer" class="terminal-drawer" hidden><div class="drawer-heading"><span>${icon('terminal')}<span id="terminal-project" class="muted"></span></span><div class="terminal-tabs" role="tablist" aria-label="Terminal tabs"></div><div class="terminal-heading-actions"><button class="icon-button" data-terminal-action="new" aria-label="New terminal" title="New terminal">${icon('plus')}</button><button class="icon-button" data-terminal-action="minimize" aria-label="Minimize terminal" title="Minimize terminal">${icon('minimize')}</button><button class="icon-button" data-terminal-action="close" aria-label="Close terminal" title="Close terminal" aria-haspopup="dialog">${icon('close')}</button></div></div><div id="terminal-host"></div></div>
   </main>
   <section id="settings-page" aria-label="Settings" hidden></section>
-  <aside id="inspector" class="inspector" aria-label="Project inspector"><nav class="inspector-tabs" aria-label="Panel views"><button class="selected" data-action="tab-files" aria-label="Files" title="Files">${icon('file')}</button><button data-action="tab-search" aria-label="Search" title="Search">${icon('search')}</button><button data-action="tab-changes" aria-label="Changes" title="Changes">${icon('branch')}<span id="changes-count"></span></button><button data-action="browser" aria-label="Browser" title="Browser">${icon('globe')}</button><button data-action="tab-pull" hidden>${icon('pull')}</button><button data-action="tab-simulator" aria-label="Simulators" title="iOS & Android simulators" ${isMac || isWindows ? '' : 'hidden'}>${icon('phone')}</button><button data-action="tab-vm" aria-label="Virtual machines" title="Virtual machines" ${isMac ? '' : 'hidden'}>${icon('monitor')}</button><button data-action="tab-design" aria-label="Design" title="Design canvas">${icon('sketch')}</button></nav><header class="inspector-heading"><h2 id="inspector-title" class="inspector-title">Files</h2>${button('refresh-inspector', 'Refresh project', 'refresh')}</header><div id="inspector-content" class="inspector-content"></div><section id="browser-panel" class="browser-panel" aria-label="Browser" hidden></section><section id="simulator-panel" class="simulator-panel" aria-label="Simulators" hidden></section><section id="vm-panel" class="vm-panel" aria-label="Virtual machines" hidden></section><section id="design-panel" class="design-panel" aria-label="Design" hidden></section></aside>
+  <aside id="inspector" class="inspector" aria-label="Project inspector"><div class="inspector-strip"><nav class="inspector-tabs" aria-label="Panel views">${INSPECTOR_AVAILABLE.map(view => `<div class="inspector-tab" data-view="${view}" hidden><button class="inspector-tab-button" data-action="${INSPECTOR_ACTIONS[view]}" aria-label="${INSPECTOR_TITLES[view]}" title="${escape(INSPECTOR_TIPS[view] ?? INSPECTOR_TITLES[view])}">${icon(INSPECTOR_ICONS[view])}<span class="inspector-tab-label">${INSPECTOR_TITLES[view]}</span>${view === 'changes' ? '<span id="changes-count" class="inspector-tab-count"></span>' : ''}</button>${button('close-inspector-tab', `Close ${INSPECTOR_TITLES[view]}`, 'close', 'inspector-tab-close', `data-view="${view}"`)}</div>`).join('')}${button('inspector-add-tab', 'Open a view', 'plus', 'inspector-tab-add', 'aria-haspopup="dialog"')}</nav><h2 id="inspector-title" class="sr-only">${INSPECTOR_TITLES[inspectorTabs.selected]}</h2><div class="inspector-strip-actions">${button('refresh-inspector', 'Refresh project', 'refresh', '', 'id="inspector-refresh"')}${button('toggle-inspector', 'Hide inspector', 'panel', 'inspector-hide')}</div></div><div id="inspector-content" class="inspector-content"></div><section id="browser-panel" class="browser-panel" aria-label="Browser" hidden></section><section id="simulator-panel" class="simulator-panel" aria-label="Simulators" hidden></section><section id="vm-panel" class="vm-panel" aria-label="Virtual machines" hidden></section><section id="design-panel" class="design-panel" aria-label="Design" hidden></section></aside>
 </div><div id="toast" class="toast" role="status" hidden></div><dialog id="dialog"></dialog>`;
 publishSpringEasings();
 installDialogMotion(document.querySelector<HTMLDialogElement>('#dialog')!);
@@ -301,6 +312,11 @@ const projectRunner = new ProjectRunner({
   notify,
 });
 let sidebarDragging = false, orderingBusy = false;
+/** A thread opened from Needs review stays there while open, so its row does not jump from under the click. */
+let sectionHold = '', completedOpen = readOpen(localStorage, COMPLETED_OPEN_KEY);
+/** Threads whose turn finished while another was open (Needs review); read on first draw. */
+let unreviewed: Set<string> | undefined;
+function saveUnreviewed(): void { try { localStorage.setItem(UNREVIEWED_KEY, JSON.stringify([...unreviewed ?? []])); } catch { /* per-launch only */ } }
 bindThreadReordering($('#navigation'), {
   busy: () => orderingBusy,
   dragging: active => { sidebarDragging = active; if (!active) renderNavigation(); },
@@ -597,9 +613,9 @@ function restoreThreadPanel(task?: Session): void {
   clearWorkspaceInspector(false);
   const saved = task && threadPanels.get(task.id);
   const sameWorkspace = saved?.workspace === workspaceKey();
-  // Without saved state the conversation opens the panel on Files, unless the user closed it or it would cover the chat.
+  // Without saved state the conversation opens the panel on the selected tab, unless the user closed it or it would cover the chat.
   state.inspector = saved?.open ?? (state.view === 'conversation' && inspectorChosen && !matchMedia('(max-width: 920px)').matches);
-  state.inspectorTab = saved?.tab ?? 'files'; state.filePath = sameWorkspace ? saved?.folder ?? '' : '';
+  state.inspectorTab = saved?.tab && inspectorTabs.open.includes(saved.tab) ? saved.tab : threadDefault(inspectorTabs); state.filePath = sameWorkspace ? saved?.folder ?? '' : '';
   state.selectedFile = sameWorkspace ? saved?.file ?? '' : ''; state.selectedKind = sameWorkspace ? saved?.kind ?? '' : ''; state.selectedStaged = saved?.staged ?? false;
   state.browserUrl = sameWorkspace ? saved?.browserUrl ?? '' : ''; selectedFileContext = sameWorkspace && saved?.context ? { ...saved.context } : undefined;
   state.filePreviewLoading = Boolean(state.selectedKind);
@@ -919,8 +935,18 @@ function renderNavigation(): void {
   const filterIcon = filtered ? projectAppIcon(filtered.id, filtered.name) : '';
   const shownIcon = filterLabel.previousElementSibling;
   if ((shownIcon?.outerHTML ?? '') !== filterIcon) { shownIcon?.remove(); if (filterIcon) filterLabel.insertAdjacentHTML('beforebegin', filterIcon); }
-  const sidebarSessions = listedSessions().filter(s => s.archived === state.archived && (state.archived || taskStage(s) !== 'completed') && !botProjects.has(s.projectId));
-  const visible = sidebarSessions.filter(s => (!state.projectFilter || s.projectId === state.projectFilter) && s.title.toLowerCase().includes(state.query.toLowerCase()));
+  const sidebarSessions = listedSessions().filter(s => s.archived === state.archived && !botProjects.has(s.projectId));
+  const matching = sidebarSessions.filter(s => (!state.projectFilter || s.projectId === state.projectFilter) && s.title.toLowerCase().includes(state.query.toLowerCase()));
+  // Opening a thread reviews it; one that no longer needs review leaves the list.
+  const seen = unreviewed ?? (state.sessions.length ? unreviewed = readCollapsed(localStorage, UNREVIEWED_KEY) : new Set<string>());
+  const reviewed = [...seen].filter(id => { const task = state.sessions.find(s => s.id === id); return id === state.sessionId || (task ? task.archived || taskStage(task) === 'completed' : state.sessions.length > 0); });
+  if (reviewed.length) { for (const id of reviewed) seen.delete(id); saveUnreviewed(); }
+  const sections = sidebarSections({
+    tasks: [...matching].sort(compareThreadOrder), now, stage: taskStage, unseen: s => seen.has(s.id),
+    active: s => isRunning(s.id) || Boolean(s.resumeAtReset) && limitActive(s, now),
+    selectedId: state.sessionId, held: sectionHold === state.sessionId,
+  });
+  const visible = state.archived ? matching : sections.rest;
   renderBots();
   $('#archive-toggle').classList.toggle('active', state.archived);
   $('#archive-toggle').setAttribute('aria-pressed', String(state.archived));
@@ -931,7 +957,7 @@ function renderNavigation(): void {
     const startedAt = live?.startedAt ?? s.lastPromptAt;
     const elapsed = isRunning(s.id) && startedAt != null ? formatDuration(now - startedAt) : '';
     const age = elapsed || (activityAt == null ? '' : responseAge(activityAt, now));
-    const status = live && (live.approvals.size || live.inputs.size) ? 'attention' : isRunning(s.id) ? 'running' : limitActive(s, now) ? 'limited' : '';
+    const status = live && (live.approvals.size || live.inputs.size) || s.status === 'waiting_approval' ? 'attention' : isRunning(s.id) ? 'running' : limitActive(s, now) ? 'limited' : '';
     const statusLabel = status === 'attention' ? live?.inputs.size ? 'Needs your answer' : 'Needs approval' : status === 'limited' ? `Usage limit · ${resetLabel(s.limitedUntil, now)}` : 'Running';
     // Three lines, like a card: where (app icon, checkout, age), what (title), and the branch,
     // linked pull request or issue, and the agent working on it.
@@ -943,19 +969,37 @@ function renderNavigation(): void {
       + (s.cloud ? `<span class="task-cloud" role="img" aria-label="Runs on ${escape(s.cloud.label)}" title="Runs on a ${escape(s.cloud.label)} cloud machine">${cloudIcon()}</span>` : '');
     const branch = s.worktreePath || s.cloud ? `<span class="task-branch">${worktreeMark}${s.worktreeBranch ? `<span>${escape(s.worktreeBranch)}</span>` : ''}</span>` : '';
     const signals = `${status ? `<span class="task-indicator ${status}" role="img" aria-label="${statusLabel}" title="${statusLabel}"></span>` : ''}${age ? `<span class="task-age${elapsed ? ' task-runtime' : ''}"${elapsed ? ` data-started-at="${startedAt}"` : ''} title="${elapsed ? `Working for ${elapsed}` : `Last message: ${escape(new Date(activityAt!).toLocaleString())}`}">${age}</span>` : ''}`;
-    const button = `<button class="task-item${inFolder ? ' task-oneline' : ''} ${s.id === state.sessionId ? 'selected' : ''}" data-action="select-task" data-id="${escape(s.id)}" data-activity="${activeTask(s, now) ? 'active' : 'inactive'}" draggable="true" data-pinned="${Boolean(s.pinned)}" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" ${s.id === state.sessionId ? 'aria-current="page"' : ''} aria-description="${shortProvider(s.provider)}" title="${escape(s.worktreeBranch ? `${s.title}\n${s.worktreeBranch}` : s.title)}">`;
+    const stage = taskStage(s), done = stage === 'completed';
+    // Completed rows keep their completion order, so they are not dragged.
+    const reorderable = state.archived || !done;
+    const button = `<button class="task-item${inFolder ? ' task-oneline' : ''} ${s.id === state.sessionId ? 'selected' : ''}" data-action="select-task" data-id="${escape(s.id)}" data-activity="${activeTask(s, now) ? 'active' : 'inactive'}" draggable="${reorderable}" data-pinned="${Boolean(s.pinned)}" ${reorderable ? 'aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"' : ''} ${s.id === state.sessionId ? 'aria-current="page"' : ''} aria-description="${shortProvider(s.provider)}" title="${escape(s.worktreeBranch ? `${s.title}\n${s.worktreeBranch}` : s.title)}">`;
     const pin = s.pinned ? `<span class="task-pin" role="img" aria-label="Pinned">${icon('pin')}</span>` : '';
     const projectName = `<span class="task-project">${escape(p?.name ?? 'Project')}</span>`;
+    // Row actions sit beside the row's button (buttons cannot nest), over its right edge.
+    const title = escape(s.title), id = escape(s.id), busy = isRunning(s.id) || configuringSessions.has(s.id);
+    const tick = state.archived || busy ? '' : `<button class="task-action task-check${done ? ' checked' : ''}" data-action="${done ? 'sidebar-reopen' : 'sidebar-complete'}" data-task="${id}" aria-label="${done ? 'Reopen' : 'Mark complete'}: ${title}" title="${done ? 'Reopen task' : 'Mark complete'}">${icon('check')}</button>`;
+    const archive = `<button class="task-action task-archive" data-action="sidebar-archive" data-task="${id}" aria-label="${s.archived ? 'Restore' : 'Archive'}: ${title}" title="${s.archived ? 'Restore task' : 'Archive task'}">${icon(s.archived ? 'undo' : 'archive')}</button>`;
+    // The archive view deletes directly; elsewhere Delete sits in the row's menu, one click from hover.
+    const last = state.archived
+      ? `<button class="task-action task-delete" data-action="sidebar-delete" data-task="${id}" aria-label="Delete: ${title}" title="${busy ? 'Stop the agent before deleting this task' : 'Delete task…'}" ${busy ? 'disabled' : ''}>${icon('trash')}</button>`
+      : `<button class="task-action task-more" data-action="sidebar-more" data-task="${id}" aria-haspopup="menu" aria-label="Task actions: ${title}" title="Task actions">${icon('more')}</button>`;
+    const wrap = (content: string) => `<div class="task-row${inFolder ? ' task-row-oneline' : ''}" id="task-row-${id}" data-stage="${stage}" data-actions="${[tick, archive, last].filter(Boolean).length}">${content}<span class="task-actions">${tick}${archive}${last}</span></div>`;
     // Inside a project's folder the heading already names the project: one line with the
     // title, then the worktree mark, linked PR or issue, status, age and harness.
-    if (inFolder) return `${button}<span class="task-line task-top"><span class="task-title">${escape(s.title)}</span>${worktreeMark}${linkMark}${pin}${projectName}${signals}${providerLogo(s.provider, 'task-provider')}</span></button>`;
+    if (inFolder) return wrap(`${button}<span class="task-line task-top"><span class="task-title">${escape(s.title)}</span>${worktreeMark}${linkMark}${pin}${projectName}${signals}${providerLogo(s.provider, 'task-provider')}</span></button>`);
     // With one project chosen the filter names it: two lines, the title and then the rest.
     const head = inProject
       ? `<span class="task-line task-top"><span class="task-title">${escape(s.title)}</span>${signals}</span>`
       : `<span class="task-line task-head">${projectAppIcon(s.projectId, p?.name ?? '')}<span class="task-checkout">${escape(checkout)}</span>${signals}</span><span class="task-title">${escape(s.title)}</span>`;
-    return `${button}${head}`
-      + `<span class="task-line task-meta">${branch}${linkMark}${pin}${projectName}${providerLogo(s.provider, 'task-provider')}</span></button>`;
+    return wrap(`${button}${head}`
+      + `<span class="task-line task-meta">${branch}${linkMark}${pin}${projectName}${providerLogo(s.provider, 'task-provider')}</span></button>`);
   };
+  // Active and Needs review list threads that need you; Completed is closed until opened.
+  const section = (key: 'active' | 'review', label: string, name: string, tasks: Session[]) => tasks.length
+    ? `<section class="task-group sidebar-section ${key}-group" data-thread-group="${key}" aria-label="${name}"><div class="group-heading section-heading">${label}<span class="section-count">${tasks.length}</span></div><div class="task-list">${tasks.map(s => row(s, false, Boolean(state.projectFilter))).join('')}</div></section>` : '';
+  const completedSection = sections.completed.length
+    ? `<section class="task-group sidebar-section completed-group" data-thread-group="completed" aria-label="Completed tasks"><button class="group-heading section-heading section-toggle" data-action="toggle-completed" aria-expanded="${completedOpen}" aria-controls="completed-tasks">${icon('chevron')}Completed<span class="section-count">${sections.completed.length}</span></button><div id="completed-tasks" class="task-list" ${completedOpen ? '' : 'hidden'}>${completedOpen ? sections.completed.map(s => row(s, true)).join('') : ''}</div></section>` : '';
+  const sectioned = sections.active.length + sections.review.length + sections.completed.length;
   const pinned = visible.filter(s => s.pinned).sort(compareThreadOrder);
   // Projectless chats get their own group; a chosen project filter hides them.
   const chats = state.projectFilter ? [] : visible.filter(s => !s.pinned && chatTask(s)).sort(compareThreadOrder);
@@ -979,35 +1023,37 @@ function renderNavigation(): void {
   const menuTrigger = choiceMenuAnchor ?? pendingMenuOpen?.anchor;
   const retainedRow = menuTrigger && nav.contains(menuTrigger) && menuTrigger.matches('.task-item') ? menuTrigger : null;
   const focused = nav.contains(document.activeElement) ? document.activeElement as HTMLElement : null;
-  const focusSelector = focused?.dataset.id ? `[data-id="${CSS.escape(focused.dataset.id)}"]` : focused?.dataset.action ? `[data-action="${CSS.escape(focused.dataset.action)}"]${focused.dataset.project ? `[data-project="${CSS.escape(focused.dataset.project)}"]` : ''}` : '';
+  const focusSelector = focused?.dataset.id ? `[data-id="${CSS.escape(focused.dataset.id)}"]` : focused?.dataset.action ? `[data-action="${CSS.escape(focused.dataset.action)}"]${focused.dataset.project ? `[data-project="${CSS.escape(focused.dataset.project)}"]` : ''}${focused.dataset.task ? `[data-task="${CSS.escape(focused.dataset.task)}"]` : ''}` : '';
   // Opening a project narrows the sidebar to it; say so, or the other tasks look lost.
-  const hidden = state.projectFilter ? sidebarSessions.filter(s => s.projectId !== state.projectFilter).length : 0;
+  const hidden = state.projectFilter ? sidebarSessions.filter(s => s.projectId !== state.projectFilter && taskStage(s) !== 'completed').length : 0;
   // A one-line note pinned under the list, not a card inside it.
   const note = $('#sidebar-note');
   note.innerHTML = hidden && !state.archived ? `<button class="filter-note" data-action="show-all-projects" title="Show tasks from every project"><span>${hidden} more in other projects</span><strong>Show all</strong></button>` : '';
   note.hidden = !note.innerHTML;
   // Morph rather than replace: unchanged rows keep their nodes, so nothing flickers.
-  morph(nav, !userProjects().length && !chats.length && !pinned.length ? '<div class="sidebar-empty">Open a project to get started.</div>' : state.archived
+  // Rows sit one level deeper than before (.task-row around .task-item), so morph one level deeper.
+  morph(nav, !userProjects().length && !chats.length && !pinned.length && !(state.archived ? 0 : sectioned) ? '<div class="sidebar-empty">Open a project to get started.</div>' : state.archived
     ? `<section class="task-group archived-group" data-thread-group="archived" aria-label="Archived tasks"><div class="group-heading">Archived<span>${visible.length}</span></div><div class="task-list">${[...visible].sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || compareThreadOrder(a, b)).map(s => row(s)).join('') || '<div class="no-tasks">No archived tasks</div>'}</div></section>`
-    : `${pinned.length ? `<section class="task-group pinned-group" data-thread-group="pinned" aria-label="Pinned tasks"><div class="group-heading">${icon('pin')}Pinned</div><div class="task-list">${pinned.map(s => row(s, false, Boolean(state.projectFilter))).join('')}</div></section>` : ''}${chatGroup}${folders.map(folder).join('') || (state.query && !chats.length ? '<div class="no-tasks">No matching tasks</div>' : '')}`);
+    : `${section('active', 'Active', 'Active tasks', sections.active)}${section('review', 'Needs review', 'Tasks to review', sections.review)}${pinned.length ? `<section class="task-group pinned-group" data-thread-group="pinned" aria-label="Pinned tasks"><div class="group-heading">${icon('pin')}Pinned</div><div class="task-list">${pinned.map(s => row(s, false, Boolean(state.projectFilter))).join('')}</div></section>` : ''}${chatGroup}${folders.map(folder).join('') || (state.query && !chats.length && !sectioned ? '<div class="no-tasks">No matching tasks</div>' : '')}${completedSection}`, 5);
   if (retainedRow) {
     const replacement = nav.querySelector<HTMLElement>(`.task-item[data-id="${CSS.escape(retainedRow.dataset.id!)}"]`);
     if (replacement) {
       // Keep the menu's real anchor connected through background task updates.
       retainedRow.innerHTML = replacement.innerHTML; retainedRow.className = replacement.className;
       retainedRow.title = replacement.title;
-      retainedRow.dataset.pinned = replacement.dataset.pinned;
+      retainedRow.dataset.pinned = replacement.dataset.pinned; retainedRow.draggable = replacement.draggable;
       if (replacement.hasAttribute('aria-current')) retainedRow.setAttribute('aria-current', 'page'); else retainedRow.removeAttribute('aria-current');
       replacement.replaceWith(retainedRow);
       nav.dispatchEvent(new Event('scroll'));
     } else closeChoiceMenu();
   }
-  if (focusSelector) nav.querySelector<HTMLElement>(focusSelector)?.focus({ preventScroll: true });
+  // A row action that moved its task to another section hands focus to the task's row.
+  if (focusSelector) (nav.querySelector<HTMLElement>(focusSelector) ?? (focused?.dataset.task ? nav.querySelector<HTMLElement>(`.task-item[data-id="${CSS.escape(focused.dataset.task)}"]`) : null))?.focus({ preventScroll: true });
   renderBoardView();
   updateWorkTimer();
   window.clearTimeout(activityTimer);
   if (!document.hidden) {
-    const expiry = state.sessions.reduce((next, s) => activeTask(s, now) ? Math.min(next, lastActivity(s)! + ACTIVITY_WINDOW) : next, Infinity);
+    const expiry = Math.min(...sections.review.map(s => s.lastResponseAt! + REVIEW_WINDOW), state.sessions.reduce((next, s) => activeTask(s, now) ? Math.min(next, lastActivity(s)! + ACTIVITY_WINDOW) : next, Infinity));
     if (Number.isFinite(expiry)) activityTimer = window.setTimeout(renderNavigation, Math.min(2147483647, Math.max(1, expiry - now)));
   }
 }
@@ -1680,20 +1726,24 @@ async function archiveTask(s: Session, offerCleanup: boolean): Promise<void> {
   renderNavigation();
 }
 async function changeBoardStage(stage: 'review' | 'completed'): Promise<void> {
-  const s = session(); if (!s || isRunning(s.id) || configuringSessions.has(s.id)) return;
+  const s = session(); if (s) await changeTaskStage(s, stage);
+}
+/** Complete or reopen any task. Completing a worktree task first offers to remove its clean checkout. */
+async function changeTaskStage(s: Session, stage: 'review' | 'completed'): Promise<void> {
+  if (isRunning(s.id) || configuringSessions.has(s.id)) return;
   if (stage === 'completed' && s.worktreePath) {
+    const selected = s.id === state.sessionId;
     const decision = await worktrees.cleanupOffer(s, 'complete');
     if (!decision.proceed) return;
     if (decision.remove) await worktrees.remove(s);
-    if (session()?.id !== s.id) return;
+    if (selected ? session()?.id !== s.id : !state.sessions.some(task => task.id === s.id) || isRunning(s.id)) return;
   }
   configuringSessions.add(s.id);
   try {
     const changed = await call<Session>('set_task_stage', { sessionId: s.id, stage });
     const index = state.sessions.findIndex(task => task.id === s.id); if (index >= 0) state.sessions[index] = changed;
     if (s.id === state.sessionId) renderComposer();
-    renderNavigation(); renderBoardView();
-  } finally { configuringSessions.delete(s.id); }
+  } finally { configuringSessions.delete(s.id); renderNavigation(); renderBoardView(); }
 }
 let fullTaskDescription: { id: string; value: string } | undefined;
 let sessionsReload = 0;
@@ -2465,6 +2515,8 @@ function onAgent(event: AgentEvent): void {
     clearAgentInputs(finishing.stream);
     finishingStreams.set(event.sessionId, finishing);
     state.streams.delete(event.sessionId); if (s) s.status = 'idle';
+    // A turn that finished out of view waits in Needs review.
+    if (s && s.id !== state.sessionId) { (unreviewed ??= readCollapsed(localStorage, UNREVIEWED_KEY)).add(s.id); saveUnreviewed(); }
     updateWorkTimer();
     // A failed or stopped run holds the queue; a clean finish sends the next queued message.
     const ending = runEndings.get(event.sessionId); runEndings.delete(event.sessionId);
@@ -2567,7 +2619,7 @@ async function refreshInspector(): Promise<void> {
 function syncSimulatorPanel(): void {
   const wanted = (isMac || isWindows) && state.inspector && state.inspectorTab === 'simulator' && !inspectorSuppressed;
   $('#simulator-panel').hidden = !wanted;
-  if (wanted) { $('#inspector-content').hidden = true; $('.inspector-heading>[data-action="refresh-inspector"]').hidden = true; }
+  if (wanted) { $('#inspector-content').hidden = true; $('#inspector-refresh').hidden = true; }
   if (!wanted) { simulatorPanel?.hide(); return; }
   if (simulatorPanel) { simulatorPanel.show(); return; }
   simulatorLoading ??= import('./simulator').then(({ mountSimulator }) => {
@@ -2583,7 +2635,7 @@ function syncSimulatorPanel(): void {
 function syncVmPanel(): void {
   const wanted = isMac && state.inspector && state.inspectorTab === 'vm' && !inspectorSuppressed;
   $('#vm-panel').hidden = !wanted;
-  if (wanted) { $('#inspector-content').hidden = true; $('.inspector-heading>[data-action="refresh-inspector"]').hidden = true; }
+  if (wanted) { $('#inspector-content').hidden = true; $('#inspector-refresh').hidden = true; }
   if (!wanted) { vmPanel?.hide(); return; }
   if (vmPanel) { vmPanel.show(); return; }
   vmLoading ??= import('./vm-panel').then(({ mountVmPanel }) => {
@@ -2599,7 +2651,7 @@ function syncVmPanel(): void {
 function syncDesignPanel(): void {
   const wanted = state.inspector && state.inspectorTab === 'design' && !inspectorSuppressed;
   $('#design-panel').hidden = !wanted;
-  if (wanted) { $('#inspector-content').hidden = true; $('.inspector-heading>[data-action="refresh-inspector"]').hidden = true; }
+  if (wanted) { $('#inspector-content').hidden = true; $('#inspector-refresh').hidden = true; }
   if (!wanted) { designPanel?.hide(); return; }
   if (designPanel) { designPanel.show(); return; }
   designLoading ??= import('./design-canvas').then(({ mountDesignCanvas }) => {
@@ -2621,7 +2673,7 @@ function syncBrowserPanel(): void {
   $('#browser-toggle').classList.toggle('active', wanted);
   $('#browser-panel').hidden = !wanted;
   $('#inspector-content').hidden = wanted;
-  $('.inspector-heading>[data-action="refresh-inspector"]').hidden = wanted;
+  $('#inspector-refresh').hidden = wanted;
   if (browserWanted === wanted && browserOwner === ownerKey) { browserPanel?.refresh(); return; }
   browserWanted = wanted; browserOwner = ownerKey;
   const revision = ++browserRevision;
@@ -2683,7 +2735,71 @@ async function performAgentUiAction(request: AgentUiAction): Promise<unknown> {
   }
   throw new Error('Unknown app action.');
 }
-const INSPECTOR_TITLES: Record<typeof state.inspectorTab, string> = { files: 'Files', search: 'Search', changes: 'Changes', browser: 'Browser', pull: 'Pull request', simulator: 'Simulators', vm: 'Virtual machines', design: 'Design' };
+/** Adds the selected view's tab when something opened it, then draws the strip in the open order. */
+function renderInspectorTabs(pullLinked: boolean): void {
+  const tabs = openTab(inspectorTabs, state.inspectorTab);
+  if (!sameTabs(tabs, inspectorTabs)) { inspectorTabs = tabs; saveTabs(localStorage, tabs); }
+  const nav = $('.inspector-tabs'), add = nav.querySelector<HTMLElement>('.inspector-tab-add')!;
+  const shown = tabs.open.filter(view => view !== 'pull' || pullLinked);
+  const items = [...nav.querySelectorAll<HTMLElement>(':scope>.inspector-tab')];
+  for (const item of items) {
+    const view = item.dataset.view as InspectorView, selected = view === state.inspectorTab;
+    item.hidden = !shown.includes(view);
+    item.querySelector<HTMLElement>('.inspector-tab-close')!.hidden = shown.length < 2;
+    const tab = item.querySelector<HTMLElement>('.inspector-tab-button')!;
+    tab.classList.toggle('selected', selected);
+    if (selected) tab.setAttribute('aria-current', 'true'); else tab.removeAttribute('aria-current');
+  }
+  // Move nodes only when the order changed, so a focused tab keeps focus.
+  if (items.filter(item => !item.hidden).map(item => item.dataset.view).join() !== shown.join()) for (const view of shown) nav.insertBefore(items.find(item => item.dataset.view === view)!, add);
+  add.hidden = !closedViews(tabs, INSPECTOR_AVAILABLE.filter(view => view !== 'pull' || pullLinked)).length;
+  const current = items.find(item => item.dataset.view === state.inspectorTab);
+  if (current && !current.hidden && nav.clientWidth) {
+    if (current.offsetLeft < nav.scrollLeft) nav.scrollLeft = current.offsetLeft;
+    else if (current.offsetLeft + current.offsetWidth > nav.scrollLeft + nav.clientWidth) nav.scrollLeft = current.offsetLeft + current.offsetWidth - nav.clientWidth;
+  }
+}
+function openInspectorView(view: InspectorView): void {
+  const tab = document.querySelector<HTMLElement>(`.inspector-tab[data-view="${view}"] .inspector-tab-button`);
+  if (tab) run(action(tab.dataset.action!, tab));
+}
+function closeInspectorTab(view: InspectorView): void {
+  const next = closeTab(inspectorTabs, view);
+  if (next === inspectorTabs) return;
+  const wasSelected = state.inspectorTab === view;
+  inspectorTabs = next; saveTabs(localStorage, next);
+  if (wasSelected) { ++fileRequest; state.inspectorTab = next.selected; state.selectedKind = ''; }
+  renderInspector();
+  if (wasSelected) document.querySelector<HTMLElement>(`.inspector-tab[data-view="${state.inspectorTab}"] .inspector-tab-button`)?.focus();
+}
+async function showInspectorViews(anchor: HTMLElement): Promise<void> {
+  const pullLinked = Boolean(githubEnabled() && session()?.pullRequest);
+  const views = closedViews(inspectorTabs, INSPECTOR_AVAILABLE.filter(view => view !== 'pull' || pullLinked));
+  await showChoices(anchor, { title: 'Open view', width: 240, actions: true, items: views.map(view => ({ id: view, label: INSPECTOR_TITLES[view], icon: INSPECTOR_ICONS[view] })), onSelect: id => { closeChoiceMenu(); openInspectorView(id as InspectorView); } });
+}
+/** One Changes view lives while the Changes tab shows the same checkout, so folds, scroll and loaded diffs survive refreshes. */
+let changesView: ChangesView | undefined, changesViewKey = '';
+function disposeChangesView(): void { changesView?.dispose(); changesView = undefined; changesViewKey = ''; }
+function showChangesView(target: HTMLElement, key: string): void {
+  if (!changesView || changesViewKey !== key || !target.querySelector(':scope>.changes-view')) {
+    disposeChangesView();
+    const host = document.createElement('div');
+    target.replaceChildren(host);
+    const context = workspaceContext();
+    changesView = mountChangesView(host, {
+      loadDiff: (path, staged) => call<string>('git_diff', { ...context, path, staged }),
+      stage: (paths, staged) => stage(paths, staged),
+      commit: async message => { const result = await call<string>('git_commit', { ...context, message }); await refreshInspector(); notify(result || 'Changes committed'); },
+      openFile: path => { state.inspectorTab = 'files'; run(openFile(path, 'file')); },
+      refresh: () => run(refreshInspector()),
+      notify,
+      choose: (anchor, title, items, onSelect) => void showChoices(anchor, { title, width: 260, actions: !items.some(item => item.selected !== undefined), items, onSelect: id => { closeChoiceMenu(); onSelect(id); } }),
+      worktree: () => worktrees.openDialog(newTaskView() ? 'attach' : 'new'),
+    });
+    changesViewKey = key;
+  }
+  changesView.update(state.git, undefined);
+}
 function renderInspector(): void {
   const diffEpoch = ++inspectorDiffEpoch;
   inspectorDiff?.dispose(); inspectorDiff = undefined;
@@ -2694,19 +2810,17 @@ function renderInspector(): void {
   $('.workspace').classList.toggle('inspector-closed', !visible);
   $('#inspector-toggle').classList.toggle('active', visible);
   const pullTask = githubEnabled() && session()?.pullRequest ? session() : undefined;
-  if (state.inspectorTab === 'pull' && !pullTask) state.inspectorTab = 'changes';
+  if (state.inspectorTab === 'pull' && !pullTask) { const shown = inspectorTabs.open.filter(view => view !== 'pull'); state.inspectorTab = shown.includes('changes') || !shown.length ? 'changes' : shown[0]; }
+  renderInspectorTabs(Boolean(pullTask));
   const pullTab = $('.inspector-tabs').querySelector<HTMLButtonElement>('[data-action="tab-pull"]')!;
-  pullTab.hidden = !pullTask;
   if (pullTask) { pullTab.title = `Pull request #${pullTask.pullRequest!.number}`; pullTab.setAttribute('aria-label', `Pull request #${pullTask.pullRequest!.number}`); }
-  $('.inspector-tabs').querySelectorAll('button').forEach(el => {
-    const selected = el.dataset.action === (state.inspectorTab === 'browser' ? 'browser' : 'tab-' + state.inspectorTab);
-    el.classList.toggle('selected', selected);
-    if (selected) el.setAttribute('aria-current', 'true'); else el.removeAttribute('aria-current');
-  });
   const changeCount = state.git?.files.length ?? 0;
   $('.inspector-tabs [data-action="tab-changes"]').setAttribute('aria-label', changeCount ? `Changes, ${changeCount} changed ${changeCount === 1 ? 'file' : 'files'}` : 'Changes');
   $('#inspector-title').textContent = INSPECTOR_TITLES[state.inspectorTab];
   $('#changes-count').textContent = state.git?.files.length ? String(state.git.files.length) : '';
+  const changesKey = `${state.projectId}\0${state.sessionId}\0${workspacePath()}`;
+  const keepChanges = state.inspectorTab === 'changes' && !state.selectedKind && Boolean(project()) && !session()?.remoteDevice && !(state.jj?.isRepo && !state.jj.colocated) && changesViewKey === changesKey && (state.inspectorLoading || (!state.gitError && Boolean(state.git?.isRepo)));
+  if (!keepChanges) disposeChangesView();
   syncBrowserPanel();
   syncSimulatorPanel();
   syncVmPanel();
@@ -2719,6 +2833,8 @@ function renderInspector(): void {
   const remote = session()?.remoteDevice;
   if (remote) { $('#changes-count').textContent = ''; target.innerHTML = `<div class="inspector-empty">${icon('monitor')}<h3>Runs on ${escape(remote.name)}</h3><p>Its changes and files are on that computer, so review and commit them there.</p></div>`; return; }
   if (state.inspectorTab === 'search' && !state.selectedKind) { searchPanel.show(target); return; }
+  // A refresh keeps the mounted Changes view on screen until the new status arrives.
+  if (state.inspectorLoading && changesView) return;
   if (state.inspectorLoading) { target.innerHTML = `<div class="inspector-empty" role="status">${icon('refresh')}<p>${state.inspectorTab === 'changes' ? 'Loading changes…' : 'Loading files…'}</p></div>`; return; }
   const loadError = state.inspectorTab === 'changes' ? state.gitError : state.filesError;
   if (loadError) {
@@ -2752,10 +2868,7 @@ function renderInspector(): void {
     return;
   }
   if (!state.git?.isRepo) { target.innerHTML = '<div class="inspector-empty">'+icon('branch')+'<h3>No Git repository</h3><p>Open a Git repository to review changes.</p></div>'; return; }
-  const staged = state.git.files.filter(file => ![' ', '?', '!', '.'].includes(file.index));
-  const unstaged = state.git.files.filter(file => ![' ', '!', '.'].includes(file.working) || file.index === '?');
-  const fileRows = (files: typeof staged, isStaged: boolean) => files.map(file => `<div class="change-row"><button class="change-file" data-action="open-diff" data-path="${escape(file.path)}" data-staged="${isStaged}">${fileIcon(file.path.split('/').pop() ?? file.path, false)}<span><strong>${escape(file.path.split('/').pop())}</strong><small>${escape(file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : 'root')}</small></span><span class="file-status ${file.index === '?' ? 'new' : ''}">${file.index === '?' ? 'A' : escape(isStaged ? file.index : file.working)}</span></button>${button(isStaged ? 'unstage-file' : 'stage-file', isStaged ? 'Unstage file' : 'Stage file', isStaged ? 'close' : 'plus', 'stage-button', `data-path="${escape(file.path)}"`)}</div>`).join('');
-  target.innerHTML = `<div class="branch-card"><span>${icon('branch')}<span>${escape(state.git.branch || 'No commits yet')}</span>${jjChip(state.jj)}</span><button data-action="worktree" title="Create isolated worktree" aria-label="Create isolated worktree">${icon('plus')}</button></div><div class="change-summary"><span>${state.git.files.length ? state.git.files.length + ' changed files' : 'Working tree clean'}</span>${state.git.files.length ? '' : icon('check')}</div>${staged.length ? `<section class="change-group"><div class="change-group-title"><span>Staged <small>${staged.length}</small></span><button data-action="unstage-all">Unstage all</button></div>${fileRows(staged, true)}</section>` : ''}${unstaged.length ? `<section class="change-group"><div class="change-group-title"><span>Changes <small>${unstaged.length}</small></span><button data-action="stage-all">Stage all</button></div>${fileRows(unstaged, false)}</section>` : ''}<form id="commit-form" class="commit-form"><label for="commit-message">Commit message</label><textarea id="commit-message" placeholder="Describe these changes…" rows="3" aria-label="Commit message"></textarea><button class="commit-button" ${!staged.length ? 'disabled' : ''}>${icon('check')}Commit${staged.length ? ' ' + staged.length + ' file' + (staged.length > 1 ? 's' : '') : ''}</button></form>`;
+  showChangesView(target, changesKey);
 }
 async function openRunPreview(url: string, context: { projectId: string; sessionId?: string }): Promise<void> {
   const current = () => state.projectId === context.projectId && state.sessionId === (context.sessionId ?? '');
@@ -3152,17 +3265,29 @@ async function reorderThreads(ids: string[], focus: string): Promise<void> {
     }
   }
 }
+/** Row buttons and the row menu act on any sidebar task, not only the open one. */
+function sidebarTaskAction(kind: 'complete' | 'reopen' | 'archive' | 'delete', id: string): void {
+  const task = state.sessions.find(item => item.id === id); if (!task) return;
+  if (kind === 'delete') showDeleteTask(task);
+  else if (kind === 'archive') run(archiveTask(task, true));
+  else run(changeTaskStage(task, kind === 'complete' ? 'completed' : 'review'));
+}
 async function showSidebarTaskMenu(anchor: HTMLElement): Promise<void> {
   const id = anchor.dataset.id!, task = state.sessions.find(item => item.id === id);
   if (!task) return;
   const ids = threadGroupRows(anchor).map(row => row.dataset.id!), index = ids.indexOf(id);
+  const fixed = !anchor.draggable, busy = isRunning(id) || configuringSessions.has(id), done = taskStage(task) === 'completed';
   await showChoices(anchor, { title: 'Task actions', actions: true, items: [
     { id: 'pin', label: task.pinned ? 'Unpin task' : 'Pin task', icon: 'pin', disabled: orderingBusy },
-    { id: 'up', label: 'Move up', icon: 'arrow', disabled: orderingBusy || index < 1 },
-    { id: 'down', label: 'Move down', icon: 'down', disabled: orderingBusy || index === ids.length - 1 },
+    { id: 'up', label: 'Move up', icon: 'arrow', disabled: fixed || orderingBusy || index < 1 },
+    { id: 'down', label: 'Move down', icon: 'down', disabled: fixed || orderingBusy || index === ids.length - 1 },
+    ...task.archived ? [] : [{ id: 'stage', label: done ? 'Reopen' : 'Mark complete', icon: done ? 'undo' : 'check', disabled: busy }],
+    { id: 'archive', label: task.archived ? 'Restore' : 'Archive', icon: task.archived ? 'undo' : 'archive' },
+    { id: 'delete', label: 'Delete task…', icon: 'trash', danger: true, disabled: busy || finishingStreams.has(id), description: isRunning(id) ? 'Stop the agent before deleting this task.' : undefined },
   ], onSelect: choice => {
     closeChoiceMenu();
     if (choice === 'pin') { run(pinTask(id)); return; }
+    if (choice === 'stage' || choice === 'archive' || choice === 'delete') { sidebarTaskAction(choice === 'stage' ? done ? 'reopen' : 'complete' : choice, id); return; }
     // Resolve the current list after an agent activity change or project filter.
     const row = $('#navigation').querySelector<HTMLElement>(`.task-item[data-id="${CSS.escape(id)}"]`);
     if (!row) return;
@@ -3221,8 +3346,8 @@ async function showDefaultModel(anchor: HTMLElement): Promise<void> {
     },
   });
 }
-function showDeleteTask(): void {
-  const task = session(); if (!task || isRunning(task.id) || configuringSessions.has(task.id)) return;
+function showDeleteTask(task = session()): void {
+  if (!task || isRunning(task.id) || configuringSessions.has(task.id)) return;
   const dialog = modal('Delete task?', `<form id="delete-task-form"><p class="delete-task-name">${escape(task.title)}</p><p class="delete-task-description">Permanently delete this conversation and its worker history from PandaCode? This cannot be undone. Its terminal tabs close and running commands may stop. Project files and worktrees stay.</p><p class="delete-task-error" role="alert" hidden></p><div class="dialog-footer"><button type="button" class="secondary-button" data-action="close-dialog">Cancel</button><button type="submit" class="secondary-button delete-task-confirm">Delete task</button></div></form>`, 'delete-task-dialog');
   const form = dialog.querySelector<HTMLFormElement>('#delete-task-form')!;
   const confirm = form.querySelector<HTMLButtonElement>('[type="submit"]')!;
@@ -3768,7 +3893,17 @@ async function action(name: string, element: HTMLElement): Promise<void> {
       break;
     }
     case 'open-turn-diff': await showTurnDiff(element); break;
-    case 'select-task': await selectSession(element.dataset.id!); break;
+    case 'select-task': {
+      const group = element.closest<HTMLElement>('#navigation [data-thread-group]')?.dataset.threadGroup;
+      sectionHold = group === 'review' ? element.dataset.id! : '';
+      await selectSession(element.dataset.id!); break;
+    }
+    case 'sidebar-complete': sidebarTaskAction('complete', element.dataset.task!); break;
+    case 'sidebar-reopen': sidebarTaskAction('reopen', element.dataset.task!); break;
+    case 'sidebar-archive': sidebarTaskAction('archive', element.dataset.task!); break;
+    case 'sidebar-delete': sidebarTaskAction('delete', element.dataset.task!); break;
+    case 'sidebar-more': { const row = element.closest('.task-row')?.querySelector<HTMLElement>('.task-item'); if (row) await showSidebarTaskMenu(row); break; }
+    case 'toggle-completed': completedOpen = !completedOpen; try { localStorage.setItem(COMPLETED_OPEN_KEY, String(completedOpen)); } catch { /* per-launch preference only */ } renderNavigation(); break;
     case 'select-project': await selectProject(element.dataset.id!); break;
     case 'archive-view': state.archived = !state.archived; renderNavigation(); break;
     case 'toggle-theme': toggleTheme(); break;
@@ -3822,6 +3957,8 @@ async function action(name: string, element: HTMLElement): Promise<void> {
     case 'terminal': await toggleTerminal(); break;
     case 'toggle-inspector': state.inspector = inspectorChosen = inspectorSuppressed || !state.inspector; inspectorSuppressed = false; renderInspector(); break;
     case 'tab-vm': openVm(); break;
+    case 'inspector-add-tab': await showInspectorViews(element); break;
+    case 'close-inspector-tab': closeInspectorTab(element.dataset.view as InspectorView); break;
     case 'tab-design': inspectorSuppressed = false; state.inspector = true; state.inspectorTab = 'design'; state.selectedKind = ''; renderInspector(); break;
     case 'deploy': await showDeploy(element); break;
     case 'tab-simulator': case 'simulator': if (name === 'simulator' && state.inspector && state.inspectorTab === 'simulator' && !inspectorSuppressed) { state.inspectorTab = 'changes'; renderInspector(); } else openSimulator(); break;

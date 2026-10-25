@@ -1,8 +1,10 @@
 import { expect, test } from '@playwright/test';
+import { openInspectorTab } from './inspector-tab-helper';
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('#inspector')).toBeVisible();
+  await openInspectorTab(page, 'Files');
   await page.getByRole('button', { name: 'Files', exact: true }).click();
 });
 
