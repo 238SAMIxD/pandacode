@@ -6,7 +6,7 @@ import './cloud-settings.css';
 import { escape } from './dom';
 import { infoMark } from './tooltip';
 
-export type CloudConnection = { provider: 'daytona' | 'cloudflare' | 'aws' | 'vercel' | 'railway' | 'gcloud' | KeyedProvider; connected: boolean; detail: string | null; sandboxes?: boolean };
+export type CloudConnection = { provider: 'daytona' | 'cloudflare' | 'aws' | 'vercel' | 'railway' | 'gcloud' | 'docker' | KeyedProvider; connected: boolean; detail: string | null; sandboxes?: boolean };
 export type CloudSettingsHost = {
   call<T>(command: string, args?: Record<string, unknown>): Promise<T>;
   listen(name: 'cloud-setup', callback: (event: { provider: string; label: string }) => void): Promise<() => void>;
@@ -65,6 +65,11 @@ const PROVIDERS: Record<CloudConnection['provider'], { name: string; summary: st
     name: 'Google Cloud', summary: 'Deploys by agents: Cloud Run and Cloud Storage.',
     fields: [{ name: 'project', label: 'Project ID', placeholder: 'my-app-123456' }, { name: 'region', label: 'Region', placeholder: 'Optional, such as us-central1', optional: true }, { name: 'zone', label: 'Zone', placeholder: 'Optional; for cloud agent VMs, such as us-central1-a', optional: true, sparse: true }],
     note: 'Uses your installed gcloud CLI and its sign-in (run `gcloud auth login` first); PandaCode downloads nothing and stores only the project, region and zone.', connect: 'Connect',
+  },
+  docker: {
+    name: 'Docker', summary: 'Containers on this machine or any Docker host.',
+    fields: [{ name: 'engine', label: 'Engine', placeholder: 'Optional; docker (default) or apple', optional: true }, { name: 'endpoint', label: 'Docker host', placeholder: 'Optional; empty for this machine, ssh://user@host or tcp://host:2376', optional: true }, { name: 'image', label: 'Image', placeholder: 'Optional, e.g. ubuntu:24.04', optional: true }, { name: 'tlsCa', label: 'TLS CA path', placeholder: 'Optional; for tcp:// hosts', optional: true, sparse: true }, { name: 'tlsCert', label: 'TLS cert path', placeholder: 'Optional; for tcp:// hosts', optional: true, sparse: true }, { name: 'tlsKey', label: 'TLS key path', placeholder: 'Optional; for tcp:// hosts', optional: true, sparse: true }],
+    note: 'Runs each task in its own container (label pandacode). For ssh:// and tcp:// hosts, that machine’s Docker daemon is root-equivalent — only point at machines you trust. Containers keep their disk until deleted and use this machine’s or the host’s resources; nothing is billed.', connect: 'Connect',
   },
   ...Object.fromEntries(Object.entries(KEYED).map(([id, provider]) => [id, {
     name: provider.name, summary: 'Cloud machines for agents.',

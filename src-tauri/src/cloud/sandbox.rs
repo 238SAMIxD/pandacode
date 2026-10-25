@@ -88,8 +88,9 @@ pub fn checked((code, output): (Option<i32>, String)) -> Result<()> {
 }
 
 /// Every provider cloud agents can run on, with its display name.
-pub const AGENT_PROVIDERS: [(&str, &str); 20] = [
+pub const AGENT_PROVIDERS: [(&str, &str); 21] = [
     ("daytona", "Daytona"),
+    ("docker", "Docker"),
     ("digitalocean", "DigitalOcean"),
     ("vultr", "Vultr"),
     ("hetzner", "Hetzner"),
@@ -115,6 +116,7 @@ pub const AGENT_PROVIDERS: [(&str, &str); 20] = [
 pub fn connected(provider: &str) -> Result<Box<dyn Sandbox>> {
     Ok(match provider {
         "daytona" => Box::new(Daytona::connected()?),
+        "docker" => super::docker::sandbox()?,
         "digitalocean" => super::digitalocean::sandbox()?,
         "vultr" => super::vultr::sandbox()?,
         "hetzner" => super::hetzner::sandbox()?,
@@ -138,7 +140,7 @@ pub fn connected(provider: &str) -> Result<Box<dyn Sandbox>> {
 }
 
 /// Settings → Cloud for the providers added with cloud agents: check, then save. Daytona,
-/// Cloudflare, AWS, Vercel, Railway and Google Cloud keep their own arms in `commands`.
+/// Docker, Cloudflare, AWS, Vercel, Railway and Google Cloud keep their own arms in `commands`.
 pub fn connect(provider: &str, key: &str, options: &Value) -> Result<()> {
     match provider {
         "digitalocean" => super::digitalocean::connect(key, options),

@@ -80,9 +80,9 @@ export function createPreviewVm() {
 
 /* Cloud sandboxes in the preview: connections that accept any key (except "bad"),
  * machines per provider, a drawn desktop for providers with screens, and recorded input. */
-const BASE = ['daytona', 'cloudflare', 'aws', 'vercel', 'railway', 'gcloud'];
+const BASE = ['daytona', 'cloudflare', 'aws', 'vercel', 'railway', 'gcloud', 'docker'];
 const KEYED = ['digitalocean', 'vultr', 'hetzner', 'runpod', 'e2b', 'modal', 'codesandbox', 'runloop', 'blaxel', 'tensorlake', 'freestyle', 'boat', 'instabox'];
-const AGENT_TARGETS = [['e2b', 'E2B'], ['daytona', 'Daytona'], ['digitalocean', 'DigitalOcean'], ['vultr', 'Vultr'], ['hetzner', 'Hetzner'], ['runpod', 'RunPod'], ['modal', 'Modal'], ['vercel', 'Vercel Sandbox'], ['codesandbox', 'CodeSandbox'], ['runloop', 'Runloop'], ['blaxel', 'Blaxel'], ['tensorlake', 'Tensorlake'], ['freestyle', 'Freestyle'], ['boat', 'boat'], ['instabox', 'InstaBox'], ['cloudflare', 'Cloudflare'], ['aws', 'AWS EC2'], ['gcloud', 'Google Cloud']] as const;
+const AGENT_TARGETS = [['e2b', 'E2B'], ['daytona', 'Daytona'], ['docker', 'Docker'], ['digitalocean', 'DigitalOcean'], ['vultr', 'Vultr'], ['hetzner', 'Hetzner'], ['runpod', 'RunPod'], ['modal', 'Modal'], ['vercel', 'Vercel Sandbox'], ['codesandbox', 'CodeSandbox'], ['runloop', 'Runloop'], ['blaxel', 'Blaxel'], ['tensorlake', 'Tensorlake'], ['freestyle', 'Freestyle'], ['boat', 'boat'], ['instabox', 'InstaBox'], ['cloudflare', 'Cloudflare'], ['aws', 'AWS EC2'], ['gcloud', 'Google Cloud']] as const;
 type PreviewCloudMachine = { id: string; provider: string; name: string; state: string; os: string; desktop: boolean; detail: string };
 export function createPreviewCloud() {
   const connected = new Map<string, string | null>();
@@ -114,7 +114,7 @@ export function createPreviewCloud() {
       if (typeof provider !== 'string' || ![...BASE, ...KEYED].includes(provider)) throw new Error('Unknown cloud provider.');
       if (provider === 'modal' && !options.tokenId) throw new Error('Enter the Modal token ID.');
       if (provider === 'blaxel' && !options.workspace) throw new Error('Enter the Blaxel workspace.');
-      if (provider !== 'aws' && provider !== 'gcloud' && (typeof key !== 'string' || !key.trim())) throw new Error('Enter the key.');
+      if (provider !== 'aws' && provider !== 'gcloud' && provider !== 'docker' && (typeof key !== 'string' || !key.trim())) throw new Error('Enter the key.');
       if (key === 'bad') throw new Error(`${provider === 'daytona' ? 'Daytona' : 'Cloudflare'} refused the credentials (HTTP 401). Check them in Settings → Cloud.`);
       connected.set(provider, provider === 'aws' ? `${options.profile || 'default profile'} · ${options.region}` : provider === 'cloudflare' ? String(options.account) : provider === 'vercel' ? (String(options.team ?? '') || null) : provider === 'railway' ? (String(options.workspace ?? '') || null) : provider === 'gcloud' ? [options.project, options.region, options.zone].filter(Boolean).join(' · ') : KEYED.includes(provider) ? (String(options.workspace ?? options.environment ?? options.apiUrl ?? '') || null) : null);
       return connections();

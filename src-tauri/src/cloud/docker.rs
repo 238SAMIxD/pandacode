@@ -1,0 +1,518 @@
+//! Docker containers for cloud agents (docs/cloud-agents.md): one container per task, on this
+//! machine's Docker or on any Docker host, through the configured endpoint — a local daemon
+//! (no endpoint), `unix:///path`, `ssh://[user@]host[:port]` over the shared SSH transport
+//! (cloud/ssh.rs), or a TLS-secured `tcp://` Engine API. The local engine can also be Apple
+//! Containers (`container`, docker-shaped: -l labels, cp) selected in Settings. Containers
+//! carry the `pandacode` label and keep running (holding their disk) until stopped, at the
+//! cost of the host's own resources — nothing is billed, but a Docker daemon is
+//! root-equivalent on its machine, so endpoints are trust decisions like any VPS.
+use serde_json::Value;
+use std::process::Command;
+use std::time::Duration;
+
+use super::{sandbox::{Info, Sandbox}, shell_quote, ssh, Machine};
+use crate::workspace::{run_process, GitOutput};
+use crate::Result;
+
+const SERVICE: &str = "Docker";
+/// The Sandbox contract keeps at least 4 MiB of output.
+const OUTPUT: usize = 4 << 20;
+const LABEL: &str = "pandacode";
+const IMAGE: &str = "ubuntu:24.04";
+/// A fresh container pulls its image on first run, which can take minutes.
+const CREATE_TIMEOUT: u64 = 600;
+
+/// The local container engine; both CLIs are docker-shaped, differing in flag spelling,
+/// list output and the delete verb.
+#[derive(Clone, Copy, PartialEq)]
+enum Engine {
+    Docker,
+    Apple,
+}
+
+pub struct Docker {
+    /// None: this machine's daemon.
+    endpoint: Option<String>,
+    image: String,
+    tls: Option<Tls>,
+    engine: Engine,
+}
+
+#[derive(Clone)]
+struct Tls {
+    ca: String,
+    cert: String,
+    key: String,
+}
+
+impl Docker {
+    fn new(endpoint: Option<String>, image: Option<String>, tls: Option<Tls>, engine: Engine) -> Self {
+        Docker {
+            endpoint: endpoint.filter(|e| !e.trim().is_empty()).map(|e| e.trim().trim_end_matches('/').to_string()),
+            image: image.filter(|i| !i.trim().is_empty()).map(|i| i.trim().to_string()).unwrap_or_else(|| IMAGE.into()),
+            tls,
+            engine,
+        }
+    }
+    fn connected() -> Result<Self> {
+        let settings = super::settings();
+        let options = settings.providers.get("docker").ok_or("Connect Docker in Settings → Cloud first.")?;
+        let tls = match (options.get("tlsCa"), options.get("tlsCert"), options.get("tlsKey")) {
+            (Some(ca), Some(cert), Some(key)) => Some(Tls { ca: ca.clone(), cert: cert.clone(), key: key.clone() }),
+            _ => None,
+        };
+        let engine = if options.get("engine").map(String::as_str) == Some("apple") { Engine::Apple } else { Engine::Docker };
+        Ok(Docker::new(options.get("endpoint").cloned(), options.get("image").cloned(), tls, engine))
+    }
+
+    /// The CLI binary and the human label of the selected engine.
+    fn binary(&self) -> &'static str {
+        match self.engine {
+            Engine::Docker => "docker",
+            Engine::Apple => "container",
+        }
+    }
+    fn label(&self) -> &'static str {
+        match self.engine {
+            Engine::Docker => SERVICE,
+            Engine::Apple => "Apple Containers",
+        }
+    }
+
+    /// `docker` arguments selecting the endpoint: `-H` and, for TLS, the certificate flags —
+    /// never environment variables, so the bounded runner's sanitized environment is enough.
+    fn docker_args(&self) -> Vec<String> {
+        let mut args = Vec::new();
+        if let Some(endpoint) = &self.endpoint {
+            if !endpoint.starts_with("ssh://") {
+                args.extend(["-H".into(), endpoint.clone()]);
+            }
+        }
+        if let Some(tls) = &self.tls {
+            args.extend(["--tlsverify".into(), "--tlscacert".into(), tls.ca.clone(), "--tlscert".into(), tls.cert.clone(), "--tlskey".into(), tls.key.clone()]);
+        }
+        args
+    }
+
+    /// The SSH target of an `ssh://[user@]host[:port]` endpoint.
+    fn ssh_target(&self) -> Result<ssh::Target> {
+        let endpoint = self.endpoint.as_deref().ok_or("This Docker endpoint is not remote.")?;
+        let rest = endpoint.strip_prefix("ssh://").ok_or("This Docker endpoint is not an SSH host.")?;
+        let (user, host_port) = match rest.split_once('@') {
+            Some((user, host_port)) => (user, host_port),
+            None => ("root", rest),
+        };
+        let (host, port) = match host_port.rsplit_once(':') {
+            Some((host, port)) => (host, port.parse::<u16>().map_err(|_| format!("That Docker SSH endpoint has no readable port: {endpoint}"))?),
+            None => (host_port, 22),
+        };
+        if host.is_empty() || host.contains('/') {
+            return Err(format!("That does not look like a Docker SSH endpoint: {endpoint}"));
+        }
+        // The parsed user is cached per endpoint string, so the poll cadence cannot grow it.
+        let user: &'static str = static_user(if user.is_empty() { "root" } else { user });
+        Ok(ssh::Target { host: host.to_string(), port, user })
+    }
+
+    /// Whether the endpoint is a remote SSH host (docker then runs through cloud/ssh.rs).
+    fn over_ssh(&self) -> bool {
+        self.endpoint.as_deref().is_some_and(|e| e.starts_with("ssh://"))
+    }
+
+    /// Run one container command through the endpoint; exit code and stdout, the CLI's
+    /// stderr appended on failure. Arguments stay a vector: formats like `{{json .}}` hold
+    /// spaces the shell must not split (the SSH path quotes each, behind the binary).
+    fn call(&self, args: &[&str], timeout: Duration) -> Result<(Option<i32>, String)> {
+        if self.over_ssh() {
+            return ssh::exec(&self.ssh_target()?, &self.remote_line(args), timeout);
+        }
+        let mut command = Command::new(self.binary());
+        command.args(self.docker_args());
+        command.args(args);
+        let out = run_cli(command, timeout)?;
+        let mut text = String::from_utf8_lossy(&out.stdout.bytes).into_owned();
+        if !out.status.success() {
+            text.push_str(&String::from_utf8_lossy(&out.stderr.bytes));
+        }
+        Ok((out.status.code(), text))
+    }
+    /// The command line an SSH host runs: the container binary in front, every argument
+    /// quoted (an SSH endpoint never goes through `-H`; it invokes the remote CLI directly).
+    fn remote_line(&self, args: &[&str]) -> String {
+        std::iter::once(self.binary()).chain(args.iter().copied()).map(shell_quote).collect::<Vec<_>>().join(" ")
+    }
+    fn checked(&self, args: &[&str], timeout: Duration) -> Result<()> {
+        super::sandbox::checked(self.call(args, timeout)?)
+    }
+}
+
+/// Run the local container CLI, mapping a missing binary to a readable error.
+fn run_cli(command: Command, timeout: Duration) -> Result<GitOutput> {
+    run_process(command, "docker", OUTPUT, timeout).map_err(|error| {
+        let lowered = error.to_lowercase();
+        if lowered.contains("no such file") || lowered.contains("not found") || lowered.contains("cannot find") {
+            "A container engine is needed for this cloud provider. Install Docker (or, on macOS, Apple Containers) and try again.".into()
+        } else {
+            error
+        }
+    })
+}
+
+/// `ssh::Target` wants a `&'static str`; intern the configured SSH users so the poll cadence
+/// cannot leak per call.
+fn static_user(user: &str) -> &'static str {
+    static USERS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, &'static str>>> = std::sync::OnceLock::new();
+    let mut users = USERS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new())).lock().unwrap();
+    *users.entry(user.to_string()).or_insert_with(|| Box::leak(user.to_string().into_boxed_str()))
+}
+
+/// The containers PandaCode started, from `docker ps` NDJSON.
+fn parse_list(output: &str) -> Vec<Machine> {
+    output.lines().filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok()).filter_map(|item| machine(&item)).collect()
+}
+
+fn machine(item: &Value) -> Option<Machine> {
+    // The container name is the native ID: create() returns it, every command takes it, and
+    // the trait's default state() must find what create made (the container ID would not).
+    let name = item["Names"].as_str()?.split(',').next()?.to_string();
+    let image = item["Image"].as_str().unwrap_or("image");
+    let state = match item["State"].as_str() {
+        Some("running") => "running",
+        Some("created" | "exited" | "paused") => "stopped",
+        _ => "error",
+    };
+    Some(Machine { id: format!("docker:{name}"), provider: "docker".into(), name: name.clone(), state: state.into(), os: "linux".into(), desktop: false, detail: format!("{SERVICE} · {image}") })
+}
+
+/// Apple's list entries (`container ls --all --format json`): one object per container with
+/// `id`, `configuration.image.reference`, `configuration.labels` and `status.state`.
+fn apple_machine(item: &Value) -> Option<Machine> {
+    let id = item["id"].as_str()?.to_string();
+    // Only PandaCode's own containers carry the label.
+    if item["configuration"]["labels"][LABEL].as_str() != Some("true") {
+        return None;
+    }
+    let image = item["configuration"]["image"]["reference"].as_str().unwrap_or("image");
+    let state = match item["status"]["state"].as_str() {
+        Some("running") => "running",
+        Some("stopped" | "created") => "stopped",
+        _ => "error",
+    };
+    Some(Machine { id: format!("docker:{id}"), provider: "docker".into(), name: id.clone(), state: state.into(), os: "linux".into(), desktop: false, detail: format!("Apple Containers · {image}") })
+}
+
+/// Container names are stricter in PandaCode than in Docker: the same hostname-safe shape as
+/// the other providers, so task machines stay uniform.
+fn valid_name(name: &str) -> Result<&str> {
+    let ok = (1..=63).contains(&name.len())
+        && name.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && !name.ends_with('-');
+    ok.then_some(name).ok_or_else(|| "Docker names use lowercase letters, digits and dashes, starting with a letter or digit (up to 63).".to_string().into())
+}
+
+pub fn connect(options: &Value) -> Result<()> {
+    let engine = match options["engine"].as_str().map(str::trim).filter(|e| !e.is_empty()) {
+        None | Some("docker") => Engine::Docker,
+        Some("apple") => Engine::Apple,
+        Some(other) => return Err(format!("The engine is docker or apple, not {other}.")),
+    };
+    let endpoint = options["endpoint"].as_str().map(str::trim).filter(|e| !e.is_empty()).map(|e| e.trim_end_matches('/').to_string());
+    if let Some(endpoint) = &endpoint {
+        if !endpoint.starts_with("ssh://") && !endpoint.starts_with("tcp://") && !endpoint.starts_with("unix://") {
+            return Err("Docker hosts are ssh://user@host, tcp://host:port (with TLS) or unix:///path — or empty for this machine.".into());
+        }
+    }
+    if engine == Engine::Apple && endpoint.is_some() {
+        return Err("Apple Containers run only on this machine — leave the Docker host empty.".into());
+    }
+    let tls = match (options["tlsCa"].as_str(), options["tlsCert"].as_str(), options["tlsKey"].as_str()) {
+        (None | Some(""), None | Some(""), None | Some("")) => None,
+        (Some(ca), Some(cert), Some(key)) => Some(Tls { ca: ca.trim().into(), cert: cert.trim().into(), key: key.trim().into() }),
+        _ => return Err("TLS needs all three certificate paths (CA, cert, key).".into()),
+    };
+    if tls.is_some() && !endpoint.as_deref().is_some_and(|e| e.starts_with("tcp://")) {
+        return Err("TLS certificates apply to tcp:// Docker hosts.".into());
+    }
+    let image = options["image"].as_str().map(str::trim).filter(|i| !i.is_empty()).map(str::to_string);
+    // The endpoint works: ask its daemon for its version (and surface our public key when an
+    // SSH host refuses the PandaCode key, since that host is not one we can provision).
+    let docker = Docker::new(endpoint.clone(), image.clone(), tls, engine);
+    if let Err(error) = docker.version() {
+        if docker.over_ssh() {
+            if let Ok((_, public)) = ssh::key_pair() {
+                return Err(format!("{error} — for an SSH host, authorize PandaCode's key there first: {public}"));
+            }
+        }
+        return Err(error);
+    }
+    let mut settings = super::settings();
+    let entry = settings.providers.entry("docker".into()).or_default();
+    if let Some(endpoint) = endpoint {
+        entry.insert("endpoint".into(), endpoint);
+    } else {
+        entry.remove("endpoint");
+    }
+    if let Some(image) = image {
+        entry.insert("image".into(), image);
+    } else {
+        entry.remove("image");
+    }
+    if engine == Engine::Apple {
+        entry.insert("engine".into(), "apple".into());
+    } else {
+        entry.remove("engine");
+    }
+    for (name, path) in [("tlsCa", docker.tls.as_ref().map(|t| &t.ca)), ("tlsCert", docker.tls.as_ref().map(|t| &t.cert)), ("tlsKey", docker.tls.as_ref().map(|t| &t.key))] {
+        match path {
+            Some(path) => { entry.insert(name.into(), path.clone()); }
+            None => { entry.remove(name); }
+        }
+    }
+    entry.insert("detail".into(), docker.endpoint.clone().unwrap_or_else(|| match engine { Engine::Docker => "this machine".into(), Engine::Apple => "this machine (Apple Containers)".into() }));
+    super::save_settings(&settings)
+}
+
+pub fn disconnect() -> Result<()> {
+    let mut settings = super::settings();
+    settings.providers.remove("docker");
+    super::save_settings(&settings)
+}
+pub fn sandbox() -> Result<Box<dyn Sandbox>> {
+    Ok(Box::new(Docker::connected()?))
+}
+
+impl Docker {
+    /// The daemon answers.
+    fn version(&self) -> Result<()> {
+        let args: &[&str] = match self.engine {
+            Engine::Docker => &["version", "--format", "{{.Server.Version}}"],
+            Engine::Apple => &["version"],
+        };
+        self.checked(args, Duration::from_secs(60))
+    }
+    /// The arguments that start a labelled, always-on task container.
+    fn create_args(&self, name: &str) -> Vec<String> {
+        let label_flag = match self.engine {
+            Engine::Docker => "--label",
+            Engine::Apple => "-l",
+        };
+        vec!["run".into(), "-d".into(), "--name".into(), name.into(), label_flag.into(), LABEL.into(), self.image.clone(), "sh".into(), "-c".into(), "sleep infinity".into()]
+    }
+}
+
+impl Sandbox for Docker {
+    /// Stopped containers keep their filesystem; they occupy the host until removed.
+    fn info(&self) -> Info {
+        Info { persistent: true, max_unattended_minutes: 24 * 60 }
+    }
+    fn list(&self) -> Result<Vec<Machine>> {
+        match self.engine {
+            Engine::Docker => {
+                let filter = format!("label={LABEL}");
+                let (code, output) = self.call(&["ps", "-a", "--filter", filter.as_str(), "--format", "{{json .}}"], Duration::from_secs(60))?;
+                if code != Some(0) {
+                    return Err(super::sandbox::checked((code, output)).unwrap_err());
+                }
+                Ok(parse_list(&output))
+            }
+            // Apple's list is one JSON array; filtering by the label happens in code.
+            Engine::Apple => {
+                let (code, output) = self.call(&["ls", "--all", "--format", "json"], Duration::from_secs(60))?;
+                if code != Some(0) {
+                    return Err(super::sandbox::checked((code, output)).unwrap_err());
+                }
+                let items: Vec<Value> = serde_json::from_str(&output).map_err(|_| format!("{} returned an unreadable container list.", self.label()))?;
+                Ok(items.iter().filter_map(apple_machine).collect())
+            }
+        }
+    }
+    fn create(&self, name: &str) -> Result<Machine> {
+        let name = valid_name(name)?;
+        // sleep infinity keeps the container alive; the harness runtime is installed into it
+        // by the ordinary cloud-agent setup, and the first run may pull the image.
+        let created = self.create_args(name);
+        let args: Vec<&str> = created.iter().map(String::as_str).collect();
+        self.checked(&args, Duration::from_secs(CREATE_TIMEOUT))?;
+        Ok(Machine { id: format!("docker:{name}"), provider: "docker".into(), name: name.into(), state: "running".into(), os: "linux".into(), desktop: false, detail: format!("{} · {}", self.label(), self.image) })
+    }
+    fn power(&self, native: &str, action: &str) -> Result<()> {
+        match action {
+            "start" | "stop" => self.checked(&[action, native], Duration::from_secs(120)),
+            "delete" => {
+                let args: &[&str] = match self.engine {
+                    Engine::Docker => &["rm", "-f", native],
+                    Engine::Apple => &["delete", "--force", native],
+                };
+                match self.checked(args, Duration::from_secs(120)) {
+                    // A container that is already gone did what was asked.
+                    Err(e) if e.contains("No such container") || e.contains("not found") => Ok(()),
+                    result => result,
+                }
+            }
+            _ => Err(format!("Docker containers can start, stop or be deleted, not {action}.")),
+        }
+    }
+    fn exec(&self, native: &str, command: &str, timeout: Duration) -> Result<(Option<i32>, String)> {
+        self.call(&["exec", native, "sh", "-c", command], timeout + Duration::from_secs(30))
+    }
+    /// Containers run until stopped; cloud agents stop them themselves after an idle run end.
+    fn keep_alive(&self, _native: &str, _minutes: u32) -> Result<()> {
+        Ok(())
+    }
+    /// Whole files with `cp`; the chunked default would run one exec per 44 KiB. Both engines
+    /// take the same source/destination shape — but on the SSH path the daemon reads its own
+    /// filesystem, so the file is staged there through the SSH transport first.
+    fn upload(&self, native: &str, path: &str, bytes: &[u8], private: bool) -> Result<()> {
+        let folder = path.rsplit_once('/').map(|(folder, _)| folder).unwrap_or(".");
+        super::sandbox::checked(self.exec(native, &format!("mkdir -p {}", shell_quote(folder)), Duration::from_secs(60))?)?;
+        let staging = format!("pandacode-docker-{}", uuid::Uuid::new_v4());
+        let (source, cleanup): (String, Box<dyn FnOnce() -> Result<()>>) = if self.over_ssh() {
+            let target = self.ssh_target()?;
+            let remote = format!("/tmp/{staging}");
+            ssh::upload(&target, &remote, bytes, false)?;
+            let for_cleanup = remote.clone();
+            let cleanup = move || ssh::exec(&target, &format!("rm -f {}", shell_quote(&for_cleanup)), Duration::from_secs(60)).map(|_| ());
+            (remote, Box::new(cleanup))
+        } else {
+            let temporary = std::env::temp_dir().join(&staging);
+            std::fs::write(&temporary, bytes).map_err(|_| "Could not stage the file for the upload.".to_string())?;
+            let for_cleanup = temporary.display().to_string();
+            let path_for_cleanup = for_cleanup.clone();
+            let cleanup = move || { let _ = std::fs::remove_file(&path_for_cleanup); Ok(()) };
+            (for_cleanup, Box::new(cleanup))
+        };
+        let destination = format!("{native}:{path}");
+        let args: Vec<&str> = vec!["cp", source.as_str(), destination.as_str()];
+        let copy = self.call(&args, Duration::from_secs(600));
+        drop(args);
+        cleanup()?;
+        super::sandbox::checked(copy?)?;
+        if private {
+            super::sandbox::checked(self.exec(native, &format!("chmod 600 {}", shell_quote(path)), Duration::from_secs(60))?)?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn docker(endpoint: Option<&str>, tls: Option<(&str, &str, &str)>) -> Docker {
+        Docker::new(endpoint.map(str::to_string), None, tls.map(|(ca, cert, key)| Tls { ca: ca.into(), cert: cert.into(), key: key.into() }), Engine::Docker)
+    }
+
+    fn apple() -> Docker {
+        Docker::new(None, None, None, Engine::Apple)
+    }
+
+    #[test]
+    fn the_engines_pick_their_binary_labels_and_delete_verb() {
+        assert_eq!(docker(None, None).binary(), "docker");
+        assert_eq!(apple().binary(), "container");
+        assert!(docker(None, None).create_args("pc-x").contains(&"--label".to_string()));
+        assert!(apple().create_args("pc-x").contains(&"-l".to_string()));
+        assert_eq!(apple().create_args("pc-x").last().unwrap(), "sleep infinity");
+        assert_eq!(apple().label(), "Apple Containers");
+    }
+
+    #[test]
+    fn apple_lists_only_labelled_containers() {
+        // Trimmed from a real `container ls --all --format json` entry.
+        let item = serde_json::json!({"id":"pc-abc123","configuration":{"image":{"reference":"docker.io/library/ubuntu:24.04"},"labels":{"pandacode":"true"}},"status":{"state":"stopped"}});
+        let mine = apple_machine(&item).unwrap();
+        assert_eq!((mine.id.as_str(), mine.name.as_str(), mine.state.as_str()), ("docker:pc-abc123", "pc-abc123", "stopped"));
+        assert_eq!(mine.detail, "Apple Containers · docker.io/library/ubuntu:24.04");
+        // A running one maps to running; an unlabelled one (the account's other work) is not ours.
+        let mut running = item.clone();
+        running["status"]["state"] = serde_json::json!("running");
+        assert_eq!(apple_machine(&running).unwrap().state, "running");
+        let mut other = item.clone();
+        other["configuration"]["labels"] = serde_json::json!({});
+        assert_eq!(apple_machine(&other), None);
+        assert_eq!(apple_machine(&serde_json::json!({"id":"x","configuration":{"labels":{}}})), None);
+    }
+
+    #[test]
+    fn endpoints_select_the_transport() {
+        // Local daemon: no selection flags at all.
+        assert!(docker(None, None).docker_args().is_empty());
+        // SSH endpoints never go through -H; they run over cloud/ssh.rs.
+        assert!(docker(Some("ssh://me@box"), None).docker_args().is_empty());
+        assert!(docker(Some("ssh://me@box"), None).over_ssh());
+        // A socket or TCP endpoint rides -H; TLS adds the certificate flags.
+        assert_eq!(docker(Some("unix:///run/docker.sock"), None).docker_args(), ["-H".to_string(), "unix:///run/docker.sock".to_string()]);
+        let tls = docker(Some("tcp://box:2376"), Some(("ca.pem", "cert.pem", "key.pem")));
+        assert_eq!(tls.docker_args(), vec!["-H".to_string(), "tcp://box:2376".to_string(), "--tlsverify".to_string(), "--tlscacert".to_string(), "ca.pem".to_string(), "--tlscert".to_string(), "cert.pem".to_string(), "--tlskey".to_string(), "key.pem".to_string()]);
+        assert!(!tls.over_ssh());
+    }
+
+    #[test]
+    fn ssh_targets_parse_users_hosts_and_ports() {
+        assert_eq!(docker(Some("ssh://box"), None).ssh_target().unwrap().host, "box");
+        let target = docker(Some("ssh://me@box:2222"), None).ssh_target().unwrap();
+        assert_eq!((target.host.as_str(), target.port, target.user), ("box", 2222, "me"));
+        assert_eq!(docker(Some("ssh://box"), None).ssh_target().unwrap().user, "root");
+        assert!(docker(Some("ssh://box:zzz"), None).ssh_target().is_err());
+        assert!(docker(Some("ssh://"), None).ssh_target().is_err());
+    }
+
+    #[test]
+    fn the_ssh_line_names_the_binary_and_quotes_every_argument() {
+        let line = docker(Some("ssh://box"), None).remote_line(&["exec", "pc-x", "sh", "-c", "echo hi && ls"]);
+        assert_eq!(line, "'docker' 'exec' 'pc-x' 'sh' '-c' 'echo hi && ls'");
+        assert!(docker(Some("ssh://box"), None).remote_line(&["version"]).starts_with("'docker' "));
+    }
+
+    #[test]
+    fn lists_containers_from_ndjson() {
+        let output = concat!(
+            r#"{"Command":"\"sleep infinity\"","ID":"abc123def","Image":"ubuntu:24.04","Names":"pc-abc123def","State":"running","Status":"Up"}"#, "\n",
+            r#"{"Command":"\"sleep infinity\"","ID":"fff000","Image":"ubuntu:24.04","Names":"pc-fff000","State":"exited","Status":"Exited"}"#, "\n",
+            "not json at all\n",
+        );
+        let machines = parse_list(output);
+        // The name is the native ID, so state() finds what create() made.
+        assert_eq!(machines.iter().map(|m| (m.id.as_str(), m.name.as_str(), m.state.as_str())).collect::<Vec<_>>(), vec![("docker:pc-abc123def", "pc-abc123def", "running"), ("docker:pc-fff000", "pc-fff000", "stopped")]);
+        assert_eq!(machines[0].detail, "Docker · ubuntu:24.04");
+        assert!(!machines[0].desktop && machines[0].os == "linux");
+        assert_eq!(machine(&serde_json::json!({"ID":"x","Names":"x","State":"weird"})).unwrap().state, "error");
+    }
+
+    #[test]
+    fn names_are_hostnames() {
+        assert_eq!(valid_name("pc-1").unwrap(), "pc-1");
+        assert!(valid_name("Pc-1").is_err() && valid_name("-pc").is_err() && valid_name("pc-").is_err() && valid_name("").is_err());
+    }
+
+    #[test]
+    fn connect_validates_the_endpoint_and_engine() {
+        assert!(connect(&serde_json::json!({"endpoint": "ftp://box"})).is_err());
+        assert!(connect(&serde_json::json!({"endpoint": "tcp://box:2376", "tlsCa": "ca.pem"})).is_err());
+        assert!(connect(&serde_json::json!({"endpoint": "tcp://box:2376", "tlsCa": "ca", "tlsCert": "c"})).is_err());
+        assert!(connect(&serde_json::json!({"engine": "podman"})).is_err());
+        assert!(connect(&serde_json::json!({"engine": "apple", "endpoint": "ssh://box"})).is_err());
+        // The happy paths reach for the daemon, which CI cannot run; only shape checks here.
+    }
+
+    /// Needs a working local docker; run with `cargo test docker_live -- --ignored`.
+    #[test]
+    #[ignore]
+    fn docker_live() {
+        let api = Docker::new(None, None, None, Engine::Docker);
+        Sandbox::create(&api, "pandacode-smoke").unwrap();
+        let run = || -> Result<()> {
+            assert_eq!(Sandbox::exec(&api, "pandacode-smoke", "echo hi", Duration::from_secs(30))?, (Some(0), "hi\n".into()));
+            Sandbox::spawn(&api, "pandacode-smoke", "sleep 120")?;
+            let (_, ps) = Sandbox::exec(&api, "pandacode-smoke", "ps -eo args | grep '[s]leep 120'", Duration::from_secs(30))?;
+            assert!(ps.contains("sleep 120"), "the detached run must survive its exec session");
+            Sandbox::upload(&api, "pandacode-smoke", "/tmp/p.txt", b"x", true)?;
+            assert_eq!(Sandbox::download(&api, "pandacode-smoke", "/tmp/p.txt", 0, 10)?, b"x");
+            Ok(())
+        };
+        let result = run();
+        Sandbox::power(&api, "pandacode-smoke", "delete").unwrap();
+        result.unwrap();
+    }
+}
