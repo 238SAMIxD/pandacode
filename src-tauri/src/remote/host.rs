@@ -1,27 +1,32 @@
 //! Answers requests from the account's other computers, only while
-//! "Allow remote control" is on and only from computers trusted here (their key pinned),
+//! "Allow remote control" is on,
 //! and pushes the agent events of the tasks they mirror. Remote prompts run under the
 //! same approval policy as local ones.
 use super::{remote, socket, start, Subscriber};
 use crate::{message_queue, providers::AgentEvent, AppState, Result};
 use rusqlite::OptionalExtension;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
 
-pub(crate) const METHODS: [&str; 11] = ["subscribe", "providers.list", "providers.models", "task.start", "task.messages", "task.send", "task.stop", "task.steer", "task.configure", "approval.respond", "input.respond"];
+pub(crate) const METHODS: [&str; 13] = ["subscribe", "tasks.list", "projects.icons", "providers.list", "providers.models", "task.start", "task.messages", "task.send", "task.stop", "task.steer", "task.configure", "approval.respond", "input.respond"];
 pub(crate) const OFF: &str = "Remote control is off on this computer";
 pub(crate) const MAX_TEXT: usize = 100 * 1024;
 const SUBSCRIPTION: Duration = Duration::from_secs(10 * 60);
 /// Events wait this long, so one frame carries everything a subscriber missed meanwhile.
 const FLUSH: Duration = Duration::from_millis(100);
 pub(crate) const MAX_IDS: usize = 500;
+const TASKS_DEFAULT: usize = 200;
+const TASKS_MAX: usize = 500;
 const WINDOW_MS: i64 = 60_000;
 const MAX_SEEN: usize = 20_000;
 /// A reply's or event frame's JSON budget: sealing adds a third (base64) plus a small
 /// envelope, so this stays under the relay's 256 KB frame.
 pub(crate) const PAGE_BUDGET: usize = 180 * 1024;
+const MAX_PROJECT_ICON_IDS: usize = 50;
+const MAX_PROJECT_ICON_BYTES: usize = 64 * 1024;
 /// A single message or event larger than this is cut, with [`CUT`] marking the cut.
 const MAX_MESSAGE: usize = 120 * 1024;
 /// Messages read per `task.messages` page before the budget trims it.
@@ -30,19 +35,12 @@ const PAGE_ROWS: i64 = 400;
 const MAX_BUFFER: usize = 4096;
 const CUT: &str = "\n…[cut on the host to fit a remote page]";
 /// Harness ids `providers.models` accepts (the same list `storage` allows).
-pub(crate) const PROVIDERS: [&str; 15] = ["claude", "codex", "kimi", "opencode", "glm", "antigravity", "grok", "mimo", "pi", "deepseek", "commandcode", "cline", "omp", "github-copilot", "muse"];
+pub(crate) const PROVIDERS: [&str; 17] = ["claude", "codex", "kimi", "opencode", "glm", "antigravity", "grok", "mimo", "pi", "deepseek", "commandcode", "cline", "kilo", "omp", "github-copilot", "muse", "devin"];
 
-pub(crate) fn untrusted(host_name: &str) -> String {
-    format!("This computer isn't trusted on {host_name}. Trust it in Settings → Remote access on that computer.")
-}
-
-/// Hosting must be on, and the frame must have been sealed with the caller's pinned key.
-pub(crate) fn gate(host_enabled: bool, trusted: bool, host_name: &str) -> Result<()> {
+/// Hosting must be on. The socket already limits frames to devices in presence.
+pub(crate) fn gate(host_enabled: bool) -> Result<()> {
     if !host_enabled {
         return Err(OFF.into());
-    }
-    if !trusted {
-        return Err(untrusted(host_name));
     }
     Ok(())
 }
@@ -84,6 +82,8 @@ pub(crate) fn valid_id(id: &str) -> Result<()> {
 #[derive(Debug, PartialEq)]
 pub(crate) enum Call {
     Subscribe { session_ids: Vec<String> },
+    TasksList { limit: usize },
+    ProjectIcons { project_ids: Vec<String> },
     Providers { force: bool },
     Models { provider: String, force: bool },
     Start(start::Start),
@@ -128,6 +128,27 @@ fn force_param(params: &Value) -> Result<bool> {
     }
 }
 
+fn task_limit(params: &Value) -> Result<usize> {
+    match params.get("limit").filter(|value| !value.is_null()) {
+        None => Ok(TASKS_DEFAULT),
+        Some(value) => value
+            .as_u64()
+            .and_then(|limit| usize::try_from(limit).ok())
+            .filter(|limit| *limit <= TASKS_MAX)
+            .ok_or_else(|| format!("Limit must be between 0 and {TASKS_MAX}.")),
+    }
+}
+
+fn project_icon_ids(params: &Value) -> Result<Vec<String>> {
+    let ids = params.get("projectIds").and_then(Value::as_array).ok_or("Missing projectIds.")?;
+    if ids.is_empty() || ids.len() > MAX_PROJECT_ICON_IDS {
+        return Err(format!("Request 1 to {MAX_PROJECT_ICON_IDS} project icons at a time."));
+    }
+    ids.iter()
+        .map(|id| id.as_str().filter(|id| valid_id(id).is_ok()).map(str::to_owned).ok_or_else(|| "Invalid projectIds.".to_owned()))
+        .collect()
+}
+
 fn configure(params: &Value) -> Result<Call> {
     let model = match (name_param(params, "provider")?, name_param(params, "model")?) {
         (Some(provider), Some(model)) => Some((provider, model)),
@@ -152,6 +173,8 @@ pub(crate) fn parse(host_enabled: bool, method: &str, params: &Value) -> Result<
             let session_ids = ids.iter().map(|id| id.as_str().filter(|id| valid_id(id).is_ok()).map(str::to_owned).ok_or("Invalid sessionIds.")).collect::<std::result::Result<_, _>>()?;
             Call::Subscribe { session_ids }
         }
+        "tasks.list" => Call::TasksList { limit: task_limit(params)? },
+        "projects.icons" => Call::ProjectIcons { project_ids: project_icon_ids(params)? },
         "providers.list" => Call::Providers { force: force_param(params)? },
         "providers.models" => {
             let provider = name_param(params, "provider")?.ok_or("Missing provider.")?;
@@ -172,21 +195,53 @@ pub(crate) fn parse(host_enabled: bool, method: &str, params: &Value) -> Result<
     })
 }
 
+/// Checked when a queued request is about to run, not when it arrived: remote control is
+/// still on, the sender is still in presence, and the request is fresh. Returns whether
+/// remote tasks may use Full access.
+fn admit(inner: &mut super::Inner, from: &str, message: &Value, now_ms: i64) -> Result<bool> {
+    gate(inner.settings.host_enabled)?;
+    inner.callable(from)?;
+    inner.replay.check(message["ts"].as_i64(), message["nonce"].as_str(), now_ms)?;
+    Ok(inner.settings.remote_full_access)
+}
+
+/// Without "Full access for remote tasks", an explicit `full` is refused and a start
+/// without a mode (which would default to full) asks for approvals.
+fn cap_mode(call: Call, full_access: bool) -> Result<Call> {
+    const SAFE: &str = "ask";
+    if full_access {
+        return Ok(call);
+    }
+    let refuse = || Err(full_access_off());
+    Ok(match call {
+        Call::Start(start) if start.mode.as_deref() == Some("full") => return refuse(),
+        Call::Start(start) => Call::Start(start::Start { mode: Some(start.mode.unwrap_or_else(|| SAFE.into())), ..start }),
+        Call::Configure { mode: Some(mode), .. } if mode == "full" => return refuse(),
+        other => other,
+    })
+}
+
+fn full_access_off() -> String {
+    format!("Full access is off for remote tasks on {}.", super::config::device_name())
+}
+
+/// Without "Full access for remote tasks", a prompt, steer or configure that would run a
+/// task stored in `full` is refused, unless it switches the task to another mode. The
+/// task's own mode is the user's and is never changed here.
+fn allow_task_mode(stored: &str, requested: Option<&str>, full_access: bool) -> Result<()> {
+    if !full_access && stored == "full" && requested.is_none_or(|mode| mode == "full") {
+        return Err(full_access_off());
+    }
+    Ok(())
+}
+
 /// The response to one request frame, or None when it has no usable id.
-/// `trusted` is true only when the frame opened with the caller's pinned key.
-pub(crate) async fn handle(app: &tauri::AppHandle, from: &str, message: &Value, trusted: bool) -> Option<Value> {
+pub(crate) async fn handle(app: &tauri::AppHandle, from: &str, message: &Value) -> Option<Value> {
     let id = message["id"].as_str().filter(|id| valid_id(id).is_ok())?;
-    let name = super::config::device_name();
-    let admitted = {
-        let state = remote(app);
-        let mut inner = state.lock();
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        let enabled = inner.settings.host_enabled;
-        // Trust first: an untrusted caller never fills the nonce set.
-        gate(enabled, trusted, &name).and_then(|_| inner.replay.check(message["ts"].as_i64(), message["nonce"].as_str(), now_ms)).map(|_| enabled)
-    };
-    let result = match admitted.and_then(|enabled| parse(enabled, message["method"].as_str().unwrap_or_default(), &message["params"])) {
-        Ok(call) => run(app, from, call).await,
+    let admitted = admit(&mut remote(app).lock(), from, message, chrono::Utc::now().timestamp_millis());
+    let call = admitted.and_then(|full_access| parse(true, message["method"].as_str().unwrap_or_default(), &message["params"]).and_then(|call| cap_mode(call, full_access)).map(|call| (call, full_access)));
+    let result = match call {
+        Ok((call, full_access)) => run(app, from, call, full_access).await,
         Err(error) => Err(error),
     };
     Some(match result {
@@ -196,15 +251,15 @@ pub(crate) async fn handle(app: &tauri::AppHandle, from: &str, message: &Value, 
 }
 
 /// The task must exist here; a mirror never forwards a second hop.
-fn local_task(state: &AppState, session_id: &str) -> Result<()> {
+fn local_task(state: &AppState, session_id: &str) -> Result<crate::storage::Session> {
     let task = state.store.lock().map_err(|e| e.to_string())?.session(session_id)?;
     if task.remote_device.is_some() {
         return Err("That task runs on another computer.".into());
     }
-    Ok(())
+    Ok(task)
 }
 
-async fn run(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
+async fn run(app: &tauri::AppHandle, from: &str, call: Call, full_access: bool) -> Result<Value> {
     let state = app.state::<AppState>();
     match call {
         Call::Subscribe { session_ids } => {
@@ -220,6 +275,23 @@ async fn run(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
             subscriber.until = Some(Instant::now() + SUBSCRIPTION);
             subscriber.sessions.extend(session_ids);
             Ok(json!({"tasks": tasks}))
+        }
+        Call::TasksList { limit } => {
+            let handle = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let state = handle.state::<AppState>();
+                tasks_list(&state, limit)
+            })
+            .await
+            .map_err(|e| e.to_string())?
+        }
+        Call::ProjectIcons { project_ids } => {
+            let handle = app.clone();
+            crate::blocking(move || {
+                let state = handle.state::<AppState>();
+                project_icons(&state, &project_ids)
+            })
+            .await
         }
         Call::Providers { force } => {
             let mut providers = serde_json::to_value(crate::local_providers(force).await).map_err(|e| e.to_string())?;
@@ -240,7 +312,7 @@ async fn run(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
             messages_page(&store.db, &session_id, after_id)
         }
         Call::Send { session_id, text } => {
-            local_task(&state, &session_id)?;
+            allow_task_mode(&local_task(&state, &session_id)?.mode, None, full_access)?;
             // Like Enter in the composer: a running task queues the message.
             let busy = || state.agents.lock().map(|agents| agents.contains_key(&session_id)).map_err(|e| e.to_string());
             if busy()? {
@@ -262,11 +334,11 @@ async fn run(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
             Ok(json!({}))
         }
         Call::Steer { session_id, text } => {
-            local_task(&state, &session_id)?;
+            allow_task_mode(&local_task(&state, &session_id)?.mode, None, full_access)?;
             message_queue::steer_task(app.clone(), state, session_id, text).await
         }
         Call::Configure { session_id, model, effort, mode } => {
-            local_task(&state, &session_id)?;
+            allow_task_mode(&local_task(&state, &session_id)?.mode, mode.as_deref(), full_access)?;
             if let Some((provider, _)) = &model {
                 start::require_installed(provider).await?;
             }
@@ -298,10 +370,146 @@ async fn run(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
     }
 }
 
+/// Returns local tasks and their projects for a viewer's task picker. Store::sessions
+/// already omits drafts and architect workers; mirrors and bot workspaces are filtered here.
+fn tasks_list(state: &AppState, limit: usize) -> Result<Value> {
+    let (active, pending_by_session) = {
+        let agents = state.agents.lock().map_err(|e| e.to_string())?;
+        let mut pending = HashMap::new();
+        for (session_id, agent) in agents.iter() {
+            let requests = agent.pending_requests.lock().map_err(|e| e.to_string())?;
+            let items = pending_items(&requests);
+            if !items.is_empty() {
+                pending.insert(session_id.clone(), items);
+            }
+        }
+        (agents.keys().cloned().collect::<HashSet<_>>(), pending)
+    };
+    let (sessions, project_rows, bot_projects) = {
+        let store = state.store.lock().map_err(|e| e.to_string())?;
+        (store.sessions()?, store.projects()?, crate::bots::project_ids(&store)?.into_iter().collect::<HashSet<_>>())
+    };
+
+    let project_chats: HashSet<String> = project_rows
+        .iter()
+        .filter(|project| !bot_projects.contains(&project.id) && crate::chats::is_chat_folder(Path::new(&project.path)))
+        .map(|project| project.id.clone())
+        .collect();
+    let projects: Vec<Value> = project_rows
+        .into_iter()
+        .filter(|project| !bot_projects.contains(&project.id))
+        .map(|project| {
+            let repo = crate::github_hub::project_repo(Path::new(&project.path));
+            json!({"id": project.id, "name": project.name, "repo": repo})
+        })
+        .collect();
+    let project_names: HashMap<String, String> = projects
+        .iter()
+        .filter_map(|project| Some((project["id"].as_str()?.to_owned(), project["name"].as_str()?.to_owned())))
+        .collect();
+    let mut sessions: Vec<_> = sessions
+        .into_iter()
+        .filter(|task| task.remote_device.is_none() && !bot_projects.contains(&task.project_id) && project_names.contains_key(&task.project_id))
+        .collect();
+    sessions.sort_by(|a, b| activity_at(b).cmp(&activity_at(a)).then_with(|| a.id.cmp(&b.id)));
+    let tasks: Vec<Value> = sessions
+        .into_iter()
+        .take(limit)
+        .map(|task| {
+            let status = if matches!(task.status.as_str(), "running" | "waiting") && !active.contains(&task.id) { "interrupted" } else { task.status.as_str() };
+            let mut item = json!({
+                "sessionId": task.id,
+                "title": task.title,
+                "status": status,
+                "projectId": task.project_id,
+                "projectName": project_names[&task.project_id],
+                "provider": task.provider,
+                "model": task.model,
+                "effort": task.reasoning_effort,
+                "mode": task.mode,
+                "pinned": task.pinned,
+                "updatedAt": task.updated_at,
+                "lastPromptAt": task.last_prompt_at,
+                "pending": pending_by_session.get(&task.id).cloned().unwrap_or_default(),
+            });
+            if let Some(branch) = task.worktree_branch {
+                item["branch"] = json!(branch);
+            }
+            if project_chats.contains(&task.project_id) {
+                item["chat"] = json!(true);
+            }
+            item
+        })
+        .collect();
+    Ok(fit_task_lists(tasks, projects))
+}
+
+/// Resolves only registered non-bot projects, keeping filesystem icon reads off the async runtime.
+fn project_icons(state: &AppState, ids: &[String]) -> Result<Value> {
+    let project_paths = {
+        let store = state.store.lock().map_err(|e| e.to_string())?;
+        let bot_projects: HashSet<String> = crate::bots::project_ids(&store)?.into_iter().collect();
+        store
+            .projects()?
+            .into_iter()
+            .filter(|project| !bot_projects.contains(&project.id))
+            .map(|project| (project.id, std::path::PathBuf::from(project.path)))
+            .collect::<HashMap<_, _>>()
+    };
+    let entries = ids.iter().filter_map(|id| {
+        project_paths.get(id).map(|path| (id.clone(), crate::project_icon::find(path)))
+    });
+    Ok(fit_project_icons(entries))
+}
+
+fn activity_at(task: &crate::storage::Session) -> i64 {
+    task.last_response_at.into_iter().chain(task.last_prompt_at).max().unwrap_or(task.created_at)
+}
+
+/// Fits both arrays, including their object envelope, under the relay's reply budget.
+fn fit_task_lists(mut tasks: Vec<Value>, mut projects: Vec<Value>) -> Value {
+    fit_list(&mut projects, PAGE_BUDGET);
+    let task_budget = PAGE_BUDGET.saturating_sub(json!(projects).to_string().len() + 32);
+    fit_list(&mut tasks, task_budget);
+    while json!({"tasks": &tasks, "projects": &projects}).to_string().len() > PAGE_BUDGET {
+        if tasks.pop().is_none() && projects.pop().is_none() {
+            break;
+        }
+    }
+    json!({"tasks": tasks, "projects": projects})
+}
+
+/// Keeps the result envelope under the frame budget; known projects without a usable icon stay null.
+fn fit_project_icons(icons: impl IntoIterator<Item = (String, Option<String>)>) -> Value {
+    let mut result = serde_json::Map::new();
+    for (id, icon) in icons {
+        if result.contains_key(&id) {
+            continue;
+        }
+        let icon = icon.filter(|icon| icon.len() <= MAX_PROJECT_ICON_BYTES).map(Value::String).unwrap_or(Value::Null);
+        result.insert(id.clone(), icon);
+        if json!({"icons": &result}).to_string().len() > PAGE_BUDGET {
+            result.remove(&id);
+            break;
+        }
+    }
+    json!({"icons": result})
+}
+
 /// Each subscribed task that exists here: its status as this window shows it, its newest
 /// message id (so the viewer pulls what it missed) and its title.
 fn subscribed_tasks(state: &AppState, ids: &[String]) -> Result<Vec<Value>> {
-    let agents = state.agents.lock().map_err(|e| e.to_string())?;
+    let (active, pending_by_session) = {
+        let agents = state.agents.lock().map_err(|e| e.to_string())?;
+        let mut pending = HashMap::new();
+        for id in ids {
+            if let Some(agent) = agents.get(id) {
+                let requests = agent.pending_requests.lock().map_err(|e| e.to_string())?;
+                pending.insert(id.clone(), pending_items(&requests));
+            }
+        }
+        (agents.keys().cloned().collect::<HashSet<_>>(), pending)
+    };
     let store = state.store.lock().map_err(|e| e.to_string())?;
     let mut tasks = Vec::new();
     for id in ids {
@@ -312,10 +520,35 @@ fn subscribed_tasks(state: &AppState, ids: &[String]) -> Result<Vec<Value>> {
             .map_err(|e| e.to_string())?;
         let Some((status, title, last_id)) = row else { continue };
         // Only a registered agent is really running; a stale row reads as interrupted.
-        let status = if agents.contains_key(id) || !matches!(status.as_str(), "running" | "waiting") { status } else { "interrupted".into() };
-        tasks.push(json!({"sessionId": id, "status": status, "lastId": last_id, "title": title}));
+        let status = if active.contains(id) || !matches!(status.as_str(), "running" | "waiting") { status } else { "interrupted".into() };
+        let pending = pending_by_session.get(id).cloned().unwrap_or_default();
+        tasks.push(json!({"sessionId": id, "status": status, "lastId": last_id, "title": title, "pending": pending}));
     }
+    fit_list(&mut tasks, PAGE_BUDGET.saturating_sub(json!({"tasks": []}).to_string().len()));
     Ok(tasks)
+}
+
+/// Clones the currently answerable events into a small JSON shape for late subscribers.
+fn pending_items(requests: &HashMap<String, AgentEvent>) -> Vec<Value> {
+    let mut items: Vec<Value> = requests
+        .values()
+        .map(|event| {
+            let mut item = json!({
+                "kind": event.kind,
+                "requestId": event.request_id,
+                "text": event.text,
+                "data": event.data,
+            });
+            if let Some(tool) = &event.tool {
+                item["tool"] = json!(tool);
+            }
+            shrink(&mut item, MAX_MESSAGE.saturating_sub(1024));
+            item
+        })
+        .collect();
+    items.sort_by(|a, b| a["requestId"].as_str().cmp(&b["requestId"].as_str()));
+    fit_list(&mut items, MAX_MESSAGE);
+    items
 }
 
 /// Messages after `after_id`, oldest first, cut to fit one frame. `hasMore` asks the
@@ -415,10 +648,10 @@ pub(crate) fn follow(app: &tauri::AppHandle, device: &str, session_id: &str) {
     subscriber.sessions.insert(session_id.to_owned());
 }
 
-/// Drops subscribers that expired, left the account or lost trust; true if any remain.
+/// Drops expired subscribers and devices no longer in presence; true if any remain.
 fn prune_subscribers(inner: &mut super::Inner, now: Instant) -> bool {
-    let super::Inner { subscribers, devices, settings, .. } = inner;
-    subscribers.retain(|id, subscriber| subscriber.until.is_some_and(|until| until > now) && devices.iter().any(|d| &d.id == id && settings.is_trusted(id, &d.public_key)));
+    let super::Inner { subscribers, devices, .. } = inner;
+    subscribers.retain(|id, subscriber| subscriber.until.is_some_and(|until| until > now) && devices.iter().any(|d| &d.id == id));
     !subscribers.is_empty()
 }
 
@@ -470,10 +703,10 @@ async fn flush(app: tauri::AppHandle) {
     };
     for (device, events, finished) in batches {
         for frame in frames(events) {
-            let _ = socket::send_trusted(&app, &device, &json!({"type": "event", "name": "agent.events", "data": {"events": frame}}));
+            let _ = socket::send_to_device(&app, &device, &json!({"type": "event", "name": "agent.events", "data": {"events": frame}}));
         }
         for data in finished {
-            let _ = socket::send_trusted(&app, &device, &json!({"type": "event", "name": "run.finished", "data": data}));
+            let _ = socket::send_to_device(&app, &device, &json!({"type": "event", "name": "run.finished", "data": data}));
         }
     }
 }
@@ -544,7 +777,15 @@ mod tests {
         assert!(parse(true, "task.stop", &json!({})).is_err());
         assert!(parse(true, "approval.respond", &json!({"sessionId": "s", "requestId": "r"})).is_err());
         assert!(parse(true, "input.respond", &json!({"sessionId": "s", "requestId": "r"})).is_err());
-        for gone in ["tasks.list", "task.get", "shell.exec"] {
+        assert_eq!(parse(true, "tasks.list", &json!({})), Ok(Call::TasksList { limit: TASKS_DEFAULT }));
+        assert_eq!(parse(true, "tasks.list", &json!({"limit": null})), Ok(Call::TasksList { limit: TASKS_DEFAULT }));
+        assert_eq!(parse(true, "tasks.list", &json!({"limit": 500})), Ok(Call::TasksList { limit: 500 }));
+        assert_eq!(parse(true, "tasks.list", &json!({"limit": 1})), Ok(Call::TasksList { limit: 1 }));
+        assert_eq!(parse(true, "tasks.list", &json!({"limit": 0})), Ok(Call::TasksList { limit: 0 }));
+        assert!(parse(true, "tasks.list", &json!({"limit": 501})).is_err());
+        assert!(parse(true, "tasks.list", &json!({"limit": 1.5})).is_err());
+        assert!(parse(true, "tasks.list", &json!({"limit": "20"})).is_err());
+        for gone in ["task.get", "shell.exec"] {
             assert!(parse(true, gone, &json!({})).is_err(), "{gone}");
         }
         assert!(valid_id(&"a".repeat(201)).is_err());
@@ -563,6 +804,41 @@ mod tests {
     }
 
     #[test]
+    fn project_icon_requests_are_validated() {
+        assert_eq!(parse(true, "projects.icons", &json!({"projectIds": ["p1", "p2"]})), Ok(Call::ProjectIcons { project_ids: vec!["p1".into(), "p2".into()] }));
+        let fifty: Vec<String> = (0..MAX_PROJECT_ICON_IDS).map(|i| format!("p{i}")).collect();
+        assert!(parse(true, "projects.icons", &json!({"projectIds": fifty})).is_ok());
+        assert!(parse(true, "projects.icons", &json!({})).is_err());
+        assert!(parse(true, "projects.icons", &json!({"projectIds": []})).is_err());
+        assert!(parse(true, "projects.icons", &json!({"projectIds": vec!["p"; 51]})).is_err());
+        for bad in [json!({"projectIds": [""]}), json!({"projectIds": ["bad id"]}), json!({"projectIds": [1]}), json!({"projectIds": "p1"})] {
+            assert!(parse(true, "projects.icons", &bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn project_icons_obey_single_icon_and_reply_budgets() {
+        let result = fit_project_icons(vec![
+            ("oversized".into(), Some("x".repeat(64 * 1024 + 1))),
+            ("empty".into(), None),
+            ("first".into(), Some("x".repeat(60 * 1024))),
+            ("second".into(), Some("x".repeat(60 * 1024))),
+            ("third".into(), Some("x".repeat(60 * 1024))),
+            ("after".into(), Some("small".into())),
+        ]);
+        assert_eq!(result["icons"]["oversized"], Value::Null);
+        assert_eq!(result["icons"]["empty"], Value::Null);
+        assert!(result["icons"].get("first").is_some());
+        assert!(result["icons"].get("second").is_some());
+        assert!(result["icons"].get("third").is_none());
+        assert!(result["icons"].get("after").is_none());
+        assert!(result.to_string().len() <= PAGE_BUDGET);
+
+        let at_limit = fit_project_icons(vec![("at-limit".into(), Some("x".repeat(MAX_PROJECT_ICON_BYTES)))]);
+        assert_eq!(at_limit["icons"]["at-limit"].as_str().unwrap().len(), MAX_PROJECT_ICON_BYTES);
+    }
+
+    #[test]
     fn provider_lists_are_trimmed_to_one_reply() {
         let model = json!({"id": "m", "name": "x".repeat(1000)});
         let mut list = vec![model.clone(); 400];
@@ -578,10 +854,116 @@ mod tests {
     }
 
     #[test]
-    fn untrusted_callers_are_refused_by_name() {
-        assert_eq!(gate(false, true, "Mac"), Err(OFF.to_string()));
-        assert_eq!(gate(true, false, "Mac"), Err("This computer isn't trusted on Mac. Trust it in Settings → Remote access on that computer.".to_string()));
-        assert_eq!(gate(true, true, "Mac"), Ok(()));
+    fn task_and_project_lists_fit_one_reply() {
+        let tasks = vec![json!({"title": "t".repeat(1024)}); 110];
+        let projects = vec![json!({"name": "p".repeat(900)}); 70];
+        let result = fit_task_lists(tasks, projects);
+        assert!(result.to_string().len() <= PAGE_BUDGET);
+        assert!(!result["tasks"].as_array().unwrap().is_empty());
+        assert!(!result["projects"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn remote_pending_requests_keep_answer_payloads_within_one_message_budget() {
+        let request_id = "run-id:provider-id";
+        let requests = HashMap::from([(
+            request_id.to_owned(),
+            AgentEvent {
+                session_id: "task-id".into(),
+                kind: "input_request".into(),
+                text: "Choose one".into(),
+                request_id: Some(request_id.into()),
+                data: Some(json!({"question": "x".repeat(MAX_MESSAGE * 2)})),
+                tool: None,
+            },
+        )]);
+        let pending = pending_items(&requests);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0]["kind"], "input_request");
+        assert_eq!(pending[0]["requestId"], request_id);
+        assert_eq!(pending[0]["text"], "Choose one");
+        assert!(pending[0]["data"]["question"].as_str().unwrap().contains("[cut on the host"));
+        assert!(pending[0].get("tool").is_none());
+        assert!(json!(pending).to_string().len() <= MAX_MESSAGE);
+    }
+
+    #[test]
+    fn host_gate_only_checks_remote_control() {
+        assert_eq!(gate(false), Err(OFF.to_string()));
+        assert_eq!(gate(true), Ok(()));
+    }
+
+    #[test]
+    fn a_present_device_keeps_its_subscription_without_a_pin() {
+        let now = Instant::now();
+        let subscriber = Subscriber {
+            until: Some(now + Duration::from_secs(60)),
+            ..Default::default()
+        };
+        let mut inner = super::super::Inner {
+            devices: vec![super::super::Device {
+                id: "viewer".into(), name: "Phone".into(), platform: "iOS".into(), public_key: "current-key".into(),
+                host: false, online: true, last_seen: Value::Null,
+            }],
+            ..Default::default()
+        };
+        inner.subscribers.insert("viewer".into(), subscriber);
+        assert!(prune_subscribers(&mut inner, now));
+        assert!(inner.subscribers.contains_key("viewer"));
+    }
+
+    #[test]
+    fn access_is_checked_when_a_request_runs() {
+        let mut inner = super::super::Inner {
+            devices: vec![super::super::Device { id: "viewer".into(), name: String::new(), platform: String::new(), public_key: "k".into(), host: false, online: true, last_seen: Value::Null }],
+            ..Default::default()
+        };
+        let now = 1_000_000_000;
+        let request = |nonce: &str| json!({"ts": now, "nonce": nonce});
+        assert_eq!(admit(&mut inner, "viewer", &request("nonce-0000000000000001"), now), Err(OFF.to_string()));
+        inner.settings.host_enabled = true;
+        assert_eq!(admit(&mut inner, "viewer", &request("nonce-0000000000000002"), now), Ok(false));
+        inner.settings.remote_full_access = true;
+        assert_eq!(admit(&mut inner, "viewer", &request("nonce-0000000000000003"), now), Ok(true));
+        assert!(admit(&mut inner, "viewer", &request("nonce-0000000000000003"), now).is_err(), "replayed");
+        // Revoked (gone from presence) after the request was queued.
+        inner.devices.clear();
+        assert_eq!(admit(&mut inner, "viewer", &request("nonce-0000000000000004"), now), Err(super::super::UNKNOWN_DEVICE.to_string()));
+    }
+
+    #[test]
+    fn full_access_is_capped_for_remote_tasks() {
+        let start = |mode: Option<&str>| {
+            let mut params = json!({"projectId": "p", "prompt": "go", "provider": "claude", "model": "sonnet"});
+            if let Some(mode) = mode {
+                params["mode"] = json!(mode);
+            }
+            parse(true, "task.start", &params).unwrap()
+        };
+        let mode = |call: Call| match call {
+            Call::Start(start) => start.mode,
+            Call::Configure { mode, .. } => mode,
+            _ => unreachable!(),
+        };
+        assert_eq!(mode(cap_mode(start(None), false).unwrap()).as_deref(), Some("ask"), "the full default asks instead");
+        assert_eq!(mode(cap_mode(start(Some("auto")), false).unwrap()).as_deref(), Some("auto"));
+        assert!(cap_mode(start(Some("full")), false).unwrap_err().starts_with("Full access is off for remote tasks on "));
+        assert_eq!(mode(cap_mode(start(None), true).unwrap()), None);
+        assert_eq!(mode(cap_mode(start(Some("full")), true).unwrap()).as_deref(), Some("full"));
+        let configure = |mode: &str| parse(true, "task.configure", &json!({"sessionId": "s", "mode": mode})).unwrap();
+        assert!(cap_mode(configure("full"), false).is_err());
+        assert_eq!(mode(cap_mode(configure("plan"), false).unwrap()).as_deref(), Some("plan"));
+        assert_eq!(mode(cap_mode(configure("full"), true).unwrap()).as_deref(), Some("full"));
+    }
+
+    #[test]
+    fn a_full_task_takes_no_remote_prompts_without_full_access() {
+        let off = |stored, requested| allow_task_mode(stored, requested, false);
+        assert!(off("full", None).unwrap_err().starts_with("Full access is off for remote tasks on "), "send, steer, model-only configure");
+        assert!(off("full", Some("full")).is_err());
+        assert!(off("full", Some("ask")).is_ok(), "switching it to an approving mode");
+        assert!(off("ask", None).is_ok() && off("auto", None).is_ok());
+        assert!(allow_task_mode("full", None, true).is_ok());
     }
 
     #[test]

@@ -7,16 +7,17 @@ import { cloudChip, cloudItems, cloudProvider, type CloudTarget } from './cloud-
  * signed-in computer; a task that runs there shows that computer, locked. */
 
 export const LOCAL = 'local';
+/** Opens Settings → Remote access when no other computer can take a task. */
+export const CONNECT_SETUP = 'connect-setup';
 
-/** The control beside Local / Worktree; empty when there is nothing to choose. */
+/** The control beside Local / Worktree. A New task always offers it, so other computers and cloud providers can be found and set up from here. */
 export function computerControl(session: Session, fresh: boolean, targets: RemoteTarget[], chosen: string, clouds: CloudTarget[] = []): string {
   if (session.cloud) return cloudChip(session);
   if (session.remoteDevice) {
     const name = escape(session.remoteDevice.name);
     return `<span class="composer-computer composer-computer-fixed" aria-label="Computer: ${name} (fixed for this task)" title="This task runs on ${name}. Start a new task to use another computer.">${icon('monitor')}<span>on ${name}</span></span>`;
   }
-  // Cloud targets alone are enough, once one is connected; Settings → Cloud lists the rest.
-  if (!fresh || (!targets.length && !clouds.some(cloud => cloud.ready))) return '';
+  if (!fresh) return '';
   const cloud = clouds.find(item => item.provider === cloudProvider(chosen));
   const name = cloud ? `Cloud · ${cloud.label}` : targets.find(target => target.deviceId === chosen)?.name ?? 'This computer';
   return `<button type="button" id="composer-computer" class="composer-computer" data-action="computer-menu" aria-label="Computer: ${escape(name)}" aria-haspopup="dialog" aria-expanded="false" title="Where this task runs">${icon('monitor')}<span>${escape(name)}</span>${icon('down')}</button>`;
@@ -26,6 +27,7 @@ export function computerItems(targets: RemoteTarget[], chosen: string, clouds: C
   return [
     { id: LOCAL, label: 'This computer', icon: 'monitor', selected: chosen === LOCAL },
     ...targets.map(target => ({ id: target.deviceId, label: target.name, description: target.online ? target.platform : 'Offline', icon: 'monitor', selected: target.deviceId === chosen, disabled: !target.online })),
+    ...(targets.length ? [] : [{ id: CONNECT_SETUP, label: 'Set up other computers…', icon: 'settings' }]),
     ...cloudItems(clouds, chosen),
   ];
 }

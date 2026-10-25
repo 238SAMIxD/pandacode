@@ -30,8 +30,8 @@ test('the inspector opens on a single Changes tab in a slim strip', async ({ pag
   // The last tab cannot be closed, and the old heading row is gone.
   await expect(tab(page, 'changes').locator('.inspector-tab-close')).toBeHidden();
   await expect(page.locator('#inspector .inspector-heading')).toHaveCount(0);
-  const stripBox = (await page.locator('#inspector .inspector-strip').boundingBox())!;
-  expect(stripBox.height).toBeLessThanOrEqual(36);
+  const stripBox = (await page.locator('#inspector .inspector-strip').boundingBox())!, headerBox = (await page.locator('.workspace-header').boundingBox())!;
+  expect(Math.abs(stripBox.height - headerBox.height), 'level with the workspace header').toBeLessThan(2);
   // The content uses the panel's full width.
   const inspectorBox = (await page.locator('#inspector').boundingBox())!, contentBox = (await page.locator('#inspector-content').boundingBox())!;
   expect(contentBox.x - inspectorBox.x).toBeLessThanOrEqual(2);

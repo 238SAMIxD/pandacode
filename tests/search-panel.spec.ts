@@ -40,6 +40,22 @@ test('the panel opens on Changes and labelled views open as tabs', async ({ page
   await expect(tab(page, 'tab-files')).not.toHaveClass(/selected/);
 });
 
+test('the tab strip runs along the top of the panel, level with the workspace header', async ({ page }) => {
+  await open(page);
+  for (const name of ['Files', 'Search']) await openInspectorTab(page, name);
+  const bar = await page.locator('.inspector-strip').boundingBox();
+  const panel = await page.locator('#inspector').boundingBox();
+  const header = await page.locator('.workspace-header').boundingBox();
+  const content = await page.locator('#inspector-content').boundingBox();
+  const tabs = await page.locator('.inspector-tabs > .inspector-tab:visible').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().top));
+  expect(tabs.length).toBeGreaterThan(2);
+  expect(Math.max(...tabs) - Math.min(...tabs), 'one row of views').toBeLessThan(1);
+  expect(Math.abs(bar!.y - panel!.y), 'at the top of the panel').toBeLessThan(2);
+  expect(Math.abs(bar!.height - header!.height), 'as tall as the header beside it').toBeLessThan(2);
+  expect(bar!.width, 'across the panel').toBeGreaterThan(panel!.width - 4);
+  expect(content!.y, 'the view sits under the strip').toBeGreaterThanOrEqual(bar!.y + bar!.height - 1);
+});
+
 test('search lists matching file names and highlighted text matches grouped by file', async ({ page }) => {
   await open(page);
   await openInspectorTab(page, 'tab-search');
@@ -83,7 +99,8 @@ test('toggles reach the backend, invalid regex is reported, and opening a match 
   const path = await line.getAttribute('data-search-open');
   await line.click();
   await expect.poll(async () => (await calls(page, 'read_file')).at(-1)?.args.path).toBe(path);
-  await page.getByRole('button', { name: 'Back' }).click();
+  // The match opens as a tab beside the conversation; the search stays where it was.
+  await expect(page.locator('.file-view-path')).toHaveText(path!);
   await expect(searchInput(page)).toHaveValue('createSearchIndex');
   await expect(page.locator('.search-line').first()).toBeVisible();
 });

@@ -1,6 +1,6 @@
-/* The inspector's open views as one slim tab strip across the panel's top. */
+/* The inspector's open views as one slim tab strip across the panel's top, level with the workspace header. */
 .inspector{padding-left:0}
-.inspector-strip{display:flex;align-items:center;gap:4px;flex:none;height:34px;padding:0 4px 0 6px;border-bottom:1px solid var(--border)}
+.inspector-strip{display:flex;align-items:center;gap:4px;flex:none;height:var(--titlebar-height);padding:0 4px 0 6px;border-bottom:1px solid var(--border)}
 html[data-theme] .workspace>.inspector .inspector-strip>.inspector-tabs{display:flex;flex:0 1 auto;flex-wrap:nowrap;align-items:center;gap:2px;min-width:0;height:100%;min-height:0;padding:0;border-radius:0;background:transparent;box-shadow:none;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;overscroll-behavior-x:contain}
 .inspector-strip>.inspector-tabs::-webkit-scrollbar{display:none}
 .inspector-tabs>.segment-thumb{display:none}

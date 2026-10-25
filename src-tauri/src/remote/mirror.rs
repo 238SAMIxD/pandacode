@@ -108,7 +108,7 @@ fn status_after(current: &str, kind: &str) -> Option<&'static str> {
     (next != current).then_some(next)
 }
 
-/// `agent.events` from a trusted host.
+/// `agent.events` from the task's host.
 pub(crate) fn events(app: &tauri::AppHandle, from: &str, data: &Value) {
     let Some(list) = data["events"].as_array() else { return };
     let state = app.state::<AppState>();
@@ -134,7 +134,7 @@ pub(crate) fn events(app: &tauri::AppHandle, from: &str, data: &Value) {
     }
 }
 
-/// `run.finished` from a trusted host: copy the run's messages, then end the local turn.
+/// `run.finished` from the task's host: copy the run's messages, then end the local turn.
 pub(crate) fn finished(app: &tauri::AppHandle, from: &str, data: &Value) {
     let Some(session) = data["sessionId"].as_str() else { return };
     let Some(local) = app.state::<AppState>().store.lock().ok().and_then(|store| local_id(&store, from, session)) else { return };
@@ -459,7 +459,7 @@ mod tests {
             store.db.execute_batch("DROP INDEX sessions_remote; ALTER TABLE sessions DROP COLUMN remote_device; ALTER TABLE sessions DROP COLUMN remote_session; ALTER TABLE sessions DROP COLUMN remote_synced_id; PRAGMA user_version=25;").unwrap();
         }
         let store = Store::open(&path).unwrap();
-        assert_eq!((crate::storage::SCHEMA_VERSION, store.db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0)).unwrap()), (27, 27));
+        assert_eq!((crate::storage::SCHEMA_VERSION, store.db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0)).unwrap()), (29, 29));
         let columns: i64 = store.db.query_row("SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name IN ('remote_device','remote_session','remote_synced_id')", [], |r| r.get(0)).unwrap();
         assert_eq!(columns, 3);
         let project = store.add_project(&std::env::temp_dir()).unwrap();
