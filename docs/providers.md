@@ -137,9 +137,9 @@ At launch the layers are applied in order, each winning over the last: the
 environment PandaCode inherited, then the global set (unless the provider opted
 out), then the provider's own variables, then the harness's sign-in and
 endpoint configuration (a GLM or MiMo key always configures its Claude Code
-process), then a named connection's environment. For Claude Code, "Prefer
-saved Claude login" still scrubs inherited credential variables after all of
-this.
+process, and "Prefer saved Claude login" scrubs inherited credential variables
+at this point), then a named connection's environment, whose variables land
+after the scrub.
 
 The effective set is applied to everything that spawns the harness: tasks
 (`run_inner` in `providers.rs`), warm Claude agents (`providers/warm.rs`, whose

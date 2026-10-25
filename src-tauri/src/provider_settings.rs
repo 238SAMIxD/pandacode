@@ -528,12 +528,24 @@ fn persist(runtime: &mut Runtime, next: Settings) -> Result<()> {
     if bytes.len() > 56 * 1024 {
         return Err("Provider settings would grow past their storage budget. Remove some environment variables and try again.".into());
     }
+    // Environment values can embed proxy credentials, so the file gets the
+    // app's secret-file treatment: 0600 (unix), flushed, then renamed into place.
     let temp = runtime.path.with_extension("json.tmp");
-    std::fs::write(
-        &temp,
-        serde_json::to_vec_pretty(&next).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::File::options()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&temp)
+            .and_then(|mut file| file.write_all(&bytes).and_then(|_| file.sync_all()))
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(unix))]
+    std::fs::write(&temp, &bytes).map_err(|e| e.to_string())?;
     if let Err(error) = std::fs::rename(&temp, &runtime.path) {
         let _ = std::fs::remove_file(&temp);
         return Err(error.to_string());
@@ -710,12 +722,13 @@ fn refresh_provider(app: &tauri::AppHandle, provider: &str, result: Configuratio
 
 /// A global variable affects every provider's discovery.
 fn refresh_all(app: &tauri::AppHandle, result: Configuration) -> Result<Configuration> {
-    for provider in crate::providers::PROVIDERS.iter().map(|(id, _)| *id) {
+    for (provider, _) in crate::providers::PROVIDERS {
         crate::agent_usage::invalidate(provider);
         crate::providers::acp_catalog::invalidate(provider);
         crate::slash_commands::invalidate_provider(provider);
+        // Listeners match literal provider ids, so each one gets its own event.
+        let _ = app.emit("provider-models-changed", serde_json::json!({"provider":provider}));
     }
-    let _ = app.emit("provider-models-changed", serde_json::json!({"provider":"*"}));
     Ok(result)
 }
 

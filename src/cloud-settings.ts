@@ -251,7 +251,11 @@ export function mountCloudSettings(host: HTMLElement, options: CloudSettingsHost
         say(root, 'progress', inherit ? 'Saved. Cloud agents on this provider include the saved environment variables.' : 'Saved. Nothing from the provider environment is sent to this cloud.');
       }).catch(error => {
         connections = previous; target.checked = !inherit;
-        say(root, 'error', error instanceof Error ? error.message : String(error));
+        // The connect form's own error line is hidden while connected, so the
+        // visible row status carries the failure.
+        const line = root.querySelector<HTMLElement>('.cloud-row-status')!;
+        line.hidden = false; line.classList.add('cloud-error');
+        line.textContent = error instanceof Error ? error.message : String(error);
       }).finally(() => { busy = ''; if (!disposed) render(); });
       return;
     }

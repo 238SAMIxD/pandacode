@@ -181,8 +181,8 @@ export function mountProviderSettings(host: HTMLElement, saved: () => Promise<un
     endpointHint.textContent = chosen ? chosen.url : 'Required before MiMo tasks can start. The Token Plan page shows your cluster.';
     endpointHint.classList.toggle('error', !chosen);
   }
-  async function perform(operation: () => Promise<Configuration>, success: string, submittedInput?: HTMLInputElement, onFailure?: () => void): Promise<void> {
-    if (pending || disposed) return;
+  async function perform(operation: () => Promise<Configuration>, success: string, submittedInput?: HTMLInputElement, onFailure?: () => void): Promise<boolean> {
+    if (pending || disposed) return false;
     const submittedValue = submittedInput?.value;
     pending = true; host.setAttribute('aria-busy', 'true');
     claudeMode.disabled = true;
@@ -190,7 +190,7 @@ export function mountProviderSettings(host: HTMLElement, saved: () => Promise<un
     host.querySelectorAll<HTMLInputElement>('[data-use-global]').forEach(toggle => toggle.disabled = true);
     try {
       const configuration = await operation();
-      if (disposed) return;
+      if (disposed) return false;
       configurationRevision++;
       if (submittedInput && submittedInput.value === submittedValue) {
         editedPaths.delete(submittedInput);
@@ -198,7 +198,8 @@ export function mountProviderSettings(host: HTMLElement, saved: () => Promise<un
       }
       render(configuration); message(success);
       await saved();
-    } catch (error) { if (!disposed) { message(String(error), true); onFailure?.(); } }
+      return true;
+    } catch (error) { if (!disposed) { message(String(error), true); onFailure?.(); } return false; }
     finally {
       pending = false;
       if (!disposed) { claudeMode.disabled = false; host.removeAttribute('aria-busy'); host.querySelectorAll<HTMLButtonElement>('button').forEach(button => button.disabled = false); host.querySelectorAll<HTMLInputElement>('[data-use-global]').forEach(toggle => toggle.disabled = false); for (const input of keyInputs) host.querySelector<HTMLButtonElement>(`#${input.id}-form button`)!.disabled = input.disabled; }
@@ -217,7 +218,8 @@ export function mountProviderSettings(host: HTMLElement, saved: () => Promise<un
       const operation = envKey === '*'
         ? () => call<Configuration>('provider_set_global_environment_variable', { name: variable, value: value.value })
         : () => call<Configuration>('provider_set_environment_variable', { provider: envKey, name: variable, value: value.value });
-      void perform(operation, envKey === '*' ? 'Global environment variable saved.' : 'Environment variable saved.').then(saved, () => {});
+      // The entered variable survives a refused save (validation, storage budget).
+      void perform(operation, envKey === '*' ? 'Global environment variable saved.' : 'Environment variable saved.').then(ok => { if (ok) saved(); });
       return;
     }
     const keyedProvider = form.dataset.keyProvider as KeyedProvider | undefined;
@@ -237,7 +239,9 @@ export function mountProviderSettings(host: HTMLElement, saved: () => Promise<un
     const target = (event.target as HTMLElement).closest<HTMLElement>('button'); if (!target) return;
     if (target.hasAttribute('data-check-claude')) { void checkClaude(); return; }
     const removingEnv = target.dataset.removeEnv;
-    if (removingEnv !== undefined) {
+    // Only the provider env lists use valued data-remove-env buttons; the named
+    // connection editor's row Remove carries no value and must not match.
+    if (removingEnv !== undefined && target.dataset.envName && target.closest('[data-env-list]')) {
       const name = target.dataset.envName!;
       const operation = removingEnv === '*'
         ? () => call<Configuration>('provider_remove_global_environment_variable', { name })
