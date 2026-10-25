@@ -6,6 +6,7 @@
 
 use crate::{message_queue, AppState};
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
 
@@ -23,6 +24,7 @@ enum Command {
     SignIn { name: Option<String> },
     SignOut,
     FullAccess { enabled: bool },
+    ExportBots { path: PathBuf },
 }
 
 /// `pandacode serve …`: true when the argument was handled; the process then serves until
@@ -33,14 +35,14 @@ pub fn handle() -> bool {
         return false;
     }
     match parse(&args[1..]) {
-        Ok(command) => {
+        Ok((command, import)) => {
             SERVE.store(true, Ordering::Relaxed);
             // A server has no Secret Service agent: the 0600 file backend is serve's default.
             // Set PANDACODE_SECRETS_FILE=0 to use the OS store anyway.
             if std::env::var_os("PANDACODE_SECRETS_FILE").is_none() {
                 std::env::set_var("PANDACODE_SECRETS_FILE", "1");
             }
-            serve(command)
+            serve(command, import)
         }
         Err(help) => {
             eprintln!("{help}");
@@ -50,7 +52,7 @@ pub fn handle() -> bool {
 }
 
 /// Builds the app with no window and runs it until an explicit exit. Never returns.
-fn serve(command: Command) -> ! {
+fn serve(command: Command, import: Option<PathBuf>) -> ! {
     let app = tauri::Builder::default()
         .setup(move |app| {
             let dir = crate::setup_common(app)?;
@@ -61,7 +63,7 @@ fn serve(command: Command) -> ! {
                 let _ = window.hide();
                 let _ = window.close();
             }
-            start(app.handle(), &dir, command);
+            start(app.handle(), &dir, command, import);
             Ok(())
         })
         .build(crate::app_context())
@@ -71,8 +73,18 @@ fn serve(command: Command) -> ! {
 }
 
 /// Per-command startup, run from setup.
-fn start(app: &tauri::AppHandle, dir: &std::path::Path, command: Command) {
+fn start(app: &tauri::AppHandle, dir: &std::path::Path, command: Command, import: Option<PathBuf>) {
     match command {
+        Command::ExportBots { path } => match crate::headless_bots::run_export(app, &path) {
+            Ok(()) => {
+                println!("Bot configuration written to {}.", path.display());
+                std::process::exit(0)
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1)
+            }
+        },
         Command::SignOut => {
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
@@ -99,6 +111,9 @@ fn start(app: &tauri::AppHandle, dir: &std::path::Path, command: Command) {
                     std::process::exit(1)
                 }
                 crate::remote::headless_reload(&app, &dir);
+                if let Some(path) = import {
+                    crate::headless_bots::run_import(&app, &path);
+                }
                 start_services(app);
             });
         }
@@ -110,6 +125,9 @@ fn start(app: &tauri::AppHandle, dir: &std::path::Path, command: Command) {
             if !crate::remote::signed_in(dir) {
                 eprintln!("This server is not signed in to PandaCode Connect. Run: pandacode serve --sign-in");
                 std::process::exit(1)
+            }
+            if let Some(path) = import {
+                crate::headless_bots::run_import(app, &path);
             }
             // serve exists to host: flip the host switch if a saved sign-in left it off.
             if !crate::remote::host_enabled(dir) {
@@ -226,7 +244,7 @@ pub(crate) fn drain_queue(app: tauri::AppHandle, session_id: String) {
             if crate::bots::owner_of(&store, &session_id).ok().flatten().is_some() {
                 return;
             }
-            store.session(&session_id).ok().is_some_and(|task| can_drain(task.archived, task.limited_until, now))
+            store.session(&session_id).ok().is_some_and(|task| can_drain(task.archived, task.limited_at, task.limited_until, now))
         };
         if !eligible {
             return;
@@ -273,10 +291,10 @@ pub(crate) fn drain_queue(app: tauri::AppHandle, session_id: String) {
     });
 }
 
-/// A task may take its next queued message when it is live and not inside a usage limit
-/// (dispatchQueue's `task.archived` and `limitActive` checks, main.ts:2260-2261).
-fn can_drain(archived: bool, limited_until: Option<i64>, now: i64) -> bool {
-    !archived && limited_until.is_none_or(|until| until <= now)
+/// A task may take its next queued message when it is live and not inside a usage limit —
+/// limitActive in src/usage-limit.ts: a limit without a known reset holds indefinitely.
+fn can_drain(archived: bool, limited_at: Option<i64>, limited_until: Option<i64>, now: i64) -> bool {
+    !archived && limited_at.is_none_or(|_at| limited_until.is_some_and(|until| until <= now))
 }
 
 /// An agent tool or a remote client queued (or removed) a message. The run-end hook drains
@@ -288,8 +306,9 @@ pub(crate) fn queue_changed(app: &tauri::AppHandle, session_id: &str) {
     drain_queue(app.clone(), session_id.to_owned());
 }
 
-fn parse(args: &[String]) -> Result<Command, String> {
+fn parse(args: &[String]) -> Result<(Command, Option<PathBuf>), String> {
     let mut name: Option<String> = None;
+    let mut import: Option<PathBuf> = None;
     let mut sign_in = false;
     let mut command = Command::Serve;
     let mut ops = 0;
@@ -313,6 +332,21 @@ fn parse(args: &[String]) -> Result<Command, String> {
                 command = Command::FullAccess { enabled: false };
                 ops += 1;
             }
+            "--export-bots" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| format!("--export-bots needs a file path.\n\n{}", help()))?;
+                command = Command::ExportBots { path: PathBuf::from(value) };
+                ops += 1;
+                index += 1;
+            }
+            "--import-bots" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| format!("--import-bots needs a file path.\n\n{}", help()))?;
+                import = Some(PathBuf::from(value));
+                index += 1;
+            }
             "--device-name" => {
                 let value = args
                     .get(index + 1)
@@ -325,19 +359,27 @@ fn parse(args: &[String]) -> Result<Command, String> {
         index += 1;
     }
     if ops > 1 {
-        return Err(format!("Choose one: --sign-in, --sign-out, --full-access, --no-full-access.\n\n{}", help()));
+        return Err(format!(
+            "Choose one: --sign-in, --sign-out, --full-access, --no-full-access, --export-bots.\n\n{}",
+            help()
+        ));
     }
     // Built at the end, so flags work in any order.
     if sign_in {
         command = Command::SignIn { name };
     }
-    Ok(command)
+    // An import composes only with serving (or a first-run sign-in): the exiting ops
+    // would silently ignore the file.
+    if import.is_some() && !matches!(command, Command::Serve | Command::SignIn { .. }) {
+        return Err(format!("--import-bots only works with serve or --sign-in.\n\n{}", help()));
+    }
+    Ok((command, import))
 }
 
 fn help() -> String {
     "PandaCode headless host (docs/headless.md)
 
-Usage: pandacode serve [--sign-in [--device-name <name>]] [--sign-out] [--full-access | --no-full-access]
+Usage: pandacode serve [--sign-in [--device-name <name>]] [--sign-out] [--full-access | --no-full-access] [--export-bots <file>] [--import-bots <file>]
 
 Runs this computer as an always-on PandaCode Connect host: your devices see it as a
 computer and can start, watch, steer and approve tasks on it. Linux servers run it
@@ -347,7 +389,10 @@ under `xvfb-run -a pandacode serve …` (a display is required to start, none is
   --sign-out             Forget the Connect sign-in on this server and exit.
   --full-access          Let remote devices pick Full access (no approvals); exits after saving.
   --no-full-access       Require approvals again (the default); exits after saving.
-  --device-name <name>   Name shown to your devices when signing in (default: the hostname)."
+  --device-name <name>   Name shown to your devices when signing in (default: the hostname).
+  --import-bots <file>   Create/update bots, channels, schedules and rules from a JSON file
+                         (docs/headless.md), then serve. Re-applying a file converges.
+  --export-bots <file>   Write every bot's configuration (no secrets) to a JSON file and exit."
         .into()
 }
 
@@ -359,41 +404,76 @@ mod tests {
         flags.split_whitespace().map(str::to_owned).collect()
     }
 
+    /// The command half of a parse, for tests that don't care about the import path.
+    fn parsed(flags: &str) -> Result<Command, String> {
+        parse(&argv(flags)).map(|(command, _)| command)
+    }
+
     #[test]
     fn flags_parse_in_any_order() {
-        assert_eq!(parse(&argv("")), Ok(Command::Serve));
-        assert_eq!(parse(&argv("--sign-in")), Ok(Command::SignIn { name: None }));
+        assert_eq!(parsed(""), Ok(Command::Serve));
+        assert_eq!(parsed("--sign-in"), Ok(Command::SignIn { name: None }));
         assert_eq!(
-            parse(&argv("--sign-in --device-name build-server")),
+            parsed("--sign-in --device-name build-server"),
             Ok(Command::SignIn { name: Some("build-server".into()) })
         );
         assert_eq!(
-            parse(&argv("--device-name build-server --sign-in")),
+            parsed("--device-name build-server --sign-in"),
             Ok(Command::SignIn { name: Some("build-server".into()) })
         );
-        assert_eq!(parse(&argv("--full-access")), Ok(Command::FullAccess { enabled: true }));
-        assert_eq!(parse(&argv("--no-full-access")), Ok(Command::FullAccess { enabled: false }));
-        assert_eq!(parse(&argv("--sign-out")), Ok(Command::SignOut));
-        assert!(parse(&argv("--wat")).is_err());
-        assert!(parse(&argv("--device-name")).is_err());
+        assert_eq!(parsed("--full-access"), Ok(Command::FullAccess { enabled: true }));
+        assert_eq!(parsed("--no-full-access"), Ok(Command::FullAccess { enabled: false }));
+        assert_eq!(parsed("--sign-out"), Ok(Command::SignOut));
+        assert_eq!(
+            parsed("--export-bots bots.json"),
+            Ok(Command::ExportBots { path: PathBuf::from("bots.json") })
+        );
+        assert!(parsed("--wat").is_err());
+        assert!(parsed("--device-name").is_err());
+        assert!(parsed("--export-bots").is_err());
+    }
+
+    #[test]
+    fn import_bots_is_a_modifier_not_an_op() {
+        let (_, import) = parse(&argv("--import-bots bots.json")).unwrap();
+        assert_eq!(import, Some(PathBuf::from("bots.json")));
+        let (_, import) = parse(&argv("--sign-in --import-bots bots.json --device-name s")).unwrap();
+        assert_eq!(import, Some(PathBuf::from("bots.json")));
+        assert_eq!(parse(&argv("--import-bots bots.json")).unwrap().0, Command::Serve);
+        // It still conflicts with the exclusive ops, which exit after saving.
+        assert!(parse(&argv("--sign-out --import-bots bots.json")).is_err());
     }
 
     #[test]
     fn help_mentions_every_flag() {
         let text = help();
-        for flag in ["--sign-in", "--sign-out", "--full-access", "--no-full-access", "--device-name", "xvfb-run"] {
+        for flag in [
+            "--sign-in",
+            "--sign-out",
+            "--full-access",
+            "--no-full-access",
+            "--device-name",
+            "--import-bots",
+            "--export-bots",
+            "xvfb-run",
+        ] {
             assert!(text.contains(flag), "{flag}");
         }
     }
 
     #[test]
     fn only_live_unlimited_tasks_take_their_queue() {
-        assert!(can_drain(false, None, 1000));
-        assert!(can_drain(false, Some(1000), 1000));
-        // Inside a limit, or archived: hold (dispatchQueue's limitActive and archived checks).
-        assert!(!can_drain(false, Some(1001), 1000));
-        assert!(!can_drain(true, None, 1000));
-        assert!(!can_drain(true, Some(999), 1000));
+        assert!(can_drain(false, None, None, 1000));
+        assert!(can_drain(false, None, Some(1000), 1000));
+        assert!(can_drain(false, Some(500), Some(1000), 1000));
+        // Inside a limit (with or without a known reset), or archived: hold. limitActive
+        // holds a limit with an unknown reset indefinitely; the resume send ends a run,
+        // which then delivers the queue.
+        assert!(!can_drain(false, Some(500), Some(1001), 1000));
+        assert!(!can_drain(false, Some(500), None, 1000));
+        assert!(!can_drain(true, None, None, 1000));
+        assert!(!can_drain(true, None, Some(999), 1000));
+        assert!(!can_drain(true, Some(500), Some(999), 1000));
     }
 
     #[test]

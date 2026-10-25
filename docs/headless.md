@@ -105,6 +105,51 @@ login for the server's user and run a LaunchAgent with `RunAtLoad`:
 No xvfb, no `PANDACODE_SECRETS_FILE` (macOS already uses the 0600 file). Try plain
 `ssh host pandacode serve` first — if it starts, skip the auto-login.
 
+## Bots
+
+Bots (channels, schedules, approval rules, their whole profile) are configured with one
+JSON file applied inside the serve process — no UI, and channels come up live:
+
+```sh
+pandacode serve --import-bots bots.json
+```
+
+```json
+{ "bots": [ {
+    "name": "build-bot",
+    "role": "Build assistant", "instructions": "…", "goals": "…", "soul": "optional persona",
+    "provider": "claude", "model": "…", "mode": "auto", "heartbeatMinutes": 30,
+    "skills": ["skill-id"], "mcp": ["server-name"],
+    "channels": [
+      { "kind": "telegram", "label": "main", "config": {},
+        "secrets": { "token": "env:TELEGRAM_BOT_TOKEN" } },
+      { "kind": "web" }
+    ],
+    "schedules": [ { "title": "Morning report", "prompt": "…", "kind": "daily", "timeOfDay": "09:00" } ],
+    "rules": [ { "pattern": "npm test*", "decision": "allow" } ]
+} ] }
+```
+
+- Fields and validation are the Settings UI's (`mode` is one of ask/auto/review/plan/full;
+  schedule kinds are once/interval/daily/weekdays with `intervalMinutes`, `timeOfDay`
+  HH:MM or a `runAt` ms timestamp for `once`; secret names per channel kind: telegram and
+  discord need `token`, slack `token` + `app_token`, whatsapp `access_token` +
+  `signing_secret` and a `config.phoneNumberId`; web needs nothing).
+- Secret values are inline or `"env:NAME"`, read from the environment at import — put the
+  tokens in the systemd unit's `Environment=`/`EnvironmentFile=`, not in the file.
+- Importing is idempotent: bots match by name (existing profiles are updated), channels
+  by kind+label, schedules by title, rules by pattern+decision — re-applying converges,
+  so keep the file in version control and re-apply after edits. A bot that fails is
+  reported and skipped; serve exits non-zero until the file is clean.
+- Web channels print their chat links at import (`http://host:47321/chat/<id>#<token>` —
+  loopback unless the channel's `config.remote` is true).
+- `--export-bots bots.json` writes every bot's configuration without secrets (channels
+  list `secretsNeeded` names; web tokens are excluded — a re-import mints a fresh link).
+  Use it to snapshot or move a server's setup; put the tokens back before re-importing.
+
+Schedules, rules, profiles and secrets are read fresh by a running serve; channels added
+by hand (not through the import) need a restart to connect.
+
 ## Security
 
 - The server dials the relay outbound (one WebSocket). No inbound ports, and the relay

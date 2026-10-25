@@ -65,6 +65,7 @@ mod workspace;
 mod jj;
 mod tray;
 mod headless;
+mod headless_bots;
 
 pub use usage_keychain::handle_usage_keychain_helper;
 pub use cloud_agents::handle_cloud_bridge;
