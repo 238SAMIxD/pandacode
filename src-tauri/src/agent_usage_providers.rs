@@ -141,7 +141,7 @@ async fn fetch_deepseek() -> Usage {
     // Same rule as GLM: a failed background read cannot establish which key
     // the harness uses. Only fall back to the environment after a successful,
     // empty store lookup.
-    let saved = tokio::task::spawn_blocking(crate::provider_settings::deepseek_key).await;
+    let saved = tokio::task::spawn_blocking(crate::provider_settings::deepseek_key_for_usage).await;
     let saved = saved.ok().and_then(Result::ok).ok_or(());
     let api_key = match saved_key_or_environment(saved, env_key("DEEPSEEK_API_KEY")) {
         Ok(Some(key)) => key,
@@ -955,7 +955,10 @@ fn deepseek_part(entry: &Value) -> Option<String> {
 
 fn deepseek_amount(value: &Value) -> Option<String> {
     let text = value.as_str()?.trim();
-    (!text.is_empty() && text.len() <= 24 && text.bytes().all(|b| b.is_ascii_digit() || b == b'.'))
+    (!text.is_empty()
+        && text.len() <= 24
+        && text.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+        && text.parse::<f64>().is_ok())
         .then(|| text.to_owned())
 }
 
@@ -1136,6 +1139,8 @@ mod tests {
             json!({"is_available": true}),
             json!({"is_available": true, "balance_infos": []}),
             json!({"is_available": true, "balance_infos": [{"currency": "CNY", "total_balance": "about 110"}]}),
+            json!({"is_available": true, "balance_infos": [{"currency": "CNY", "total_balance": "1.2.3"}]}),
+            json!({"is_available": true, "balance_infos": [{"currency": "CNY", "total_balance": "."}]}),
             json!({"is_available": true, "balance_infos": [{"currency": "C\nY", "total_balance": "110.00"}]}),
             json!({"is_available": true, "balance_infos": [{"currency": "CNY", "total_balance": 110}]}),
         ] {
