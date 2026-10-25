@@ -15,8 +15,9 @@ const ID_CREATE: u64 = 1;
 const ID_MODEL: u64 = 2;
 const ID_THOUGHT: u64 = 3;
 const ID_SUBSCRIBE: u64 = 4;
-const ID_STOP: u64 = 900;
-const FIRST_PROMPT_ID: u64 = 5;
+const ID_MODE: u64 = 5;
+const ID_STOP: u64 = 1 << 40;
+const FIRST_PROMPT_ID: u64 = 6;
 
 pub(super) const SIGN_IN: &str =
     "ZCode requires sign-in. Run `zcode` in a terminal and sign in, then send again.";
@@ -44,6 +45,8 @@ pub(super) struct State {
     requested_model: Option<(String, String)>,
     /// Thought level requested via `session/setThoughtLevel`.
     requested_thought: Option<String>,
+    /// Session mode requested via `session/setMode` (create and every resume).
+    requested_mode: Option<&'static str>,
     /// Sequence number of the prompt in flight; 0 until the first `session/send`.
     next_input: u64,
     /// The current assistant message streamed reasoning deltas.
@@ -95,6 +98,9 @@ pub(super) fn stop(remote_id: &str) -> Value {
     json!({"id": ID_STOP, "method": "session/stop", "params": {"sessionId": remote_id}})
 }
 
+/// Discovery stdout cap, mirroring the Pi discovery limit.
+const DISCOVERY_OUTPUT_LIMIT: u64 = 16 * 1024 * 1024;
+
 /// The catalog is session metadata only: never send a prompt during discovery.
 pub(super) async fn models(path: &Path) -> Result<Vec<ModelInfo>, String> {
     if let Some(models) = acp_catalog::get("zcode", path) {
@@ -126,7 +132,9 @@ fn parse_models(snapshot: &Value) -> Result<Vec<ModelInfo>, String> {
             .as_array()
             .into_iter()
             .flatten()
-            .map(|level| effort_info(field(level, "value"), level["description"].as_str()))
+            .map(|level| (field(level, "value"), level["description"].as_str()))
+            .filter(|(value, _)| validate_reasoning_effort("zcode", Some(value)).is_ok())
+            .map(|(value, description)| effort_info(value, description))
             .collect();
         let default_reasoning_effort = reasoning["defaultLevel"]
             .as_str()
@@ -174,16 +182,22 @@ async fn discover(path: &Path) -> Result<Vec<ModelInfo>, String> {
             }}),
         )
         .await?;
-        let mut stdout =
-            tokio::io::BufReader::new(child.stdout.take().ok_or("ZCode stdout unavailable")?);
+        let mut stdout = tokio::io::BufReader::new(
+            child.stdout.take().ok_or("ZCode stdout unavailable")?,
+        )
+        .take(DISCOVERY_OUTPUT_LIMIT + 1);
+        let mut total = 0u64;
         loop {
             let mut line = Vec::new();
-            if stdout
+            let count = stdout
                 .read_until(b'\n', &mut line)
                 .await
-                .map_err(|e| e.to_string())?
-                == 0
-            {
+                .map_err(|e| e.to_string())?;
+            total += count as u64;
+            if total > DISCOVERY_OUTPUT_LIMIT {
+                return Err("ZCode model catalog exceeded its output limit".into());
+            }
+            if count == 0 {
                 return Err("ZCode exited before returning models".into());
             }
             let value: Value =
@@ -191,11 +205,11 @@ async fn discover(path: &Path) -> Result<Vec<ModelInfo>, String> {
             if value.get("method").is_some() && value.get("id").is_some() {
                 // The server blocks on client requests (runtime preferences);
                 // declining them like the run path does unblocks the create.
-                let _ = write_json(
+                write_json(
                     &mut stdin,
                     &json!({"id": value["id"], "error": {"code": -32601, "message": "Method not found"}}),
                 )
-                .await;
+                .await?;
                 continue;
             }
             if value["id"] != ID_CREATE {
@@ -270,6 +284,14 @@ impl Protocol {
                 self.zcode.context_window =
                     context_window_of(&value["result"]["settings"], &session["model"]);
             }
+            Some(ID_MODE) => {
+                let applied = self.zcode.requested_mode.is_some_and(|wanted| {
+                    value["result"]["settings"]["mode"]["current"] == wanted
+                });
+                if !applied {
+                    return Err("ZCode did not apply the selected access mode".into());
+                }
+            }
             Some(ID_THOUGHT) => {
                 let applied = self.zcode.requested_thought.as_deref().is_some_and(|effort| {
                     value["result"]["settings"]["thoughtLevel"]["current"] == *effort
@@ -288,6 +310,11 @@ impl Protocol {
     /// get `-32601`, which recorded servers answer and carry on from.
     fn zcode_frame(&mut self, value: Value, step: &mut Step) -> Result<(), String> {
         match (field(&value, "method"), value.get("id").is_some()) {
+            ("interaction/requestPermission", true) if self.config.mode == "full" => {
+                // yolo should not ask; a policy request that still arrives takes
+                // the offered one-time allow, never a standing grant.
+                step.write.push(permission_decision(&value, true));
+            }
             ("interaction/requestPermission", true) => {
                 let params = &value["params"];
                 let text = format!(
@@ -425,6 +452,14 @@ impl Protocol {
         let settings = &result["settings"];
         let current = &result["session"]["model"];
         self.zcode.context_window = context_window_of(settings, current);
+        let wanted = mode(&self.config.mode);
+        if settings["mode"]["current"].as_str() != Some(wanted) {
+            self.zcode.requested_mode = Some(wanted);
+            step.write.push(json!({
+                "id": ID_MODE, "method": "session/setMode",
+                "params": {"sessionId": self.remote_id, "mode": wanted},
+            }));
+        }
         let catalog = &settings["model"]["available"];
         let wanted = &self.config.model;
         if !wanted.is_empty() && wanted != "default" {
@@ -464,13 +499,6 @@ impl Protocol {
     /// Writes the prompt (or a steered next turn) as `session/send`.
     pub(super) fn zcode_prompt(&mut self, text: String, step: &mut Step) {
         self.zcode.next_input += 1;
-        if !self.config.images.is_empty() {
-            step.events.push(self.event(
-                "status",
-                "ZCode cannot receive screenshots in this version; the message was sent without them",
-                None,
-            ));
-        }
         step.write.push(json!({
             "id": FIRST_PROMPT_ID - 1 + self.zcode.next_input,
             "method": "session/send",
@@ -757,12 +785,84 @@ mod tests {
         assert_eq!(turn.write[0]["method"], "session/send");
         assert_eq!(turn.write[0]["params"]["content"], "also check tests");
         assert_eq!(turn.write[0]["params"]["inputId"], "pandacode-2");
-        let ack = p.receive(json!({"id": 6, "result": {"accepted": true}})).unwrap();
+        let ack = p.receive(json!({"id": 7, "result": {"accepted": true}})).unwrap();
         assert!(ack.write.is_empty());
         let done = p
             .receive(event("turn.completed", json!({"resultType": "success", "inputId": "pandacode-2"})))
             .unwrap();
         assert!(done.done);
+    }
+
+    #[test]
+    fn resumed_sessions_get_the_selected_mode_reapplied() {
+        let mut config = super::super::tests::config("zcode");
+        config.cwd = PathBuf::from("/tmp");
+        config.resume_id = Some("sess_saved".into());
+        config.mode = "plan".into();
+        let mut p = Protocol::new(config);
+        assert_eq!(p.initial()["method"], "session/resume");
+        let step = p.receive(json!({"id": ID_CREATE, "result": snapshot()})).unwrap();
+        // The saved session ran as build; Plan re-applies before subscribing.
+        let set_mode = step.write.iter()
+            .find(|frame| frame["method"] == "session/setMode")
+            .expect("setMode on resume");
+        assert_eq!(set_mode["params"]["mode"], "plan");
+        assert!(p.receive(json!({"id": ID_MODE, "result": snapshot()})).is_err(), "mode not applied yet");
+        let mut applied = snapshot();
+        applied["settings"]["mode"]["current"] = json!("plan");
+        let step = p.receive(json!({"id": ID_MODE, "result": applied})).unwrap();
+        assert!(step.write.iter().all(|frame| frame["method"] != "session/setMode"));
+        // A create whose snapshot already matches sends no setMode.
+        let (mut p, _) = created();
+        subscribe_acked(&mut p);
+    }
+
+    #[test]
+    fn full_access_answers_policy_requests_with_the_offered_once_allow() {
+        let mut config = super::super::tests::config("zcode");
+        config.cwd = PathBuf::from("/tmp");
+        config.mode = "full".into();
+        let mut p = Protocol::new(config);
+        p.initial();
+        p.receive(json!({"id": ID_CREATE, "result": snapshot()})).unwrap();
+        let step = p
+            .receive(json!({"id": "perm_1", "method": "interaction/requestPermission", "params": {
+                "requestId": "perm_1", "sessionId": "sess_test", "toolCallId": "call_1",
+                "toolName": "Bash", "reason": "Organization policy", "riskLevel": "medium",
+                "input": {"command": "ls"},
+                "options": [
+                    {"optionId": "allow_once", "kind": "allow_once", "name": "Allow once",
+                     "response": {"decision": "allow", "reason": "Approved once"}},
+                    {"optionId": "allow_project", "kind": "allow_always", "name": "Always",
+                     "response": {"decision": "allow", "permissionUpdates": [{"type": "addRules"}]}},
+                ],
+            }}))
+            .unwrap();
+        assert!(!step.events.iter().any(|e| e.kind == "approval"), "Full access does not prompt");
+        assert_eq!(step.write[0]["result"]["decision"], "allow");
+        assert!(
+            step.write[0]["result"].get("permissionUpdates").is_none(),
+            "never a standing grant",
+        );
+    }
+
+    #[test]
+    fn catalog_effort_values_are_validated_before_use() {
+        let mut mixed = snapshot();
+        mixed["settings"]["model"]["available"][0]["reasoning"]["levels"] = json!([
+            {"label": "no value"}, {"value": "高"}, {"value": "with space"}, {"value": "max"},
+        ]);
+        mixed["settings"]["model"]["available"][0]["reasoning"]["defaultLevel"] = json!("高");
+        let models = parse_models(&mixed).unwrap();
+        assert_eq!(
+            models[1]
+                .reasoning_efforts
+                .iter()
+                .map(|e| e.id.as_str())
+                .collect::<Vec<_>>(),
+            ["max"],
+        );
+        assert_eq!(models[1].default_reasoning_effort.as_deref(), None);
     }
 
     #[test]

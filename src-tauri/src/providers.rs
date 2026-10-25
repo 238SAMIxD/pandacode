@@ -2990,6 +2990,9 @@ async fn run_process_with_tools(
             )
             .await?,
         ),
+        // ZCode bridging does not pass `mcpServers` in session/create yet, so a
+        // started server would sit unconsumed; drop host tools until it does.
+        ("zcode", Some(_)) => (None, None),
         (_, None) => (None, None),
         _ => return Err("Host tools are unavailable for this provider".into()),
     };

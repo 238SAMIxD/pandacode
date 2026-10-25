@@ -286,7 +286,7 @@ fn harness_arguments(context: &HarnessContext<'_>) -> Result<Vec<String>, String
     if provider == "antigravity" {
         return Err("Antigravity's ACP server does not have an interactive console. Use its synced commands in the composer, or open the agy CLI separately.".into());
     }
-    if !matches!(provider, "codex" | "claude" | "kimi" | "glm" | "opencode" | "grok" | "mimo" | "pi" | "omp" | "github-copilot" | "muse" | "cline" | "devin" | "zcode") {
+    if !matches!(provider, "codex" | "claude" | "kimi" | "glm" | "opencode" | "grok" | "mimo" | "pi" | "omp" | "github-copilot" | "muse" | "cline" | "devin") {
         return Err("Choose a supported coding harness.".into());
     }
     if provider == "github-copilot" {
@@ -326,7 +326,7 @@ fn harness_arguments(context: &HarnessContext<'_>) -> Result<Vec<String>, String
         args.push(
             match provider {
                 "codex" | "muse" => "resume",
-                "claude" | "glm" | "mimo" | "grok" | "devin" | "zcode" => "--resume",
+                "claude" | "glm" | "mimo" | "grok" | "devin" => "--resume",
                 "cline" => "--id",
                 _ => "--session",
             }
@@ -424,7 +424,6 @@ fn harness_arguments(context: &HarnessContext<'_>) -> Result<Vec<String>, String
                 args.extend(["--auto-approve".into(), "false".into()]);
             }
         }
-        "zcode" => {}
         _ => {
             match context.mode {
                 "plan" => args.push("--plan".into()),

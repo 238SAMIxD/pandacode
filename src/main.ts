@@ -437,7 +437,12 @@ const attachments = mountPromptAttachments({
   },
   otherImages: taskId => (state.browserAttachments.get(taskId) ?? []).filter(item => item.kind === 'screenshot').length,
   // Grok Build's ACP agent advertises no image input; say so before a send fails.
-  imagesUnsupported: taskId => state.sessions.find(s => s.id === taskId)?.provider === 'grok' ? 'Grok Build does not accept images yet. Describe them, or attach documents and folders instead.' : null,
+  imagesUnsupported: taskId => {
+    const provider = state.sessions.find(s => s.id === taskId)?.provider;
+    if (provider === 'grok') return 'Grok Build does not accept images yet. Describe them, or attach documents and folders instead.';
+    if (provider === 'zcode') return 'ZCode does not accept images yet. Describe them, or attach documents and folders instead.';
+    return null;
+  },
   notify: message => notify(message),
   report: error => report(error),
   insertText: text => {
