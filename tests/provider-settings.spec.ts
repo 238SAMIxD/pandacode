@@ -197,7 +197,7 @@ test('provider connections expose all harnesses and real GLM model names', async
   await expect(page.getByText('GLM-5.3', { exact: true }).first()).toBeVisible();
 });
 
-for (const providerId of ['claude', 'codex', 'kimi', 'opencode', 'glm', 'antigravity', 'grok', 'mimo', 'pi', 'deepseek', 'commandcode', 'cline', 'kilo', 'omp', 'github-copilot', 'muse']) {
+for (const providerId of ['claude', 'codex', 'kimi', 'opencode', 'glm', 'antigravity', 'grok', 'mimo', 'pi', 'deepseek', 'commandcode', 'cline', 'kilo', 'omp', 'github-copilot', 'muse', 'devin']) {
   test(`provider connections start ${providerId} tasks with Full access and retain explicit restrictions when switching`, async ({ page }) => {
     await page.addInitScript(provider => localStorage.setItem('pandacode.provider', provider), providerId);
     await page.route('**/src/preview.ts*', async route => {
@@ -271,6 +271,59 @@ test('GitHub Copilot CLI has CLI sign-in guidance, a path override, Default mode
   const defaultMenu = page.getByRole('dialog', { name: 'Default agent', exact: true });
   await defaultMenu.getByRole('menuitemradio', { name: 'GitHub Copilot CLI', exact: true }).click();
   await expect(settings.getByRole('button', { name: 'Default agent for new tasks', exact: true })).toContainText('GitHub Copilot CLI');
+});
+
+test('Devin CLI lists its models with their own thinking levels, Devin modes, and CLI sign-in guidance', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('pandacode.provider', 'devin'));
+  await page.goto('/');
+  await expect(page.locator('.task-item.selected .task-title')).toHaveText('Make search feel instant');
+  await page.locator('.new-task-button').click();
+  await expect(page.locator('#model-picker-trigger .provider-logo[data-provider="devin"]')).toBeVisible();
+  // Devin's Code mode already accepts edits, so Accept edits is not a separate choice.
+  await page.locator('#mode-picker-trigger').click();
+  const modes = page.getByRole('dialog', { name: 'Permissions', exact: true }).getByRole('menuitemradio');
+  await expect(modes).toHaveCount(3);
+  await expect(modes.filter({ hasText: 'Accept edits' })).toHaveCount(0);
+  await expect(modes.filter({ hasText: 'Plan mode' })).toContainText('edits wait until you approve the plan');
+  await page.keyboard.press('Escape');
+
+  const model = page.getByRole('button', { name: 'Choose harness and model', exact: true });
+  const search = page.getByRole('searchbox', { name: 'Search harnesses and models' });
+  const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
+  const group = picker.getByRole('region', { name: 'Devin CLI', exact: true });
+  await model.click();
+  // A long catalog opens as a short list; search covers every model, and custom IDs are not offered.
+  await expect(group.locator('.model-menu-option[data-model="adaptive"]')).toBeVisible();
+  await expect(group.locator('.model-menu-option[data-model^="fusion-"]')).toHaveCount(0);
+  await search.fill('fusion');
+  await expect(group.locator('.model-menu-option[data-model="fusion-claude-opus-5-5-medium-sidekick-swe-2-medium"]')).toBeVisible();
+  await search.fill('custom-devin-model');
+  await expect(picker.locator('.model-menu-option[data-provider="devin"][data-model="custom-devin-model"]')).toHaveCount(0);
+  await search.fill('');
+  await group.locator('.model-menu-option[data-model="claude-opus-5-5-medium"]').click();
+  await expect(model).toContainText('Claude Opus 5.5');
+
+  // Each model carries its own thinking levels.
+  await model.click();
+  const effort = picker.getByRole('slider', { name: 'Reasoning effort' });
+  await expect(effort).toHaveAttribute('max', '4');
+  await search.fill('glm');
+  await expect(group.locator('.model-menu-option[data-model="glm-5-2"]')).toContainText('Text only');
+  await group.locator('.model-menu-option[data-model="glm-5-2"]').click();
+  await model.click();
+  await expect(effort).toHaveAttribute('max', '2');
+  await page.keyboard.press('Escape');
+
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const settings = page.getByRole('region', { name: 'Settings', exact: true });
+  await settings.getByRole('tab', { name: 'Providers', exact: true }).click();
+  const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Devin CLI', exact: false }) });
+  await expect(card).toContainText('devin auth login');
+  await expect(card.getByRole('link', { name: 'Install and sign in' })).toHaveAttribute('href', 'https://docs.devin.ai/cli');
+  await card.locator('summary').click();
+  await expect(card.getByLabel('Devin executable', { exact: true })).toBeVisible();
+  await settings.getByRole('tab', { name: 'Agents', exact: true }).click();
+  await expect(settings.locator('.provider-diagnostic[data-provider="devin"]')).toContainText('devin 3000.11.216');
 });
 
 test('GitHub Copilot model discovery does not crash the picker in an existing chat', async ({ page }) => {

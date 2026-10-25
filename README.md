@@ -3,7 +3,7 @@
 A small, native desktop workspace for coding agents. PandaCode runs the coding
 CLIs you already use — **Claude Code, Codex, Kimi Code, OpenCode, GLM Coding
 Plan and Xiaomi MiMo** (through Claude Code), **GitHub Copilot CLI, Antigravity,
-xAI's Grok Build, DeepSeek, Command Code, Cline and Kilo Code** (through ACP), **Pi** and its
+xAI's Grok Build, DeepSeek, Command Code, Cline, Kilo Code and Devin CLI** (through ACP), **Pi** and its
 fork **omp** (through Pi's RPC mode), and Meta's **Muse Code** (through its MSP
 protocol) — side by side, with your projects, Git, a
 terminal and a browser in one window.
@@ -208,6 +208,8 @@ PandaCode does not include provider plans or usage.
 Muse Code installs with Meta's launcher into `~/.local/bin/muse`; run `muse login` once in a terminal. PandaCode launches `muse serve` and speaks MSP, Muse's JSON-RPC session protocol, with its sandbox and approval modes; see [docs/providers.md](docs/providers.md#muse-code) for what each mode does and what Muse cannot express.
 
 [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli) installs with `npm install -g @github/copilot`; run `copilot login` in a terminal, then select **GitHub Copilot CLI** in PandaCode. PandaCode launches the local `copilot` executable over ACP. The CLI manages its own sign-in. See [provider details](docs/providers.md#github-copilot-cli).
+
+[Devin CLI](https://docs.devin.ai/cli) installs with `curl -fsSL https://cli.devin.ai/install.sh | bash` (or `brew install --cask devin-cli`, or the copy bundled with Devin Desktop); run `devin auth login` once in a terminal, then select **Devin CLI** in PandaCode. PandaCode launches `devin acp` with the CLI's own sign-in and lists every Devin model with its own thinking levels. See [provider details](docs/providers.md#devin-cli).
 
 ## Build from source
 

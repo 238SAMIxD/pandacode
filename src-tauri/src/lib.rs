@@ -2252,6 +2252,7 @@ pub(crate) async fn local_providers(force: bool) -> Vec<providers::ProviderInfo>
     if force {
         providers::acp_catalog::invalidate("antigravity");
         providers::acp_catalog::invalidate("grok");
+        providers::acp_catalog::invalidate("devin");
     }
     tauri::async_runtime::spawn_blocking(providers::discover)
         .await

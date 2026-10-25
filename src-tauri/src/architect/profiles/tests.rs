@@ -152,6 +152,7 @@ fn new_user_tasks_default_to_full_without_overriding_requested_modes_or_saved_ta
             "cline",
             "kilo",
             "github-copilot",
+            "devin",
         ] {
             let existing = store
                 .create_session(&source.project_id, provider, "default", "plan")

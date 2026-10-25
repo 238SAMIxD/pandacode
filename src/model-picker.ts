@@ -1,5 +1,5 @@
 import type { ContextUsage, Provider, ProviderId, ProviderModel } from './types';
-import { fallbackModel, modelChoices, tokenCount } from './model-catalog';
+import { advertisedModelsOnly, fallbackModel, modelChoices, tokenCount } from './model-catalog';
 import { escape, icon } from './dom';
 import { providerLogo } from './provider-logos';
 import { showPopover, hidePopover } from './popover-motion';
@@ -269,7 +269,7 @@ export function openModelPicker(options: ModelPickerOptions): () => void {
       const visible = query ? models.filter(model => providerMatches || [model.id, model.name, model.description].some(value => value.toLowerCase().includes(normalized))) : shortList(provider.id, models);
       const locked = !canSwitchProvider && provider.id !== current.provider;
       const unavailable = !provider.installed;
-      const custom = provider.id !== 'github-copilot' && Boolean(query && !namedHarness && !models.some(model => [model.id, model.name].some(value => value.toLowerCase() === normalized)) && !locked);
+      const custom = !advertisedModelsOnly(provider.id) && Boolean(query && !namedHarness && !models.some(model => [model.id, model.name].some(value => value.toLowerCase() === normalized)) && !locked);
       if (!visible.length && !custom) return '';
       const disabled = locked || unavailable;
       const row = (model: ProviderModel, isCustom: boolean): string => {

@@ -14,6 +14,8 @@ export function approvalModes(provider: ProviderId, current?: Mode): ApprovalMod
     ? 'Use Copilot Agent mode with Allow All off. PandaCode asks before permission requests.'
     : provider === 'grok'
     ? 'Grok asks before edits and commands, whatever its own config says.'
+    : provider === 'devin'
+    ? 'Devin’s Code mode: edits inside this project apply; commands it does not judge safe ask you.'
     : pi
     ? `${pi} runs without its own approvals; PandaCode asks before edits, commands and other non-read tools.`
     : provider === 'deepseek'
@@ -39,6 +41,8 @@ export function approvalModes(provider: ProviderId, current?: Mode): ApprovalMod
     ? 'Cline acts with its auto-approve on: every tool runs without asking.'
     : provider === 'muse'
     ? 'No approvals and no sandbox: Muse runs every tool without asking.'
+    : provider === 'devin'
+    ? 'Devin’s Bypass Permissions mode: every tool runs without asking, unless your organization requires approval.'
     : provider === 'github-copilot'
     ? 'Use Copilot Agent mode with Allow All on. Copilot automatically approves tool, path, and URL requests.'
     : 'Run tools without approval prompts, including outside this project.' };
@@ -50,6 +54,10 @@ export function approvalModes(provider: ProviderId, current?: Mode): ApprovalMod
     : [{ id: 'review', label: 'Approve for me', icon: 'spark', disabled: true, description: 'This harness has no agent-reviewed approvals. Choose another mode, or use Claude Code (or Codex’s Approve for me).' }];
   if (provider === 'github-copilot') return [standard,
     { id: 'plan', label: 'Plan mode', icon: 'plan', description: 'Use Copilot Plan mode. Read, search, fetch, and think requests are allowed; other permission requests are declined.' },
+    ...review, full];
+  // Devin's Code mode already accepts edits, so it has no separate Accept edits choice.
+  if (provider === 'devin') return [standard,
+    { id: 'plan', label: 'Plan mode', icon: 'plan', description: 'Devin’s Plan mode: it investigates and writes a plan; commands ask you, and edits wait until you approve the plan.' },
     ...review, full];
   return [standard, provider === 'muse'
     ? { id: 'auto', label: 'Accept edits', icon: 'edit', description: 'Work freely inside the sandbox. Muse asks only to leave it.' }

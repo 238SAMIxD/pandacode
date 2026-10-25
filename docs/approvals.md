@@ -33,6 +33,7 @@ Full access maps to the following supported native mechanisms:
 | Kimi Code | Its advertised ACP `auto` mode (unattended execution); PandaCode waits for mode acknowledgement |
 | OpenCode | Process-local `permission: { "*": "allow" }` for the selected built-in agent and matching ACP approvals |
 | Antigravity | Accepts the offered ACP one-time tool permission; the server's own policy remains authoritative |
+| Devin CLI | Its ACP `bypass` session mode; a request that still arrives (organization policy) is answered `allow_once`, never a standing grant. Implementing a plan always asks |
 
 Antigravity has no universal ACP setting that can disable server-side sandboxing
 or managed restrictions. PandaCode does not invent one. Structured questions still

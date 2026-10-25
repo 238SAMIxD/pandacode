@@ -723,7 +723,7 @@ function finishLiveMessage(current: Stream, sessionId: string): void {
   current.tools.push({ key: current.retainedMessageKey, content: current.text.length > 16384 ? current.text.slice(0, 16384) + '\n[Activity preview truncated]' : current.text, commentary: true });
   trimLiveActivity(current, sessionId); current.revision++;
 }
- function shortProvider(id: ProviderId): string { return ({ claude: 'Claude', codex: 'Codex', kimi: 'Kimi', opencode: 'OpenCode', glm: 'GLM', antigravity: 'Antigravity', grok: 'Grok', mimo: 'MiMo', pi: 'Pi', deepseek: 'DeepSeek', commandcode: 'Command Code', cline: 'Cline', kilo: 'Kilo', omp: 'omp', 'github-copilot': 'GitHub Copilot CLI', muse: 'Muse Code' })[id]; }
+ function shortProvider(id: ProviderId): string { return ({ claude: 'Claude', codex: 'Codex', kimi: 'Kimi', opencode: 'OpenCode', glm: 'GLM', antigravity: 'Antigravity', grok: 'Grok', mimo: 'MiMo', pi: 'Pi', deepseek: 'DeepSeek', commandcode: 'Command Code', cline: 'Cline', kilo: 'Kilo', omp: 'omp', 'github-copilot': 'GitHub Copilot CLI', muse: 'Muse Code', devin: 'Devin' })[id]; }
 function selectedModel(s: Session): ProviderModel { return provider(s.provider)?.models.find(model => model.id === (s.model || 'default')) ?? fallbackModel(s.provider, s.model); }
 function modelLabel(s?: Session): string {
   if (!s) return 'Default model';
@@ -849,9 +849,9 @@ function rememberedModel(id: ProviderId): string {
   return model.length <= 200 ? model : 'default';
 }
 let openCodeSaved = false;
-/** OpenCode models by last use when no Settings selection narrows the picker. */
+/** Models by last use for long catalogs: OpenCode without a Settings selection, and Devin (about 110 models, most of them Fusion pairs). */
 function recentModels(id: ProviderId): string[] | null {
-  if (id !== 'opencode' || openCodeSaved) return null;
+  if (!(id === 'opencode' && !openCodeSaved) && id !== 'devin') return null;
   const used = state.sessions.filter(s => s.provider === id && s.model);
   return used.sort((a, b) => (b.lastPromptAt ?? b.updatedAt) - (a.lastPromptAt ?? a.updatedAt)).map(s => s.model);
 }

@@ -1,7 +1,7 @@
 # Provider integrations
 
 PandaCode launches each installed CLI directly. Claude, Codex, Kimi, OpenCode,
-Antigravity, and Grok Build own their authentication; sign in using their official
+Antigravity, Grok Build, and Devin CLI own their authentication; sign in using their official
 CLI or extension.
 The optional Z.AI Coding Plan and MiMo Token Plan API keys are stored as separate
 entries in PandaCode's secrets store (see [secret storage](#secret-storage)) and injected only into their isolated Claude subprocesses. The app discovers executable paths
@@ -658,6 +658,91 @@ Verified against `cline` 3.0.73 on 2026-10-22 by driving `cline --acp`
 directly. The recorded frames back the unit tests in `providers/cline.rs`, and
 an ignored smoke test (`live_cline_lists_models`) reads the real catalog without
 spending tokens.
+
+## Devin CLI
+
+Devin CLI (`devin`; install with `curl -fsSL https://cli.devin.ai/install.sh | bash`
+or `brew install --cask devin-cli`) serves ACP v1 with `devin acp`, so PandaCode
+drives it with the shared ACP adapter (`providers/devin.rs` holds its quirks). When
+`devin` is not on PATH, PandaCode also finds the copy bundled with Devin Desktop
+(`Devin.app/Contents/Resources/app/extensions/windsurf/devin/bin/devin`). Official
+docs: [quickstart](https://docs.devin.ai/cli) and [`devin acp`](https://docs.devin.ai/cli/reference/commands).
+
+**Sign-in.** Devin keeps its own sign-in (`devin auth login`, or `WINDSURF_API_KEY`).
+PandaCode never calls ACP `authenticate` and never starts Devin's browser login.
+Devin Desktop's terminals export `ACP_BACKEND`, which makes `devin acp` ignore the
+CLI sign-in and wait for host credentials, so PandaCode removes it from the
+environment of every Devin process (tasks, discovery and the console). Without a
+sign-in, `session/new` fails with ACP `-32000` (“ACP host has not authenticated…”)
+and the turn stops with “Devin is not signed in. Run `devin auth login` in a
+terminal, then send again.”
+
+**Models and effort.** `session/new` returns `configOptions`: `mode`, `model`
+(about 110 models, about 60 of them Fusion pairs, each with
+`_meta["cognition.ai/supportsImages"]`), `thought_level` and sometimes `speed`. The
+efforts belong to the current model only and differ per model (for example
+`medium/high/max` for SWE-2, `none`…`max` for GPT-6 Sol), so discovery opens two
+processes with four empty sessions each, switches every regular model once to read
+its `thought_level`, and then deletes the sessions so they never appear in Devin's
+history. That takes about 2.5 s for the whole catalog, sends no prompt and runs no
+inference; the result is cached for five minutes. Fusion pairs are listed without
+an effort slider: switching to one takes about a second, and their efforts do not
+always match either model's, so a run keeps the effort Devin has saved. A model
+marked text-only shows “Text only”, and a task with images on such a model stops
+before the prompt. The picker shows the task's model, recent models and Devin's own
+top entries; search covers the whole catalog. Custom model IDs are not offered,
+because Devin accepts only the values it advertises.
+
+**Approvals.** Standard → Devin's Code mode (`accept-edits`: edits inside the project
+apply, commands Devin does not judge safe ask). Devin has no mode that asks before
+edits, so Accept edits is not offered separately (a task already in it also runs in
+Code mode). Plan mode → `plan`: Devin investigates, writes its plan to
+`~/.devin/plans/` and ends with an `exit_plan_mode` request, which PandaCode shows as
+“Implement this plan?”; approving chooses `plan_accept_edits`, never
+`plan_bypass`. Full access → `bypass`, and any request that still arrives is answered
+`allow_once`. Approving a request always chooses `allow_once`: the standing grants
+Devin offers (this session, this project, all projects, switch to bypass) are never
+chosen. Devin's permission requests carry only the tool call ID, so the approval text
+is built from `_meta["cognition.ai/editableCommand"]` (“Run `…`?”) or the tool's title.
+
+**Fewer round trips.** Devin saves the mode, model and effort on its session, and
+`session/load` reports them, so a resumed task sends `session/set_config_option`
+only for a setting that changed. A follow-up on the same model usually goes straight
+to `session/prompt`. `session/load` replays the conversation before it answers; that
+replay is ignored, because the transcript already holds it.
+
+**Steering.** Devin advertises `cognition.ai/midTurnPrompts`: a second
+`session/prompt` during a turn joins it, and both requests answer when the turn
+ends. Steering is therefore live, as for OpenCode.
+
+**Turn data.** Text, thoughts, tool calls (kind `execute`, `edit`, `switch_mode`…),
+cancel, images (`promptCapabilities.image`), HTTP MCP for PandaCode tools, and
+`usage_update` for the context meter use the common ACP paths. Usage frames tagged
+`_meta["cognition.ai/subagent_context"]` describe a subagent's context and are
+ignored. Devin's `cognition.ai/*` notifications (titles, status, turn stats) are not
+used. Plan limits are not exposed over ACP.
+
+**Commands.** Devin advertises its slash commands and skills with
+`available_commands_update`. `/login`, `/logout`, `/ask`, `/plan`, `/code`, `/bypass`
+and `/normal` are hidden: the account stays with the CLI, and modes with PandaCode's
+mode picker (`/bypass` would widen approvals). Command discovery deletes its session
+too.
+
+**Terminal console.** The console opens Devin's REPL with `--permission-mode
+accept-edits` (Standard) or `dangerous` (Full access), the task's `--model`, and
+`--resume <session-id>` for an existing task: ACP sessions and REPL sessions are the
+same. The REPL has no Plan permission mode, so a Plan task asks you to use task chat
+or `/plan`.
+
+**Updates.** Devin updates itself (`devin update`, Homebrew, or with Devin Desktop),
+so Settings shows a manual update link.
+
+Verified against `devin` 3000.11.216 on 2026-10-25 by driving `devin acp` directly
+(initialize, `session/new`, `session/load`, model switches, a Code turn, a rejected
+command, a Plan turn and a live steer). The recorded frames back the unit tests in
+`providers/devin.rs`, and an ignored smoke test
+(`installed_devin_lists_models_with_efforts`) reads the real catalog and command list
+without sending a prompt.
 
 ## Kilo Code
 

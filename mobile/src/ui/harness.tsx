@@ -22,6 +22,7 @@ export const HARNESSES: Record<string, Harness> = {
   cline: { name: 'Cline', logo: require('../../assets/providers/cline.svg'), mono: true },
   'github-copilot': { name: 'GitHub Copilot', logo: require('../../assets/providers/github-copilot.svg'), mono: true },
   muse: { name: 'Muse Code', logo: require('../../assets/providers/muse.svg') },
+  devin: { name: 'Devin', logo: require('../../assets/providers/devin.svg'), mono: true },
   kilo: { name: 'Kilo Code' },
   omp: { name: 'omp' },
 };
