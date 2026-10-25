@@ -181,7 +181,7 @@ export function mountProviderSettings(host: HTMLElement, saved: () => Promise<un
     endpointHint.textContent = chosen ? chosen.url : 'Required before MiMo tasks can start. The Token Plan page shows your cluster.';
     endpointHint.classList.toggle('error', !chosen);
   }
-  async function perform(operation: () => Promise<Configuration>, success: string, submittedInput?: HTMLInputElement): Promise<void> {
+  async function perform(operation: () => Promise<Configuration>, success: string, submittedInput?: HTMLInputElement, onFailure?: () => void): Promise<void> {
     if (pending || disposed) return;
     const submittedValue = submittedInput?.value;
     pending = true; host.setAttribute('aria-busy', 'true');
@@ -198,7 +198,7 @@ export function mountProviderSettings(host: HTMLElement, saved: () => Promise<un
       }
       render(configuration); message(success);
       await saved();
-    } catch (error) { if (!disposed) message(String(error), true); }
+    } catch (error) { if (!disposed) { message(String(error), true); onFailure?.(); } }
     finally {
       pending = false;
       if (!disposed) { claudeMode.disabled = false; host.removeAttribute('aria-busy'); host.querySelectorAll<HTMLButtonElement>('button').forEach(button => button.disabled = false); host.querySelectorAll<HTMLInputElement>('[data-use-global]').forEach(toggle => toggle.disabled = false); for (const input of keyInputs) host.querySelector<HTMLButtonElement>(`#${input.id}-form button`)!.disabled = input.disabled; }
@@ -270,8 +270,11 @@ export function mountProviderSettings(host: HTMLElement, saved: () => Promise<un
       const provider = target.dataset.useGlobal!;
       const useGlobal = target.checked;
       void perform(
-        () => call('provider_set_use_global_environment', { provider, useGlobal }),
+        () => call<Configuration>('provider_set_use_global_environment', { provider, useGlobal }),
         useGlobal ? 'Global environment variables are used again.' : 'Global environment variables are off for this provider.',
+        undefined,
+        // perform only reports the failure; the checkbox returns to the saved state.
+        () => { target.checked = !useGlobal; },
       );
       return;
     }

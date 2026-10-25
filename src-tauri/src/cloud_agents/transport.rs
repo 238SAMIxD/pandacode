@@ -52,14 +52,24 @@ fn argv(configure: impl FnOnce(&mut Command)) -> (Vec<String>, Vec<(String, Stri
 /// `credentials.rs`), so an inherited environment is capped before the machine starts.
 const INHERIT_LIMIT: usize = 32 * 1024;
 
+/// The cloud provider a task runs on, read straight from its session row.
+fn cloud_provider(app: &tauri::AppHandle, session_id: &str) -> Option<String> {
+    let state = app.state::<crate::AppState>();
+    let store = state.store.lock().ok()?;
+    super::load(&store, session_id).ok().flatten().map(|cloud| cloud.provider)
+}
+
 /// The harness's saved environment variables for a cloud run, when this cloud is set to
 /// inherit them (off by default, so nothing is sent without the user asking for it).
+/// Variables the local launch would scrub ("Prefer saved Claude login") are filtered
+/// here too: the remote `cmd.sh` can only set, never remove.
 fn inherited_environment(cloud_provider: &str, harness: &str) -> Result<Vec<(String, String)>, String> {
     let inherits = crate::cloud::settings().providers.get(cloud_provider).and_then(|options| options.get("inheritEnvironment").map(String::as_str)) == Some("true");
     if !inherits {
         return Ok(Vec::new());
     }
-    checked_environment(crate::provider_settings::environment(harness))
+    let removed = crate::providers::claude_auth::removed_environment(harness);
+    checked_environment(crate::provider_settings::environment(harness).into_iter().filter(|(name, _)| !removed.contains(&name.as_str())).collect())
 }
 
 /// Loopback guard and size cap for an environment about to travel to a cloud machine.
@@ -99,11 +109,21 @@ pub(crate) async fn command(config: &RunConfig, configure: impl FnOnce(&mut Comm
     if !config.images.is_empty() {
         return Err("Images can't be sent to a cloud machine yet.".into());
     }
+    // Guards run before any machine prep: a refused environment must not cost a
+    // sandbox start. Attach never sends env — the bridge catches up with the live
+    // run instead of starting one — so there is nothing to inherit into.
+    let inherited = if attach {
+        Vec::new()
+    } else {
+        match cloud_provider(app, &config.session_id) {
+            Some(cloud) => inherited_environment(cloud.as_str(), &config.provider)?,
+            None => Vec::new(),
+        }
+    };
     let (args, env) = argv(configure);
     let (session_id, provider) = (config.session_id.clone(), config.provider.clone());
     let worker = app.clone();
     let prepared = crate::blocking(move || super::tasks::before_run(&worker, &session_id, &provider, attach)).await?;
-    let inherited = inherited_environment(&prepared.provider, &config.provider)?;
     let dir = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("cloud-runs");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let status = dir.join(format!("{}.status", config.session_id));

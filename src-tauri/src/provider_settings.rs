@@ -86,7 +86,7 @@ pub fn setup(dir: &Path) -> Result<()> {
         settings.mimo_endpoint = settings
             .mimo_endpoint
             .filter(|id| crate::providers::mimo_endpoint_url(id).is_some());
-        settings.global_environment = valid_vars(settings.global_environment);
+        settings.global_environment = valid_global_environment(settings.global_environment);
         settings.environment = valid_environment(settings.environment);
         settings
             .global_environment_disabled
@@ -129,6 +129,13 @@ fn valid_vars(vars: BTreeMap<String, String>) -> BTreeMap<String, String> {
     vars.into_iter()
         .filter(|(name, value)| valid_env_name(name) && value.len() <= MAX_ENV_VALUE && !value.contains('\0'))
         .collect()
+}
+
+/// The global set from a hand-edited file: junk is dropped, and an over-cap set
+/// is dropped entirely (saves can never produce one — `persist` refuses first).
+fn valid_global_environment(vars: BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let vars = valid_vars(vars);
+    if vars.len() > MAX_ENV { BTreeMap::new() } else { vars }
 }
 
 /// Keeps only providers PandaCode knows and variables with valid names and
@@ -514,6 +521,13 @@ fn save_executable(provider: &str, path: &str) -> Result<()> {
     persist(&mut runtime, next)
 }
 fn persist(runtime: &mut Runtime, next: Settings) -> Result<()> {
+    let bytes = serde_json::to_vec_pretty(&next).map_err(|e| e.to_string())?;
+    // Every save passes through here, so this is the one guard that keeps the
+    // file under the load-time cap (64 KiB) — crossing it would refuse the
+    // file on the next launch, with no UI left to shrink it.
+    if bytes.len() > 56 * 1024 {
+        return Err("Provider settings would grow past their storage budget. Remove some environment variables and try again.".into());
+    }
     let temp = runtime.path.with_extension("json.tmp");
     std::fs::write(
         &temp,
@@ -1272,6 +1286,35 @@ mod tests {
         let legacy: Settings = serde_json::from_value(serde_json::json!({"executablePaths": {}})).unwrap();
         assert!(legacy.global_environment_disabled.is_empty());
         assert!(legacy.global_environment.is_empty());
+    }
+
+    #[test]
+    fn a_save_that_would_cross_the_load_cap_is_refused_and_keeps_the_previous_settings() {
+        let directory =
+            std::env::temp_dir().join(format!("pandacode-env-budget-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let mut runtime = Runtime {
+            path: directory.join("provider-settings.json"),
+            settings: Settings::default(),
+        };
+        let mut next = runtime.settings.clone();
+        next.environment.insert(
+            "claude".into(),
+            (0..MAX_ENV).map(|index| (format!("VAR_{index}"), "x".repeat(900))).collect(),
+        );
+        let refused = persist(&mut runtime, next.clone());
+        assert!(refused.is_err(), "64 × 900-byte values cross the 56 KiB save budget");
+        assert!(refused.unwrap_err().contains("storage budget"));
+        assert!(runtime.settings.environment.is_empty(), "the in-memory settings keep the previous state");
+        // A modest set still saves, and the global cap drops an over-cap hand-edited set.
+        next.environment.insert("claude".into(), BTreeMap::from([("A".into(), "1".into())]));
+        persist(&mut runtime, next).unwrap();
+        let over_cap: BTreeMap<String, String> =
+            (0..MAX_ENV + 1).map(|index| (format!("V{index}"), "1".into())).collect();
+        assert!(valid_global_environment(over_cap).is_empty());
+        let under_cap = valid_global_environment(BTreeMap::from([("A".into(), "1".into())]));
+        assert_eq!(under_cap.len(), 1);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

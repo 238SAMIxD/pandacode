@@ -161,6 +161,10 @@ it, and the harness would lose all its API traffic. The harness's own
 credentials and endpoints still win over inherited variables, and mirroring a
 task to another computer stays untouched — that computer uses its own settings.
 
+The per-provider list and the opt-out switch live on each provider's card here,
+so harnesses without a card (Codex and Kimi Code) currently take only the
+global set.
+
 ## GitHub Copilot CLI
 
 Install GitHub Copilot CLI using [GitHub's installation guide](https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli), then sign in in a terminal with `copilot login`. PandaCode discovers or uses the configured `copilot` executable and starts its local ACP stdio server with `copilot --no-auto-update --acp --stdio`. The CLI owns GitHub authentication; PandaCode does not store GitHub credentials or add a separate login flow. ACP support is a public preview; see [GitHub's ACP reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/acp-server).

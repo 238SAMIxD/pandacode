@@ -53,6 +53,9 @@ pub async fn cloud_set_inherit_environment(provider: String, inherit: bool) -> R
         if !super::PROVIDERS.contains(&provider.as_str()) {
             return Err("Choose an available cloud provider.".into());
         }
+        if provider == "railway" {
+            return Err("Railway cannot host cloud agents, so there is no environment to inherit.".into());
+        }
         let mut settings = super::settings();
         if inherit {
             settings.providers.entry(provider.clone()).or_default().insert("inheritEnvironment".into(), "true".into());
