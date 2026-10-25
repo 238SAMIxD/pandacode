@@ -43,6 +43,7 @@ impl ModelSelection {
             "github-copilot",
             "muse",
             "devin",
+            "zcode",
         ]
         .contains(&self.provider.as_str())
             || self.model.len() > 200

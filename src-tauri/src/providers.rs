@@ -47,6 +47,7 @@ mod kimi_models;
 mod kilo;
 mod launch;
 mod pi;
+mod zcode;
 mod diagnostics;
 pub(crate) mod claude_auth;
 pub(crate) use launch::{command, pty_command, external_path, executable_path, widen_process_path};
@@ -70,7 +71,7 @@ const TOOL_INPUT_LIMIT: usize = 4096;
 const TOOL_OUTPUT_LIMIT: usize = 8192;
 const TOOL_CACHE_LIMIT: usize = 64;
 const PREVIEW_TRUNCATED: &str = "\n[Preview truncated]";
-pub(crate) const PROVIDERS: [(&str, &str); 17] = [
+pub(crate) const PROVIDERS: [(&str, &str); 18] = [
     ("claude", "Claude Code"),
     ("codex", "Codex"),
     ("kimi", "Kimi Code"),
@@ -88,6 +89,7 @@ pub(crate) const PROVIDERS: [(&str, &str); 17] = [
     ("github-copilot", "GitHub Copilot CLI"),
     ("muse", "Muse Code"),
     ("devin", "Devin CLI"),
+    ("zcode", "ZCode"),
 ];
 
 /// Claude Code tools that only report back to a session that stays open after its turn.
@@ -468,14 +470,14 @@ pub fn validate_reasoning_effort(provider: &str, effort: Option<&str>) -> Result
     let valid = match (provider, effort) {
         (
             "claude" | "codex" | "kimi" | "glm" | "opencode" | "antigravity" | "grok" | "mimo"
-            | "pi" | "deepseek" | "commandcode" | "cline" | "kilo" | "omp" | "github-copilot" | "muse" | "devin",
+            | "pi" | "deepseek" | "commandcode" | "cline" | "kilo" | "omp" | "github-copilot" | "muse" | "devin" | "zcode",
             None,
         ) => true,
         ("claude" | "glm" | "mimo", Some(value)) => {
             ["low", "medium", "high", "xhigh", "max"].contains(&value)
         }
         // The current app-server schema deliberately permits catalog-defined effort IDs.
-        ("codex" | "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "kilo" | "devin", Some(value)) => {
+        ("codex" | "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "kilo" | "devin" | "zcode", Some(value)) => {
             !value.is_empty()
                 && value.len() <= 64
                 && value
@@ -711,7 +713,7 @@ pub(crate) async fn list_model_catalog(provider: &str) -> Result<Vec<ModelInfo>,
     let semaphore = &model_discovery_semaphores()[index];
     let _permit = if matches!(
         provider,
-        "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "kilo" | "github-copilot" | "muse" | "devin"
+        "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "kilo" | "github-copilot" | "muse" | "devin" | "zcode"
     ) {
         // Saving models refreshes both windows. Queue their bounded metadata
         // queries so one window does not cache incomplete ID-only fallbacks.
@@ -742,6 +744,7 @@ pub(crate) async fn list_model_catalog(provider: &str) -> Result<Vec<ModelInfo>,
         "github-copilot" => github_copilot::models(&path).await,
         "muse" => muse::models(&path).await,
         "devin" => devin::models(&path).await,
+        "zcode" => zcode::models(&path).await,
         _ => unreachable!(),
     }
 }
@@ -1083,6 +1086,7 @@ struct Protocol {
     kimi_resume: bool,
     pi: pi::State,
     muse: muse::State,
+    zcode: zcode::State,
     // ACP may publish commands before session/new responds. Keep at most one
     // small frame until the response confirms which session owns it.
     early_kimi_commands: Option<Vec<u8>>,
@@ -1212,6 +1216,7 @@ impl Protocol {
             kimi_resume: false,
             pi: pi::State::default(),
             muse: muse::State::default(),
+            zcode: zcode::State::default(),
             early_kimi_commands: None,
             tools: HashMap::new(),
             file_write_tools: HashSet::new(),
@@ -1660,6 +1665,7 @@ impl Protocol {
     fn initial(&self) -> Value {
         match self.config.provider.as_str() {
             "pi" | "omp" => json!({"type":"get_state","id":"pandacode-init"}),
+            "zcode" => self.zcode_initial(),
             "muse" => self.muse_initial(),
             "codex" => {
                 let mut request = json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"pandacode","title":"PandaCode","version":"0.1.0"}}});
@@ -1697,6 +1703,7 @@ impl Protocol {
         let request = self.pending.remove(id)?;
         Some(match self.config.provider.as_str() {
             "pi" | "omp" => json!({"type":"extension_ui_response","id":request["id"],"confirmed":approved}),
+            "zcode" => zcode::permission_decision(&request, approved),
             "codex" => {
                 let method = string(&request, "method");
                 let result = if method == "item/permissions/requestApproval" {
@@ -1730,6 +1737,7 @@ impl Protocol {
     fn cancel(&self) -> Value {
         match self.config.provider.as_str() {
             "pi" | "omp" => json!({"type":"abort"}),
+            "zcode" => zcode::stop(&self.remote_id),
             "muse" => self.muse_cancel(),
             "codex" => {
                 json!({"id":900,"method":"turn/interrupt","params":{"threadId":self.remote_id,"turnId":self.turn_id}})
@@ -1763,6 +1771,7 @@ impl Protocol {
             "codex" => self.codex(value).map(|step| self.steered(step)),
             "kimi" => self.kimi_steered(value),
             "pi" | "omp" => self.pi(value).map(|step| self.steered(step)),
+            "zcode" => self.zcode(value).map(|step| self.steered(step)),
             "muse" => self.muse(value),
             "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "kilo" | "github-copilot" | "devin" => self.acp(value),
             _ => self.claude(value),
@@ -2701,6 +2710,7 @@ fn configure_command(command: &mut Command, config: &RunConfig) {
             command.args(["app-server", "--enable", "goals"]);
         }
         "pi" | "omp" => pi::configure(command, config),
+        "zcode" => zcode::configure(command),
         "muse" => muse::configure(command, config),
         "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "kilo" => acp::configure(command, config),
         "github-copilot" | "devin" => acp::configure(command, config),
@@ -2785,6 +2795,7 @@ async fn run_inner(
         "github-copilot",
         "muse",
         "devin",
+        "zcode",
     ]
     .contains(&config.provider.as_str())
     {
