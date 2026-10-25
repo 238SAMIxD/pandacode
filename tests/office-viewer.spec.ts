@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openInspectorTab } from './inspector-tab-helper';
 
 const open = async (page: Page, name: string) => {
   await page.locator('.file-row').getByRole('button', { name, exact: true }).click();
@@ -10,6 +11,7 @@ test.beforeEach(async ({ page }) => {
   errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto('/');
+  await openInspectorTab(page, 'Files');
   await page.getByRole('button', { name: 'Files', exact: true }).click();
 });
 test.afterEach(() => { expect(errors).toEqual([]); });

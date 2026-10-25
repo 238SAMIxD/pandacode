@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { openInspectorTab } from './inspector-tab-helper';
 
 // Vite may add an HMR timestamp to the app's module URL. Reuse that exact
 // instance so assertions and injected events reach the application's store.
@@ -8,7 +9,9 @@ const prompt = (page: Page) => page.getByRole('textbox', { name: 'Message your c
 // Rows mark tasks with a prompt or response in the last 24 hours; folders group them by project.
 const activeRows = (page: Page) => page.locator('#navigation .task-item[data-activity="active"]');
 const taskRow = (page: Page, id: string, activity?: 'active' | 'inactive') => page.locator(`#navigation .task-item[data-id="${id}"]${activity ? `[data-activity="${activity}"]` : ''}`);
-const folderRows = (page: Page, id: string) => page.locator(`#navigation .folder-group:has(.task-item[data-id="${id}"]) .task-item`);
+const activeSectionRows = (page: Page) => page.locator('#navigation [data-thread-group="active"] .task-item');
+// The Changes tab stacks each changed file with its diff inline.
+const changeFiles = (page: Page) => page.locator('#inspector-content .changes-view .cv-file');
 const projectFilter = (page: Page) => page.getByRole('button', { name: 'Filter projects', exact: true });
 const chooseProjectFilter = async (page: Page, name: string) => {
   await projectFilter(page).click();
@@ -193,7 +196,7 @@ test('identifies sample data and renders the desktop workspace without runtime e
   await expect(page.locator('.markdown pre code')).toContainText('createSearchIndex');
   await expect(prompt(page)).toBeEnabled();
   await page.locator('.inspector-tabs [data-action="tab-changes"]').click();
-  await expect(page.locator('.change-row')).toHaveCount(3);
+  await expect(changeFiles(page)).toHaveCount(3);
   await page.screenshot({ path: '/private/tmp/pandacode-activity.png' });
   expect(errors).toEqual([]);
 });
@@ -1250,9 +1253,14 @@ test('changes permissions and opens task actions with anchored keyboard menus', 
   await expect(page.locator('.user-message,.agent-message')).toHaveText(history);
   await page.getByRole('button', { name: 'Task actions', exact: true }).click();
   const actions = page.getByRole('dialog', { name: 'Task actions', exact: true });
+  // Pin task leads the menu; Rename task follows it.
+  await expect(actions.getByRole('menuitem', { name: 'Pin task', exact: true })).toBeFocused();
+  await page.keyboard.press('ArrowDown');
   await expect(actions.getByRole('menuitem', { name: 'Rename task', exact: true })).toBeFocused();
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Home');
+  await expect(actions.getByRole('menuitem', { name: 'Pin task', exact: true })).toBeFocused();
+  await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
   await expect(actions).toHaveCount(0);
   const rename = page.locator('#dialog');
@@ -2326,7 +2334,8 @@ test('keeps approval, retry, stopping, and completed summaries clear', async ({ 
 test('marks a sent prompt active before the first agent response', async ({ page }) => {
   const sessionId = await startControlledStatusStream(page);
   await expect(taskRow(page, sessionId, 'active')).toBeVisible();
-  await expect(folderRows(page, sessionId).first()).toHaveAttribute('data-id', sessionId);
+  // The open thread's running agent is listed under Active.
+  await expect(activeSectionRows(page).first()).toHaveAttribute('data-id', sessionId);
   await expect(page.locator('.streaming-content')).toBeEmpty();
   // Metadata can arrive before the native send has returned its persisted prompt.
   await page.evaluate(async () => { const { refreshStatusTestSessions } = await import((window as any).__pandacodePreviewUrl); refreshStatusTestSessions(); });
@@ -2426,7 +2435,10 @@ test('moves a task to inactive automatically at the 24 hour response boundary', 
 test('renaming and changing a model do not make an old response active', async ({ page }) => {
   await taskRow(page, 'session-4', 'inactive').click();
   await page.getByRole('button', { name: 'Task actions', exact: true }).click();
-  const renameAction = page.getByRole('dialog', { name: 'Task actions', exact: true }).getByRole('menuitem', { name: 'Rename task', exact: true });
+  const taskActions = page.getByRole('dialog', { name: 'Task actions', exact: true });
+  await expect(taskActions.getByRole('menuitem', { name: 'Pin task', exact: true })).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  const renameAction = taskActions.getByRole('menuitem', { name: 'Rename task', exact: true });
   await expect(renameAction).toBeFocused();
   await renameAction.press('Enter');
   const dialog = page.getByRole('dialog');
@@ -2508,19 +2520,18 @@ test('removes the old project inspector actions while the new task history loads
   });
   await page.reload();
   await page.locator('.inspector-tabs [data-action="tab-changes"]').click();
-  await expect(page.locator('.change-row')).toHaveCount(3);
-  await page.locator('[data-action="open-diff"]').first().click();
-  await expect(page.locator('.diff-viewer')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Stage file', exact: true })).toBeVisible();
+  await expect(changeFiles(page)).toHaveCount(3);
+  await expect(changeFiles(page).first().locator('.diff-viewer')).toBeVisible();
+  await expect(changeFiles(page).first().getByRole('button', { name: 'File actions', exact: true })).toBeVisible();
   await chooseProjectFilter(page, 'pandacode');
   await page.waitForFunction(() => typeof (window as any).__pandacodeReleaseMessages === 'function');
   await expect(page.locator('.task-item.selected .task-title')).toHaveText('Explore the project');
-  await expect(page.locator('#inspector-content')).toContainText('Loading files…');
-  await expect(page.getByRole('button', { name: 'Stage file', exact: true })).toHaveCount(0);
-  await expect(page.locator('.diff-viewer,.change-row')).toHaveCount(0);
+  await expect(page.locator('#inspector-content')).toContainText('Loading changes…');
+  await expect(page.getByRole('button', { name: 'File actions', exact: true })).toHaveCount(0);
+  await expect(page.locator('.diff-viewer,.cv-file')).toHaveCount(0);
   await page.evaluate(() => { (window as any).__pandacodeReleaseMessages(); delete (window as any).__pandacodeReleaseMessages; });
   await page.locator('.inspector-tabs [data-action="tab-changes"]').click();
-  await expect(page.locator('.change-row')).toHaveCount(3);
+  await expect(changeFiles(page)).toHaveCount(3);
   await expect(page.locator('#breadcrumb')).toContainText('pandacode');
 });
 
@@ -2633,8 +2644,8 @@ test('changes the empty task project while keeping its draft, harness, model, an
   await expect.poll(() => savedSelection(page)).toEqual({ provider: 'kimi', model: 'project-switch-model' });
   await expect(page.getByRole('complementary', { name: 'Project inspector' })).toBeVisible();
   await page.locator('.inspector-tabs [data-action="tab-changes"]').click();
-  await page.locator('[data-action="open-diff"]').first().click();
-  await expect(page.locator('.diff-viewer')).toBeVisible();
+  await expect(changeFiles(page).first().locator('.diff-viewer')).toBeVisible();
+  const oldChanges = await page.locator('#inspector-content .changes-view').elementHandle();
   await page.getByRole('button', { name: 'Change task project', exact: true }).first().click();
   const picker = taskProjectPicker(page);
   await picker.getByRole('searchbox', { name: 'Search projects', exact: true }).fill('panda');
@@ -2644,7 +2655,8 @@ test('changes the empty task project while keeping its draft, harness, model, an
   await expect(prompt(page)).toHaveAttribute('data-session-id', sessionId!);
   await expect(openTaskProject(page)).toHaveText('pandacode');
   await expect(page.locator('#composer-area').getByRole('button', { name: 'Change task project', exact: true })).toHaveText('pandacode');
-  await expect(page.locator('.diff-viewer')).toHaveCount(0);
+  // The old project's Changes view and its diffs are gone; the new project gets its own.
+  await expect.poll(() => oldChanges!.evaluate(node => node.isConnected)).toBe(false);
   await expect(page.getByRole('complementary', { name: 'Project inspector' })).toContainText('test/pandacode-project');
   await expect(prompt(page)).toHaveValue('Keep this plan while I choose the right repository');
   await expect(page.locator('#composer')).toContainText('project-switch-model');
@@ -2982,6 +2994,7 @@ test('switches harness after the first message while preserving conversation and
 });
 
 test('browses a file and includes its contents as attached message context', async ({ page }) => {
+  await openInspectorTab(page, 'Files');
   await page.getByRole('button', { name: 'Files', exact: true }).click();
   await page.locator('[data-action="open-file"][data-path="package.json"]').click();
   await expect(page.locator('.code-preview')).toContainText('"name": "orbit"');
@@ -3000,17 +3013,28 @@ test('browses a file and includes its contents as attached message context', asy
 
 test('reviews a diff, stages changes, and commits within the sample session', async ({ page }) => {
   await page.locator('.inspector-tabs [data-action="tab-changes"]').click();
-  await expect(page.getByRole('button', { name: 'Commit', exact: true })).toBeDisabled();
-  await page.locator('[data-action="open-diff"]').first().click();
-  await expect(page.locator('.diff-viewer')).toContainText('renderResults');
-  await page.getByRole('button', { name: 'Stage file', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Unstage file', exact: true })).toHaveCount(1);
-  await page.getByRole('button', { name: 'Stage all', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Commit 3 files', exact: true })).toBeEnabled();
-  await page.getByRole('textbox', { name: 'Commit message', exact: true }).fill('Improve search responsiveness');
-  await page.getByRole('button', { name: 'Commit 3 files', exact: true }).click();
-  await expect(page.getByText('Working tree clean', { exact: true })).toBeVisible();
-  await expect(page.locator('.change-row')).toHaveCount(0);
+  const view = page.locator('#inspector-content .changes-view');
+  const menuItem = (name: string) => page.getByRole('menuitem', { name, exact: true });
+  const more = view.getByRole('button', { name: 'More actions', exact: true });
+  await more.click();
+  await menuItem('Commit…').click();
+  const commit = view.getByRole('button', { name: 'Commit', exact: true });
+  await view.getByRole('textbox', { name: 'Commit message', exact: true }).fill('Improve search responsiveness');
+  await expect(commit).toBeDisabled();
+  const first = changeFiles(page).first();
+  await expect(first.locator('.diff-viewer')).toContainText('renderResults');
+  await first.getByRole('button', { name: 'File actions', exact: true }).click();
+  await menuItem('Stage file').click();
+  await expect(commit).toBeEnabled();
+  await first.getByRole('button', { name: 'File actions', exact: true }).click();
+  await expect(menuItem('Unstage file')).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await more.click();
+  await menuItem('Stage all').click();
+  await expect(changeFiles(page)).toHaveCount(3);
+  await commit.click();
+  await expect(view.getByText('Working tree clean', { exact: true })).toBeVisible();
+  await expect(changeFiles(page)).toHaveCount(0);
   await expect(page.locator('#toast')).toContainText('Preview commit created');
 });
 
@@ -3178,8 +3202,8 @@ test('routes worktree files, Git, and terminals by task and retains each checkou
   await expect(page.getByRole('complementary', { name: 'Project inspector' })).toBeVisible();
   await page.locator('.inspector-tabs [data-action="tab-changes"]').click();
   await expect(page.locator('#inspector-content')).toContainText('codex/worktree-routing');
-  await page.locator('[data-action="open-diff"]').first().click();
-  await expect(page.locator('.diff-viewer')).toBeVisible();
+  await expect(changeFiles(page).first().locator('.diff-viewer')).toBeVisible();
+  await openInspectorTab(page, 'Files');
   await page.getByRole('button', { name: 'Files', exact: true }).click();
   await page.locator('[data-action="open-file"][data-path="package.json"]').click();
   await expect(page.locator('.code-preview')).toContainText('"checkout":"worktree"');
@@ -3224,29 +3248,28 @@ test('clears worktree inspector actions immediately and ignores stale same-proje
   const taskId = await page.locator('.task-item.selected').getAttribute('data-id');
   await expect(page.getByRole('complementary', { name: 'Project inspector' })).toBeVisible();
   await page.locator('.inspector-tabs [data-action="tab-changes"]').click();
-  await page.locator('[data-action="open-diff"]').first().click();
-  await expect(page.locator('.diff-viewer')).toBeVisible();
+  await expect(changeFiles(page).first().locator('.diff-viewer')).toBeVisible();
   await page.evaluate(() => { (window as any).__pandacodeDelayWorktreeHistory = true; });
   await page.locator('.task-item[data-id="session-1"]').click();
   await expect.poll(() => page.evaluate(() => typeof (window as any).__pandacodeReleaseWorktreeHistory)).toBe('function');
   await page.locator('.inspector-tabs [data-action="tab-changes"]').click();
-  await expect(page.locator('.diff-viewer,.change-row')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Stage file', exact: true })).toHaveCount(0);
-  await page.evaluate(() => { (window as any).__pandacodeDelayWorktreeHistory = false; (window as any).__pandacodeReleaseWorktreeHistory(); });
-  await expect(page.locator('.change-row')).toHaveCount(3);
+  await expect(page.locator('.diff-viewer,.cv-file')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'File actions', exact: true })).toHaveCount(0);
+  // The root checkout's diffs are held until the worktree task is open again.
+  await page.evaluate(() => { (window as any).__pandacodeDelayWorktreeDiff = true; (window as any).__pandacodeDelayWorktreeHistory = false; (window as any).__pandacodeReleaseWorktreeHistory(); });
+  await expect(changeFiles(page)).toHaveCount(3);
   await expect(page.getByRole('complementary', { name: 'Project inspector' })).toBeVisible();
-  await page.evaluate(() => { (window as any).__pandacodeDelayWorktreeDiff = true; });
-  await page.locator('[data-action="open-diff"]').first().click();
   await expect.poll(() => page.evaluate(() => typeof (window as any).__pandacodeReleaseWorktreeDiff)).toBe('function');
   await page.evaluate(() => { (window as any).__pandacodeDelayWorktreeDiff = false; });
   await page.locator(`.task-item[data-id="${taskId}"]`).click();
   await expect(newTaskHeading(page)).toBeVisible();
-  await expect(page.locator('.diff-viewer')).toBeVisible();
-  await expect(page.locator('.diff-viewer')).toContainText('worktree-snapshot');
+  const diff = changeFiles(page).first().locator('.diff-viewer');
+  await expect(diff).toBeVisible();
+  await expect(diff).toContainText('worktree-snapshot');
   await page.evaluate(() => { (window as any).__pandacodeReleaseWorktreeDiff(); });
   await expect.poll(() => page.evaluate(() => (window as any).__pandacodeWorktreeDiffFinished)).toBe(true);
-  await expect(page.locator('.diff-viewer')).toContainText('worktree-snapshot');
-  await expect(page.locator('.diff-viewer')).not.toContainText('root-stale-snapshot');
+  await expect(diff).toContainText('worktree-snapshot');
+  await expect(page.locator('#inspector-content')).not.toContainText('root-stale-snapshot');
   await expect(page.locator('.task-item.selected')).toHaveAttribute('data-id', taskId!);
 });
 
