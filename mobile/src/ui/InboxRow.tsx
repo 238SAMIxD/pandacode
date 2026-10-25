@@ -1,7 +1,7 @@
 // One inbox row: project tile + name and status, the title, then `branch · computer` and the
 // harness logo. Swipe for Snooze / Pin / Stop; long press for the same as a menu.
 import * as Haptics from 'expo-haptics';
-import { Link } from 'expo-router';
+import { Link, router } from 'expo-router';
 import { memo, useEffect, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Text, View, type ColorValue } from 'react-native';
 import Swipeable, { type SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
@@ -10,6 +10,7 @@ import { connect } from '../connect/client.ts';
 import { markOpen } from '../connect/perf.ts';
 import { elapsedLabel, stalledFor, tomorrowMorning, type InboxRow as Row } from '../store/inbox.ts';
 import { taskKey, useConnect } from '../store/index.ts';
+import { workerActive } from '../store/team.ts';
 import { removeOutbox, retryOutbox, snooze, togglePin, unsnooze } from '../store/local.ts';
 import { HarnessLogo } from './harness.tsx';
 import { Icon } from './Icon.tsx';
@@ -118,15 +119,23 @@ function SidebarStatus({ row, colors }: { row: Row; colors: Colors }) {
   return <Status row={row} colors={colors} />;
 }
 
-/** A running row's second line: what the agent is doing now and how many subagents are working. */
+/** A running row's second line: what the agent is doing now and how many subagents and team
+ * workers (once the task's team is known) are working; the count opens the Agents screen. */
 function Activity({ row, colors }: { row: Row; colors: Colors }) {
-  const { activity, agents } = row.run;
+  const workers = useConnect(s => { const team = s.teams[row.key]; return team && team !== 'outdated' ? team.workers.filter(workerActive).length : 0; });
+  const activity = row.run.activity;
+  const agents = row.run.agents + workers;
   if (row.badge !== 'working' || (!activity && !agents)) return null;
   return (
     <View style={styles.line}>
       <Icon ios={activity === 'Thinking' ? 'brain' : 'arrow.turn.down.right'} android={activity === 'Thinking' ? 'psychology' : 'subdirectory_arrow_right'} size={11} color={colors.secondary} />
       <Text style={[styles.activity, { color: colors.secondary }]} numberOfLines={1}>{activity || 'Working'}</Text>
-      {agents > 0 && <Text style={[styles.agents, { color: colors.tint, backgroundColor: colors.tintFill }]}>+{agents} agent{agents === 1 ? '' : 's'}</Text>}
+      {agents > 0 && (
+        <Pressable onPress={() => router.push({ pathname: '/agents', params: { device: row.deviceId, session: row.task.sessionId } })} hitSlop={8}
+          accessibilityRole="button" accessibilityLabel={`${agents} agent${agents === 1 ? '' : 's'} working. Show agents`}>
+          <Text style={[styles.agents, { color: colors.tint, backgroundColor: colors.tintFill }]}>+{agents} agent{agents === 1 ? '' : 's'}</Text>
+        </Pressable>
+      )}
     </View>
   );
 }

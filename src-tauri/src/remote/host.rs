@@ -13,9 +13,9 @@ use std::process::Command;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Listener, Manager};
 
-pub(crate) const METHODS: [&str; 26] = ["subscribe", "tasks.list", "projects.icons", "providers.list", "providers.models", "task.start", "task.messages", "task.attachment", "task.workspaceImage", "task.send", "task.stop", "task.steer", "task.configure", "approval.respond", "input.respond", "task.pull", "task.pullDiff", "task.pullMerge", "task.pullDetect", "task.changes", "task.diff", "bots.list", "bot.thread", "bot.message", "bot.pause", "batch"];
+pub(crate) const METHODS: [&str; 28] = ["subscribe", "tasks.list", "projects.icons", "providers.list", "providers.models", "task.start", "task.messages", "task.team", "task.workerMessages", "task.attachment", "task.workspaceImage", "task.send", "task.stop", "task.steer", "task.configure", "approval.respond", "input.respond", "task.pull", "task.pullDiff", "task.pullMerge", "task.pullDetect", "task.changes", "task.diff", "bots.list", "bot.thread", "bot.message", "bot.pause", "batch"];
 pub(crate) const OFF: &str = "Remote control is off on this computer";
 pub(crate) const MAX_TEXT: usize = 100 * 1024;
 const SUBSCRIPTION: Duration = Duration::from_secs(10 * 60);
@@ -25,6 +25,10 @@ pub(crate) const MAX_IDS: usize = 500;
 const TASKS_DEFAULT: usize = 200;
 const TASKS_MAX: usize = 500;
 const MESSAGE_PAGE_DEFAULT: i64 = 100;
+const WORKER_MESSAGE_PAGE_DEFAULT: i64 = 100;
+const WORKER_MESSAGE_PAGE_MAX: i64 = 100;
+const TEAM_MESSAGE_COUNT: usize = 30;
+const TEAM_MESSAGE_TEXT: usize = 2048;
 const WINDOW_MS: i64 = 60_000;
 const MAX_SEEN: usize = 20_000;
 /// A reply's or event frame's JSON budget: sealing adds a third (base64) plus a small
@@ -101,6 +105,8 @@ pub(crate) enum Call {
     Models { provider: String, force: bool },
     Start(start::Start),
     Messages { session_id: String, page: MessagePaging },
+    Team { session_id: String },
+    WorkerMessages { session_id: String, worker_id: String, after_id: i64, limit: i64 },
     Attachment { session_id: String, id: String, variant: crate::attachments::Variant, offset: u64 },
     WorkspaceImage { session_id: String, path: String, variant: crate::attachments::Variant, offset: u64 },
     Send { session_id: String, text: String },
@@ -132,6 +138,8 @@ impl Call {
             Self::Models { .. } => "providers.models",
             Self::Start(_) => "task.start",
             Self::Messages { .. } => "task.messages",
+            Self::Team { .. } => "task.team",
+            Self::WorkerMessages { .. } => "task.workerMessages",
             Self::Attachment { .. } => "task.attachment",
             Self::WorkspaceImage { .. } => "task.workspaceImage",
             Self::Send { .. } => "task.send",
@@ -166,6 +174,8 @@ pub(crate) fn is_read_only_method(method: &str) -> bool {
             | "providers.list"
             | "providers.models"
             | "task.messages"
+            | "task.team"
+            | "task.workerMessages"
             | "task.attachment"
             | "task.workspaceImage"
             | "task.pull"
@@ -370,6 +380,18 @@ pub(crate) fn parse(host_enabled: bool, method: &str, params: &Value) -> Result<
         }
         "task.start" => Call::Start(start::parse(params)?),
         "task.messages" => Call::Messages { session_id: id_param(params, "sessionId")?, page: message_paging(params)? },
+        "task.team" => Call::Team { session_id: id_param(params, "sessionId")? },
+        "task.workerMessages" => {
+            let after_id = match params.get("afterId").filter(|value| !value.is_null()) {
+                None => 0,
+                Some(value) => value.as_i64().filter(|id| *id >= 0).ok_or("Invalid afterId.")?,
+            };
+            let limit = match params.get("limit").filter(|value| !value.is_null()) {
+                None => WORKER_MESSAGE_PAGE_DEFAULT,
+                Some(value) => value.as_u64().and_then(|limit| i64::try_from(limit).ok()).filter(|limit| (1..=WORKER_MESSAGE_PAGE_MAX).contains(limit)).ok_or_else(|| format!("Limit must be between 1 and {WORKER_MESSAGE_PAGE_MAX}."))?,
+            };
+            Call::WorkerMessages { session_id: id_param(params, "sessionId")?, worker_id: id_param(params, "workerId")?, after_id, limit }
+        }
         "task.attachment" => {
             let (variant, offset) = variant_offset(params)?;
             Call::Attachment { session_id: id_param(params, "sessionId")?, id: uuid_param(params, "id")?, variant, offset }
@@ -530,10 +552,445 @@ async fn run(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
     }
 }
 
+fn remote_worker_status(status: &str) -> &str {
+    match status {
+        "waiting" => "running",
+        "queued" | "running" | "completed" | "failed" | "stopped" => status,
+        _ => "stopped",
+    }
+}
+
+fn bounded_text(text: &str, max: usize) -> String {
+    let mut end = text.len().min(max);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    if end < text.len() {
+        format!("{}[Truncated]", &text[..end])
+    } else {
+        text.to_owned()
+    }
+}
+
+fn remote_worker(worker: &crate::architect::Worker) -> Value {
+    let checkpoint = worker.checkpoint.as_ref().map(|checkpoint| {
+        json!({
+            "summary": bounded_text(&checkpoint.summary, 1024),
+            "nextSteps": bounded_text(&checkpoint.next_steps, 1024),
+            "blocker": checkpoint.blocker.as_deref().map(|blocker| bounded_text(blocker, 1024)),
+            "updatedAt": checkpoint.updated_at,
+        })
+    });
+    json!({
+        "id": worker.id,
+        "name": worker.name,
+        "provider": worker.provider,
+        "model": worker.model,
+        "status": remote_worker_status(&worker.status),
+        "attempt": worker.attempt,
+        "summary": bounded_text(&worker.summary, 2048),
+        "checkpoint": checkpoint,
+        "files": worker.files,
+        "dependsOn": worker.depends_on,
+        "startedAt": worker.created_at,
+        "createdAt": worker.created_at,
+        "updatedAt": worker.updated_at,
+        "sessionId": worker.session_id,
+        // Desktop TeamWorker fields the phone's team panel also uses.
+        "profileId": worker.profile_id,
+        "assignment": bounded_text(&worker.assignment, 2048),
+        "error": worker.error.as_deref().map(|error| bounded_text(error, 1024)),
+        "readOnly": worker.read_only,
+        "abandoned": worker.abandoned,
+        "filesTruncated": false,
+    })
+}
+
+fn team_reply(
+    store: &crate::storage::Store,
+    team: &crate::architect::TeamSnapshot,
+) -> Result<Value> {
+    let mut query = store.db.prepare("SELECT id,sender,recipient,content,created_at FROM architect_messages WHERE parent_session_id=?1 ORDER BY id DESC LIMIT ?2").map_err(|error| error.to_string())?;
+    let mut messages = query
+        .query_map(
+            rusqlite::params![team.session_id, TEAM_MESSAGE_COUNT as i64],
+            |row| {
+                Ok(json!({
+                    "id": row.get::<_, i64>(0)?,
+                    "sender": row.get::<_, String>(1)?,
+                    "recipient": row.get::<_, String>(2)?,
+                    "message": bounded_text(&row.get::<_, String>(3)?, TEAM_MESSAGE_TEXT),
+                    "createdAt": row.get::<_, i64>(4)?,
+                }))
+            },
+        )
+        .map_err(|error| error.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| error.to_string())?;
+    messages.reverse();
+
+    let workers: Vec<Value> = team.workers.iter().map(remote_worker).collect();
+    let mut snapshot = remote_team(team, workers);
+    if !messages.is_empty() {
+        snapshot["messages"] = json!(messages);
+    }
+    Ok(fit_team_reply(json!({"team": snapshot})))
+}
+
+fn remote_team(team: &crate::architect::TeamSnapshot, workers: Vec<Value>) -> Value {
+    json!({
+        "sessionId": team.session_id,
+        "status": team.status,
+        "round": team.round,
+        "revision": team.revision,
+        "summary": team.summary.as_deref().map(|summary| bounded_text(summary, 4096)),
+        "updatedAt": team.updated_at,
+        "mode": if team.config.auto { "auto" } else { "classic" },
+        "rounds": {"used": team.round, "max": team.config.max_rounds},
+        "workers": workers,
+    })
+}
+
+fn trim_team_files(reply: &mut Value) -> bool {
+    let Some(workers) = reply["team"]["workers"].as_array_mut() else {
+        return false;
+    };
+    let Some(index) = workers
+        .iter()
+        .enumerate()
+        .filter_map(|(index, worker)| {
+            worker["files"]
+                .as_array()
+                .filter(|files| !files.is_empty())
+                .map(|files| (index, json!(files).to_string().len()))
+        })
+        .max_by_key(|(_, size)| *size)
+        .map(|(index, _)| index)
+    else {
+        return false;
+    };
+    let worker = &mut workers[index];
+    if let Some(files) = worker["files"].as_array_mut() {
+        files.pop();
+        worker["filesTruncated"] = json!(true);
+    }
+    true
+}
+
+fn trim_team_text(reply: &mut Value) -> bool {
+    let Some(team) = reply["team"].as_object_mut() else {
+        return false;
+    };
+    let mut target: Option<(usize, usize, String, usize)> = None;
+    let mut consider = |row: usize, field: usize, key: &str, value: &Value| {
+        if let Some(text) = value.as_str() {
+            if text.len() > 256
+                && target
+                    .as_ref()
+                    .is_none_or(|(_, _, _, length)| text.len() > *length)
+            {
+                target = Some((row, field, key.to_owned(), text.len()));
+            }
+        }
+    };
+    if let Some(workers) = team.get("workers").and_then(Value::as_array) {
+        for (index, worker) in workers.iter().enumerate() {
+            for key in ["summary", "assignment", "error"] {
+                consider(index, 0, key, &worker[key]);
+            }
+            for key in ["summary", "nextSteps", "blocker"] {
+                consider(index, 1, key, &worker["checkpoint"][key]);
+            }
+        }
+    }
+    if let Some(messages) = team.get("messages").and_then(Value::as_array) {
+        for (index, message) in messages.iter().enumerate() {
+            consider(index, 2, "message", &message["message"]);
+        }
+    }
+    let Some((index, group, key, _)) = target else {
+        return false;
+    };
+    let text = if group == 2 {
+        &mut reply["team"]["messages"][index][&key]
+    } else if group == 1 {
+        &mut reply["team"]["workers"][index]["checkpoint"][&key]
+    } else {
+        &mut reply["team"]["workers"][index][&key]
+    };
+    if let Some(value) = text.as_str() {
+        *text = json!(bounded_text(value, value.len() / 2));
+        reply["team"]["truncated"] = json!(true);
+        return true;
+    }
+    false
+}
+
+/// Keeps the complete worker list where possible, trimming file detail and prose first.
+fn fit_team_reply(mut reply: Value) -> Value {
+    while reply.to_string().len() > PAGE_BUDGET {
+        if trim_team_text(&mut reply) || trim_team_files(&mut reply) {
+            reply["team"]["truncated"] = json!(true);
+            continue;
+        }
+        if reply["team"]["messages"]
+            .as_array()
+            .is_some_and(|messages| !messages.is_empty())
+        {
+            reply["team"]["messages"].as_array_mut().unwrap().remove(0);
+            reply["team"]["truncated"] = json!(true);
+            continue;
+        }
+        if reply["team"]["workers"]
+            .as_array()
+            .is_some_and(|workers| !workers.is_empty())
+        {
+            reply["team"]["workers"].as_array_mut().unwrap().pop();
+            reply["team"]["workersTruncated"] = json!(true);
+            continue;
+        }
+        shrink(&mut reply, PAGE_BUDGET);
+        break;
+    }
+    reply
+}
+
+fn worker_messages(
+    store: &crate::storage::Store,
+    session_id: &str,
+    worker_id: &str,
+    after_id: i64,
+    limit: i64,
+) -> Result<Value> {
+    local_session_from(store, session_id)?;
+    let team = crate::architect::load(store, session_id)?.ok_or("Team is unavailable.")?;
+    let worker = team
+        .workers
+        .iter()
+        .find(|worker| worker.id == worker_id)
+        .ok_or("Worker does not belong to this team.")?;
+    let worker_session = worker.session_id.as_str();
+    let task = local_session_from(store, worker_session)?;
+    let last_id: Option<i64> = store
+        .db
+        .query_row(
+            "SELECT MAX(id) FROM messages WHERE session_id=?1",
+            [worker_session],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    let mut query = store.db.prepare("SELECT m.id,m.session_id,m.role,CASE WHEN m.role='assistant' THEN COALESCE(substr(CAST(m.content AS BLOB),1,131076),X'') ELSE m.content END,m.created_at,m.turn_duration_ms,t.summary FROM messages m LEFT JOIN turn_changes t ON t.message_id=m.id WHERE m.session_id=?1 AND m.id>?2 ORDER BY m.id LIMIT ?3").map_err(|error| error.to_string())?;
+    let rows = query
+        .query_map(
+            rusqlite::params![worker_session, after_id, limit + 1],
+            |row| {
+                let role: String = row.get(2)?;
+                let content = match row.get_ref(3)? {
+                    rusqlite::types::ValueRef::Blob(bytes) if role == "assistant" => {
+                        String::from_utf8_lossy(bytes).into_owned()
+                    }
+                    _ => row.get(3)?,
+                };
+                let turn_changes = row
+                    .get::<_, Option<String>>(6)?
+                    .map(|summary| {
+                        serde_json::from_str(&summary).map_err(|error| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                6,
+                                rusqlite::types::Type::Text,
+                                Box::new(error),
+                            )
+                        })
+                    })
+                    .transpose()?;
+                Ok(crate::storage::Message {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    role,
+                    content,
+                    created_at: row.get(4)?,
+                    turn_duration_ms: row.get(5)?,
+                    author_provider: None,
+                    turn_changes,
+                    coordination_kind: None,
+                })
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    let mut messages = rows
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| error.to_string())?;
+    let fetched_more = messages.len() > limit as usize;
+    messages.truncate(limit as usize);
+    for message in &mut messages {
+        crate::architect::internal_turns::project_message(store, message)?;
+        const NOTICE: &str = "\n\n[Message preview truncated at 128 KiB. The provider retains the complete conversation.]";
+        if message.content.len() > 128 * 1024 {
+            let mut end = 128 * 1024 - NOTICE.len();
+            while !message.content.is_char_boundary(end) {
+                end -= 1;
+            }
+            message.content.truncate(end);
+            message.content.push_str(NOTICE);
+        }
+    }
+    if let Some(last) = messages.last() {
+        let mut author = store.provider_at_message(worker_session, last.id)?;
+        for message in messages.iter_mut().rev() {
+            if message.role == "handoff" {
+                if let Ok(value) = serde_json::from_str::<Value>(&message.content) {
+                    if let Some(provider) = value.get("fromProvider").and_then(Value::as_str) {
+                        author = provider.to_owned();
+                    }
+                }
+            } else if message.role == "assistant" {
+                message.author_provider = Some(author.clone());
+            }
+        }
+    }
+    let message_values = messages
+        .iter()
+        .map(serde_json::to_value)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    let first_id = message_values
+        .first()
+        .and_then(|message| message["id"].as_i64());
+    let has_older = match first_id {
+        Some(id) => message_exists(&store.db, worker_session, id, true)?,
+        None => false,
+    };
+    let mut reply = fit_worker_message_page(
+        &bounded_text(&task.title, 1024),
+        last_id,
+        message_values,
+        has_older,
+        fetched_more,
+    );
+    if let Some(id) = reply["messages"]
+        .as_array()
+        .and_then(|messages| messages.last())
+        .and_then(|message| message["id"].as_i64())
+    {
+        reply["hasMore"] =
+            json!(fetched_more || message_exists(&store.db, worker_session, id, false)?);
+    }
+    Ok(reply)
+}
+
+fn fit_worker_message_page(
+    title: &str,
+    last_id: Option<i64>,
+    values: Vec<Value>,
+    has_older: bool,
+    fetched_more: bool,
+) -> Value {
+    let mut kept = Vec::new();
+    let mut has_more = fetched_more;
+    for mut message in values {
+        shrink(&mut message, MAX_MESSAGE);
+        let mut candidate = json!({"messages": &kept, "hasMore": has_more, "hasOlder": has_older, "title": title, "lastId": last_id});
+        candidate["messages"]
+            .as_array_mut()
+            .unwrap()
+            .push(message.clone());
+        if candidate.to_string().len() > PAGE_BUDGET {
+            if kept.is_empty() {
+                let envelope = json!({"messages": [], "hasMore": true, "hasOlder": has_older, "title": title, "lastId": last_id}).to_string().len();
+                shrink(&mut message, PAGE_BUDGET.saturating_sub(envelope + 8));
+                let candidate = json!({"messages": [message], "hasMore": true, "hasOlder": has_older, "title": title, "lastId": last_id});
+                if candidate.to_string().len() <= PAGE_BUDGET {
+                    kept = candidate["messages"].as_array().unwrap().clone();
+                }
+            }
+            has_more = true;
+            break;
+        }
+        kept.push(message);
+    }
+    json!({"messages": kept, "hasMore": has_more, "hasOlder": has_older, "title": title, "lastId": last_id})
+}
+
+fn team_event_cache() -> &'static StdMutex<HashMap<String, HashMap<String, Value>>> {
+    static CACHE: OnceLock<StdMutex<HashMap<String, HashMap<String, Value>>>> = OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+fn queue_team_event(app: &tauri::AppHandle, session_id: &str, data: Value) {
+    buffer(app, session_id, |subscriber| {
+        push_event(
+            &mut subscriber.events,
+            team_event_value(session_id, data.clone()),
+        );
+    });
+}
+
+fn team_event_value(session_id: &str, data: Value) -> Value {
+    json!({"sessionId": session_id, "kind": "team", "text": "", "requestId": null, "data": data})
+}
+
+fn changed_worker_rows(
+    team: &crate::architect::TeamSnapshot,
+    previous: &mut HashMap<String, Value>,
+) -> Vec<Value> {
+    let mut changed = Vec::new();
+    let mut live_ids = HashSet::new();
+    for worker in &team.workers {
+        live_ids.insert(worker.id.clone());
+        let row = remote_worker(worker);
+        if previous.get(&worker.id) != Some(&row) {
+            previous.insert(worker.id.clone(), row.clone());
+            changed.push(row);
+        }
+    }
+    previous.retain(|id, _| live_ids.contains(id));
+    changed
+}
+
+/// Architect state is a Tauri app event on desktop. Translate it once the first
+/// Connect viewer subscribes, and feed only changed worker rows through the same
+/// per-subscriber 100 ms event buffer used for agent deltas.
+fn watch_team_events(app: &tauri::AppHandle) {
+    static WATCHING: OnceLock<()> = OnceLock::new();
+    WATCHING.get_or_init(|| {
+        let app = app.clone();
+        let listener_app = app.clone();
+        let _ = app.listen("architect-event", move |event| {
+            let Ok(value) = serde_json::from_str::<Value>(event.payload()) else {
+                return;
+            };
+            if value["removed"] == true {
+                if let Some(session_id) = value["sessionId"].as_str() {
+                    team_event_cache()
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .remove(session_id);
+                    queue_team_event(&listener_app, session_id, json!({"removed": true}));
+                }
+                return;
+            }
+            let Ok(team) = serde_json::from_value::<crate::architect::TeamSnapshot>(value) else {
+                return;
+            };
+            let changed = {
+                let mut cache = team_event_cache()
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                let previous = cache.entry(team.session_id.clone()).or_default();
+                changed_worker_rows(&team, previous)
+            };
+            for worker in changed {
+                queue_team_event(&listener_app, &team.session_id, worker);
+            }
+        });
+    });
+}
+
 async fn run_one(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value> {
     let state = app.state::<AppState>();
     match call {
         Call::Subscribe { session_ids } => {
+            watch_team_events(app);
             let handle = app.clone();
             let requested = session_ids.clone();
             let tasks = crate::blocking(move || {
@@ -593,6 +1050,28 @@ async fn run_one(app: &tauri::AppHandle, from: &str, call: Call) -> Result<Value
                     MessagePaging::After { after_id, limit } if limit == PAGE_ROWS => messages_page(&store.db, &session_id, after_id),
                     page => messages_page_with(&store.db, &session_id, page),
                 }
+            })
+            .await
+        }
+        Call::Team { session_id } => {
+            let handle = app.clone();
+            crate::blocking(move || {
+                let state = handle.state::<AppState>();
+                let store = state.store.lock().map_err(|e| e.to_string())?;
+                local_session_from(&store, &session_id)?;
+                let Some(team) = crate::architect::load(&store, &session_id)? else {
+                    return Ok(json!({"team": null}));
+                };
+                team_reply(&store, &team)
+            })
+            .await
+        }
+        Call::WorkerMessages { session_id, worker_id, after_id, limit } => {
+            let handle = app.clone();
+            crate::blocking(move || {
+                let state = handle.state::<AppState>();
+                let store = state.store.lock().map_err(|e| e.to_string())?;
+                worker_messages(&store, &session_id, &worker_id, after_id, limit)
             })
             .await
         }
@@ -1734,6 +2213,78 @@ fn cut(message: &mut Value) {
 mod tests {
     use super::*;
 
+    fn worker_fixture(id: &str, status: &str) -> crate::architect::Worker {
+        crate::architect::Worker {
+            id: id.into(),
+            session_id: format!("session-{id}"),
+            name: format!("Worker {id}"),
+            profile_id: "profile".into(),
+            provider: "codex".into(),
+            model: "test-model".into(),
+            reasoning_effort: None,
+            status: status.into(),
+            assignment: "Inspect the implementation".into(),
+            summary: "Worker summary".into(),
+            error: None,
+            depends_on: vec!["prior".into()],
+            files: vec!["src/main.rs".into()],
+            read_only: false,
+            attempt: 2,
+            created_at: 100,
+            updated_at: 200,
+            keys: vec![],
+            abandoned: false,
+            result_revision: 1,
+            checkpoint: Some(crate::architect::coordination::WorkerCheckpoint {
+                summary: "Checkpoint summary".into(),
+                next_steps: "Checkpoint next".into(),
+                blocker: None,
+                updated_at: 150,
+            }),
+            timed_out: false,
+        }
+    }
+
+    fn team_fixture(workers: Vec<crate::architect::Worker>) -> crate::architect::TeamSnapshot {
+        crate::architect::TeamSnapshot {
+            session_id: "team-session".into(),
+            tool_catalog_version: 0,
+            config: crate::architect::TeamConfig {
+                auto: true,
+                roster_only: false,
+                name: None,
+                workers: vec![],
+                max_parallel: 0,
+                max_rounds: 8,
+                max_assignments: 50,
+                workspace: "shared".into(),
+                summary_limit: 2000,
+                lead_guidance: None,
+            },
+            status: "running".into(),
+            round: 3,
+            revision: 9,
+            workers,
+            error: None,
+            summary: Some("Team summary".into()),
+            updated_at: 300,
+            generation: 1,
+            objective: "Objective".into(),
+            reviewed_revision: 0,
+            dispatch_revision: 1,
+            pending_turn: None,
+            pending_setup: None,
+            coordination_revision: 0,
+            reviewed_coordination_revision: 0,
+            legacy_prompt_through_id: Some(0),
+            continued_revision: None,
+            last_turn_kind: None,
+            objective_start: 0,
+            timed_out: false,
+            briefings: Default::default(),
+        }
+    }
+
     fn subagent(id: &str, response: &str) -> crate::providers::SubagentActivity {
         crate::providers::SubagentActivity {
             id: id.into(),
@@ -1746,6 +2297,86 @@ mod tests {
             started_at: 1_700_000_000_000,
             updated_at: 1_700_000_000_500,
         }
+    }
+
+    #[test]
+    fn team_snapshot_and_worker_event_keep_the_phone_shape() {
+        let team = team_fixture(vec![worker_fixture("w1", "waiting")]);
+        let worker = remote_worker(&team.workers[0]);
+        let mut previous = HashMap::new();
+        assert_eq!(changed_worker_rows(&team, &mut previous), [worker.clone()]);
+        assert!(
+            changed_worker_rows(&team, &mut previous).is_empty(),
+            "unchanged rows are not resent"
+        );
+
+        let snapshot = remote_team(&team, vec![worker.clone()]);
+        assert_eq!(snapshot["sessionId"], "team-session");
+        assert_eq!(snapshot["mode"], "auto");
+        assert_eq!(snapshot["rounds"], json!({"used": 3, "max": 8}));
+        assert_eq!(
+            snapshot["workers"][0]["status"], "running",
+            "desktop waiting is represented as a running phone worker"
+        );
+        assert_eq!(snapshot["workers"][0]["startedAt"], 100);
+        assert_eq!(snapshot["workers"][0]["sessionId"], "session-w1");
+        assert_eq!(
+            snapshot["workers"][0]["checkpoint"],
+            json!({"summary":"Checkpoint summary","nextSteps":"Checkpoint next","blocker":null,"updatedAt":150})
+        );
+
+        let event = team_event_value("team-session", worker);
+        assert_eq!(event["sessionId"], "team-session");
+        assert_eq!(event["kind"], "team");
+        assert_eq!(event["data"]["id"], "w1");
+        assert_eq!(event["data"]["sessionId"], "session-w1");
+    }
+
+    #[test]
+    fn team_and_worker_message_replies_stay_within_the_remote_budget() {
+        let workers = (0..25)
+            .map(|index| {
+                let mut worker = worker_fixture(&format!("w{index}"), "completed");
+                worker.summary = "summary ".repeat(512);
+                worker.assignment = "assignment ".repeat(512);
+                worker.files = (0..24)
+                    .map(|file| format!("src/{index}-{file}-{}", "x".repeat(500)))
+                    .collect();
+                worker.checkpoint.as_mut().unwrap().summary = "checkpoint ".repeat(512);
+                worker.checkpoint.as_mut().unwrap().next_steps = "next ".repeat(512);
+                worker
+            })
+            .collect();
+        let team = team_fixture(workers);
+        let messages = (0..TEAM_MESSAGE_COUNT).map(|id| json!({"id": id, "sender": "architect", "recipient": "w1", "message": "coordination ".repeat(128), "createdAt": id})).collect::<Vec<_>>();
+        let mut value = remote_team(&team, team.workers.iter().map(remote_worker).collect());
+        value["messages"] = json!(messages);
+        let reply = fit_team_reply(json!({"team": value}));
+        assert!(reply.to_string().len() <= PAGE_BUDGET);
+        assert_eq!(reply["team"]["workers"].as_array().unwrap().len(), 25);
+        assert_eq!(
+            reply["team"]["messages"].as_array().unwrap().len(),
+            TEAM_MESSAGE_COUNT
+        );
+        assert_eq!(reply["team"]["truncated"], true);
+        assert!(reply["team"]["workers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|worker| worker["filesTruncated"] == true));
+
+        let values = (1..=100).map(|id| json!({
+            "id": id, "sessionId": "session-w1", "role": "assistant", "content": "response ".repeat(320),
+            "createdAt": id, "turnDurationMs": null, "authorProvider": "codex", "turnChanges": null, "coordinationKind": null,
+        })).collect();
+        let page = fit_worker_message_page("Worker w1", Some(100), values, false, true);
+        assert!(page.to_string().len() <= PAGE_BUDGET);
+        assert_eq!(page["title"], "Worker w1");
+        assert_eq!(page["lastId"], 100);
+        assert_eq!(page["hasMore"], true);
+        assert_eq!(page["messages"][0]["sessionId"], "session-w1");
+        assert_eq!(page["messages"][0]["authorProvider"], "codex");
+        assert!(page["messages"].as_array().unwrap().len() < 100);
     }
 
     #[test]
@@ -1833,6 +2464,60 @@ mod tests {
             assert!(parse(true, gone, &json!({})).is_err(), "{gone}");
         }
         assert!(valid_id(&"a".repeat(201)).is_err());
+    }
+
+    #[test]
+    fn team_requests_are_read_only_and_validate_worker_paging() {
+        assert_eq!(
+            parse(true, "task.team", &json!({"sessionId": "s1"})),
+            Ok(Call::Team {
+                session_id: "s1".into()
+            })
+        );
+        assert_eq!(
+            parse(
+                true,
+                "task.workerMessages",
+                &json!({"sessionId": "s1", "workerId": "w1"})
+            ),
+            Ok(Call::WorkerMessages {
+                session_id: "s1".into(),
+                worker_id: "w1".into(),
+                after_id: 0,
+                limit: WORKER_MESSAGE_PAGE_DEFAULT
+            })
+        );
+        assert_eq!(
+            parse(
+                true,
+                "task.workerMessages",
+                &json!({"sessionId": "s1", "workerId": "w1", "afterId": 7, "limit": 25})
+            ),
+            Ok(Call::WorkerMessages {
+                session_id: "s1".into(),
+                worker_id: "w1".into(),
+                after_id: 7,
+                limit: 25
+            })
+        );
+        for params in [
+            json!({"workerId": "w1"}),
+            json!({"sessionId": "s1"}),
+            json!({"sessionId": "s1", "workerId": "w1", "afterId": -1}),
+            json!({"sessionId": "s1", "workerId": "w1", "afterId": "7"}),
+            json!({"sessionId": "s1", "workerId": "w1", "limit": 0}),
+            json!({"sessionId": "s1", "workerId": "w1", "limit": WORKER_MESSAGE_PAGE_MAX + 1}),
+        ] {
+            assert!(
+                parse(true, "task.workerMessages", &params).is_err(),
+                "{params}"
+            );
+        }
+        for method in ["task.team", "task.workerMessages"] {
+            assert!(is_read_only_method(method));
+            assert!(METHODS.contains(&method));
+        }
+        assert!(parse(false, "task.team", &json!({"sessionId": "s1"})).is_err());
     }
 
     #[test]

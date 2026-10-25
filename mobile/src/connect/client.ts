@@ -9,6 +9,7 @@ import { File, Paths } from 'expo-file-system';
 import { BUILD_DEMO, DEMO_FILE, demoAtStart } from '../demo.ts';
 import { demoCall, type DemoHost } from '../demo-host.ts';
 import { delivering, settled, unmatched, type Sent } from '../store/sent.ts';
+import { applyTeamEvent, decodeTeam, type Team } from '../store/team.ts';
 import { applyEvent, ended, fromList, fromSubscribe, idleLive, lastId, mergeMessages, prependMessages, staleLists } from '../store/reduce.ts';
 import { cachedLastId, clearThreads, readThread, saveThread } from '../store/threads.ts';
 import { PrefetchQueue, prefetchOrder } from '../store/prefetch.ts';
@@ -440,9 +441,17 @@ function events(host: string, list: unknown) {
       live[key] = applyEvent(live[key] ?? idleLive(), { ...event, text: typeof event.text === 'string' ? event.text : '' });
       if (!active(before) && active(live[key].status)) started.add(event.sessionId);
     }
+    let teams = s.teams;
+    for (const event of list as AgentEvent[]) {
+      if (event?.kind !== 'team' || typeof event.sessionId !== 'string' || !ids.has(event.sessionId)) continue;
+      const key = taskKey(host, event.sessionId);
+      const team = teams[key] === 'outdated' ? undefined : teams[key];
+      const next = applyTeamEvent(team, event.data);
+      if (next !== team && next !== undefined) teams = { ...teams, [key]: next };
+    }
     let sent = s.sent;
     for (const id of started) if (sent[taskKey(host, id)]) sent = { ...sent, [taskKey(host, id)]: delivering(sent[taskKey(host, id)]) };
-    return { live, sent, tasks: withStatuses(s, host, live) };
+    return { live, sent, teams, tasks: withStatuses(s, host, live) };
   });
   // A turn that starts on its own (the host delivering a queued prompt after the last run's
   // copy) saved its prompt before its first event: copy it now, not only at this run's end.
@@ -1003,6 +1012,41 @@ async function pauseBot(deviceId: string, botId: string, paused: boolean): Promi
   void listBots(deviceId).catch(() => undefined);
 }
 
+// ---- Teams (newer hosts) ----
+
+/** Hosts without task.team, so one 'Unknown method.' doesn't mark pulls and bots outdated too. */
+const teamless = new Set<string>();
+
+/** The task's team (null: not an architect task), stored per task; 'outdated' on hosts without task.team. */
+async function loadTeam(deviceId: string, sessionId: string): Promise<Team | null | 'outdated'> {
+  const key = taskKey(deviceId, sessionId);
+  if (teamless.has(deviceId)) return 'outdated';
+  try {
+    const team = decodeTeam(await call(deviceId, 'task.team', { sessionId }, TIMEOUT_MS, true));
+    patch(s => ({ teams: { ...s.teams, [key]: team } }));
+    return team;
+  } catch (error) {
+    if ((error as Error).message !== UNKNOWN_METHOD) throw error;
+    teamless.add(deviceId);
+    patch(s => ({ teams: { ...s.teams, [key]: 'outdated' } }));
+    return 'outdated';
+  }
+}
+
+/** A team worker's transcript, oldest first (afterId pages until the host has no more). */
+async function workerMessages(deviceId: string, sessionId: string, workerId: string, afterId = 0): Promise<Message[]> {
+  let all: Message[] = [];
+  let cursor = afterId;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const reply = await call<Partial<MessagePage>>(deviceId, 'task.workerMessages', { sessionId, workerId, ...(cursor ? { afterId: cursor } : {}) });
+    const fresh = (Array.isArray(reply?.messages) ? reply.messages : []).filter(m => typeof m?.id === 'number' && m.id > cursor);
+    all = [...all, ...fresh];
+    if (!reply?.hasMore || !fresh.length) return all;
+    cursor = fresh[fresh.length - 1].id;
+  }
+  return all;
+}
+
 // ---- Attachments ----
 
 const attachmentDeps: AttachmentDeps = {
@@ -1027,5 +1071,6 @@ export const connect = {
   listTasks, refreshLists, listProviders, listModels, startTask, projectIcons,
   sendMessage, stopTask, steerTask, configureTask, respondApproval, respondInput,
   loadPull, pullDiff, mergePull, taskChanges, taskDiff, listBots, botThread, botMessage, pauseBot,
+  loadTeam, workerMessages,
   attachment,
 };

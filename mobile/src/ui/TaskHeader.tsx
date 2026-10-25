@@ -1,6 +1,6 @@
 // The task screen's native header: the title, a system back button (the sidebar toggle and New
 // task in the Duo's split view) and bar button items for the pull request (when one is linked),
-// Changes, a More menu (Model & permissions, Task info; folded so the title keeps its room) and
+// Changes, Agents (person.3, when the task has subagents or a team), a More menu (Model & permissions, Task info; folded so the title keeps its room) and
 // Stop while running. A bot's conversation shows the
 // bot's avatar and name and a Pause/Resume item. They are real UIBarButtonItems, so on the iPhone Duo iOS moves them into the
 // side rail with the status bar; Android draws the same buttons in its app bar.
@@ -80,7 +80,7 @@ function BotTitle({ bot }: { bot: Bot }) {
   );
 }
 
-export function TaskHeader({ deviceId, sessionId, title, running, pull, bot }: { deviceId: string; sessionId: string; title: string; running: boolean; pull: boolean; bot?: Bot }) {
+export function TaskHeader({ deviceId, sessionId, title, running, pull, agents, bot }: { deviceId: string; sessionId: string; title: string; running: boolean; pull: boolean; agents: boolean; bot?: Bot }) {
   const colors = useColors();
   const split = useSplit();
   const collapsed = useSidebar(s => s.collapsed);
@@ -89,6 +89,7 @@ export function TaskHeader({ deviceId, sessionId, title, running, pull, bot }: {
   const info = () => router.push({ pathname: '/task-info', params });
   const openPull = () => router.push({ pathname: '/pull', params });
   const changes = () => router.push({ pathname: '/changes', params });
+  const openAgents = () => router.push({ pathname: '/agents', params });
   const stop = () => stopTask(deviceId, sessionId);
   const pause = () => bot && pauseBot(deviceId, bot);
   // A custom title view can't go in the Duo's rail, so the split view keeps the plain title.
@@ -99,6 +100,7 @@ export function TaskHeader({ deviceId, sessionId, title, running, pull, bot }: {
       <View style={styles.row}>
         {!!bot && <Button icon={bot.paused ? { ios: 'play.circle', android: 'play_circle' } : { ios: 'pause.circle', android: 'pause_circle' }} label={bot.paused ? 'Resume bot' : 'Pause bot'} onPress={pause} />}
         {pull && <Button icon={{ ios: 'arrow.triangle.pull', android: 'merge' }} label="Pull request" onPress={openPull} />}
+        {agents && <Button icon={{ ios: 'person.3', android: 'groups' }} label="Agents" onPress={openAgents} />}
         <Button icon={{ ios: 'plus.forwardslash.minus', android: 'difference' }} label="Changes" onPress={changes} />
         <Button icon={{ ios: 'slider.horizontal.3', android: 'tune' }} label="Model and permissions" onPress={settings} />
         <Button icon={{ ios: 'info.circle', android: 'info' }} label="Task info" onPress={info} />
@@ -118,6 +120,7 @@ export function TaskHeader({ deviceId, sessionId, title, running, pull, bot }: {
       <Stack.Toolbar placement="right">
         <Stack.Toolbar.Button icon={bot?.paused ? 'play.circle' : 'pause.circle'} accessibilityLabel={bot?.paused ? 'Resume bot' : 'Pause bot'} hidden={!bot} onPress={pause} />
         <Stack.Toolbar.Button icon="arrow.triangle.pull" accessibilityLabel="Pull request" hidden={!pull} onPress={openPull} />
+        <Stack.Toolbar.Button icon="person.3" accessibilityLabel="Agents" hidden={!agents} onPress={openAgents} />
         <Stack.Toolbar.Button icon="plus.forwardslash.minus" accessibilityLabel="Changes" onPress={changes} />
         <Stack.Toolbar.Menu icon="ellipsis.circle" accessibilityLabel="More">
           <Stack.Toolbar.MenuAction icon="slider.horizontal.3" onPress={settings}>Model & permissions</Stack.Toolbar.MenuAction>

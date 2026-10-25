@@ -1,6 +1,6 @@
 // Pure state transitions for messages and live runs; no React Native imports (tested in node).
 import type { AgentEvent, HostActivity, Message, PendingRequest, TaskStatus, ToolActivity } from '../connect/types.ts';
-import { decodeSubagent, parseFields, todosOf, toolKind, type Subagent, type Todo } from './trace.ts';
+import { decodeSubagent, describeTool, parseFields, todosOf, toolKind, traceText, type Subagent, type Todo } from './trace.ts';
 
 const MAX_TEXT = 262_144;
 const MAX_ITEMS = 200;
@@ -122,7 +122,7 @@ function reduce(live: Live, event: AgentEvent, now: number): Live {
       const item: LiveItem = { kind: 'tool', tool, startedAt, endedAt: tool.status === 'running' ? undefined : before?.endedAt ?? now };
       const items = index < 0 ? [...live.items, item] : live.items.map((x, i) => (i === index ? item : x));
       const todos = toolKind(tool.name) === 'todo' ? todosOf(parseFields(tool.input)) : [];
-      return { ...running, items: cap(items), activity: tool.status === 'running' ? `Running ${tool.name.slice(0, 80)}` : 'Working…', thinking: undefined, todos: todos.length ? todos : live.todos };
+      return { ...running, items: cap(items), activity: tool.status === 'running' ? traceText(describeTool(tool)).slice(0, 80) : 'Working…', thinking: undefined, todos: todos.length ? todos : live.todos };
     }
     case 'status':
       return { ...running, activity: event.text, thinking: THINKING.test(event.text) ? event.text.slice(0, 200) : running.thinking };

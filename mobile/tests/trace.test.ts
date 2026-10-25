@@ -16,7 +16,7 @@ test('rows read as sentences: command, file name with +/−, search, MCP', () =>
   const edit = describeTool(t('Edit', { file_path: '/repo/src/auth.ts', old_string: 'a\nb', new_string: 'a\nb\nc' }));
   assert.deepEqual([edit.verb, edit.chip, edit.added, edit.removed], ['Edited', 'auth.ts', 3, 2]);
   assert.deepEqual(describeTool(t('Grep', { pattern: 'retry', path: 'src/upload' })), { kind: 'search', verb: 'Searched', chip: 'upload', object: 'for retry' });
-  assert.deepEqual(describeTool(t('mcp__github__get_issue', {})), { kind: 'mcp', verb: 'Used', chip: 'github', object: 'get issue' });
+  assert.deepEqual(describeTool(t('mcp__github__get_issue', { query: 'retry bug' })), { kind: 'mcp', verb: 'Used', chip: 'github › get issue', object: 'retry bug' });
   assert.equal(describeTool(t('Read', 'docs/relay.md')).chip, 'relay.md'); // plain-text input
 });
 

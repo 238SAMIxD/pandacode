@@ -1,5 +1,6 @@
 // Fake computers, tasks and messages for demo mode (src/demo.ts): screenshots and App Review.
 import type { Bot, Device, Message, Project, TaskSummary, ToolActivity } from './connect/types.ts';
+import { DEMO_TEAM_TASK, demoTeamMessages } from './demo-team.ts';
 import { useConnect } from './store/index.ts';
 import { iconKey } from './store/icon-cache.ts';
 import { useIcons } from './store/icons.ts';
@@ -23,6 +24,7 @@ export function seedDemo() {
   });
   const studio: TaskSummary[] = [
     t('auth', 'Add passkey sign-in to the account page', 'pandacode-web', 'claude', 'feat/passkeys', 2, { status: 'waiting', pending: [{ kind: 'approval', requestId: 'r1', text: 'Run `npm install @simplewebauthn/server`?' }] }),
+    t(DEMO_TEAM_TASK, 'Agents view on the phone', 'pandacode', 'claude', 'feat/agents-view', 1, { status: 'running', runStartedAt: now - 19 * MIN, model: 'opus' }),
     t('flaky', 'Fix the flaky upload test on CI', 'relay', 'codex', 'fix/upload-retry', 6, { status: 'running' }),
     t('icons', 'Which icon set should the toolbar use?', 'design-system', 'opencode', 'main', 14, { status: 'waiting', pending: [{ kind: 'input_request', requestId: 'q1', text: 'Pick one' }] }),
     t('docs', 'Document the Connect relay protocol', 'pandacode', 'claude', 'docs/relay', 9),
@@ -91,6 +93,7 @@ export function seedDemo() {
     m('user', 'What should I look at first today?', 13),
     m('assistant', 'Good morning. Three things:\n\n1. **Passkeys PR #482** is approved and its checks are green, so it can merge.\n2. The upload test is still flaky on CI; Codex is on it.\n3. The billing webhook migration failed overnight.', 12, 18_000),
   ];
+  const team = demoTeamMessages({ m, tool: toolMessage });
   const flaky: Message[] = [m('user', 'The upload test fails about one run in ten on CI. Find out why and fix it.', 6)];
   const projects = (list: TaskSummary[]): Project[] => [...new Set(list.filter(x => !x.botId).map(x => x.projectId))].map(id => ({ id, name: id, repo: null }));
   const tasks = { studio: { tasks: studio, projects: projects(studio), loadedAt: now }, laptop: { tasks: laptop, projects: projects(laptop), loadedAt: now } };
@@ -123,6 +126,19 @@ export function seedDemo() {
         { kind: 'tool', tool: tool('f2', 'Bash', json({ command: 'npm test -- upload --repeat 50' }), '', 'running'), startedAt: now - 40_000 },
       ],
     },
+    [`studio/${DEMO_TEAM_TASK}`]: {
+      ...idleLive(), status: 'running', activity: 'Working…', startedAt: now - 19 * MIN,
+      items: [
+        { kind: 'tool', tool: tool('tl1', 'mcp__pandacode_architect__pandacode_read_team_mailbox', json({}), json({ messages: [], nextCursor: 4 })), startedAt: now - 2 * MIN, endedAt: now - 2 * MIN },
+        { kind: 'tool', tool: tool('tl2', 'mcp__pandacode_architect__pandacode_simulator_control', json({ action: 'tap', x: 200, y: 618 }), 'Tapped.'), startedAt: now - 70_000, endedAt: now - 68_000 },
+        { kind: 'tool', tool: tool('tl3', 'mcp__pandacode_architect__pandacode_simulator_screenshot', json({}), '', 'running'), startedAt: now - 5000 },
+      ],
+    },
+    // The running worker's own session, so the Agents view shows what it is doing.
+    'studio/demo-w-mobile': {
+      ...idleLive(), status: 'running', activity: 'Working…', startedAt: now - 8 * MIN,
+      items: [{ kind: 'tool', tool: tool('mo5', 'Write', json({ file_path: 'mobile/src/app/agents.tsx', content: '' }), '', 'running'), startedAt: now - 20_000 }],
+    },
     'studio/stall': {
       ...idleLive(), status: 'running', activity: 'Running Bash', startedAt: now - 11 * MIN, lastEventAt: now - 4 * MIN,
       items: [{ kind: 'tool', tool: tool('st1', 'Bash', json({ command: 'npx openapi-generator-cli generate -i spec.yaml' }), '', 'running'), startedAt: now - 4 * MIN }],
@@ -137,8 +153,8 @@ export function seedDemo() {
     ready: true, signedIn: true, connected: true, configured: true, deviceId: 'phone', demo: true, error: null,
     account: { id: '1', login: 'pandadev', avatarUrl: '' },
     devices, tasks,
-    bots: { studio: bots, laptop: [] }, pulls: {}, outdated: {},
-    messages: { 'studio/bot-leo': leo, 'studio/docs': docs, 'studio/auth': auth, 'studio/flaky': flaky },
+    bots: { studio: bots, laptop: [] }, pulls: {}, teams: {}, outdated: {},
+    messages: { [`studio/${DEMO_TEAM_TASK}`]: team, 'studio/bot-leo': leo, 'studio/docs': docs, 'studio/auth': auth, 'studio/flaky': flaky },
     live,
     providers: { studio: [
       { id: 'claude', name: 'Claude Code', installed: true, models: [] },

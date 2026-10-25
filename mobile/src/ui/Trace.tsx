@@ -9,6 +9,7 @@ import { elapsedLabel } from '../store/inbox.ts';
 import { describeTool, DIFF_LINES, diffLines, exitCode, parseFields, shellCommand, subagentActive, subagentName, summarizeTools, todosOf, type Subagent, type Todo, type TraceKind } from '../store/trace.ts';
 import { duration } from '../store/turns.ts';
 import { Icon } from './Icon.tsx';
+import { McpBody, useWorkerNames } from './ToolCards.tsx';
 import { mono, useColors } from './theme.ts';
 
 type IconName = Pick<ComponentProps<typeof Icon>, 'ios' | 'android'>;
@@ -28,8 +29,27 @@ const KIND_ICONS: Record<TraceKind, IconName> = {
   mcp: { ios: 'server.rack', android: 'dns' }, tool: { ios: 'wrench.and.screwdriver', android: 'build' },
 };
 
+// PandaCode's own tools (store/pandacode-tools.ts), by tool.
+const OWN_ICONS: Record<string, IconName> = {
+  dispatch_workers: { ios: 'person.3', android: 'groups' }, followup_worker: { ios: 'arrowshape.turn.up.right', android: 'reply' },
+  cancel_worker: { ios: 'xmark.circle', android: 'cancel' }, read_worker: { ios: 'person.text.rectangle', android: 'badge' },
+  list_workers: { ios: 'person.3.sequence', android: 'groups' }, team_directory: { ios: 'person.3.sequence', android: 'groups' },
+  finish_team: { ios: 'flag.checkered', android: 'flag' }, send_team_message: { ios: 'paperplane', android: 'send' },
+  read_team_mailbox: { ios: 'tray', android: 'inbox' }, checkpoint_worker: { ios: 'bookmark', android: 'bookmark' },
+  title: { ios: 'character.cursor.ibeam', android: 'title' }, track_files: { ios: 'doc.on.doc', android: 'file_copy' },
+  simulator_screenshot: { ios: 'camera.viewfinder', android: 'screenshot' }, simulator_describe: { ios: 'text.viewfinder', android: 'document_scanner' },
+  simulator_devices: { ios: 'iphone', android: 'smartphone' }, simulator_control: { ios: 'hand.tap', android: 'touch_app' },
+  simulator_manage: { ios: 'iphone', android: 'smartphone' }, vm_screenshot: { ios: 'camera.viewfinder', android: 'screenshot' },
+  vm_list: { ios: 'desktopcomputer', android: 'computer' }, vm_control: { ios: 'cursorarrow.click', android: 'mouse' },
+  vm_manage: { ios: 'desktopcomputer', android: 'computer' }, design_write: { ios: 'paintpalette', android: 'palette' },
+  design_list: { ios: 'square.grid.2x2', android: 'grid_view' }, design_comments: { ios: 'text.bubble', android: 'comment' },
+  design_resolve: { ios: 'checkmark.bubble', android: 'mark_chat_read' }, preview_file: { ios: 'eye', android: 'visibility' },
+  run_project: { ios: 'play', android: 'play_arrow' }, cloud_cli: { ios: 'icloud.and.arrow.up', android: 'cloud_upload' },
+};
+const traceIcon = (kind: TraceKind, own?: string) => (own && OWN_ICONS[own]) || KIND_ICONS[kind];
+
 /** Spinner while running, a check when done, a red cross when it failed. */
-function StatusMark({ status, color }: { status: ToolActivity['status'] | Subagent['status']; color: ColorValue }) {
+export function StatusMark({ status, color }: { status: ToolActivity['status'] | Subagent['status']; color: ColorValue }) {
   const colors = useColors();
   if (status === 'running') return <ActivityIndicator size="small" style={styles.small} />;
   if (status === 'waiting') return <Icon ios="hand.raised.fill" android="front_hand" size={12} color={colors.orange} />;
@@ -42,14 +62,15 @@ export const ToolRow = memo(function ToolRow({ tool, startedAt, endedAt }: { too
   const colors = useColors();
   const [open, setOpen] = useState(false);
   const fields = useMemo(() => parseFields(tool.input), [tool.input]);
-  const trace = useMemo(() => describeTool(tool, fields), [tool, fields]);
+  const names = useWorkerNames();
+  const trace = useMemo(() => describeTool(tool, fields, names), [tool, fields, names]);
   const failed = tool.status === 'failed';
   const took = startedAt && endedAt && endedAt - startedAt >= 1000 ? duration(endedAt - startedAt) : '';
   return (
     <View style={styles.tool}>
       <Pressable onPress={() => setOpen(o => !o)} style={styles.toolHead} hitSlop={4}
         accessibilityRole="button" accessibilityState={{ expanded: open }} accessibilityLabel={`${trace.verb} ${trace.chip} ${trace.object}, ${tool.status}${took ? `, ${took}` : ''}`}>
-        <Icon {...KIND_ICONS[trace.kind]} size={13} color={failed ? colors.red : colors.secondary} />
+        <Icon {...traceIcon(trace.kind, trace.own)} size={13} color={failed ? colors.red : colors.secondary} />
         <Text style={styles.sentence} numberOfLines={1}>
           <Text style={[styles.verb, { color: failed ? colors.red : colors.secondary }]}>{trace.verb}</Text>
           {!!trace.chip && <Text style={[styles.chip, { color: colors.text }]}>{`  ${trace.chip}`}</Text>}
@@ -59,7 +80,9 @@ export const ToolRow = memo(function ToolRow({ tool, startedAt, endedAt }: { too
         {!!took && <Text style={[styles.took, { color: colors.tertiary }]}>{took}</Text>}
         <StatusMark status={tool.status} color={colors.tertiary} />
       </Pressable>
-      {open && <ToolBody tool={tool} kind={trace.kind} fields={fields} />}
+      {open && (trace.kind === 'mcp'
+        ? <View style={[styles.toolBody, { backgroundColor: colors.fill }]}><McpBody tool={tool} fields={fields} own={trace.own} /></View>
+        : <ToolBody tool={tool} kind={trace.kind} fields={fields} />)}
     </View>
   );
 });
@@ -165,7 +188,7 @@ export const PlanCard = memo(function PlanCard({ todos }: { todos: readonly Todo
 });
 
 /** A minute-ish clock for running things, ticking every TICK_MS. */
-function useNow(ticking: boolean) {
+export function useNow(ticking: boolean) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     if (!ticking) return;

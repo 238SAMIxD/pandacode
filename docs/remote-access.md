@@ -198,6 +198,8 @@ approval policy: remote prompts get no more power than local ones.
 | `providers.models` | `{ provider, force?: boolean }` | the host's `list_provider_models` result: `[{ id, name, description, reasoningEfforts, defaultReasoningEffort, contextWindow }]`, its tail dropped to fit one reply. `provider` must be a known harness id (`Unknown provider.`). |
 | `task.start` | `{ repo?: "owner/name", projectId?: string, branch?, worktree, prompt, provider, model, mode?, effort? }` (exactly one of `repo` or `projectId`) | `{ sessionId }` |
 | `task.messages` | `{ sessionId, afterId?, tail?, beforeId?, limit? }` (`limit` is 1..400; defaults to 100 for `tail`/`beforeId`, 400 for `afterId`) | `{ messages: [{ id, role, content, createdAt, turnDurationMs, attachments }], hasMore, hasOlder, title, lastId }`. `attachments` is always an array; saved images include `{ id, kind: "image", name, mime, bytes, width, height }`, while document and folder context markers carry `{ id, kind, name }`. `tail: true` returns the newest page; `beforeId` returns the page immediately before that message id. Both are oldest-first. Use only one of `afterId`, `tail: true` or `beforeId`; mixing them is refused. `hasMore` means newer rows follow this page, `hasOlder` means older rows precede its first message, and `lastId` is the newest message id (or `null` for an empty thread). |
+| `task.team` | `{ sessionId }` | `{ team: null \| TeamSnapshot }`. The snapshot includes `sessionId`, `status`, `round`, `revision`, `summary`, `updatedAt`, `mode: "auto" \| "classic"`, `rounds: { used, max }`, `workers`, and optional `messages` (the latest 30 coordination messages, oldest first). Each worker includes `{ id, name, provider, model, status, attempt, summary, checkpoint, files, dependsOn, startedAt, updatedAt, sessionId }` plus desktop fields `profileId`, `assignment`, `error`, `readOnly`, `abandoned`, and `createdAt`. `checkpoint` is null or `{ summary, nextSteps, blocker, updatedAt }`. Worker `waiting` is exposed as `running` to match the phone status set. Summary, assignment, error, checkpoint text and coordination messages are cut to fit; `filesTruncated` marks a trimmed file list, while team-level `truncated` and `workersTruncated` appear only if needed to stay under 180 KiB. A task with no team returns `{ team: null }`. |
+| `task.workerMessages` | `{ sessionId, workerId, afterId?, limit? }` (`afterId` defaults to 0; `limit` is 1..100 and defaults to 100) | `{ messages, hasMore, hasOlder, title, lastId }`. `sessionId` identifies the architect task; `workerId` must belong to that team's saved workers. Messages are the worker transcript page returned by the desktop worker-message API: `{ id, sessionId, role, content, createdAt, turnDurationMs, authorProvider?, turnChanges?, coordinationKind? }`, oldest first. `afterId` is an exclusive cursor; pass the last returned message id for the next page. `hasMore` reports newer rows after the page and `hasOlder` reports saved rows before it. The page fits within 180 KiB. |
 | `task.attachment` | `{ sessionId, id, variant: "thumb" | "full", offset? }` | `{ mime, total, offset, data, done }`, with `data` a base64 chunk. Image ids must be UUIDs linked to a message in that same local session. `thumb` is a JPEG with a long edge no larger than 480 px and fits one chunk. `full` returns original bytes unless the source exceeds 8 MiB, when the host makes a JPEG with a long edge no larger than 2048 px. Chunks contain at most 120 KiB of raw bytes. |
 | `task.workspaceImage` | `{ sessionId, path, variant: "thumb" | "full", offset? }` | The same chunk shape as `task.attachment`. Uses the local task's workspace image checks: relative paths only, no traversal or escaping symlinks, image types only, and a maximum source size of 8 MiB. Mirrors are refused. |
 
@@ -298,6 +300,7 @@ the kinds sent in `agent.events`:
 | `status` | Progress or state text. Plan updates and reasoning/thinking notices use this kind; any provider metadata is reduced to recognized scalar fields. |
 | `steer` | A steer was accepted, delivered, or failed; `data` includes its id, status and mode. |
 | `subagent` | A child-agent snapshot changed. `data` is a desktop `SubagentActivity` (`id`, `parentId`, `name`, `prompt`, `status`, `response`, `tools`, `startedAt`, `updatedAt`); ids are scoped to the parent run. |
+| `team` | A worker row changed in the task's architect team. `sessionId` is the architect task id and `data` is the changed worker row in `task.team` shape. If the team is removed, `data` is `{ "removed": true }`. The desktop emits full `architect-event` snapshots; Connect sends only changed rows through the same 100 ms buffer. |
 | `task_settings` | Goal runtime task settings changed. |
 | `text` | Assistant text delta. `data.messageId` and optional phase associate it with its message. |
 | `tool` | A tool started or changed; the current `ToolActivity` is in `tool` (`id`, `name`, `status`, `input`, `output`, and optional `writePaths`). |
@@ -309,7 +312,8 @@ There are no separate `plan`, `todo`, `thinking` or `reasoning` event kinds: tho
 updates are represented as `status` text and/or data. The provider's `done` event is consumed by
 the desktop run loop and is not sent in `agent.events`. Likewise, local `status: running`,
 `turn_changes`, persistence errors, and final `done` emissions are window events rather than
-Connect `AgentEvent`s. Connect signals the end with `run.finished` instead.
+Connect `AgentEvent`s. The desktop's `architect-event` is also a window event; Connect translates
+it to the `team` kind for subscribed architect tasks. Connect signals run end with `run.finished`.
 
 For example, a live child update is an ordinary `agent.events` item:
 
@@ -362,8 +366,8 @@ is not copied again.
 
 Responses and events are handled as soon as they arrive and never wait behind a slow request.
 Each peer can have up to four read requests in flight. The read lane includes `subscribe`,
-`tasks.list`, `projects.icons`, `providers.list`, `providers.models`, `task.messages`,
-`task.attachment`, `task.workspaceImage`, `task.pull`, `task.pullDiff`, `task.pullDetect`,
+`tasks.list`, `projects.icons`, `providers.list`, `providers.models`, `task.messages`, `task.team`,
+`task.workerMessages`, `task.attachment`, `task.workspaceImage`, `task.pull`, `task.pullDiff`, `task.pullDetect`,
 `task.changes`, `task.diff` and `bots.list`. Replies may arrive out of order; both the phone
 and desktop client match them by request id. The desktop mirror still copies messages by its
 `afterId` cursor and commits each page before advancing it.

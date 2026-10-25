@@ -67,6 +67,8 @@ export default function RootLayout() {
                 <Stack.Screen name="pull" options={{ ...pushed, title: 'Pull request' }} />
                 <Stack.Screen name="changes" options={{ ...pushed, title: 'Changes' }} />
                 <Stack.Screen name="diff" options={{ ...pushed, title: 'Diff' }} />
+                <Stack.Screen name="agents" options={{ ...pushed, title: 'Agents' }} />
+                <Stack.Screen name="agent" options={{ ...pushed, title: 'Agent' }} />
               </Stack.Protected>
               <Stack.Protected guard={!signedIn} redirectTo={HOME}>
                 <Stack.Screen name="sign-in" />

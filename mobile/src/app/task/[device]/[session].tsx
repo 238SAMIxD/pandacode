@@ -20,6 +20,8 @@ import { HeaderBlur, TaskHeader } from '../../../ui/TaskHeader.tsx';
 import { useColors } from '../../../ui/theme.ts';
 import { useBackdrop } from '../../../ui/Backdrop.tsx';
 import { Transcript } from '../../../ui/transcript.tsx';
+import { WorkerNamesContext } from '../../../ui/ToolCards.tsx';
+import { useNames, useTeam } from '../../../ui/useTeam.ts';
 
 const NONE: PendingRequest[] = [];
 
@@ -96,6 +98,10 @@ export default function TaskScreen() {
   const liveStatus = useConnect(s => s.live[key]?.status ?? 'idle');
   const approvals = useConnect(s => s.live[key]?.approvals ?? NONE);
   const inputs = useConnect(s => s.live[key]?.inputs ?? NONE);
+  // Asked once (not polled here): names workers in tool sentences and shows the Agents item.
+  const team = useTeam(device, session, false);
+  const names = useNames(team);
+  const agents = useConnect(s => !!s.live[key]?.subagents?.length) || (!!team && team !== 'outdated' && team.workers.length > 0);
   const status = liveStatus === 'idle' && task && isActive(task.status) ? task.status : liveStatus;
   const [bottom, setBottom] = useState(80);
   const keyboard = useKeyboardHeight();
@@ -114,8 +120,9 @@ export default function TaskScreen() {
   const requests = approvals.length + inputs.length > 0;
   const running = isActive(status);
   return (
+    <WorkerNamesContext.Provider value={names}>
     <View style={[styles.screen, { backgroundColor: backdrop.background }]}>
-      <TaskHeader deviceId={device} sessionId={session} running={running} title={task?.title || 'Task'} pull={pull} bot={bot} />
+      <TaskHeader deviceId={device} sessionId={session} running={running} title={task?.title || 'Task'} pull={pull} agents={agents} bot={bot} />
       {/* Side insets: the iPhone Duo's rail, or a landscape notch. */}
       <View style={[styles.screen, { paddingLeft: insets.left, paddingRight: insets.right }]}>
         <Transcript deviceId={device} sessionId={session} top={(hasGlass ? header : 0) + 12} bottom={bottom + keyboard + 12} listRef={list} onAway={setAway} />
@@ -132,6 +139,7 @@ export default function TaskScreen() {
         </View>
       </View>
     </View>
+    </WorkerNamesContext.Provider>
   );
 }
 

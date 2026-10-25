@@ -2,7 +2,7 @@
 // Pure (tested in node): screens pass store slices in and render the result.
 import type { Bot, TaskSummary, TasksList } from '../connect/types.ts';
 import type { Live } from './reduce.ts';
-import { describeTool, subagentActive } from './trace.ts';
+import { describeTool, subagentActive, traceText } from './trace.ts';
 
 export const SETTLED_MS = 24 * 3600_000;
 /** A running task with no event for this long shows as stalled. */
@@ -66,8 +66,7 @@ export function glanceOf(live: Live | undefined, task?: TaskSummary): RunGlance 
   const runningChild = subagents.findLast(a => subagentActive(a) && a.tools.some(t => t.status === 'running'));
   const childTool = runningChild?.tools.findLast(t => t.status === 'running');
   const sentence = (t: { name: string; status: 'running' | 'completed' | 'failed'; input: string }) => {
-    const trace = describeTool(t);
-    return [trace.verb, trace.chip, trace.object].filter(Boolean).join(' ').slice(0, CURRENT_TOOL_MAX);
+    return traceText(describeTool(t)).slice(0, CURRENT_TOOL_MAX);
   };
   const activity = tool?.kind === 'tool' ? sentence(tool.tool)
     : live?.thinking ? 'Thinking'

@@ -4,6 +4,7 @@
 import { OFFLINE, type Method } from './connect/rpc.ts';
 import type { Bot, ConfigureParams, Message, StartParams, TaskSummary } from './connect/types.ts';
 import { DEMO_CHANGES, demoDiff, demoPull, demoPullPatch } from './demo-pull.ts';
+import { DEMO_TEAM_TASK, demoTeam, demoWorkerMessages } from './demo-team.ts';
 import type { ConnectState } from './store/index.ts';
 import { idleLive, lastId } from './store/reduce.ts';
 
@@ -131,6 +132,11 @@ export async function demoCall(host: DemoHost, deviceId: string, method: Method,
     }
     case 'task.changes': return DEMO_CHANGES;
     case 'task.diff': return { diff: demoDiff(params.path), truncated: false };
+    case 'task.team': return { team: params?.sessionId === DEMO_TEAM_TASK ? demoTeam(host.now()) : null };
+    case 'task.workerMessages': {
+      const all = params?.sessionId === DEMO_TEAM_TASK ? demoWorkerMessages(String(params.workerId), host.now()) : [];
+      return { messages: all.filter(m => m.id > (Number(params?.afterId) || 0)), hasMore: false, hasOlder: false };
+    }
     case 'bots.list': return { bots: s.bots[deviceId] ?? [] };
     case 'bot.thread': {
       const bot = s.bots[deviceId]?.find(b => b.id === params.botId);

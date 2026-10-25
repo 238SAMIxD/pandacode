@@ -6,6 +6,7 @@ import { build } from '../connect/config.ts';
 import type { Account, Bot, Device, Message, Provider, ProviderModel, PullDetail, TasksList } from '../connect/types.ts';
 import { idleLive, type Live } from './reduce.ts';
 import { unmatched, type Sent } from './sent.ts';
+import type { Team } from './team.ts';
 
 export type { Live, LiveItem } from './reduce.ts';
 
@@ -39,6 +40,8 @@ export interface ConnectState {
   bots: Record<string, Bot[]>;
   /** The linked pull request per taskKey once checked (null: none). */
   pulls: Record<string, PullDetail | null>;
+  /** An architect task's team per taskKey once asked (null: none; 'outdated': the host lacks task.team). */
+  teams: Record<string, Team | null | 'outdated'>;
   /** Hosts that answered 'Unknown method.' to the pull request, changes or bot methods. */
   outdated: Record<string, boolean>;
   /** The last user-facing connection error (sign-out, relay). */
@@ -49,7 +52,7 @@ export interface ConnectState {
 
 export const initialState = (): ConnectState => ({
   configured: !!build, ready: false, signedIn: false, connected: false, account: null, deviceId: '',
-  devices: [], tasks: {}, messages: {}, older: {}, history: {}, sent: {}, live: {}, providers: {}, models: {}, bots: {}, pulls: {}, outdated: {}, error: null, demo: false,
+  devices: [], tasks: {}, messages: {}, older: {}, history: {}, sent: {}, live: {}, providers: {}, models: {}, bots: {}, pulls: {}, teams: {}, outdated: {}, error: null, demo: false,
 });
 
 export const useConnect = create<ConnectState>(() => initialState());

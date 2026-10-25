@@ -1,9 +1,11 @@
 // Tool traces as the desktop draws them (src/tool-trace.ts, src/tool-activity.ts, src/subagents.ts):
 // a kind per tool, a one-line sentence, edit diffs, todo lists and subagent snapshots. Pure (tested in node).
 import type { ToolActivity } from '../connect/types.ts';
+import { ownSentence, ownTool, type WorkerNames } from './pandacode-tools.ts';
 
 export type TraceKind = 'shell' | 'read' | 'edit' | 'write' | 'search' | 'web' | 'fetch' | 'todo' | 'agent' | 'skill' | 'mcp' | 'tool';
-export interface Trace { kind: TraceKind; verb: string; chip: string; object: string; added?: number; removed?: number }
+/** `own`: one of PandaCode's own tools (`dispatch_workers`, `title`…), for its icon and card. */
+export interface Trace { kind: TraceKind; verb: string; chip: string; object: string; added?: number; removed?: number; own?: string }
 export type DiffLine = { kind: 'add' | 'del'; text: string };
 export interface Todo { text: string; status: 'pending' | 'in_progress' | 'completed' | (string & {}) }
 export interface Subagent {
@@ -92,7 +94,7 @@ export function todosOf(fields: Fields): Todo[] {
 
 const domain = (url: string) => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return clip(url, MAX_CHIP); } };
 
-function mcpParts(name: string) {
+export function mcpParts(name: string) {
   const mcp = /^mcp__(.+?)__(.+)$/.exec(name);
   return mcp ? { server: mcp[1], tool: mcp[2] } : { server: 'PandaCode', tool: name.replace(/^pandacode_architect_/, '').replace(/^pandacode_/, '') };
 }
@@ -105,10 +107,13 @@ export function inputHint(input: string): string {
   return clip(value, MAX_OBJECT);
 }
 
-/** `Ran [npm] test -- upload`, `Edited [auth.ts] +4 −1`: the row's sentence. */
-export function describeTool(tool: Pick<ToolActivity, 'name' | 'status' | 'input'>, fields = parseFields(tool.input)): Trace {
+/** `Ran [npm] test -- upload`, `Edited [auth.ts] +4 −1`, `Dispatched 3 workers`: the row's sentence. */
+export function describeTool(tool: Pick<ToolActivity, 'name' | 'status' | 'input'>, fields = parseFields(tool.input), names?: WorkerNames): Trace {
   const kind = toolKind(tool.name);
   const verb = VERBS[kind][tool.status === 'running' ? 0 : 1];
+  const own = kind === 'mcp' ? ownTool(tool.name) : undefined;
+  const sentence = own ? ownSentence(own, fields, tool.status === 'running', names) : undefined;
+  if (sentence) return { kind, ...sentence, chip: '', own };
   const base = { kind, verb };
   switch (kind) {
     case 'shell': {
@@ -133,10 +138,17 @@ export function describeTool(tool: Pick<ToolActivity, 'name' | 'status' | 'input
     case 'todo': { const n = todosOf(fields).length; return { ...base, chip: '', object: n ? `the plan · ${n} ${n === 1 ? 'step' : 'steps'}` : 'the plan' }; }
     case 'agent': return { ...base, chip: field(fields, 'subagent_type', 'agent') || 'agent', object: clip(field(fields, 'description', 'prompt'), 90) };
     case 'skill': return { ...base, chip: field(fields, 'skill', 'name', 'command'), object: '' };
-    case 'mcp': { const { server, tool: t } = mcpParts(tool.name); return { ...base, chip: server, object: t.replace(/_/g, ' ') }; }
+    case 'mcp': {
+      const { server, tool: t } = mcpParts(tool.name);
+      const name = (own ?? t).replace(/_/g, ' ');
+      return { ...base, chip: own ? `PandaCode › ${name}` : `${server} › ${name}`, object: inputHint(tool.input), ...(own ? { own } : {}) };
+    }
     default: return { ...base, chip: tool.name || 'Tool', object: inputHint(tool.input) };
   }
 }
+
+/** The trace as one plain line: `Dispatched 3 workers`, `Ran npm test`. */
+export const traceText = (t: Trace) => [t.verb, t.chip, t.object].filter(Boolean).join(' ');
 
 /** A shell result's exit code (Codex `Exit code: N` or JSON `exitCode`) and the rest. */
 export function exitCode(output: string): { code?: number; body: string } {
