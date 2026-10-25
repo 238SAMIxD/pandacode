@@ -187,7 +187,7 @@ test('provider connections are grouped in Providers and never accept secrets in 
   await expect(dialog.locator('#glm-key-form').getByRole('button', { name: 'Save key', exact: true })).toBeDisabled();
   await expect(dialog.getByText('opencode auth login', { exact: true })).toBeVisible();
   await expect(dialog.getByText('Each sign-in, key or plan here is used only by the agent it belongs to.')).toBeVisible();
-  await expect(dialog.getByRole('img', { name: 'How providers relate to agents', exact: true })).toHaveAttribute('data-tip', /Nothing here is applied to every agent/);
+  await expect(dialog.getByRole('img', { name: 'How providers relate to agents', exact: true })).toHaveAttribute('data-tip', /the global environment variables are the one thing every harness gets/);
   // OpenCode models are chosen once, in Settings → Agents.
   await expect(dialog.getByRole('button', { name: 'Choose models', exact: true })).toHaveCount(0);
   await expect(dialog.getByText('agy', { exact: true })).toBeVisible();
