@@ -2992,7 +2992,7 @@ dependencies = [
 
 [[package]]
 name = "pandacode"
-version = "0.3.43"
+version = "0.3.44"
 dependencies = [
  "base64 0.22.1",
  "block2",
