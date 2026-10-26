@@ -676,6 +676,7 @@ mod tests {
 }
 
 /// Metadata rows for one Connect message, in their original attachment order.
+#[cfg(test)]
 pub fn message_attachment_rows(
     db: &rusqlite::Connection,
     session_id: &str,
