@@ -49,10 +49,10 @@ html[data-native-platform=macos] .settings-nav-head{padding-left:72px}
 .settings-page-root .settings-default-row .settings-select{justify-self:end}
 .settings-page-root .settings-switch{appearance:none;-webkit-appearance:none;display:block;position:relative;flex-shrink:0;width:var(--switch-w);height:var(--switch-h);padding:0;margin:0;border:1px solid color-mix(in srgb,var(--text) 15%,transparent);border-radius:var(--radius-full);background:var(--raised);box-shadow:none;cursor:pointer;transition:background-color 220ms,border-color 220ms,box-shadow 220ms}
 /* The knob carries momentum: it stretches while held and lands with a spring. */
-.settings-page-root .settings-switch::before{content:"";position:absolute;left:2px;top:2px;width:calc(var(--switch-h) - 6px);height:calc(var(--switch-h) - 6px);border-radius:var(--radius-full);background:#fff;box-shadow:0 1px 3px rgb(0 0 0 / .2);transition:transform var(--spring-bounce-duration,380ms) var(--spring-bounce,cubic-bezier(.34,1.4,.64,1)),width var(--spring-fast-duration,240ms) var(--spring-fast,ease)}
+.settings-page-root .settings-switch::before{content:"";position:absolute;left:2px;top:2px;width:calc(var(--switch-h) - 6px);height:calc(var(--switch-h) - 6px);border-radius:var(--radius-full);background:#fff;box-shadow:0 0 0 1px rgb(0 0 0 / .14),0 1px 3px rgb(0 0 0 / .25);transition:transform var(--spring-bounce-duration,380ms) var(--spring-bounce,cubic-bezier(.34,1.4,.64,1)),width var(--spring-fast-duration,240ms) var(--spring-fast,ease)}
 .settings-page-root .settings-switch:not(:checked):hover{border-color:color-mix(in srgb,var(--text) 28%,transparent)}
 .settings-page-root .settings-switch:active::before{width:calc(var(--switch-h) - 1px)}
-.settings-page-root .settings-switch:checked{background:var(--accent);border-color:var(--accent);box-shadow:0 0 0 4px rgb(var(--accent-rgb) / .16)}
+.settings-page-root .settings-switch:checked{background:var(--accent);border-color:var(--accent)}
 .settings-page-root .settings-switch:checked::before{transform:translateX(calc(var(--switch-w) - var(--switch-h)))}
 .settings-page-root .settings-switch:checked:active::before{transform:translateX(calc(var(--switch-w) - var(--switch-h) - 5px))}
 .settings-page-root .settings-switch:focus-visible{outline:2px solid var(--focus);outline-offset:3px}
