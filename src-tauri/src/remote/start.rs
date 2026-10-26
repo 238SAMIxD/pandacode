@@ -6,14 +6,17 @@ use serde_json::{json, Value};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::Manager;
 
-/// Worst case for a start: clone 6 min + fetch 90 s + 8 local git steps of 15 s ≈ 9.5 min.
+/// Worst case for a start: clone 6 min + a fetch (an existing project) or the checkout a
+/// worktree start defers (a fresh clone) 90 s + 8 local git steps of 15 s ≈ 9.5 min.
 /// The viewer waits longer ([`super::mirror`]'s `START_TIMEOUT`).
 const CLONE: Duration = Duration::from_secs(6 * 60);
 const FETCH: Duration = Duration::from_secs(90);
+const CHECKOUT: Duration = Duration::from_secs(90);
 const GIT: Duration = Duration::from_secs(15);
 pub(crate) const WORST_CASE: Duration = Duration::from_secs(6 * 60 + 90 + 8 * 15);
 /// Clones land in `~/PandaCode/<name>`.
@@ -24,6 +27,15 @@ pub(crate) const STAGES: [&str; 5] = ["finding", "downloading", "preparing", "st
 /// Percent updates within one stage are sent at most this often (stage changes at once).
 const PROGRESS_EVERY: Duration = Duration::from_millis(400);
 const PROGRESS_EVENT: &str = "task.progress";
+/// The error of a start the viewer cancelled (`task.cancelStart`); no `error` stage is sent for it.
+pub(crate) const CANCELLED: &str = "Start cancelled.";
+
+fn check(cancel: &AtomicBool) -> Result<()> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(CANCELLED.into());
+    }
+    Ok(())
+}
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Start {
@@ -85,6 +97,62 @@ fn valid_branch(branch: &str) -> Result<()> {
 /// The first project whose origin is `repo` (GitHub names ignore case).
 pub(crate) fn find_project(projects: Vec<(Project, Option<String>)>, repo: &str) -> Option<Project> {
     projects.into_iter().find(|(_, origin)| origin.as_deref().is_some_and(|origin| origin.eq_ignore_ascii_case(repo))).map(|(project, _)| project)
+}
+
+/// The repository's own config file, where `remote.origin.url` lives: `.git/config`, or the
+/// common directory's for a linked worktree.
+fn config_path(root: &Path) -> Option<PathBuf> {
+    let dot_git = root.join(".git");
+    if dot_git.is_dir() {
+        return Some(dot_git.join("config"));
+    }
+    let gitdir = root.join(std::fs::read_to_string(&dot_git).ok()?.trim().strip_prefix("gitdir:")?.trim());
+    Some(match std::fs::read_to_string(gitdir.join("commondir")) {
+        Ok(common) => gitdir.join(common.trim()).join("config"),
+        Err(_) => gitdir.join("config"),
+    })
+}
+
+/// `remote.origin.url` from the text of a git config, as the GitHub repository it names.
+/// The outer None means this file can't answer the way `git config --get` would (an include,
+/// a quoted or escaped value, an unusual header), so ask git.
+fn config_repo(config: &str) -> Option<Option<String>> {
+    let (mut inside, mut url) = (false, None);
+    for line in config.lines().map(str::trim) {
+        if let Some(header) = line.strip_prefix('[') {
+            let (name, rest) = header.split_once(']')?;
+            if !(rest.trim().is_empty() || rest.trim().starts_with(['#', ';'])) {
+                return None;
+            }
+            let name = name.trim();
+            let lowered = name.to_ascii_lowercase();
+            if lowered.starts_with("include") || lowered.starts_with("remote.") {
+                return None;
+            }
+            inside = name.split_once(char::is_whitespace).is_some_and(|(section, subsection)| section.eq_ignore_ascii_case("remote") && subsection.trim() == "\"origin\"");
+        } else if inside {
+            if let Some((_, value)) = line.split_once('=').filter(|(key, _)| key.trim().eq_ignore_ascii_case("url")) {
+                let value = value.trim();
+                if value.contains(['"', '\\', '#', ';']) {
+                    return None;
+                }
+                url = Some(value.to_owned());
+            }
+        }
+    }
+    Some(url.and_then(|url| github_hub::repo_from_remote(&url)))
+}
+
+/// Each project's GitHub repository. The origin comes from the config file, which takes
+/// microseconds; only a project whose config is out of the ordinary costs a git process, and
+/// those run side by side.
+pub(crate) fn origins(projects: Vec<Project>) -> Vec<(Project, Option<String>)> {
+    let direct: Vec<_> = projects.iter().map(|project| config_path(Path::new(&project.path)).and_then(|path| std::fs::read_to_string(path).ok()).and_then(|config| config_repo(&config))).collect();
+    let found: Vec<Option<String>> = std::thread::scope(|scope| {
+        let asked: Vec<_> = projects.iter().zip(&direct).map(|(project, direct)| direct.is_none().then(|| scope.spawn(|| github_hub::project_repo(Path::new(&project.path))))).collect();
+        direct.iter().zip(asked).map(|(direct, asked)| direct.clone().unwrap_or_else(|| asked.and_then(|handle| handle.join().ok()).flatten())).collect()
+    });
+    projects.into_iter().zip(found).collect()
 }
 
 fn find_project_id(projects: Vec<Project>, id: &str) -> Option<Project> {
@@ -180,22 +248,35 @@ fn stop_group(child: &mut std::process::Child) {
 }
 
 /// `gh repo clone` like [`github_hub::clone_to`], with git's `--progress` read as it
-/// arrives so the viewer sees a percentage. Same timeout, stops the whole group.
-fn clone_with_progress(repo: &str, destination: &Path, timeout: Duration, mut progress: impl FnMut(u8)) -> Result<()> {
+/// arrives so the viewer sees a percentage. Same timeout, stops the whole group. With
+/// `lazy` the clone leaves the working tree empty (`--no-checkout`) for the caller to fill.
+fn clone_with_progress(repo: &str, destination: &Path, timeout: Duration, lazy: bool, cancel: &AtomicBool, progress: impl FnMut(u8)) -> Result<()> {
     let repo = github_hub::valid_repo(repo)?;
     let parent = destination.parent().filter(|parent| parent.is_dir()).ok_or("Choose an existing folder to clone into.")?;
     let mut command = Command::new(crate::providers::tool_path("gh").unwrap_or_else(|| "gh".into()));
     command.current_dir(parent).args(["repo", "clone", &repo]).arg(destination).args(["--", "--progress"]);
+    if lazy {
+        command.arg("--no-checkout");
+    }
     if let Ok(path) = crate::providers::executable_path() {
         command.env("PATH", path);
     }
     command.env("GH_PROMPT_DISABLED", "1").env("GH_NO_UPDATE_NOTIFIER", "1").env("GH_PAGER", "cat").env("NO_COLOR", "1").env("CLICOLOR", "0").env("GIT_TERMINAL_PROMPT", "0");
     crate::child_env::sanitize(&mut command);
+    supervise(command, &repo, destination, timeout, cancel, progress)
+}
+
+/// Runs a clone `command` in its own process group, relaying its progress. A timeout or
+/// `cancel` kills the group within 100 ms and removes the half-made `destination` (only when
+/// it did not exist before).
+fn supervise(mut command: Command, repo: &str, destination: &Path, timeout: Duration, cancel: &AtomicBool, mut progress: impl FnMut(u8)) -> Result<()> {
+    check(cancel)?;
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut command, 0);
     #[cfg(windows)]
     std::os::windows::process::CommandExt::creation_flags(&mut command, 0x08000000);
     command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+    let existed = destination.exists();
     let mut child = command.spawn().map_err(|e| format!("Could not run the GitHub CLI: {e}"))?;
     let stderr = child.stderr.take().ok_or("Could not read the GitHub CLI.")?;
     let (sender, percents) = mpsc::channel();
@@ -211,10 +292,20 @@ fn clone_with_progress(repo: &str, destination: &Path, timeout: Duration, mut pr
         if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
             break status;
         }
-        if Instant::now() >= deadline {
+        let stopped = if cancel.load(Ordering::Relaxed) {
+            Some(CANCELLED.to_owned())
+        } else if Instant::now() >= deadline {
+            Some(format!("Cloning {repo} took longer than {} minutes.", timeout.as_secs() / 60))
+        } else {
+            None
+        };
+        if let Some(reason) = stopped {
             stop_group(&mut child);
             let _ = reader.join();
-            return Err(format!("Cloning {repo} took longer than {} minutes.", timeout.as_secs() / 60));
+            if !existed {
+                let _ = std::fs::remove_dir_all(destination);
+            }
+            return Err(reason);
         }
     };
     let tail = reader.join().unwrap_or_default();
@@ -280,9 +371,9 @@ pub(crate) fn progress(app: &tauri::AppHandle, from: &str, data: &Value) {
     }
 }
 
-/// The project checking out `repo`, cloned into `~/PandaCode` when there is none, and
-/// whether it was cloned just now.
-fn project_for(state: &AppState, target: &Target, progress: &Progress) -> Result<(Project, bool)> {
+/// The project checking out `repo`, cloned into `~/PandaCode` when there is none (with an
+/// empty working tree when `lazy`), and whether it was cloned just now.
+fn project_for(state: &AppState, target: &Target, progress: &Progress, lazy: bool, cancel: &AtomicBool) -> Result<(Project, bool)> {
     let (projects, bot_projects) = {
         let store = state.store.lock().map_err(|e| e.to_string())?;
         (store.projects()?, crate::bots::project_ids(&store)?)
@@ -295,26 +386,25 @@ fn project_for(state: &AppState, target: &Target, progress: &Progress) -> Result
             find_project_id(projects, id).map(|project| (project, false)).ok_or_else(|| "Project not found.".into())
         }
         Target::Repo(repo) => {
-            let origins = projects.into_iter().map(|project| {
-                let origin = github_hub::project_repo(Path::new(&project.path));
-                (project, origin)
-            });
-            if let Some(project) = find_project(origins.collect(), repo) {
+            if let Some(project) = find_project(origins(projects), repo) {
                 return Ok((project, false));
             }
             let home = crate::agent_usage_providers::home().ok_or("This computer has no home folder to clone into.")?;
             let destination = clone_path(&home, repo, Path::exists);
             std::fs::create_dir_all(home.join(CLONE_FOLDER)).map_err(|e| e.to_string())?;
             progress.report("downloading", None, None);
-            clone_with_progress(repo, &destination, CLONE, |percent| progress.report("downloading", Some(percent), None))?;
+            clone_with_progress(repo, &destination, CLONE, lazy, cancel, |percent| progress.report("downloading", Some(percent), None))?;
             Ok((state.store.lock().map_err(|e| e.to_string())?.add_project(&destination)?, true))
         }
     }
 }
 
-/// Fetches and picks the viewer's branch when origin has it, else the default branch.
-fn pick_branch(root: &Path, wanted: Option<&str>) -> Result<String> {
-    git(root, &["fetch", "--quiet", "origin"], FETCH).map_err(|e| format!("Could not fetch from GitHub: {e}"))?;
+/// Picks the viewer's branch when origin has it, else the default branch. An existing
+/// checkout fetches first (`fetch`); a clone made a moment ago already has origin's refs.
+pub(crate) fn pick_branch(root: &Path, wanted: Option<&str>, fetch: bool) -> Result<String> {
+    if fetch {
+        git(root, &["fetch", "--quiet", "origin"], FETCH).map_err(|e| format!("Could not fetch from GitHub: {e}"))?;
+    }
     if let Some(branch) = wanted.filter(|branch| on_origin(root, branch)) {
         return Ok(branch.to_owned());
     }
@@ -358,76 +448,161 @@ fn busy_in_place(state: &AppState, project_id: &str) -> Result<bool> {
     Ok(agents.keys().any(|id| store.session(id).is_ok_and(|task| task.project_id == project_id && task.worktree_path.is_none())))
 }
 
-/// Puts a fresh clone's checkout on `branch`; nobody's work is there yet.
-fn checkout(root: &Path, branch: &str) -> Result<()> {
+/// Puts a fresh clone's checkout on `branch`; nobody's work is there yet. A clone starts on
+/// origin's default branch at origin's commit, so that branch needs no switch and no merge,
+/// and any other is made from origin's ref.
+pub(crate) fn checkout(root: &Path, branch: &str) -> Result<()> {
+    if git(root, &["symbolic-ref", "--quiet", "--short", "HEAD"], GIT).is_ok_and(|current| current == branch) {
+        return Ok(());
+    }
     let local = git(root, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")], GIT).is_ok();
     let switched = if local { git(root, &["switch", branch], GIT) } else { git(root, &["switch", "--track", "-c", branch, &format!("origin/{branch}")], GIT) };
-    switched.map_err(|e| format!("Could not check out {branch}: {e}"))?;
-    // A local branch that diverged keeps its own commits; the agent starts from them.
-    let _ = git(root, &["merge", "--ff-only", "--quiet", &format!("origin/{branch}")], GIT);
-    Ok(())
+    switched.map(drop).map_err(|e| format!("Could not check out {branch}: {e}"))
 }
 
-/// Refuses a harness this computer doesn't have.
-pub(crate) async fn require_installed(provider: &str) -> Result<()> {
-    let providers = tauri::async_runtime::spawn_blocking(crate::providers::discover).await.map_err(|e| e.to_string())?;
-    if !providers.iter().any(|p| p.id == provider && p.installed) {
-        let name = providers.iter().find(|p| p.id == provider).map_or(provider, |p| p.name.as_str());
-        return Err(format!("{name} is not installed on {}.", super::config::device_name()));
+/// Fills the working tree of a clone made with `--no-checkout` from its HEAD.
+fn restore_checkout(root: &Path) -> Result<()> {
+    git(root, &["reset", "--hard", "--quiet"], CHECKOUT).map(drop).map_err(|e| format!("Could not check out the repository: {e}"))
+}
+
+fn remote_worktree(root: &Path, branch: &str) -> Result<workspace::Worktree> {
+    let name = format!("pandacode/remote-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    workspace::create_worktree_with(root, &name, Some(&format!("origin/{branch}")), false)
+}
+
+/// A worktree for a task on a `--no-checkout` clone, made while the clone's own working tree
+/// is filled in: two separate checkouts in parallel, each with its own index, instead of one
+/// after the other. Both finish before this returns, so the project is never left empty.
+pub(crate) fn worktree_while_restoring(root: &Path, branch: &str) -> Result<workspace::Worktree> {
+    std::thread::scope(|scope| {
+        let main = scope.spawn(|| restore_checkout(root));
+        let made = remote_worktree(root, branch);
+        let restored = main.join().unwrap_or_else(|_| Err("Could not check out the repository.".into()));
+        match (made, restored) {
+            (Ok(made), Ok(())) => Ok(made),
+            (made, restored) => {
+                if let Ok(made) = &made {
+                    discard(root, made);
+                }
+                Err(restored.err().or(made.err()).unwrap_or_default())
+            }
+        }
+    })
+}
+
+/// Removes a worktree made for a start that did not go on, best effort.
+fn discard(root: &Path, made: &workspace::Worktree) {
+    let _ = workspace::remove_worktree(root, &made.path, Some(&made.branch), true);
+}
+
+/// The refusal for a harness `host` doesn't have, naming it as the app does when it knows it.
+fn not_installed(provider: &str, host: &str, installed: bool) -> Result<()> {
+    if installed {
+        return Ok(());
     }
-    Ok(())
+    let name = crate::providers::PROVIDERS.iter().find(|(id, _)| *id == provider).map_or(provider, |(_, name)| name);
+    Err(format!("{name} is not installed on {host}."))
+}
+
+/// Refuses a harness this computer doesn't have. Only that harness is looked up, in the
+/// folders the app searches; `providers::discover` would also run `--version` on all of them
+/// (2-4 s) just to read a list this check ignores.
+pub(crate) async fn require_installed(provider: &str) -> Result<()> {
+    let id = provider.to_owned();
+    let installed = tauri::async_runtime::spawn_blocking(move || crate::providers::PROVIDERS.iter().any(|(known, _)| *known == id) && crate::providers::executable(&id).is_some()).await.map_err(|e| e.to_string())?;
+    not_installed(provider, &super::config::device_name(), installed)
 }
 
 /// Starts the task, reporting each stage to the viewer, and the failure as `error`.
 pub(crate) async fn run(app: &tauri::AppHandle, from: &str, start: Start) -> Result<Value> {
+    run_cancellable(app, from, start, Arc::new(AtomicBool::new(false))).await
+}
+
+/// [`run`] that stops when `cancel` is set: it is checked between stages, and a running clone
+/// is killed and its folder removed. Once the task exists it is too late to cancel. A cancelled
+/// start fails with [`CANCELLED`] and sends no `error` stage; the canceller answers the viewer.
+pub(crate) async fn run_cancellable(app: &tauri::AppHandle, from: &str, start: Start, cancel: Arc<AtomicBool>) -> Result<Value> {
     let progress = Arc::new(Progress { app: app.clone(), to: from.to_owned(), start: start.start_id.clone(), repo: match &start.target { Target::Repo(repo) => repo.clone(), Target::ProjectId(_) => String::new() }, last: Mutex::new(None) });
-    let result = start_task(app, from, start, &progress).await;
-    if let Err(error) = &result {
+    let result = start_task(app, from, start, &progress, &cancel).await;
+    if let Some(error) = result.as_ref().err().filter(|error| *error != CANCELLED) {
         progress.report("error", None, Some(error));
     }
     result
 }
 
-async fn start_task(app: &tauri::AppHandle, from: &str, start: Start, progress: &Arc<Progress>) -> Result<Value> {
+/// The checkout a start works in once the project is found or cloned: the branch to use, and
+/// for a worktree start on a fresh clone the worktree made along the way.
+fn prepare(state: &AppState, project: &Project, cloned: bool, worktree: bool, wanted: Option<&str>, progress: &Progress, cancel: &AtomicBool) -> Result<(String, Option<workspace::Worktree>)> {
+    check(cancel)?;
+    progress.report("preparing", None, None);
+    let root = PathBuf::from(&project.path);
+    let branch = pick_branch(&root, wanted, !cloned)?;
+    check(cancel)?;
+    let made = match (worktree, cloned) {
+        (true, true) => Some(worktree_while_restoring(&root, &branch)?),
+        (false, true) => {
+            checkout(&root, &branch)?;
+            None
+        }
+        (false, false) => {
+            ready_in_place(&root, &project.name, &branch, busy_in_place(state, &project.id)?)?;
+            None
+        }
+        (true, false) => None,
+    };
+    Ok((branch, made))
+}
+
+async fn start_task(app: &tauri::AppHandle, from: &str, start: Start, progress: &Arc<Progress>, cancel: &Arc<AtomicBool>) -> Result<Value> {
+    check(cancel)?;
     progress.report("finding", None, None);
     // Before any clone: the images must be ones this caller just sent.
     super::images::claim(app, from, &start.image_ids)?;
     require_installed(&start.provider).await?;
+    check(cancel)?;
     let handle = app.clone();
-    let (target, wanted, worktree, reporter) = (start.target, start.branch.clone(), start.worktree, progress.clone());
-    let (project, branch) = tauri::async_runtime::spawn_blocking(move || -> Result<(Project, String)> {
+    let (target, wanted, worktree, reporter, flag) = (start.target, start.branch.clone(), start.worktree, progress.clone(), cancel.clone());
+    let (project, branch, made) = tauri::async_runtime::spawn_blocking(move || -> Result<(Project, String, Option<workspace::Worktree>)> {
         let state = handle.state::<AppState>();
-        let (project, cloned) = project_for(&state, &target, &reporter)?;
-        reporter.report("preparing", None, None);
-        let root = PathBuf::from(&project.path);
-        let branch = pick_branch(&root, wanted.as_deref())?;
-        if !worktree {
-            if cloned {
-                checkout(&root, &branch)?;
-            } else {
-                ready_in_place(&root, &project.name, &branch, busy_in_place(&state, &project.id)?)?;
-            }
+        // A worktree start never uses the clone's own checkout, so a fresh clone defers it.
+        let (project, cloned) = project_for(&state, &target, &reporter, worktree, &flag)?;
+        let prepared = prepare(&state, &project, cloned, worktree, wanted.as_deref(), &reporter, &flag);
+        if cloned && worktree && prepared.is_err() {
+            let _ = restore_checkout(Path::new(&project.path));
         }
-        Ok((project, branch))
+        prepared.map(|(branch, made)| (project, branch, made))
     })
     .await
     .map_err(|e| e.to_string())??;
+    let root = PathBuf::from(&project.path);
+    if let Err(error) = check(cancel) {
+        made.iter().for_each(|made| discard(&root, made));
+        return Err(error);
+    }
     let state = app.state::<AppState>();
-    let task = {
+    let created = {
         let store = state.store.lock().map_err(|e| e.to_string())?;
-        let task = crate::architect::profiles::create_user_task(&store, &project.id, &start.provider, &start.model, start.mode.as_deref(), None)?;
-        if start.effort.is_some() {
-            store.set_reasoning_effort(&task.id, start.effort.as_deref())?;
+        crate::architect::profiles::create_user_task(&store, &project.id, &start.provider, &start.model, start.mode.as_deref(), None).and_then(|task| {
+            if start.effort.is_some() {
+                store.set_reasoning_effort(&task.id, start.effort.as_deref())?;
+            }
+            Ok(task)
+        })
+    };
+    let task = match created {
+        Ok(task) => task,
+        Err(error) => {
+            made.iter().for_each(|made| discard(&root, made));
+            return Err(error);
         }
-        task
     };
     if worktree {
         let store = state.store.clone();
-        let (id, root) = (task.id.clone(), PathBuf::from(&project.path));
-        let attached = tauri::async_runtime::spawn_blocking(move || -> Result<()> {
-            let name = format!("pandacode/remote-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
-            let checkout = workspace::create_worktree_with(&root, &name, Some(&format!("origin/{branch}")), false)?;
-            store.lock().map_err(|e| e.to_string())?.attach_worktree(&id, &checkout.path, &checkout.branch).map(|_| ())
+        let id = task.id.clone();
+        let attached = tauri::async_runtime::spawn_blocking(move || -> Result<workspace::Worktree> {
+            let checkout = made.map_or_else(|| remote_worktree(&root, &branch), Ok)?;
+            store.lock().map_err(|e| e.to_string())?.attach_worktree(&id, &checkout.path, &checkout.branch)?;
+            Ok(checkout)
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -558,6 +733,147 @@ mod tests {
         assert!(parse(&project).is_err());
     }
 
+    fn git_in(dir: &Path, args: &[&str]) {
+        assert!(Command::new("git").arg("-C").arg(dir).args(args).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t").env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t").output().unwrap().status.success(), "{args:?}");
+    }
+
+    fn temp_base(label: &str) -> PathBuf {
+        let base = std::env::temp_dir().join(format!("pandacode-start-{label}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base).unwrap();
+        base.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn the_origin_is_read_from_the_config_file_like_git_reads_it() {
+        let repo = |config: &str| config_repo(config).unwrap();
+        assert_eq!(repo("[core]\n\tbare = false\n[remote \"origin\"]\n\turl = https://github.com/Orbit-Labs/Orbit.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n"), Some("Orbit-Labs/Orbit".into()));
+        assert_eq!(repo("[remote \"origin\"]\n\turl = git@github.com:orbit-labs/orbit.git\n"), Some("orbit-labs/orbit".into()));
+        assert_eq!(repo("[REMOTE \"origin\"]\n\tURL=https://github.com/a/b\n"), Some("a/b".into()));
+        assert_eq!(repo("[remote \"upstream\"]\n\turl = https://github.com/a/other\n[remote \"Origin\"]\n\turl = https://github.com/a/other\n"), None, "other remotes are not origin");
+        assert_eq!(repo("[remote \"origin\"]\n\turl = https://github.com/a/first\n\turl = https://github.com/a/last\n"), Some("a/last".into()), "the last value wins");
+        assert_eq!(repo("[remote \"origin\"]\n\turl = https://gitlab.com/a/b\n"), None, "not GitHub");
+        assert_eq!(repo(""), None);
+        // What the file alone can't answer is left to git.
+        for hard in ["[include]\n\tpath = ../more\n[remote \"origin\"]\n\turl = https://github.com/a/b\n", "[includeIf \"gitdir:~/\"]\n\tpath = x\n", "[remote.origin]\n\turl = https://github.com/a/b\n", "[remote \"origin\"] url = https://github.com/a/b\n", "[remote \"origin\"]\n\turl = \"https://github.com/a/b\"\n", "[remote \"origin\"]\n\turl = https://github.com/a/b # mine\n", "[remote \"origin\"\n"] {
+            assert_eq!(config_repo(hard), None, "{hard}");
+        }
+    }
+
+    #[test]
+    fn project_origins_match_git_for_checkouts_worktrees_and_odd_configs() {
+        let base = temp_base("origins");
+        let main = base.join("main");
+        std::fs::create_dir_all(&main).unwrap();
+        git_in(&main, &["init", "-q", "-b", "main"]);
+        git_in(&main, &["remote", "add", "origin", "https://github.com/Orbit-Labs/Orbit.git"]);
+        git_in(&main, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        let linked = base.join("linked");
+        git_in(&main, &["worktree", "add", "-q", linked.to_str().unwrap()]);
+        let included = base.join("included");
+        std::fs::create_dir_all(&included).unwrap();
+        git_in(&included, &["init", "-q"]);
+        std::fs::write(included.join("more.conf"), "[remote \"origin\"]\n\turl = git@github.com:orbit-labs/included.git\n").unwrap();
+        git_in(&included, &["config", "include.path", "../more.conf"]);
+        let bare = base.join("empty");
+        std::fs::create_dir_all(&bare).unwrap();
+        git_in(&bare, &["init", "-q"]);
+        let sub = main.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        let missing = base.join("missing");
+        let folders = [&main, &linked, &included, &bare, &sub, &missing];
+        let projects: Vec<Project> = folders.iter().enumerate().map(|(n, path)| Project { id: n.to_string(), name: n.to_string(), path: path.to_string_lossy().into_owned() }).collect();
+        assert_eq!(config_path(&main).as_deref(), Some(main.join(".git/config")).as_deref());
+        assert!(config_path(&linked).is_some_and(|path| path == main.join(".git").join("config") || path.canonicalize().ok() == main.join(".git/config").canonicalize().ok()));
+        assert_eq!(config_path(&sub), None);
+        let found: Vec<Option<String>> = origins(projects).into_iter().map(|(_, origin)| origin).collect();
+        let by_git: Vec<Option<String>> = folders.iter().map(|path| github_hub::project_repo(path)).collect();
+        assert_eq!(found, by_git);
+        assert_eq!(found[0].as_deref(), Some("Orbit-Labs/Orbit"));
+        assert_eq!(found[1], found[0], "a linked worktree shares its main checkout's config");
+        assert_eq!(found[2].as_deref(), Some("orbit-labs/included"), "an include goes through git");
+        assert_eq!((found[3].clone(), found[4].as_deref(), found[5].clone()), (None, Some("Orbit-Labs/Orbit"), None));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn only_the_requested_harness_is_checked() {
+        assert_eq!(not_installed("claude", "Studio", true), Ok(()));
+        assert_eq!(not_installed("claude", "Studio", false), Err("Claude Code is not installed on Studio.".into()));
+        assert_eq!(not_installed("nope", "Studio", false), Err("nope is not installed on Studio.".into()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_cancelled_clone_is_killed_and_its_half_made_folder_removed() {
+        let base = temp_base("cancel");
+        let destination = base.join("repo");
+        let command = || {
+            let mut command = Command::new("sh");
+            // A clone that has made its folder and then hangs, with a child of its own like gh's git.
+            command.arg("-c").arg(format!("mkdir -p {0}; echo partial > {0}/file; sleep 30 & wait", destination.display()));
+            command
+        };
+        // Already cancelled: nothing runs.
+        let cancel = AtomicBool::new(true);
+        assert_eq!(supervise(command(), "a/b", &destination, Duration::from_secs(60), &cancel, drop), Err(CANCELLED.into()));
+        assert!(!destination.exists());
+        // Cancelled while it runs.
+        let cancel = Arc::new(AtomicBool::new(false));
+        let setter = cancel.clone();
+        let canceller = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            setter.store(true, Ordering::Relaxed);
+        });
+        let started = Instant::now();
+        assert_eq!(supervise(command(), "a/b", &destination, Duration::from_secs(60), &cancel, drop), Err(CANCELLED.into()));
+        canceller.join().unwrap();
+        assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
+        assert!(!destination.exists(), "the partial clone is removed");
+        // A timeout stops it the same way, and a folder that was already there stays.
+        std::fs::create_dir_all(&destination).unwrap();
+        let error = supervise(command(), "a/b", &destination, Duration::from_millis(300), &AtomicBool::new(false), drop).unwrap_err();
+        assert!(error.starts_with("Cloning a/b took longer than"), "{error}");
+        assert!(destination.exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A fresh clone is not fetched again; a worktree start fills the lazy clone and the
+    /// worktree together; a start on the default branch needs no switch.
+    #[test]
+    fn a_fresh_clone_needs_no_fetch_and_a_lazy_one_gets_both_checkouts() {
+        let base = temp_base("lazy");
+        let (origin, clone) = (base.join("origin"), base.join("clone"));
+        std::fs::create_dir_all(&origin).unwrap();
+        git_in(&origin, &["init", "-q", "-b", "main"]);
+        std::fs::write(origin.join("a.txt"), "a").unwrap();
+        git_in(&origin, &["add", "."]);
+        git_in(&origin, &["commit", "-q", "-m", "one"]);
+        git_in(&origin, &["branch", "feature"]);
+        git_in(&base, &["clone", "-q", "--no-checkout", origin.to_str().unwrap(), "clone"]);
+        assert!(!clone.join("a.txt").exists());
+        git_in(&origin, &["commit", "-q", "--allow-empty", "-m", "two"]);
+        assert_eq!(pick_branch(&clone, Some("feature"), false).unwrap(), "feature");
+        assert_eq!(pick_branch(&clone, None, false).unwrap(), "main");
+        let before = git(&clone, &["rev-parse", "origin/main"], GIT).unwrap();
+        pick_branch(&clone, None, false).unwrap();
+        assert_eq!(git(&clone, &["rev-parse", "origin/main"], GIT).unwrap(), before, "no fetch");
+        pick_branch(&clone, None, true).unwrap();
+        assert_ne!(git(&clone, &["rev-parse", "origin/main"], GIT).unwrap(), before, "fetch sees the new commit");
+        let made = worktree_while_restoring(&clone, "feature").unwrap();
+        assert_eq!(std::fs::read_to_string(clone.join("a.txt")).unwrap(), "a");
+        assert_eq!(std::fs::read_to_string(made.path.join("a.txt")).unwrap(), "a");
+        assert!(made.branch.starts_with("pandacode/"));
+        assert_eq!(git(&clone, &["status", "--porcelain"], GIT).unwrap(), "", "the main checkout is whole and clean");
+        assert_eq!(git(&clone, &["branch", "--show-current"], GIT).unwrap(), "main");
+        // The default branch is already checked out; another is made from origin's ref.
+        checkout(&clone, "main").unwrap();
+        checkout(&clone, "feature").unwrap();
+        assert_eq!(git(&clone, &["branch", "--show-current"], GIT).unwrap(), "feature");
+        discard(&clone, &made);
+        assert!(!made.path.exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// Picks a pushed branch, falls back to origin's default, and checks it out.
     #[test]
     fn the_branch_comes_from_origin() {
@@ -569,9 +885,9 @@ mod tests {
         run(&origin, &["commit", "-q", "--allow-empty", "-m", "one"]);
         run(&origin, &["branch", "feature"]);
         run(&base, &["clone", "-q", origin.to_str().unwrap(), "clone"]);
-        assert_eq!(pick_branch(&clone, Some("feature")).unwrap(), "feature");
-        assert_eq!(pick_branch(&clone, Some("unpushed")).unwrap(), "main");
-        assert_eq!(pick_branch(&clone, None).unwrap(), "main");
+        assert_eq!(pick_branch(&clone, Some("feature"), true).unwrap(), "feature");
+        assert_eq!(pick_branch(&clone, Some("unpushed"), true).unwrap(), "main");
+        assert_eq!(pick_branch(&clone, None, true).unwrap(), "main");
         // An existing checkout on another branch, dirty or busy is never switched.
         assert!(ready_in_place(&clone, "orbit", "feature", false).unwrap_err().contains("on main, not feature"));
         assert!(ready_in_place(&clone, "orbit", "main", true).unwrap_err().contains("an agent working"));
@@ -581,7 +897,7 @@ mod tests {
         std::fs::remove_file(clone.join("notes.txt")).unwrap();
         // Clean, idle and on the branch: fast-forwarded and used in place.
         run(&origin, &["commit", "-q", "--allow-empty", "-m", "two"]);
-        pick_branch(&clone, Some("main")).unwrap();
+        pick_branch(&clone, Some("main"), true).unwrap();
         ready_in_place(&clone, "orbit", "main", false).unwrap();
         assert_eq!(git(&clone, &["rev-parse", "HEAD"], GIT).unwrap(), git(&origin, &["rev-parse", "HEAD"], GIT).unwrap());
         checkout(&clone, "feature").unwrap();

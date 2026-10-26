@@ -10,7 +10,7 @@ import { escape, icon } from './dom';
 export type RemoteStartStage = 'connecting' | 'finding' | 'downloading' | 'preparing' | 'starting' | 'error';
 /** `remote://start-progress`, validated natively (`remote/start.rs` `progress_payload`). */
 export interface RemoteStartProgress { deviceId: string; startId?: string | null; repo?: string | null; stage: Exclude<RemoteStartStage, 'connecting'>; percent?: number | null; detail?: string | null }
-export interface RemoteStart { sessionId: string; deviceId: string; device: string; repo: string | null; stage: RemoteStartStage; percent: number | null; detail: string | null; retry?: () => void; onStage?: (start: RemoteStart) => void }
+export interface RemoteStart { sessionId: string; deviceId: string; device: string; repo: string | null; stage: RemoteStartStage; percent: number | null; detail: string | null; retry?: () => void; onStage?: (start: RemoteStart) => void; cancelling?: boolean; startId?: string }
 
 const EVENT = 'remote://start-progress';
 const STAGES: readonly RemoteStartStage[] = ['connecting', 'finding', 'downloading', 'preparing', 'starting', 'error'];
@@ -69,7 +69,7 @@ function watch(): void {
 /** A host's stage: matched by start id (the viewer's task id), else the computer. */
 export function onRemoteStartProgress(event: RemoteStartProgress): void {
   if (!event || !STAGES.includes(event.stage)) return;
-  const start = (event.startId && starts.get(event.startId)) || [...starts.values()].find(item => item.deviceId === event.deviceId && item.stage !== 'error');
+  const start = (event.startId && [...starts.values()].find(item => item.startId === event.startId)) || [...starts.values()].find(item => item.deviceId === event.deviceId && item.stage !== 'error');
   if (!start || start.deviceId !== event.deviceId) return;
   // A frame that arrives late never moves a start backwards, except into an error.
   if (event.stage !== 'error' && STAGES.indexOf(event.stage) < STAGES.indexOf(start.stage)) return;
@@ -94,12 +94,16 @@ export async function trackRemoteStart<T>(sessionId: string, target: { deviceId:
   starts.set(sessionId, { sessionId, deviceId: target.deviceId, device: target.name, repo: null, stage: 'connecting', percent: null, detail: null, retry, onStage });
   syncRemoteStartStrip();
   try {
-    const result = await start(sessionId);
+    // A new id per deliberate attempt: the host remembers a failed or cancelled startId.
+    const attempt = `${sessionId}.${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    starts.get(sessionId)!.startId = attempt;
+    const result = await start(attempt);
     starts.delete(sessionId);
     return result;
   } catch (error) {
     const entry = starts.get(sessionId);
-    if (entry) Object.assign(entry, { stage: 'error', percent: null, detail: entry.stage === 'error' && entry.detail ? entry.detail : message(error) });
+    if (entry?.cancelling) starts.delete(sessionId);
+    else if (entry) Object.assign(entry, { stage: 'error', percent: null, detail: entry.stage === 'error' && entry.detail ? entry.detail : message(error) });
     throw error;
   } finally { syncRemoteStartStrip(); }
 }

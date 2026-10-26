@@ -5,14 +5,24 @@
 use super::{client, host, remote, start::git};
 use crate::{providers::AgentEvent, storage::Store, AppState, Result};
 use rusqlite::{params, OptionalExtension};
-use serde_json::{json, Value};
-use std::collections::HashMap;
+use serde_json::{json, Map, Value};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::time::Duration;
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
+use tokio::sync::Notify;
 
 /// Cloning and checking out can take a while on the host: its worst case plus margin.
 const START_TIMEOUT: Duration = Duration::from_secs(super::start::WORST_CASE.as_secs() + 3 * 60);
+/// A burst of presence frames (and renewals) makes one subscribe round.
+const SUBSCRIBE_DEBOUNCE: Duration = Duration::from_millis(250);
+/// A host that failed to subscribe while it runs an active mirror is retried after this,
+/// doubling up to [`RETRY_MAX`].
+const RETRY_FIRST: Duration = Duration::from_secs(2);
+const RETRY_MAX: Duration = Duration::from_secs(60);
+/// How often a start whose reply was lost asks the host how it went.
+const START_POLL: Duration = Duration::from_secs(3);
 /// Pages per sync; a longer history continues at the next run end or subscription.
 const MAX_PAGES: usize = 50;
 const NO_REPO: &str = "This project has no GitHub origin, so it can't run on another computer. Add a GitHub remote named origin first.";
@@ -113,14 +123,130 @@ fn status_after(current: &str, kind: &str) -> Option<&'static str> {
     (next != current).then_some(next)
 }
 
+/// What this computer, as a viewer, keeps in memory about its mirrors.
+#[derive(Default)]
+pub(crate) struct Viewer {
+    /// Per host: the journal epoch its `seq`s belong to (new with every host launch).
+    epochs: HashMap<String, String>,
+    /// The newest event `seq` seen per (host, host task).
+    seqs: HashMap<(String, String), u64>,
+    /// Approval and question cards shown per local task: request id → kind.
+    cards: HashMap<String, HashMap<String, String>>,
+    /// Starts not yet answered, by local id.
+    starts: HashMap<String, PendingStart>,
+}
+
+pub(crate) struct PendingStart {
+    device: String,
+    start_id: String,
+    /// The row was made for this start (else it is the user's draft).
+    created: bool,
+    /// Ends the `task.start` call still waiting for its reply.
+    cancel: Arc<Notify>,
+    /// A call for it (the start, or asking how it went) is in flight.
+    busy: bool,
+}
+
+impl Viewer {
+    /// Moves to a host's epoch: a new one (the host restarted) forgets its old `seq`s.
+    fn epoch(&mut self, device: &str, epoch: Option<&str>) {
+        let Some(epoch) = epoch else { return };
+        if self.epochs.get(device).map(String::as_str) != Some(epoch) {
+            self.epochs.insert(device.to_owned(), epoch.to_owned());
+            self.seqs.retain(|(host, _), _| host != device);
+        }
+    }
+
+    /// Whether an event is new, advancing past it. One without `seq` (older hosts) always is.
+    fn fresh(&mut self, device: &str, event: &Value) -> bool {
+        let (Some(seq), Some(session)) = (event["seq"].as_u64(), event["sessionId"].as_str()) else { return true };
+        let last = self.seqs.entry((device.to_owned(), session.to_owned())).or_default();
+        if seq <= *last {
+            return false;
+        }
+        *last = seq;
+        true
+    }
+
+    fn advance(&mut self, device: &str, session: &str, seq: u64) {
+        let last = self.seqs.entry((device.to_owned(), session.to_owned())).or_default();
+        *last = (*last).max(seq);
+    }
+
+    /// `subscribe` params: the tasks, and where this viewer left off in each it has seen.
+    fn subscribe_params(&self, device: &str, sessions: &[String]) -> Value {
+        let mut params = json!({"sessionIds": sessions});
+        if let Some(epoch) = self.epochs.get(device) {
+            let after: Map<String, Value> = sessions.iter().filter_map(|id| Some((id.clone(), json!(self.seqs.get(&(device.to_owned(), id.clone()))?)))).collect();
+            params["epoch"] = json!(epoch);
+            params["afterSeq"] = Value::Object(after);
+        }
+        params
+    }
+
+    /// Notes the card a relabelled event shows or clears.
+    fn card(&mut self, event: &Value) {
+        let (Some(local), Some(kind), Some(request)) = (event["sessionId"].as_str(), event["kind"].as_str(), event["requestId"].as_str()) else { return };
+        match kind {
+            "approval" | "input_request" => {
+                self.cards.entry(local.to_owned()).or_default().insert(request.to_owned(), kind.to_owned());
+            }
+            "approval_cancelled" | "input_cancelled" => {
+                self.cards.get_mut(local).map(|cards| cards.remove(request));
+            }
+            _ => {}
+        }
+    }
+
+    /// The events that make a task's cards match the host's pending requests: a missing
+    /// card is shown again (after a restart or a lost frame), an answered one is cleared.
+    fn sync_cards(&mut self, local: &str, pending: &[Value]) -> Vec<Value> {
+        let shown = self.cards.entry(local.to_owned()).or_default();
+        let wanted: HashSet<&str> = pending.iter().filter_map(|item| item["requestId"].as_str()).collect();
+        let mut events = Vec::new();
+        shown.retain(|request, kind| {
+            let keep = wanted.contains(request.as_str());
+            if !keep {
+                let cancelled = if kind == "approval" { "approval_cancelled" } else { "input_cancelled" };
+                events.push(json!({"sessionId": local, "kind": cancelled, "text": "", "requestId": request, "data": null}));
+            }
+            keep
+        });
+        for item in pending {
+            let (Some(kind @ ("approval" | "input_request")), Some(request)) = (item["kind"].as_str(), item["requestId"].as_str()) else { continue };
+            if shown.insert(request.to_owned(), kind.to_owned()).is_some() {
+                continue;
+            }
+            let mut event = json!({"sessionId": local, "kind": kind, "text": item["text"].as_str().unwrap_or_default(), "requestId": request, "data": item["data"]});
+            if let Some(tool) = item.get("tool") {
+                event["tool"] = tool.clone();
+            }
+            events.push(event);
+        }
+        events
+    }
+}
+
 /// `agent.events` from the task's host.
 pub(crate) fn events(app: &tauri::AppHandle, from: &str, data: &Value) {
     let Some(list) = data["events"].as_array() else { return };
+    apply(app, from, data["epoch"].as_str(), list);
+}
+
+/// Shows a host's events (live or replayed) under their local ids, each once: one at or
+/// before the newest `seq` already seen is dropped.
+fn apply(app: &tauri::AppHandle, from: &str, epoch: Option<&str>, list: &[Value]) {
+    let list: Vec<Value> = {
+        let state = remote(app);
+        let mut inner = state.lock();
+        inner.viewer.epoch(from, epoch);
+        list.iter().filter(|event| inner.viewer.fresh(from, event)).cloned().collect()
+    };
     let state = app.state::<AppState>();
     let (events, changed) = {
         let Ok(store) = state.store.lock() else { return };
         let mut ids: HashMap<String, Option<String>> = HashMap::new();
-        let events = relabel(list, |remote| ids.entry(remote.to_owned()).or_insert_with(|| local_id(&store, from, remote)).clone());
+        let events = relabel(&list, |remote| ids.entry(remote.to_owned()).or_insert_with(|| local_id(&store, from, remote)).clone());
         let mut changed = false;
         for event in &events {
             let (Some(id), Some(kind)) = (event["sessionId"].as_str(), event["kind"].as_str()) else { continue };
@@ -131,7 +257,15 @@ pub(crate) fn events(app: &tauri::AppHandle, from: &str, data: &Value) {
         }
         (events, changed)
     };
-    for event in events {
+    {
+        let state = remote(app);
+        let mut inner = state.lock();
+        events.iter().for_each(|event| inner.viewer.card(event));
+    }
+    for mut event in events {
+        if let Some(event) = event.as_object_mut() {
+            event.remove("seq");
+        }
         let _ = app.emit("agent-event", event);
     }
     if changed {
@@ -149,10 +283,9 @@ pub(crate) fn finished(app: &tauri::AppHandle, from: &str, data: &Value) {
     tauri::async_runtime::spawn(async move { end_turn(&app, &local, successful, stopped, &text).await });
 }
 
+/// Copies the run's messages, always (a turn that ended here first, by Stop or an offline
+/// host, still gets them), then ends the turn unless it already ended.
 async fn end_turn(app: &tauri::AppHandle, local: &str, successful: bool, stopped: bool, text: &str) {
-    if !active(&app.state::<AppState>(), local) {
-        return;
-    }
     if let Err(error) = sync(app, local).await {
         eprintln!("PandaCode Connect: could not copy a remote task's messages: {error}");
     }
@@ -174,6 +307,8 @@ fn finish_once(store: &Store, local: &str, successful: bool, stopped: bool) -> R
 
 /// Ends the local turn and emits the window's ordinary `done`, unless it already ended.
 fn finish(app: &tauri::AppHandle, local: &str, successful: bool, stopped: bool, text: &str) {
+    // The window drops a turn's cards when it ends.
+    remote(app).lock().viewer.cards.remove(local);
     match lock(&app.state::<AppState>()).and_then(|store| finish_once(&store, local, successful, stopped)) {
         Ok(true) => {}
         Ok(false) => return,
@@ -270,41 +405,143 @@ fn reconcile(local: &str, host: &str) -> Reconcile {
     if active(local) {
         return Reconcile::Ended { successful: host == "idle", stopped: host == "interrupted" };
     }
+    // Interrupted by this computer's restart: the host knows how the turn really ended.
+    if local == "interrupted" && local != host {
+        return Reconcile::Set(host.to_owned());
+    }
     Reconcile::Same
 }
 
-/// Asks every online host for the events of the tasks mirrored from it, and catches up on
-/// what changed meanwhile. Run on each presence change and every 9 minutes.
-pub(crate) async fn subscribe_all(app: tauri::AppHandle) {
-    let mirrors: Vec<(String, String)> = {
-        let state = app.state::<AppState>();
-        let Ok(store) = state.store.lock() else { return };
-        let Ok(mut statement) = store.db.prepare("SELECT remote_device,remote_session FROM sessions WHERE remote_session IS NOT NULL AND archived=0 ORDER BY updated_at DESC") else { return };
-        statement.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).map(|rows| rows.filter_map(std::result::Result::ok).collect()).unwrap_or_default()
-    };
-    let mut hosts: HashMap<String, Vec<String>> = HashMap::new();
-    for (device, session) in mirrors {
-        let sessions = hosts.entry(device).or_default();
-        if sessions.len() < host::MAX_IDS {
-            sessions.push(session);
-        }
+/// Host tasks a subscribe reply says are gone. Older hosts don't list them; there a
+/// requested task missing from a reply far too small to have been trimmed is gone.
+fn gone(reply: &Value, requested: &[String]) -> Vec<String> {
+    if let Some(missing) = reply["missing"].as_array() {
+        return missing.iter().filter_map(Value::as_str).filter(|id| requested.iter().any(|r| r == id)).map(str::to_owned).collect();
     }
-    for (device, sessions) in hosts {
-        let online = remote(&app).lock().devices.iter().any(|d| d.id == device && d.online);
-        if !online {
-            continue;
-        }
-        match client::call(&app, &device, "subscribe", json!({"sessionIds": sessions})).await {
-            Ok(reply) => catch_up(&app, &device, reply["tasks"].as_array().map(Vec::as_slice).unwrap_or_default()).await,
-            Err(error) => eprintln!("PandaCode Connect: could not follow tasks on {}: {error}", super::device_label(&device)),
-        }
+    if reply.to_string().len() > host::PAGE_BUDGET / 16 {
+        return Vec::new();
     }
+    let listed: HashSet<&str> = reply["tasks"].as_array().map(|tasks| tasks.iter().filter_map(|task| task["sessionId"].as_str()).collect()).unwrap_or_default();
+    requested.iter().filter(|id| !listed.contains(id.as_str())).cloned().collect()
 }
 
-async fn catch_up(app: &tauri::AppHandle, device: &str, tasks: &[Value]) {
+#[derive(Default)]
+struct Schedule {
+    running: bool,
+    again: bool,
+    retry: bool,
+    failures: u32,
+}
+
+fn schedule() -> MutexGuard<'static, Schedule> {
+    static SCHEDULE: OnceLock<Mutex<Schedule>> = OnceLock::new();
+    SCHEDULE.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The wait before retrying after `failures` failed rounds: 2 s, 4 s, 8 s… up to a minute.
+fn retry_delay(failures: u32) -> Duration {
+    RETRY_FIRST.saturating_mul(1 << failures.saturating_sub(1).min(5)).min(RETRY_MAX)
+}
+
+/// Subscribes to every online host soon, one round at a time: calls within the debounce
+/// share a round, a call during a round runs one more after it, and a round in which a
+/// host running an active mirror failed is retried within seconds. Run on each presence
+/// change, every 9 minutes and after a start.
+pub(crate) fn subscribe_soon(app: &tauri::AppHandle) {
+    {
+        let mut schedule = schedule();
+        if std::mem::replace(&mut schedule.running, true) {
+            schedule.again = true;
+            return;
+        }
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(SUBSCRIBE_DEBOUNCE).await;
+            schedule().again = false;
+            let failed = subscribe_all(&app).await;
+            let retry = {
+                let mut schedule = schedule();
+                schedule.failures = if failed { schedule.failures.saturating_add(1) } else { 0 };
+                if schedule.again {
+                    continue;
+                }
+                schedule.running = false;
+                (failed && !std::mem::replace(&mut schedule.retry, true)).then(|| retry_delay(schedule.failures))
+            };
+            if let Some(delay) = retry {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(delay).await;
+                    schedule().retry = false;
+                    subscribe_soon(&app);
+                });
+            }
+            break;
+        }
+    });
+}
+
+/// Asks every online host (all at once) for the events of the tasks mirrored from it,
+/// and catches up on what changed meanwhile; also follows up starts whose reply was lost.
+/// Returns whether a host running an active mirror could not be reached.
+async fn subscribe_all(app: &tauri::AppHandle) -> bool {
+    let mirrors: Vec<(String, String, bool)> = {
+        let state = app.state::<AppState>();
+        let Ok(store) = state.store.lock() else { return false };
+        let Ok(mut statement) = store.db.prepare("SELECT remote_device,remote_session,status IN ('running','waiting') FROM sessions WHERE remote_session IS NOT NULL AND archived=0 ORDER BY updated_at DESC") else { return false };
+        statement.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).map(|rows| rows.filter_map(std::result::Result::ok).collect()).unwrap_or_default()
+    };
+    let mut hosts: HashMap<String, (Vec<String>, bool)> = HashMap::new();
+    for (device, session, running) in mirrors {
+        let (sessions, active) = hosts.entry(device).or_default();
+        if sessions.len() < host::MAX_IDS {
+            sessions.push(session);
+            *active |= running;
+        }
+    }
+    let online: HashSet<String> = remote(app).lock().devices.iter().filter(|d| d.online).map(|d| d.id.clone()).collect();
+    resume_starts(app, &online);
+    let rounds = hosts.into_iter().filter(|(device, _)| online.contains(device)).map(|(device, (sessions, active))| async move {
+        let params = remote(app).lock().viewer.subscribe_params(&device, &sessions);
+        match client::call(app, &device, "subscribe", params).await {
+            Ok(reply) => {
+                catch_up(app, &device, &reply, &sessions).await;
+                false
+            }
+            Err(error) => {
+                eprintln!("PandaCode Connect: could not follow tasks on {}: {error}", super::device_label(&device));
+                active
+            }
+        }
+    });
+    futures_util::future::join_all(rounds).await.into_iter().any(|failed| failed)
+}
+
+async fn catch_up(app: &tauri::AppHandle, device: &str, reply: &Value, requested: &[String]) {
+    let epoch = reply["epoch"].as_str();
     let mut changed = false;
-    for task in tasks {
+    // A task deleted on the host (or never made there) would otherwise spin forever.
+    for session in gone(reply, requested) {
+        let state = app.state::<AppState>();
+        let local = lock(&state).ok().and_then(|store| local_id(&store, device, &session));
+        if let Some(local) = local.filter(|local| active(&state, local)) {
+            finish(app, &local, false, false, &format!("This task is no longer on {}.", super::device_label(device)));
+        }
+    }
+    for task in reply["tasks"].as_array().map(Vec::as_slice).unwrap_or_default() {
         let (Some(session), Some(status)) = (task["sessionId"].as_str(), task["status"].as_str()) else { continue };
+        // What this viewer missed while away, in order, before the snapshot below.
+        if let Some(events) = task["events"].as_array() {
+            apply(app, device, epoch, events);
+        }
+        if let Some(seq) = task["seq"].as_u64() {
+            let state = remote(app);
+            let mut inner = state.lock();
+            inner.viewer.epoch(device, epoch);
+            inner.viewer.advance(device, session, seq);
+        }
         let row = app.state::<AppState>().store.lock().ok().and_then(|store| {
             let local = local_id(&store, device, session)?;
             store.db.query_row("SELECT status,remote_synced_id FROM sessions WHERE id=?1", [&local], |r| Ok((local.clone(), r.get::<_, String>(0)?, r.get::<_, i64>(1)?))).ok()
@@ -318,12 +555,129 @@ async fn catch_up(app: &tauri::AppHandle, device: &str, tasks: &[Value]) {
             Reconcile::Set(status) => changed |= lock(&app.state::<AppState>()).and_then(|store| store.status(&local, &status)).is_ok(),
             Reconcile::Same => {}
         }
-        if task["lastId"].as_i64().is_some_and(|last| last > synced) {
+        // Approvals and questions still waiting come back after a restart or a lost frame.
+        if let Some(pending) = task["pending"].as_array() {
+            let shown = remote(app).lock().viewer.sync_cards(&local, pending);
+            for event in shown {
+                let _ = app.emit("agent-event", event);
+            }
+        }
+        // A gap means events were lost: the messages copy is the full catch-up.
+        if task["gap"] == true || task["lastId"].as_i64().is_some_and(|last| last > synced) {
             changed |= sync(app, &local).await.is_ok();
         }
     }
     if changed {
         let _ = app.emit("sessions-changed", ());
+    }
+}
+
+/// Follows up, on each host that is online, every start whose reply was lost.
+fn resume_starts(app: &tauri::AppHandle, online: &HashSet<String>) {
+    let ready: Vec<String> = {
+        let state = remote(app);
+        let mut inner = state.lock();
+        inner.viewer.starts.iter_mut().filter(|(_, start)| !start.busy && online.contains(&start.device)).map(|(local, start)| {
+            start.busy = true;
+            local.clone()
+        }).collect()
+    };
+    for local in ready {
+        tauri::async_runtime::spawn(resume_start(app.clone(), local));
+    }
+}
+
+/// How a start stands, from `task.startStatus` (or from its failure).
+#[derive(Debug, PartialEq)]
+enum StartState {
+    Running,
+    Done(String),
+    Failed(String),
+    /// Ask again once the host is back.
+    Unreachable,
+}
+
+fn start_state(reply: &Result<Value>) -> StartState {
+    match reply {
+        Err(error) if client::maybe_ran(error) || error == super::socket::OFFLINE => StartState::Unreachable,
+        // Older hosts refuse `task.startStatus` as an unknown method: the start can't be found.
+        Err(error) => StartState::Failed(error.clone()),
+        Ok(reply) => match reply["state"].as_str() {
+            Some("running") => StartState::Running,
+            Some("done") => started_session(reply).map_or_else(StartState::Failed, StartState::Done),
+            Some("failed") => StartState::Failed(reply["error"].as_str().unwrap_or("The other computer could not start the task.").chars().take(1000).collect()),
+            _ => StartState::Failed("The other computer lost track of this start.".into()),
+        },
+    }
+}
+
+/// A start whose reply was lost: asks its host by `startId` how it went until it ends,
+/// then links the mirror or puts the row back.
+async fn resume_start(app: tauri::AppHandle, local: String) {
+    let deadline = Instant::now() + START_TIMEOUT;
+    loop {
+        let start = remote(&app).lock().viewer.starts.get(&local).map(|start| (start.device.clone(), start.start_id.clone(), start.created));
+        let Some((device, start_id, created)) = start else { return };
+        let reply = client::call(&app, &device, "task.startStatus", json!({"startId": start_id})).await;
+        let state = app.state::<AppState>();
+        let outcome = match start_state(&reply) {
+            StartState::Running if Instant::now() >= deadline => StartState::Failed("The other computer took too long to start the task.".into()),
+            outcome => outcome,
+        };
+        match outcome {
+            StartState::Running => {
+                tokio::time::sleep(START_POLL).await;
+                continue;
+            }
+            StartState::Unreachable => {
+                if let Some(start) = remote(&app).lock().viewer.starts.get_mut(&local) {
+                    start.busy = false;
+                }
+                return;
+            }
+            StartState::Done(session) => {
+                remote(&app).lock().viewer.starts.remove(&local);
+                if let Err(error) = attach(&state, &local, &session) {
+                    eprintln!("PandaCode Connect: could not link a remote task: {error}");
+                }
+                subscribe_soon(&app);
+            }
+            StartState::Failed(error) => {
+                remote(&app).lock().viewer.starts.remove(&local);
+                abandon(&state, &local, created);
+                let _ = app.emit("remote://start-progress", json!({"deviceId": device, "startId": start_id, "repo": null, "stage": "error", "percent": null, "detail": error}));
+            }
+        }
+        let _ = app.emit("sessions-changed", ());
+        return;
+    }
+}
+
+/// The host task id in a `task.start` (or `task.startStatus`) reply.
+fn started_session(reply: &Value) -> Result<String> {
+    reply["sessionId"].as_str().filter(|id| host::valid_id(id).is_ok()).map(str::to_owned).ok_or_else(|| "The other computer did not start the task.".to_string())
+}
+
+/// Links a mirror row to its host task, unless it already is.
+fn attach(state: &AppState, local: &str, session: &str) -> Result<()> {
+    link(&*lock(state)?, local, session)
+}
+
+fn link(store: &Store, local: &str, session: &str) -> Result<()> {
+    store.db.execute("UPDATE sessions SET remote_session=?2 WHERE id=?1 AND remote_session IS NULL", params![local, session]).map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Puts back what a start that did not happen left, while the row still waits for its
+/// host task: a new row goes, a reused draft is a local draft again.
+fn abandon(state: &AppState, local: &str, created: bool) {
+    let waiting = lock(state).ok().and_then(|store| store.db.query_row("SELECT remote_device IS NOT NULL AND remote_session IS NULL FROM sessions WHERE id=?1", [local], |r| r.get::<_, bool>(0)).ok()).unwrap_or(false);
+    if !waiting {
+        return;
+    }
+    if created {
+        let _ = crate::task_deletion::delete_state(state, local);
+    } else if let Ok(store) = lock(state) {
+        let _ = store.db.execute("UPDATE sessions SET remote_device=NULL,remote_session=NULL,draft=1,status='idle' WHERE id=?1", [local]);
     }
 }
 
@@ -400,28 +754,69 @@ pub async fn remote_start_task(
     // Images go first, before any row exists: a failed upload leaves the New task as it was.
     let image_ids = super::images::send(&app, &device_id, image_ids.as_deref().unwrap_or_default()).await?;
     let (local, created) = mirror_row(&*lock(&state)?, &device_id, &project_id, &provider, &model, mode.as_deref(), effort.as_deref(), session_id.as_deref())?;
-    // The host echoes `startId` in its `task.progress` events (remote/start.rs).
+    // The host echoes `startId` in its `task.progress` events (remote/start.rs), runs a
+    // repeated start once, and reports or cancels it by this id.
     let start_id = start_id.filter(|id| host::valid_id(id).is_ok());
-    let request = json!({"repo": repo, "branch": branch, "worktree": worktree.unwrap_or(false), "prompt": prompt, "provider": provider, "model": model, "mode": mode, "effort": effort, "startId": start_id, "imageIds": image_ids});
-    let started = client::call_within(&app, &device_id, "task.start", request, START_TIMEOUT).await.and_then(|reply| reply["sessionId"].as_str().filter(|id| host::valid_id(id).is_ok()).map(str::to_owned).ok_or_else(|| "The other computer did not start the task.".to_string()));
-    let saved = started.and_then(|session| {
-        lock(&state)?.db.execute("UPDATE sessions SET remote_session=?2 WHERE id=?1", params![local, session]).map_err(|e| e.to_string())
-    });
-    if let Err(error) = saved {
-        // Leave nothing behind: a new row goes, a reused draft is a local draft again.
-        if created {
-            let _ = crate::task_deletion::delete_state(&state, &local);
-        } else if let Ok(store) = lock(&state) {
-            let _ = store.db.execute("UPDATE sessions SET remote_device=NULL,remote_session=NULL,draft=1,status='idle' WHERE id=?1", [&local]);
-        }
-        let _ = app.emit("sessions-changed", ());
-        return Err(error);
+    let cancel = Arc::new(Notify::new());
+    if let Some(start_id) = &start_id {
+        remote(&app).lock().viewer.starts.insert(local.clone(), PendingStart { device: device_id.clone(), start_id: start_id.clone(), created, cancel: cancel.clone(), busy: true });
     }
-    tauri::async_runtime::spawn(subscribe_all(app.clone()));
+    let request = json!({"repo": repo, "branch": branch, "worktree": worktree.unwrap_or(false), "prompt": prompt, "provider": provider, "model": model, "mode": mode, "effort": effort, "startId": start_id, "imageIds": image_ids});
+    let started = tokio::select! {
+        reply = client::call_within(&app, &device_id, "task.start", request, START_TIMEOUT) => reply,
+        _ = cancel.notified() => Err(super::start::CANCELLED.into()),
+    }
+    .and_then(|reply| started_session(&reply));
+    match started {
+        // The reply was lost, maybe not the start: the row stays (running), and the host is
+        // asked by `startId` how it went once it is back (`resume_start`).
+        Err(error) if start_id.is_some() && client::maybe_ran(&error) => {
+            if let Some(start) = remote(&app).lock().viewer.starts.get_mut(&local) {
+                start.busy = false;
+            }
+            eprintln!("PandaCode Connect: lost the reply to a start ({error}); asking the host again when it is back.");
+        }
+        started => {
+            remote(&app).lock().viewer.starts.remove(&local);
+            if let Err(error) = started.and_then(|session| attach(&state, &local, &session)) {
+                // Leave nothing behind: a new row goes, a reused draft is a local draft again.
+                abandon(&state, &local, created);
+                let _ = app.emit("sessions-changed", ());
+                return Err(error);
+            }
+        }
+    }
+    subscribe_soon(&app);
     let _ = app.emit("sessions-changed", ());
     let mut session = serde_json::to_value(lock(&state)?.session(&local)?).map_err(|e| e.to_string())?;
     session["sessionId"] = json!(local);
     Ok(session)
+}
+
+/// Cancels a start that has not made its host task yet (`sessionId` is the local row): the
+/// host stops it, clone included, and the row is put back (a new row goes, a reused draft
+/// is a draft again), also when the host can't be reached. `cancelled: false` when the
+/// host had already made the task; the mirror then runs as usual and Stop ends it.
+#[tauri::command]
+pub async fn remote_cancel_start(app: tauri::AppHandle, state: tauri::State<'_, AppState>, session_id: String) -> Result<Value> {
+    let start = remote(&app).lock().viewer.starts.get(&session_id).map(|start| (start.device.clone(), start.start_id.clone(), start.created, start.cancel.clone()));
+    let Some((device, start_id, created, cancel)) = start else { return Err("That task is not starting.".into()) };
+    let reply = client::call(&app, &device, "task.cancelStart", json!({"startId": start_id})).await;
+    if let Some(session) = reply.as_ref().ok().filter(|reply| reply["cancelled"] == false).and_then(|reply| started_session(reply).ok()) {
+        remote(&app).lock().viewer.starts.remove(&session_id);
+        attach(&state, &session_id, &session)?;
+        subscribe_soon(&app);
+        let _ = app.emit("sessions-changed", ());
+        return Ok(json!({"cancelled": false}));
+    }
+    if let Err(error) = &reply {
+        eprintln!("PandaCode Connect: could not cancel a start on {}: {error}", super::device_label(&device));
+    }
+    remote(&app).lock().viewer.starts.remove(&session_id);
+    cancel.notify_one();
+    abandon(&state, &session_id, created);
+    let _ = app.emit("sessions-changed", ());
+    Ok(json!({"cancelled": true}))
 }
 
 /// Makes (or converts an empty draft into) the local mirror row, published and running.
@@ -604,6 +999,9 @@ mod tests {
         assert_eq!(status_after("running", "approval"), Some("waiting"));
         assert_eq!(status_after("waiting", "tool"), None);
         assert_eq!(status_after("waiting", "approval_cancelled"), Some("running"));
+        // A remote answer is now forwarded as a cancel event: the mirror leaves waiting.
+        assert_eq!(status_after("waiting", "input_cancelled"), Some("running"));
+        assert_eq!(status_after("running", "input_cancelled"), None);
         // What a host sends after its run ended never restarts an idle mirror.
         for kind in ["usage", "session", "task_settings", "turn_changes", "turn_complete", "commands_changed", "goal", "approval_cancelled"] {
             assert_eq!(status_after("idle", kind), None, "{kind}");
@@ -612,7 +1010,118 @@ mod tests {
         assert_eq!(reconcile("idle", "running"), Reconcile::Set("running".into()));
         assert_eq!(reconcile("running", "running"), Reconcile::Same);
         assert_eq!(reconcile("running", "idle"), Reconcile::Ended { successful: true, stopped: false });
-        assert_eq!(reconcile("interrupted", "idle"), Reconcile::Same);
+        // A mirror interrupted by this computer's restart takes the host's real outcome.
+        assert_eq!(reconcile("interrupted", "idle"), Reconcile::Set("idle".into()));
+        assert_eq!(reconcile("interrupted", "error"), Reconcile::Set("error".into()));
+        assert_eq!(reconcile("interrupted", "interrupted"), Reconcile::Same);
+        assert_eq!(reconcile("idle", "error"), Reconcile::Same);
+    }
+
+    #[test]
+    fn replayed_and_repeated_events_show_once() {
+        let mut viewer = Viewer::default();
+        let event = |session: &str, seq: Option<u64>| {
+            let mut event = json!({"sessionId": session, "kind": "text", "text": "x"});
+            if let Some(seq) = seq {
+                event["seq"] = json!(seq);
+            }
+            event
+        };
+        viewer.epoch("host", Some("e1"));
+        assert!(viewer.fresh("host", &event("h1", Some(3))));
+        assert!(!viewer.fresh("host", &event("h1", Some(3))), "a duplicate");
+        assert!(!viewer.fresh("host", &event("h1", Some(2))), "older than the newest seen");
+        assert!(viewer.fresh("host", &event("h2", Some(2))), "positions are per task");
+        assert!(viewer.fresh("host", &event("h1", None)), "an older host sends no seq");
+        assert!(viewer.fresh("other", &event("h1", Some(1))), "and per host");
+        // The next subscribe says where this viewer left off.
+        let params = viewer.subscribe_params("host", &["h1".into(), "h3".into()]);
+        assert_eq!(params, json!({"sessionIds": ["h1", "h3"], "epoch": "e1", "afterSeq": {"h1": 3}}));
+        assert_eq!(viewer.subscribe_params("other", &["h1".into()]), json!({"sessionIds": ["h1"]}), "no epoch yet: no replay");
+        viewer.advance("host", "h1", 10);
+        viewer.advance("host", "h1", 4);
+        assert!(!viewer.fresh("host", &event("h1", Some(9))));
+        // A restarted host numbers from 1 again under a new epoch.
+        viewer.epoch("host", Some("e2"));
+        assert!(viewer.fresh("host", &event("h1", Some(1))));
+        assert!(viewer.fresh("other", &event("h1", Some(2))), "another host keeps its place");
+    }
+
+    #[test]
+    fn cards_come_back_after_a_restart_and_clear_when_answered_elsewhere() {
+        let mut viewer = Viewer::default();
+        let pending = [json!({"kind": "approval", "requestId": "run:a1", "text": "Run ls", "data": null}), json!({"kind": "input_request", "requestId": "run:q1", "text": "Which?", "data": {"questions": []}, "tool": "ask"})];
+        // A viewer that restarted shows nothing: both cards come back, once.
+        let shown = viewer.sync_cards("local", &pending);
+        assert_eq!(shown.iter().map(|e| (e["kind"].as_str().unwrap(), e["requestId"].as_str().unwrap(), e["sessionId"].as_str().unwrap())).collect::<Vec<_>>(), [("approval", "run:a1", "local"), ("input_request", "run:q1", "local")]);
+        assert_eq!((shown[0]["text"].as_str(), shown[1]["tool"].as_str()), (Some("Run ls"), Some("ask")));
+        assert!(viewer.sync_cards("local", &pending).is_empty(), "a renewal repeats nothing");
+        // Answered on another device while this one missed the cancel event.
+        let cleared = viewer.sync_cards("local", &pending[1..]);
+        assert_eq!(cleared, vec![json!({"sessionId": "local", "kind": "approval_cancelled", "text": "", "requestId": "run:a1", "data": null})]);
+        // Live events keep the record current.
+        viewer.card(&json!({"sessionId": "local", "kind": "input_cancelled", "requestId": "run:q1"}));
+        viewer.card(&json!({"sessionId": "local", "kind": "approval", "requestId": "run:a2"}));
+        assert_eq!(viewer.sync_cards("local", &[json!({"kind": "approval", "requestId": "run:a2", "text": "", "data": null})]), Vec::<Value>::new());
+    }
+
+    #[test]
+    fn tasks_gone_from_the_host_are_named() {
+        let requested = ["h1".to_string(), "h2".into(), "h3".into()];
+        assert_eq!(gone(&json!({"tasks": [{"sessionId": "h1"}], "missing": ["h2", "x"]}), &requested), ["h2"], "a newer host lists them");
+        // An older host: what a small reply leaves out is gone, but not from a trimmed one.
+        assert_eq!(gone(&json!({"tasks": [{"sessionId": "h1"}]}), &requested), ["h2", "h3"]);
+        let big = json!({"tasks": [{"sessionId": "h1", "title": "x".repeat(host::PAGE_BUDGET / 8)}]});
+        assert!(gone(&big, &requested).is_empty());
+    }
+
+    #[test]
+    fn failed_subscribes_retry_within_seconds() {
+        let s = Duration::from_secs;
+        assert_eq!([1, 2, 3, 4, 9].map(retry_delay), [s(2), s(4), s(8), s(16), s(60)]);
+        assert!(SUBSCRIBE_DEBOUNCE < s(1));
+    }
+
+    #[test]
+    fn a_lost_start_is_asked_about_until_it_ends() {
+        assert_eq!(start_state(&Ok(json!({"state": "running"}))), StartState::Running);
+        assert_eq!(start_state(&Ok(json!({"state": "done", "sessionId": "h1"}))), StartState::Done("h1".into()));
+        assert_eq!(start_state(&Ok(json!({"state": "failed", "error": "Cloning failed."}))), StartState::Failed("Cloning failed.".into()));
+        assert!(matches!(start_state(&Ok(json!({"state": "unknown"}))), StartState::Failed(_)));
+        assert!(matches!(start_state(&Ok(json!({"state": "done"}))), StartState::Failed(_)));
+        // A timeout or a lost socket: ask again when the host is back.
+        for error in [client::TIMED_OUT, client::LOST, super::super::socket::OFFLINE] {
+            assert_eq!(start_state(&Err(error.into())), StartState::Unreachable, "{error}");
+        }
+        // An older host without task.startStatus.
+        assert_eq!(start_state(&Err("Unknown method.".into())), StartState::Failed("Unknown method.".into()));
+        assert!(client::maybe_ran(client::TIMED_OUT) && !client::maybe_ran(super::super::socket::OFFLINE));
+    }
+
+    #[test]
+    fn a_start_quit_halfway_is_a_draft_again_at_launch() {
+        let path = std::env::temp_dir().join(format!("pandacode-mirror-start-{}.sqlite3", uuid::Uuid::new_v4()));
+        let (waiting, linked) = {
+            let store = Store::open(&path).unwrap();
+            let project = store.add_project(&std::env::temp_dir()).unwrap();
+            let waiting = store.create_session(&project.id, "claude", "sonnet", "full").unwrap().id;
+            let linked = store.create_session(&project.id, "claude", "sonnet", "full").unwrap().id;
+            store.db.execute("UPDATE sessions SET remote_device='host',remote_session=NULL,status='running' WHERE id=?1", [&waiting]).unwrap();
+            store.db.execute("UPDATE sessions SET remote_device='host',remote_session='h1',status='running' WHERE id=?1", [&linked]).unwrap();
+            // A late second answer (the start's own reply after a status poll) changes nothing.
+            assert_eq!(link(&store, &linked, "h2"), Ok(()));
+            (waiting, linked)
+        };
+        let store = Store::open(&path).unwrap();
+        let task = store.session(&waiting).unwrap();
+        assert_eq!((task.remote_device, task.status.as_str(), task.draft), (None, "idle", true));
+        assert!(store.is_empty_draft(&waiting).unwrap(), "discarded with the other empty drafts");
+        let mirror = of(&store, &linked).unwrap().unwrap();
+        assert_eq!((mirror.session.as_str(), store.session(&linked).unwrap().status.as_str()), ("h1", "interrupted"), "a linked mirror stays");
+        drop(store);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
     }
 
     #[test]

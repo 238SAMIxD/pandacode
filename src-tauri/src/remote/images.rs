@@ -7,8 +7,12 @@ use super::client;
 use crate::{prompt_attachments, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::{Mutex, OnceLock};
+use std::task::Poll;
 use std::time::{Duration, Instant};
 use tauri::Manager;
 
@@ -20,8 +24,14 @@ pub(crate) const MAX_BYTES: usize = 5 * 1024 * 1024;
 /// sealed, well under the relay's 256 KB frame.
 pub(crate) const CHUNK: usize = 72 * 1024;
 const MAX_CHUNKS: usize = MAX_BYTES.div_ceil(CHUNK);
-/// Chunks go out at most this often: the relay allows 20 frames a second per computer.
-const PACE: Duration = Duration::from_millis(75);
+/// The relay lets a computer send 100 frames at once, then 20 a second (`relay/src/limits.ts`).
+/// Image chunks spend at most [`BURST`] of the bucket and refill at [`RATE`], so the rest of
+/// the bucket and 2 frames a second stay free for requests, prompts and events.
+const BURST: f64 = 80.0;
+const RATE: f64 = 18.0;
+/// Chunks sent but not yet answered. The host runs `image.put` in arrival order on one
+/// lane per computer (`socket.rs`), so a window keeps the link busy without reordering.
+const WINDOW: usize = 8;
 /// Uploads one computer may have half sent, and stored images it may hold unclaimed.
 const MAX_PARTIAL: usize = 4;
 const MAX_READY: usize = 16;
@@ -221,6 +231,81 @@ pub(crate) fn chunks(upload: &str, bytes: &[u8]) -> Vec<Value> {
     bytes.chunks(CHUNK).enumerate().map(|(index, data)| json!({"uploadId": upload, "index": index, "size": bytes.len(), "data": STANDARD.encode(data)})).collect()
 }
 
+/// A local copy of the relay's frame bucket as image chunks spend it: [`BURST`] frames
+/// at once, then [`RATE`] a second. `tokens` goes negative while callers queue for frames.
+pub(crate) struct Budget {
+    tokens: f64,
+    at: Instant,
+}
+
+impl Budget {
+    pub(crate) fn new(now: Instant) -> Self {
+        Self { tokens: BURST, at: now }
+    }
+
+    /// Reserves one frame and returns how long to wait before sending it.
+    fn take(&mut self, now: Instant) -> Duration {
+        let idle = now.saturating_duration_since(self.at).as_secs_f64();
+        self.tokens = (self.tokens + idle * RATE).min(BURST) - 1.0;
+        self.at = now;
+        Duration::from_secs_f64((-self.tokens).max(0.0) / RATE)
+    }
+}
+
+/// Every upload from this computer shares the relay's bucket, so they share this one.
+fn shared_budget() -> &'static Mutex<Budget> {
+    static BUDGET: OnceLock<Mutex<Budget>> = OnceLock::new();
+    BUDGET.get_or_init(|| Mutex::new(Budget::new(Instant::now())))
+}
+
+fn settle(whole: bool, reply: &Value, stored: &mut Vec<String>) -> Result<()> {
+    if whole {
+        let id = reply["imageId"].as_str().filter(|id| valid_image_id(id)).ok_or("The other computer did not take the image.")?;
+        stored.push(id.to_owned());
+    }
+    Ok(())
+}
+
+/// Sends every image as `image.put` chunks and returns the ids the host stored them under,
+/// in order. `put` makes one request; its first poll must send the frame, which this does
+/// at once, so frames leave in chunk order. Up to [`WINDOW`] requests are unanswered at a
+/// time, and `budget` paces the frames under the relay's rate limit.
+pub(crate) async fn upload<F, Fut>(images: &[Vec<u8>], budget: &Mutex<Budget>, mut put: F) -> Result<Vec<String>>
+where
+    F: FnMut(Value) -> Fut,
+    Fut: Future<Output = Result<Value>>,
+{
+    let mut stored = Vec::with_capacity(images.len());
+    let mut flight: VecDeque<(bool, Pin<Box<Fut>>)> = VecDeque::new();
+    for bytes in images {
+        if bytes.is_empty() {
+            return Err("Invalid screenshot attachment.".into());
+        }
+        let parts = chunks(&uuid::Uuid::new_v4().to_string(), bytes);
+        let last = parts.len() - 1;
+        for (index, params) in parts.into_iter().enumerate() {
+            let wait = budget.lock().map_err(|e| e.to_string())?.take(Instant::now());
+            if !wait.is_zero() {
+                tokio::time::sleep(wait).await;
+            }
+            let whole = index == last;
+            let mut call = Box::pin(put(params));
+            match std::future::poll_fn(|cx| Poll::Ready(call.as_mut().poll(cx))).await {
+                Poll::Ready(reply) => settle(whole, &reply?, &mut stored)?,
+                Poll::Pending => flight.push_back((whole, call)),
+            }
+            while flight.len() >= WINDOW {
+                let (whole, call) = flight.pop_front().expect("a full window");
+                settle(whole, &call.await?, &mut stored)?;
+            }
+        }
+    }
+    while let Some((whole, call)) = flight.pop_front() {
+        settle(whole, &call.await?, &mut stored)?;
+    }
+    Ok(stored)
+}
+
 /// Viewer side: sends this computer's captures to `device` and returns the ids it stored
 /// them under, in the same order.
 pub(crate) async fn send(app: &tauri::AppHandle, device: &str, ids: &[String]) -> Result<Vec<String>> {
@@ -231,28 +316,14 @@ pub(crate) async fn send(app: &tauri::AppHandle, device: &str, ids: &[String]) -
         return Ok(Vec::new());
     }
     let dir = capture_dir(app)?;
-    let mut stored = Vec::with_capacity(ids.len());
-    let mut last: Option<Instant> = None;
-    for id in ids {
-        let bytes = read_capture(&dir, id)?;
-        let upload = uuid::Uuid::new_v4().to_string();
-        let mut reply = Value::Null;
-        for params in chunks(&upload, &bytes) {
-            if let Some(last) = last {
-                tokio::time::sleep_until((last + PACE).into()).await;
-            }
-            last = Some(Instant::now());
-            reply = client::call(app, device, "image.put", params).await?;
-        }
-        let id = reply["imageId"].as_str().filter(|id| valid_image_id(id)).ok_or("The other computer did not take the image.")?;
-        stored.push(id.to_owned());
-    }
-    Ok(stored)
+    let images = ids.iter().map(|id| read_capture(&dir, id)).collect::<Result<Vec<_>>>()?;
+    upload(&images, shared_budget(), |params| client::call(app, device, "image.put", params)).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
 
@@ -370,6 +441,113 @@ mod tests {
             uploads.stored("viewer", &uuid::Uuid::new_v4().to_string(), now).unwrap();
         }
         assert!(uploads.stored("viewer", &uuid::Uuid::new_v4().to_string(), now).is_err());
+    }
+
+    #[test]
+    fn the_frame_budget_spends_a_burst_then_refills_below_the_relay_rate() {
+        let start = Instant::now();
+        let mut budget = Budget::new(start);
+        assert!(BURST < 100.0 && RATE < 20.0, "headroom under the relay's 100 burst and 20/s");
+        for _ in 0..BURST as usize {
+            assert_eq!(budget.take(start), Duration::ZERO);
+        }
+        let wait = |n: f64| Duration::from_secs_f64(n / RATE);
+        let close = |a: Duration, b: Duration| a.abs_diff(b) < Duration::from_millis(1);
+        assert!(close(budget.take(start), wait(1.0)));
+        assert!(close(budget.take(start), wait(2.0)), "queued callers line up");
+        // Idle time pays the queue back, then refills up to the burst and no further.
+        assert!(close(budget.take(start + wait(2.0)), wait(1.0)));
+        let mut budget = Budget::new(start);
+        budget.take(start);
+        for _ in 0..5 {
+            assert_eq!(budget.take(start + Duration::from_secs(60)), Duration::ZERO);
+        }
+        assert!((budget.tokens - (BURST - 5.0)).abs() < 1e-9);
+        // Never faster than the rate in the long run: 284 chunks (4 x 5 MB) fit the relay.
+        let mut budget = Budget::new(start);
+        let finish = (0..284).map(|_| budget.take(start)).last().unwrap();
+        assert!(finish.as_secs_f64() * 20.0 + 100.0 >= 284.0, "{finish:?}");
+    }
+
+    /// A host that answers after a delay and records what arrived and the most requests it
+    /// had unanswered at once, checking chunks with the real `Uploads`.
+    struct Host {
+        uploads: Mutex<Uploads>,
+        arrived: Mutex<Vec<(String, usize)>>,
+        open: std::sync::atomic::AtomicUsize,
+        most: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Host {
+        fn new() -> Arc<Self> {
+            Arc::new(Self { uploads: Mutex::default(), arrived: Mutex::default(), open: 0.into(), most: 0.into() })
+        }
+
+        /// The frame arrives when this is called, so arrival order is call order.
+        fn put(self: &Arc<Self>, params: Value) -> impl Future<Output = Result<Value>> {
+            use std::sync::atomic::Ordering::SeqCst;
+            let chunk = parse_chunk(&params).unwrap();
+            self.arrived.lock().unwrap().push((chunk.upload.clone(), chunk.index));
+            let open = self.open.fetch_add(1, SeqCst) + 1;
+            self.most.fetch_max(open, SeqCst);
+            let reply = self.uploads.lock().unwrap().add("viewer", chunk, Instant::now());
+            let host = self.clone();
+            async move {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                host.open.fetch_sub(1, SeqCst);
+                reply.map(|whole| whole.map_or(json!({}), |_| json!({"imageId": uuid::Uuid::new_v4().to_string()})))
+            }
+        }
+    }
+
+    fn fake_image(len: usize, tag: u8) -> Vec<u8> {
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        bytes.resize(len, tag);
+        bytes
+    }
+
+    #[tokio::test]
+    async fn uploads_pipeline_chunks_in_order_and_return_ids_in_image_order() {
+        let host = Host::new();
+        let images = [fake_image(CHUNK * 20 + 5, 1), fake_image(CHUNK * 3, 2), fake_image(100, 3)];
+        let budget = Mutex::new(Budget::new(Instant::now()));
+        let ids = upload(&images, &budget, |params| host.put(params)).await.unwrap();
+        assert_eq!(ids.len(), 3);
+        assert!(ids.iter().all(|id| valid_image_id(id)));
+        // Chunk indexes arrive 0, 1, 2… within each upload, and uploads don't interleave.
+        let arrived = host.arrived.lock().unwrap().clone();
+        let expected: Vec<usize> = (0..21).chain(0..3).chain(0..1).collect();
+        assert_eq!(arrived.iter().map(|(_, index)| *index).collect::<Vec<_>>(), expected);
+        assert_eq!(arrived.iter().map(|(upload, _)| upload.clone()).collect::<std::collections::HashSet<_>>().len(), 3);
+        let most = host.most.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(most > 1 && most <= WINDOW, "{most} in flight");
+    }
+
+    #[tokio::test]
+    async fn uploads_wait_for_the_budget_and_stop_at_the_first_failure() {
+        let host = Host::new();
+        let images = [fake_image(CHUNK * 3, 1)];
+        // An empty bucket makes each chunk wait one frame's refill after the last.
+        let budget = Mutex::new(Budget { tokens: 0.0, at: Instant::now() });
+        let started = Instant::now();
+        upload(&images, &budget, |params| host.put(params)).await.unwrap();
+        assert!(started.elapsed() >= Duration::from_secs_f64(2.5 / RATE), "{:?}", started.elapsed());
+        // A refused chunk ends the upload: nothing after the failing reply is sent past the window.
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let budget = Mutex::new(Budget::new(Instant::now()));
+        let failing = upload(&[fake_image(CHUNK * 40, 1)], &budget, |_| {
+            let n = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            async move {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                if n == 0 { Err("The other computer did not answer in time.".to_owned()) } else { Ok(json!({})) }
+            }
+        })
+        .await;
+        assert_eq!(failing.unwrap_err(), "The other computer did not answer in time.");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), WINDOW);
+        // A missing id, or no image at all, is an error too.
+        assert!(upload(&[fake_image(10, 1)], &budget, |_| async { Ok(json!({})) }).await.unwrap_err().contains("did not take"));
+        assert!(upload(&[Vec::new()], &budget, |_| async { Ok(json!({})) }).await.is_err());
     }
 
     #[test]

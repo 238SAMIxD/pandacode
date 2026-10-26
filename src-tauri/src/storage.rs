@@ -483,6 +483,14 @@ impl Store {
                 [],
             )
             .map_err(|e| e.to_string())?;
+        // A remote start PandaCode quit during never got its host task: the row is a local
+        // draft again (an empty one is discarded with the other drafts).
+        recovery
+            .execute(
+                "UPDATE sessions SET remote_device=NULL,status='idle',draft=NOT EXISTS(SELECT 1 FROM messages WHERE session_id=sessions.id) WHERE remote_device IS NOT NULL AND remote_session IS NULL",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
         recovery
             .execute(
                 "UPDATE sessions SET goal_state=json_set(goal_state,'$.status','paused')

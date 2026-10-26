@@ -7,19 +7,33 @@ use futures_util::stream::FuturesUnordered;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::{self, client::IntoClientRequest, Message};
 
-const PING: Duration = Duration::from_secs(30);
+const PING: Duration = Duration::from_secs(25);
+/// A ping must be answered (by anything from the relay) this soon, or the socket is dead.
+const PONG: Duration = Duration::from_secs(10);
+/// How often the socket checks for a missed pong and for the computer having slept.
+const CHECK: Duration = Duration::from_secs(2);
+/// The wall clock moving this much further than the monotonic one means the computer slept
+/// (the monotonic clock and tokio's timers stand still meanwhile).
+const SLEPT: Duration = Duration::from_secs(10);
+/// A frame the socket can't take this long marks it dead.
+const WRITE: Duration = Duration::from_secs(10);
+/// Frames waiting for the socket.
+const OUTBOX: usize = 512;
 /// How often a connected computer checks whether its token is due for a refresh.
 const REFRESH: Duration = Duration::from_secs(12 * 3600);
 /// The error a call gets when the relay can't deliver it to an offline computer.
 pub(crate) const OFFLINE: &str = "That computer is offline.";
 /// Hosts keep a subscription for 10 minutes; it is renewed before then.
 const RENEW: Duration = Duration::from_secs(9 * 60);
-const SILENT: Duration = Duration::from_secs(75);
+const FIRST_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
+/// A request that waited longer than this in its peer's queue is dropped unanswered by its
+/// work: its caller gave up ([`super::client::TIMEOUT`]) and may have sent it again.
+const EXPIRED: Duration = Duration::from_secs(super::client::TIMEOUT.as_secs() - 2);
 /// A socket must stay up this long before the backoff resets.
 const STABLE: Duration = Duration::from_secs(30);
 const MAX_FRAME: usize = 256 * 1024;
@@ -34,19 +48,43 @@ const REVOKED: u16 = 4001;
 #[derive(Debug, PartialEq)]
 enum Outcome {
     Closed { up: Duration, code: Option<u16> },
+    /// The computer slept: the socket is surely dead, so reconnect at once.
+    Woke,
     Failed,
     Unauthorized,
 }
 
-/// (wait now, base for the next failure), or None to sign out.
+/// (wait now, base for the next failure), or None to sign out. The first retry after a
+/// stable socket (or a wake) is immediate, then 1 s, 2 s, 4 s… up to a minute.
 fn backoff(delay: Duration, outcome: &Outcome) -> Option<(Duration, Duration)> {
     let base = match outcome {
         Outcome::Unauthorized | Outcome::Closed { code: Some(REVOKED), .. } => return None,
-        Outcome::Closed { up, .. } if *up >= STABLE => Duration::from_secs(1),
+        Outcome::Woke => Duration::ZERO,
+        Outcome::Closed { up, .. } if *up >= STABLE => Duration::ZERO,
         _ => delay,
     };
     let wait = if matches!(outcome, Outcome::Closed { code: Some(REPLACED), .. }) { base.max(MAX_BACKOFF) } else { base };
-    Some((wait, (base * 2).min(MAX_BACKOFF)))
+    Some((wait, (base * 2).clamp(FIRST_BACKOFF, MAX_BACKOFF)))
+}
+
+/// Spreads waits over 75–125 %, so computers that lost the relay together don't return together.
+fn jitter(wait: Duration, random: f64) -> Duration {
+    wait.mul_f64(0.75 + 0.5 * random.clamp(0.0, 1.0))
+}
+
+/// Whether the wall clock ran ahead of the monotonic clock: the computer slept.
+fn slept(wall: Option<Duration>, monotonic: Duration) -> bool {
+    wall.is_some_and(|wall| wall > monotonic + SLEPT)
+}
+
+/// Whether a ping sent at `since` went unanswered too long.
+fn unanswered(since: Option<Instant>, now: Instant) -> bool {
+    since.is_some_and(|since| now.saturating_duration_since(since) > PONG)
+}
+
+/// Sends one frame, or false when the socket failed or could not take it in time.
+async fn send<S: futures_util::Sink<Message> + Unpin>(write: &mut S, message: Message) -> bool {
+    matches!(tokio::time::timeout(WRITE, write.send(message)).await, Ok(Ok(())))
 }
 
 /// Starts (or restarts) the socket task while signed in.
@@ -69,7 +107,7 @@ fn current(app: &tauri::AppHandle, generation: u64) -> bool {
 }
 
 async fn run(app: tauri::AppHandle, generation: u64) {
-    let mut delay = Duration::from_secs(1);
+    let mut delay = Duration::ZERO;
     while current(&app, generation) {
         let Some(token) = remote(&app).lock().token.clone() else { return };
         let outcome = session(&app, generation, &token).await;
@@ -81,7 +119,7 @@ async fn run(app: tauri::AppHandle, generation: u64) {
                 inner.connected = false;
                 inner.outbox = None;
                 inner.presence = false;
-                inner.fail_pending(None, "The connection to the relay was lost.");
+                inner.fail_pending(None, super::client::LOST);
             }
             changed
         };
@@ -94,7 +132,9 @@ async fn run(app: tauri::AppHandle, generation: u64) {
         if changed {
             emit_status(&app);
         }
-        tokio::time::sleep(wait).await;
+        if !wait.is_zero() {
+            tokio::time::sleep(jitter(wait, (uuid::Uuid::new_v4().as_u128() % 1000) as f64 / 1000.0)).await;
+        }
         delay = next;
     }
 }
@@ -118,7 +158,7 @@ async fn session(app: &tauri::AppHandle, generation: u64, token: &str) -> Outcom
     };
     let opened = Instant::now();
     let (mut write, mut read) = stream.split();
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let (tx, mut rx) = mpsc::channel::<String>(OUTBOX);
     let host_enabled = {
         let state = remote(app);
         let mut inner = state.lock();
@@ -132,17 +172,20 @@ async fn session(app: &tauri::AppHandle, generation: u64, token: &str) -> Outcom
     emit_status(app);
     let closed = |code| Outcome::Closed { up: opened.elapsed(), code };
     // Hosting was toggled while connecting, before the outbox could carry it.
-    if host_enabled != hosting && write.send(Message::text(json!({"kind": "host", "enabled": host_enabled}).to_string())).await.is_err() {
+    if host_enabled != hosting && !send(&mut write, Message::text(json!({"kind": "host", "enabled": host_enabled}).to_string())).await {
         return closed(None);
     }
     // One ordered request queue per peer; dropping the map at the end stops their workers.
     let mut peers: HashMap<String, mpsc::Sender<Request>> = HashMap::new();
     let mut ping = tokio::time::interval_at(tokio::time::Instant::now() + PING, PING);
+    let mut check = tokio::time::interval_at(tokio::time::Instant::now() + CHECK, CHECK);
     // The first subscription follows the first presence frame.
     let mut renew = tokio::time::interval_at(tokio::time::Instant::now() + RENEW, RENEW);
     // The first tick is now: a token is checked at connect, then every 12 h.
     let mut refresh = tokio::time::interval(REFRESH);
-    let mut heard = Instant::now();
+    // An unanswered ping, and the clocks at the last check.
+    let mut pinged: Option<Instant> = None;
+    let (mut wall, mut monotonic) = (SystemTime::now(), Instant::now());
     loop {
         tokio::select! {
             _ = refresh.tick() => {
@@ -153,29 +196,39 @@ async fn session(app: &tauri::AppHandle, generation: u64, token: &str) -> Outcom
             }
             // None once stop() or a restart drops the outbox.
             outgoing = rx.recv() => match outgoing {
-                Some(text) => if write.send(Message::text(text)).await.is_err() { return closed(None) },
+                Some(text) => if !send(&mut write, Message::text(text)).await { return closed(None) },
                 None => {
-                    let _ = write.send(Message::Close(None)).await;
+                    let _ = send(&mut write, Message::Close(None)).await;
                     return closed(None);
                 }
             },
-            _ = renew.tick() => {
-                tauri::async_runtime::spawn(mirror::subscribe_all(app.clone()));
-            }
+            _ = renew.tick() => mirror::subscribe_soon(app),
             _ = ping.tick() => {
-                if heard.elapsed() > SILENT || write.send(Message::text("ping")).await.is_err() {
+                if !send(&mut write, Message::text("ping")).await {
                     return closed(None);
                 }
+                pinged.get_or_insert_with(Instant::now);
             }
-            incoming = read.next() => match incoming {
-                Some(Ok(Message::Text(text))) => {
-                    heard = Instant::now();
-                    frame(app, text.as_str(), &mut peers);
+            _ = check.tick() => {
+                let (now_wall, now) = (SystemTime::now(), Instant::now());
+                if slept(now_wall.duration_since(wall).ok(), now.duration_since(monotonic)) {
+                    return Outcome::Woke;
                 }
-                Some(Ok(Message::Close(close))) => return closed(close.map(|frame| u16::from(frame.code))),
-                Some(Err(_)) | None => return closed(None),
-                Some(Ok(_)) => heard = Instant::now(),
-            },
+                if unanswered(pinged, now) {
+                    return closed(None);
+                }
+                (wall, monotonic) = (now_wall, now);
+            }
+            incoming = read.next() => {
+                // Anything from the relay answers the ping.
+                pinged = None;
+                match incoming {
+                    Some(Ok(Message::Text(text))) => frame(app, text.as_str(), &mut peers),
+                    Some(Ok(Message::Close(close))) => return closed(close.map(|frame| u16::from(frame.code))),
+                    Some(Err(_)) | None => return closed(None),
+                    Some(Ok(_)) => {}
+                }
+            }
         }
     }
 }
@@ -221,29 +274,44 @@ impl Request {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Lane {
+    /// Overlapping, up to a small bound: reads, and `task.cancelStart`, which must never
+    /// wait behind the start it cancels.
     Read,
+    /// One at a time, in arrival order: everything that changes a task.
     Ordered,
+    /// Each `task.start` on its own (bounded by [`MAX_STARTS`]): a clone can take minutes,
+    /// and stops, answers and prompts must not wait behind it.
+    Start,
+}
+
+fn lane(method: &str) -> Lane {
+    match method {
+        "task.start" => Lane::Start,
+        "batch" | "task.cancelStart" => Lane::Read,
+        method if host::is_read_only_method(method) => Lane::Read,
+        _ => Lane::Ordered,
+    }
 }
 
 #[derive(Default)]
 struct PendingRequests {
     reads: VecDeque<Request>,
     ordered: VecDeque<Request>,
+    starts: VecDeque<Request>,
 }
 
 impl PendingRequests {
     fn len(&self) -> usize {
-        self.reads.len() + self.ordered.len()
+        self.reads.len() + self.ordered.len() + self.starts.len()
     }
 
     fn push(&mut self, request: Request) {
-        let method = request.message["method"].as_str().unwrap_or_default();
-        if method == "batch" || host::is_read_only_method(method) {
-            self.reads.push_back(request);
-        } else {
-            self.ordered.push_back(request);
+        match lane(request.message["method"].as_str().unwrap_or_default()) {
+            Lane::Read => self.reads.push_back(request),
+            Lane::Ordered => self.ordered.push_back(request),
+            Lane::Start => self.starts.push_back(request),
         }
     }
 
@@ -326,8 +394,14 @@ fn fresh(app: &tauri::AppHandle, from: &str, message: &Value) -> bool {
     checked.is_ok()
 }
 
+/// Queues a request for its peer. Freshness and replays are checked here, on arrival, so
+/// time spent waiting in the queue never makes a valid request expire.
 fn queue(app: &tauri::AppHandle, from: &str, (message, key): (Value, crypto::Key), peers: &mut HashMap<String, mpsc::Sender<Request>>) {
     let request = Request::new(message, key);
+    let fresh = host::fresh_request(&mut remote(app).lock(), &request.message, chrono::Utc::now().timestamp_millis());
+    if let Err(error) = fresh {
+        return refuse(app, from, request, &error);
+    }
     if !peers.contains_key(from) {
         if peers.len() >= MAX_PEERS {
             return busy(app, from, request);
@@ -343,22 +417,41 @@ fn queue(app: &tauri::AppHandle, from: &str, (message, key): (Value, crypto::Key
 
 /// Refuses a request at once instead of dropping it, so the caller doesn't wait for its timeout.
 fn busy(app: &tauri::AppHandle, from: &str, request: Request) {
-    let failure = json!({"type": "res", "id": request.message["id"], "ok": false, "error": "This computer is busy. Try again in a moment."});
+    refuse(app, from, request, "This computer is busy. Try again in a moment.");
+}
+
+fn refuse(app: &tauri::AppHandle, from: &str, request: Request, error: &str) {
+    let failure = json!({"type": "res", "id": request.message["id"], "ok": false, "error": error});
     let _ = send_sealed(app, from, &request.key, &failure);
+}
+
+/// Whether a request waited so long that its caller gave up; running it now could run a
+/// retried prompt twice. A start is kept: `startId` makes a repeated one harmless.
+fn expired(method: &str, waited: Duration) -> bool {
+    method != "task.start" && waited >= EXPIRED
 }
 
 const READS_PER_PEER: usize = 4;
 
 /// Read-only requests overlap up to a small bound. State-changing requests share one FIFO
-/// lane, including `task.start`; response ids let reads return in any order.
+/// lane; each `task.start` runs on its own. Response ids let replies return in any order.
 async fn peer(app: tauri::AppHandle, from: String, mut requests: mpsc::Receiver<Request>) {
     let mut pending = PendingRequests::default();
     let mut in_flight = FuturesUnordered::<BoxFuture<'static, Lane>>::new();
     let mut active_reads = 0usize;
+    let mut active_starts = 0usize;
     let mut ordered_active = false;
     let mut input_open = true;
 
     loop {
+        while let Some(request) = pending.starts.pop_front() {
+            active_starts += 1;
+            let (app, from) = (app.clone(), from.clone());
+            in_flight.push(Box::pin(async move {
+                answer(&app, &from, request).await;
+                Lane::Start
+            }));
+        }
         while active_reads < READS_PER_PEER {
             let Some(request) = pending.reads.pop_front() else { break };
             active_reads += 1;
@@ -375,18 +468,19 @@ async fn peer(app: tauri::AppHandle, from: String, mut requests: mpsc::Receiver<
                 Lane::Ordered
             }));
         }
-        if !input_open && pending.reads.is_empty() && pending.ordered.is_empty() && active_reads == 0 && !ordered_active {
+        if !input_open && pending.len() == 0 && in_flight.is_empty() {
             break;
         }
 
         tokio::select! {
             request = requests.recv(), if input_open => match request {
-                Some(request) if pending.len() + active_reads + usize::from(ordered_active) < PEER_QUEUE => pending.push(request),
+                Some(request) if pending.len() + active_reads + active_starts + usize::from(ordered_active) < PEER_QUEUE => pending.push(request),
                 Some(request) => busy(&app, &from, request),
                 None => input_open = false,
             },
             completed = in_flight.next(), if !in_flight.is_empty() => match completed {
                 Some(Lane::Read) => active_reads -= 1,
+                Some(Lane::Start) => active_starts -= 1,
                 Some(Lane::Ordered) => ordered_active = false,
                 None => {}
             },
@@ -395,9 +489,13 @@ async fn peer(app: tauri::AppHandle, from: String, mut requests: mpsc::Receiver<
 }
 
 async fn answer(app: &tauri::AppHandle, from: &str, request: Request) {
-    let Request { message, key, queued_at } = request;
-    let method = message["method"].as_str().unwrap_or("unknown");
-    let queue_wait = queued_at.elapsed();
+    let method = request.message["method"].as_str().unwrap_or("unknown").to_owned();
+    let queue_wait = request.queued_at.elapsed();
+    if expired(&method, queue_wait) {
+        return refuse(app, from, request, "This request waited too long on the other computer and was dropped. Try again.");
+    }
+    let Request { message, key, .. } = request;
+    let method = method.as_str();
     let start_waiting = Instant::now();
     let _start_permit = if method == "task.start" {
         Some(STARTS.get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_STARTS))).clone().acquire_owned().await.ok())
@@ -447,7 +545,7 @@ fn presence(app: &tauri::AppHandle, list: &Value) {
         use tauri::Emitter;
         let _ = app.emit("sessions-changed", ());
     }
-    tauri::async_runtime::spawn(mirror::subscribe_all(app.clone()));
+    mirror::subscribe_soon(app);
 }
 
 /// The list replaces the known devices. A device missing from it is gone, with its subscription.
@@ -546,7 +644,10 @@ fn send_sealed(app: &tauri::AppHandle, to: &str, key: &crypto::Key, message: &Va
     let state = remote(app);
     let inner = state.lock();
     let outbox = inner.outbox.as_ref().ok_or("Not connected to the relay.")?;
-    outbox.send(frame).map_err(|_| "Not connected to the relay.")?;
+    outbox.try_send(frame).map_err(|error| match error {
+        mpsc::error::TrySendError::Full(_) => "Too much is waiting to go to the relay. Try again in a moment.",
+        mpsc::error::TrySendError::Closed(_) => "Not connected to the relay.",
+    })?;
     Ok(SendStats { payload_bytes, frame_bytes, json_micros, seal_micros })
 }
 
@@ -569,17 +670,51 @@ mod tests {
         }
         let ordered = pending.ordered.iter().map(|request| request.message["method"].as_str().unwrap()).collect::<Vec<_>>();
         let reads = pending.reads.iter().map(|request| request.message["method"].as_str().unwrap()).collect::<Vec<_>>();
-        assert_eq!(ordered, ["task.send", "task.stop", "task.start"]);
+        assert_eq!(ordered, ["task.send", "task.stop"]);
         assert_eq!(reads, ["task.messages", "task.diff"]);
+        assert_eq!(pending.starts.len(), 1, "a start never holds the ordered lane");
         let mut active = false;
         assert_eq!(pending.next_ordered(&mut active).unwrap().message["method"], "task.send");
         assert!(pending.next_ordered(&mut active).is_none(), "ordered calls never overlap");
         active = false;
         assert_eq!(pending.next_ordered(&mut active).unwrap().message["method"], "task.stop");
-        active = false;
-        assert_eq!(pending.next_ordered(&mut active).unwrap().message["method"], "task.start");
         pending.push(Request { message: json!({"method": "batch"}), key: [0; 32], queued_at: Instant::now() });
         assert_eq!(pending.reads.back().unwrap().message["method"], "batch");
+    }
+
+    #[test]
+    fn stops_and_answers_never_wait_behind_a_start() {
+        assert_eq!(lane("task.start"), Lane::Start);
+        for method in ["task.stop", "approval.respond", "input.respond", "task.send", "task.pullMerge"] {
+            assert_eq!(lane(method), Lane::Ordered, "{method}");
+        }
+        // Cancelling and asking about a start overlap with it.
+        for method in ["task.cancelStart", "task.startStatus", "subscribe", "batch"] {
+            assert_eq!(lane(method), Lane::Read, "{method}");
+        }
+    }
+
+    #[test]
+    fn a_request_its_caller_gave_up_on_is_dropped() {
+        assert!(EXPIRED < super::super::client::TIMEOUT);
+        assert!(!expired("task.send", Duration::from_secs(5)));
+        assert!(expired("task.send", EXPIRED));
+        assert!(expired("approval.respond", Duration::from_secs(60)));
+        assert!(!expired("task.start", Duration::from_secs(600)), "startId makes a repeated start harmless");
+    }
+
+    #[test]
+    fn sleep_and_a_dead_socket_are_found_in_seconds() {
+        let s = Duration::from_secs;
+        assert!(!slept(Some(s(2)), s(2)));
+        assert!(!slept(Some(s(11)), s(2)), "a small clock correction");
+        assert!(slept(Some(s(3600)), s(2)), "the wall clock ran on while the computer slept");
+        assert!(!slept(None, s(2)), "the clock was set back");
+        let now = Instant::now();
+        assert!(!unanswered(None, now));
+        assert!(!unanswered(Some(now - s(5)), now));
+        assert!(unanswered(Some(now - PONG - s(1)), now));
+        assert!(PING + PONG < Duration::from_secs(60));
     }
 
     #[test]
@@ -602,10 +737,16 @@ mod tests {
         assert_eq!(backoff(s(8), &Outcome::Failed), Some((s(8), s(16))));
         assert_eq!(backoff(s(40), &Outcome::Failed), Some((s(40), s(60))));
         assert_eq!(backoff(s(8), &Outcome::Closed { up: s(5), code: None }), Some((s(8), s(16))));
-        assert_eq!(backoff(s(8), &Outcome::Closed { up: s(30), code: None }), Some((s(1), s(2))));
-        assert_eq!(backoff(s(1), &Outcome::Closed { up: s(300), code: Some(REPLACED) }), Some((s(60), s(2))));
+        // The first retry is immediate, then 1 s, 2 s…
+        assert_eq!(backoff(s(8), &Outcome::Closed { up: s(30), code: None }), Some((s(0), s(1))));
+        assert_eq!(backoff(s(0), &Outcome::Failed), Some((s(0), s(1))));
+        assert_eq!(backoff(s(1), &Outcome::Failed), Some((s(1), s(2))));
+        assert_eq!(backoff(s(30), &Outcome::Woke), Some((s(0), s(1))), "after sleep, at once");
+        assert_eq!(backoff(s(1), &Outcome::Closed { up: s(300), code: Some(REPLACED) }), Some((s(60), s(1))));
         assert_eq!(backoff(s(1), &Outcome::Closed { up: s(300), code: Some(REVOKED) }), None);
         assert_eq!(backoff(s(1), &Outcome::Unauthorized), None);
+        assert_eq!(jitter(s(0), 0.7), s(0));
+        assert_eq!((jitter(s(8), 0.0), jitter(s(8), 1.0)), (s(6), s(10)));
     }
 
     #[test]

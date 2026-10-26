@@ -4,6 +4,11 @@
 .remote-badge{margin-left:6px;padding:1px 6px;border-radius:4px;background:rgb(var(--accent-rgb) / .22);font-size:.7rem;font-weight:500}
 .remote-note{margin:.7rem 1rem;color:var(--muted);font-size:.8rem}
 .remote-error{margin:.7rem 1rem;color:var(--text);font-size:.8rem}
+.remote-load-error{display:flex;align-items:center;gap:10px;margin:.7rem 1rem;color:var(--text);font-size:.8rem}
+.remote-load-error>.icon{width:16px;height:16px;color:var(--danger);flex:none}
+.remote-load-error>span{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.remote-load-error small{color:var(--muted);overflow-wrap:anywhere}
+.remote-load-error .secondary-button{flex:none}
 .remote-code{padding:.7rem 1rem;border-top:1px solid var(--border)}
 .remote-code-row{display:flex;align-items:center;gap:12px;margin:.5rem 0}
 .remote-user-code{font:600 1.5rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.12em}

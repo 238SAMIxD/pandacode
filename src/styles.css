@@ -928,6 +928,13 @@ html[data-theme="dark"] body .dialog-plate{box-shadow:0 40px 100px -30px rgb(0 0
 .remote-start-dismiss{justify-content:center;width:24px}
 .remote-start-retry:hover,.remote-start-dismiss:hover{background:var(--raised);color:var(--text)}
 :is(.remote-start-retry,.remote-start-dismiss) .icon{width:13px;height:13px}
+.composer-inline-note{margin:0 0 6px;padding:6px 10px;border-radius:6px;background:rgb(var(--accent-rgb) / .08);color:var(--text);font-size:12px}
+.remote-connection{display:flex;align-items:center;gap:8px;margin:6px auto;padding:5px 6px 5px 10px;border-radius:6px;background:rgb(var(--accent-rgb) / .08);color:var(--text);font-size:12px}
+.remote-connection>span{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.remote-connection .secondary-button,.remote-composer-retry,.remote-checking{display:inline-flex;align-items:center;gap:5px;min-height:26px;padding:0 8px;font-size:12px;white-space:nowrap}
+.remote-connection .secondary-button .icon,.remote-composer-retry .icon{width:13px;height:13px}
+.remote-composer-retry,.remote-checking{height:31px;margin-left:auto;flex-shrink:0}
+.remote-checking{color:var(--muted)}
 /* Sent attachments: the composer's chips, read-only, each opening what it carried. */
 .message-attachments{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;white-space:normal;text-align:left}
 .message-attachments>.prompt-chip{cursor:pointer;font:inherit;font-size:.72rem;padding-right:8px}

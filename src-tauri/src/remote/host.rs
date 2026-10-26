@@ -15,12 +15,28 @@ use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Listener, Manager};
 
-pub(crate) const METHODS: [&str; 29] = ["subscribe", "tasks.list", "projects.icons", "providers.list", "providers.models", "task.start", "task.messages", "task.team", "task.workerMessages", "task.attachment", "task.workspaceImage", "task.send", "task.stop", "task.steer", "task.configure", "approval.respond", "input.respond", "task.pull", "task.pullDiff", "task.pullMerge", "task.pullDetect", "task.changes", "task.diff", "bots.list", "bot.thread", "bot.message", "bot.pause", "image.put", "batch"];
+pub(crate) const METHODS: [&str; 31] = ["subscribe", "tasks.list", "projects.icons", "providers.list", "providers.models", "task.start", "task.startStatus", "task.cancelStart", "task.messages", "task.team", "task.workerMessages", "task.attachment", "task.workspaceImage", "task.send", "task.stop", "task.steer", "task.configure", "approval.respond", "input.respond", "task.pull", "task.pullDiff", "task.pullMerge", "task.pullDetect", "task.changes", "task.diff", "bots.list", "bot.thread", "bot.message", "bot.pause", "image.put", "batch"];
 pub(crate) const OFF: &str = "Remote control is off on this computer";
 pub(crate) const MAX_TEXT: usize = 100 * 1024;
 const SUBSCRIPTION: Duration = Duration::from_secs(10 * 60);
-/// Events wait this long, so one frame carries everything a subscriber missed meanwhile.
-const FLUSH: Duration = Duration::from_millis(100);
+/// After the first event of a burst (sent at once), events wait this long, so one frame
+/// carries everything a subscriber missed meanwhile.
+const FLUSH: Duration = Duration::from_millis(40);
+/// Past a burst's first [`BURST_FRAMES`] frames, frames go at most every 100 ms: the relay
+/// allows 20 frames a second per socket, replies included.
+const SUSTAINED: Duration = Duration::from_millis(100);
+const BURST_FRAMES: u32 = 5;
+/// Events kept per task for viewers that come back (`afterSeq`), and in all.
+const JOURNAL_EVENTS: usize = 2000;
+const JOURNAL_BYTES: usize = 2 * 1024 * 1024;
+const JOURNAL_TOTAL: usize = 32 * 1024 * 1024;
+const JOURNAL_TASKS: usize = 2048;
+/// The parts of a subscribe reply that replayed events and gone ids may fill.
+const REPLAY_BUDGET: usize = PAGE_BUDGET / 3;
+const MISSING_BUDGET: usize = 24 * 1024;
+/// A finished start is remembered this long for a repeated `task.start` or `task.startStatus`.
+const START_MEMORY: Duration = Duration::from_secs(3600);
+const MAX_HOST_STARTS: usize = 256;
 pub(crate) const MAX_IDS: usize = 500;
 const TASKS_DEFAULT: usize = 200;
 const TASKS_MAX: usize = 500;
@@ -98,12 +114,14 @@ pub(crate) fn valid_id(id: &str) -> Result<()> {
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum Call {
-    Subscribe { session_ids: Vec<String> },
+    Subscribe { session_ids: Vec<String>, after: HashMap<String, u64>, epoch: Option<String> },
     TasksList { limit: usize },
     ProjectIcons { project_ids: Vec<String> },
     Providers { force: bool },
     Models { provider: String, force: bool },
     Start(start::Start),
+    StartStatus { start_id: String },
+    CancelStart { start_id: String },
     Messages { session_id: String, page: MessagePaging },
     Team { session_id: String },
     WorkerMessages { session_id: String, worker_id: String, after_id: i64, limit: i64 },
@@ -138,6 +156,8 @@ impl Call {
             Self::Providers { .. } => "providers.list",
             Self::Models { .. } => "providers.models",
             Self::Start(_) => "task.start",
+            Self::StartStatus { .. } => "task.startStatus",
+            Self::CancelStart { .. } => "task.cancelStart",
             Self::Messages { .. } => "task.messages",
             Self::Team { .. } => "task.team",
             Self::WorkerMessages { .. } => "task.workerMessages",
@@ -175,6 +195,7 @@ pub(crate) fn is_read_only_method(method: &str) -> bool {
             | "projects.icons"
             | "providers.list"
             | "providers.models"
+            | "task.startStatus"
             | "task.messages"
             | "task.team"
             | "task.workerMessages"
@@ -367,8 +388,11 @@ pub(crate) fn parse(host_enabled: bool, method: &str, params: &Value) -> Result<
             if ids.len() > MAX_IDS {
                 return Err(format!("Mirror up to {MAX_IDS} tasks per computer."));
             }
-            let session_ids = ids.iter().map(|id| id.as_str().filter(|id| valid_id(id).is_ok()).map(str::to_owned).ok_or("Invalid sessionIds.")).collect::<std::result::Result<_, _>>()?;
-            Call::Subscribe { session_ids }
+            let session_ids: Vec<String> = ids.iter().map(|id| id.as_str().filter(|id| valid_id(id).is_ok()).map(str::to_owned).ok_or("Invalid sessionIds.")).collect::<std::result::Result<_, _>>()?;
+            // Newer viewers say where they left off; anything malformed is ignored (no replay).
+            let after = params["afterSeq"].as_object().map(|after| after.iter().filter(|(id, _)| session_ids.contains(id)).filter_map(|(id, seq)| Some((id.clone(), seq.as_u64()?))).collect()).unwrap_or_default();
+            let epoch = params["epoch"].as_str().filter(|epoch| valid_id(epoch).is_ok() && epoch.len() <= 64).map(str::to_owned);
+            Call::Subscribe { session_ids, after, epoch }
         }
         "tasks.list" => Call::TasksList { limit: task_limit(params)? },
         "projects.icons" => Call::ProjectIcons { project_ids: project_icon_ids(params)? },
@@ -381,6 +405,8 @@ pub(crate) fn parse(host_enabled: bool, method: &str, params: &Value) -> Result<
             Call::Models { provider, force: force_param(params)? }
         }
         "task.start" => Call::Start(start::parse(params)?),
+        "task.startStatus" => Call::StartStatus { start_id: id_param(params, "startId")? },
+        "task.cancelStart" => Call::CancelStart { start_id: id_param(params, "startId")? },
         "task.messages" => Call::Messages { session_id: id_param(params, "sessionId")?, page: message_paging(params)? },
         "task.team" => Call::Team { session_id: id_param(params, "sessionId")? },
         "task.workerMessages" => {
@@ -458,13 +484,18 @@ fn fit_batch_results(results: Vec<Result<Value>>) -> Value {
     json!({"results": results})
 }
 
+/// Checked when a request arrives, before it waits in its peer's queue: it is fresh and
+/// not a replay. Time spent queued must not make a valid request expire.
+pub(crate) fn fresh_request(inner: &mut super::Inner, message: &Value, now_ms: i64) -> Result<()> {
+    inner.replay.check(message["ts"].as_i64(), message["nonce"].as_str(), now_ms)
+}
+
 /// Checked when a queued request is about to run, not when it arrived: remote control is
-/// still on, the sender is still in presence, and the request is fresh. Returns whether
-/// remote tasks may use Full access.
-fn admit(inner: &mut super::Inner, from: &str, message: &Value, now_ms: i64) -> Result<bool> {
+/// still on and the sender is still in presence. Returns whether remote tasks may use
+/// Full access.
+fn admit(inner: &super::Inner, from: &str) -> Result<bool> {
     gate(inner.settings.host_enabled)?;
     inner.callable(from)?;
-    inner.replay.check(message["ts"].as_i64(), message["nonce"].as_str(), now_ms)?;
     Ok(inner.settings.remote_full_access)
 }
 
@@ -501,7 +532,7 @@ fn allow_task_mode(stored: &str, requested: Option<&str>, full_access: bool) -> 
 /// The response to one request frame, or None when it has no usable id.
 pub(crate) async fn handle(app: &tauri::AppHandle, from: &str, message: &Value) -> Option<Value> {
     let id = message["id"].as_str().filter(|id| valid_id(id).is_ok())?;
-    let admitted = admit(&mut remote(app).lock(), from, message, chrono::Utc::now().timestamp_millis());
+    let admitted = admit(&remote(app).lock(), from);
     let call = admitted.and_then(|full_access| parse(true, message["method"].as_str().unwrap_or_default(), &message["params"]).and_then(|call| cap_mode(call, full_access)).map(|call| (call, full_access)));
     let result = match call {
         Ok((call, full_access)) => run(app, from, call, full_access).await,
@@ -1176,11 +1207,11 @@ fn watch_team_events(app: &tauri::AppHandle) {
 async fn run_one(app: &tauri::AppHandle, from: &str, call: Call, full_access: bool) -> Result<Value> {
     let state = app.state::<AppState>();
     match call {
-        Call::Subscribe { session_ids } => {
+        Call::Subscribe { session_ids, after, epoch } => {
             watch_team_events(app);
             let handle = app.clone();
             let requested = session_ids.clone();
-            let tasks = crate::blocking(move || {
+            let (mut tasks, missing) = crate::blocking(move || {
                 let state = handle.state::<AppState>();
                 subscribed_tasks(&state, &requested)
             })
@@ -1195,7 +1226,8 @@ async fn run_one(app: &tauri::AppHandle, from: &str, call: Call, full_access: bo
             }
             subscriber.until = Some(Instant::now() + SUBSCRIPTION);
             subscriber.sessions.extend(session_ids);
-            Ok(json!({"tasks": tasks}))
+            inner.journal.resume(&mut tasks, &after, epoch.as_deref());
+            Ok(json!({"tasks": tasks, "missing": missing, "epoch": inner.journal.epoch}))
         }
         Call::TasksList { limit } => {
             let handle = app.clone();
@@ -1226,7 +1258,20 @@ async fn run_one(app: &tauri::AppHandle, from: &str, call: Call, full_access: bo
             }
             Ok(models)
         }
-        Call::Start(request) => start::run(app, from, request).await,
+        Call::Start(request) => start_once(app, from, request).await,
+        Call::StartStatus { start_id } => Ok(start_status(host_starts().lock().unwrap_or_else(|e| e.into_inner()).get(&start_id).filter(|start| start.from == from).map(Arc::as_ref))),
+        Call::CancelStart { start_id } => {
+            let mut starts = host_starts().lock().unwrap_or_else(|e| e.into_inner());
+            Ok(match starts.get(&start_id) {
+                Some(start) if start.from == from => cancel_start(start),
+                Some(_) => json!({"cancelled": true}),
+                // Not claimed yet (still waiting for a start slot): leave it cancelled so it never runs.
+                None => {
+                    let (entry, _) = claim_start(&mut starts, &start_id, from, Instant::now())?;
+                    cancel_start(&entry)
+                }
+            })
+        }
         Call::Messages { session_id, page } => {
             let handle = app.clone();
             crate::blocking(move || {
@@ -1347,14 +1392,13 @@ async fn run_one(app: &tauri::AppHandle, from: &str, call: Call, full_access: bo
         Call::Approve { session_id, request_id, approve } => {
             local_task(&state, &session_id).await?;
             crate::respond_approval(app.clone(), state, session_id.clone(), request_id.clone(), approve).await?;
-            // Clear the card in this computer's window, as bot approvals do.
-            let event = AgentEvent { session_id, kind: "approval_cancelled".into(), text: String::new(), request_id: Some(request_id), data: None, tool: None };
-            let _ = app.emit("agent-event", event);
+            answered(app, session_id, "approval_cancelled", request_id);
             Ok(json!({}))
         }
         Call::Answer { session_id, request_id, response } => {
             local_task(&state, &session_id).await?;
-            crate::respond_user_input(app.clone(), state, session_id, request_id, response).await?;
+            crate::respond_user_input(app.clone(), state, session_id.clone(), request_id.clone(), response).await?;
+            answered(app, session_id, "input_cancelled", request_id);
             Ok(json!({}))
         }
         Call::Pull { session_id } => {
@@ -1447,6 +1491,206 @@ async fn run_one(app: &tauri::AppHandle, from: &str, call: Call, full_access: bo
             Ok(json!({}))
         }
         Call::Batch(_) => Err("Nested batch calls are not supported.".into()),
+    }
+}
+
+/// A remote answer clears the card in this window and on every other viewer, as a
+/// harness's own `*_cancelled` would: through the same forwarding as any agent event.
+fn answered(app: &tauri::AppHandle, session_id: String, kind: &str, request_id: String) {
+    let event = AgentEvent { session_id, kind: kind.into(), text: String::new(), request_id: Some(request_id), data: None, tool: None };
+    agent_event(app, &event);
+    let _ = app.emit("agent-event", event);
+}
+
+/// A start by the viewer's `startId`: a repeated `task.start` waits for (or returns) the
+/// first one's result, `task.startStatus` reports it and `task.cancelStart` stops it.
+struct HostStart {
+    from: String,
+    /// Set by `task.cancelStart`; `start::run_cancellable` checks it between steps and stops the clone.
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+    result: tokio::sync::watch::Sender<Option<Result<Value>>>,
+    at: Instant,
+}
+
+fn host_starts() -> &'static StdMutex<HashMap<String, Arc<HostStart>>> {
+    static STARTS: OnceLock<StdMutex<HashMap<String, Arc<HostStart>>>> = OnceLock::new();
+    STARTS.get_or_init(Default::default)
+}
+
+/// The start under `id`, made now (true) unless this device already asked for it.
+fn claim_start(starts: &mut HashMap<String, Arc<HostStart>>, id: &str, from: &str, now: Instant) -> Result<(Arc<HostStart>, bool)> {
+    starts.retain(|_, start| start.result.borrow().is_none() || now.duration_since(start.at) < START_MEMORY);
+    if let Some(start) = starts.get(id) {
+        return if start.from == from { Ok((start.clone(), false)) } else { Err("Invalid startId.".into()) };
+    }
+    if starts.len() >= MAX_HOST_STARTS {
+        return Err("This computer is busy. Try again in a moment.".into());
+    }
+    let start = Arc::new(HostStart { from: from.to_owned(), cancel: Default::default(), result: tokio::sync::watch::channel(None).0, at: now });
+    starts.insert(id.to_owned(), start.clone());
+    Ok((start, true))
+}
+
+/// Runs a start once per `startId`. The start runs on its own, so a lost reply or a
+/// cancelled caller never stops it halfway; every caller waits for its one result.
+async fn start_once(app: &tauri::AppHandle, from: &str, request: start::Start) -> Result<Value> {
+    let Some(id) = request.start_id.clone() else { return start::run(app, from, request).await };
+    let (entry, fresh) = claim_start(&mut host_starts().lock().unwrap_or_else(|e| e.into_inner()), &id, from, Instant::now())?;
+    let mut done = entry.result.subscribe();
+    if fresh {
+        let (app, from, entry) = (app.clone(), from.to_owned(), entry.clone());
+        tauri::async_runtime::spawn(async move {
+            let result = start::run_cancellable(&app, &from, request, entry.cancel.clone()).await;
+            // Cancelled after the task was made: it must not run unseen.
+            if let (true, Ok(reply)) = (entry.cancel.load(Ordering::SeqCst), &result) {
+                if let Some(session) = reply["sessionId"].as_str() {
+                    let _ = crate::stop_session(app.clone(), app.state::<AppState>(), session.to_owned()).await;
+                }
+            }
+            entry.result.send_if_modified(|slot| slot.is_none() && slot.replace(result).is_none());
+        });
+    }
+    let result = done.wait_for(Option::is_some).await.ok().and_then(|slot| slot.clone());
+    result.unwrap_or_else(|| Err("The start ended unexpectedly.".into()))
+}
+
+/// `task.startStatus`: running, done (with the host task), failed, or unknown here.
+fn start_status(start: Option<&HostStart>) -> Value {
+    let Some(start) = start else { return json!({"state": "unknown"}) };
+    match &*start.result.borrow() {
+        None => json!({"state": "running"}),
+        Some(Ok(reply)) => json!({"state": "done", "sessionId": reply["sessionId"]}),
+        Some(Err(error)) => json!({"state": "failed", "error": error}),
+    }
+}
+
+/// `task.cancelStart`: a running start is told to stop and its callers get `CANCELLED`
+/// at once; a start that already made its task says so (`cancelled: false`).
+fn cancel_start(start: &HostStart) -> Value {
+    let mut answer = json!({"cancelled": true});
+    start.result.send_if_modified(|slot| match slot {
+        None => {
+            start.cancel.store(true, Ordering::SeqCst);
+            *slot = Some(Err(start::CANCELLED.into()));
+            true
+        }
+        Some(Ok(reply)) => {
+            answer = json!({"cancelled": false, "sessionId": reply["sessionId"]});
+            false
+        }
+        Some(Err(_)) => false,
+    });
+    answer
+}
+
+/// Recent agent events of subscribed tasks, numbered by one process-wide `seq`, so a
+/// viewer that comes back gets exactly what it missed (docs/remote-access.md). `epoch`
+/// is new with every launch, when `seq` starts over.
+pub(crate) struct Journal {
+    pub(crate) epoch: String,
+    seq: u64,
+    bytes: usize,
+    rings: HashMap<String, Ring>,
+}
+
+impl Default for Journal {
+    fn default() -> Self {
+        Self { epoch: uuid::Uuid::new_v4().simple().to_string(), seq: 0, bytes: 0, rings: HashMap::new() }
+    }
+}
+
+#[derive(Default)]
+struct Ring {
+    /// `seq` when recording began: anything before it may be missing.
+    since: u64,
+    /// The newest `seq` dropped to stay in bounds.
+    dropped: u64,
+    bytes: usize,
+    events: std::collections::VecDeque<(u64, usize, Value)>,
+}
+
+#[derive(Debug, PartialEq)]
+enum Missed {
+    Events(Vec<Value>),
+    Gap,
+}
+
+impl Journal {
+    /// Starts recording a task's events, unless it already is.
+    fn watch(&mut self, session: &str) {
+        if self.rings.contains_key(session) {
+            return;
+        }
+        if self.rings.len() >= JOURNAL_TASKS {
+            let quiet = self.rings.iter().min_by_key(|(_, ring)| ring.events.back().map_or(ring.since, |(seq, ..)| *seq)).map(|(id, _)| id.clone());
+            if let Some(ring) = quiet.and_then(|id| self.rings.remove(&id)) {
+                self.bytes -= ring.bytes;
+            }
+        }
+        self.rings.insert(session.to_owned(), Ring { since: self.seq, ..Default::default() });
+    }
+
+    /// Numbers and keeps an event of a recorded (or, with `subscribed`, newly recorded)
+    /// task; the event as sent, with its `seq`, or None when nobody follows the task.
+    fn record(&mut self, session: &str, mut event: Value, subscribed: bool) -> Option<Value> {
+        if !self.rings.contains_key(session) {
+            if !subscribed {
+                return None;
+            }
+            self.watch(session);
+        }
+        self.seq += 1;
+        event["seq"] = json!(self.seq);
+        let size = event.to_string().len();
+        let ring = self.rings.get_mut(session)?;
+        ring.events.push_back((self.seq, size, event.clone()));
+        ring.bytes += size;
+        self.bytes += size;
+        while ring.events.len() > JOURNAL_EVENTS || ring.bytes > JOURNAL_BYTES {
+            let Some((seq, size, _)) = ring.events.pop_front() else { break };
+            (ring.dropped, ring.bytes, self.bytes) = (seq, ring.bytes - size, self.bytes - size);
+        }
+        while self.bytes > JOURNAL_TOTAL {
+            let Some(ring) = self.rings.values_mut().max_by_key(|ring| ring.bytes) else { break };
+            let Some((seq, size, _)) = ring.events.pop_front() else { break };
+            (ring.dropped, ring.bytes, self.bytes) = (seq, ring.bytes - size, self.bytes - size);
+        }
+        Some(event)
+    }
+
+    /// The events after `after`, in order and within `budget`, or a gap when some are gone.
+    fn missed(&self, session: &str, after: u64, budget: usize) -> Missed {
+        let Some(ring) = self.rings.get(session).filter(|ring| after >= ring.since && after >= ring.dropped && after <= self.seq) else { return Missed::Gap };
+        let mut events = Vec::new();
+        for (_, _, event) in ring.events.iter().filter(|(seq, ..)| *seq > after) {
+            push_event(&mut events, event.clone());
+        }
+        if json!(events).to_string().len() > budget {
+            return Missed::Gap;
+        }
+        Missed::Events(events)
+    }
+
+    /// Adds to each subscribed task the newest `seq`, and for a viewer that says where it
+    /// left off (same `epoch`), the events it missed or `gap: true`.
+    fn resume(&mut self, tasks: &mut [Value], after: &HashMap<String, u64>, epoch: Option<&str>) {
+        let same = epoch == Some(self.epoch.as_str());
+        let mut room = REPLAY_BUDGET;
+        for task in tasks {
+            let Some(id) = task["sessionId"].as_str().map(str::to_owned) else { continue };
+            self.watch(&id);
+            if let Some(after) = after.get(&id) {
+                match if same { self.missed(&id, *after, room) } else { Missed::Gap } {
+                    Missed::Events(events) if events.is_empty() => {}
+                    Missed::Events(events) => {
+                        room = room.saturating_sub(json!(events).to_string().len());
+                        task["events"] = json!(events);
+                    }
+                    Missed::Gap => task["gap"] = json!(true),
+                }
+            }
+            task["seq"] = json!(self.seq);
+        }
     }
 }
 
@@ -2062,8 +2306,9 @@ fn fit_project_icons(icons: impl IntoIterator<Item = (String, Option<String>)>) 
 }
 
 /// Each subscribed task that exists here: its status as this window shows it, its newest
-/// message id (so the viewer pulls what it missed) and its title.
-fn subscribed_tasks(state: &AppState, ids: &[String]) -> Result<Vec<Value>> {
+/// message id (so the viewer pulls what it missed) and its title; then the ids that are
+/// not tasks here (deleted, or never were), so the viewer stops waiting on them.
+fn subscribed_tasks(state: &AppState, ids: &[String]) -> Result<(Vec<Value>, Vec<Value>)> {
     let (active_runs, pending_by_session) = {
         let agents = state.agents.lock().map_err(|e| e.to_string())?;
         let mut active_runs = HashMap::new();
@@ -2079,14 +2324,17 @@ fn subscribed_tasks(state: &AppState, ids: &[String]) -> Result<Vec<Value>> {
     };
     let store = state.store.lock().map_err(|e| e.to_string())?;
     let teams = observed_team_states(&store.db, &ids.iter().map(String::as_str).collect::<Vec<_>>())?;
-    let mut tasks = Vec::new();
+    let (mut tasks, mut missing) = (Vec::new(), Vec::new());
     for id in ids {
         let row: Option<(String, String, i64, Option<i64>)> = store
             .db
             .query_row("SELECT status,title,(SELECT COALESCE(MAX(id),0) FROM messages WHERE session_id=?1),last_prompt_at FROM sessions WHERE id=?1 AND remote_device IS NULL", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
             .optional()
             .map_err(|e| e.to_string())?;
-        let Some((status, title, last_id, last_prompt_at)) = row else { continue };
+        let Some((status, title, last_id, last_prompt_at)) = row else {
+            missing.push(json!(id));
+            continue;
+        };
         let pending = pending_by_session.get(id).cloned().unwrap_or_default();
         let mut task = json!({"sessionId": id, "status": status, "lastId": last_id, "title": title, "pending": pending});
         shape_task_status(&mut task, active_runs.contains_key(id), teams.get(id));
@@ -2102,8 +2350,11 @@ fn subscribed_tasks(state: &AppState, ids: &[String]) -> Result<Vec<Value>> {
         }
         tasks.push(task);
     }
-    fit_list(&mut tasks, PAGE_BUDGET.saturating_sub(json!({"tasks": []}).to_string().len()));
-    Ok(tasks)
+    fit_list(&mut missing, MISSING_BUDGET);
+    // Room is left for the gone ids and what `Journal::resume` adds: a `seq` (and maybe
+    // `gap`) per task and the replayed events.
+    fit_list(&mut tasks, PAGE_BUDGET.saturating_sub(REPLAY_BUDGET + MISSING_BUDGET + 40 * ids.len() + json!({"tasks": [], "missing": [], "epoch": "0".repeat(32)}).to_string().len()));
+    Ok((tasks, missing))
 }
 
 /// Clones the currently answerable events into a small JSON shape for late subscribers.
@@ -2272,12 +2523,16 @@ pub(crate) fn fit_providers(providers: &mut Value) {
     }
 }
 
-/// Appends an event to a subscriber's buffer, joining consecutive text deltas.
+/// Appends an event to a subscriber's buffer, joining consecutive text deltas. A joined
+/// delta takes the newest `seq`, so a viewer's position still covers all of its text.
 pub(crate) fn push_event(events: &mut Vec<Value>, event: Value) {
     if event["kind"] == "text" {
         if let Some(last) = events.last_mut().filter(|last| last["kind"] == "text" && last["sessionId"] == event["sessionId"] && last["data"] == event["data"] && last["requestId"] == event["requestId"]) {
             let joined = format!("{}{}", last["text"].as_str().unwrap_or_default(), event["text"].as_str().unwrap_or_default());
             last["text"] = json!(joined);
+            if let Some(seq) = event.get("seq") {
+                last["seq"] = seq.clone();
+            }
             return;
         }
     }
@@ -2317,6 +2572,7 @@ pub(crate) fn follow(app: &tauri::AppHandle, device: &str, session_id: &str) {
         subscriber.until = Some(Instant::now() + SUBSCRIPTION);
     }
     subscriber.sessions.insert(session_id.to_owned());
+    inner.journal.watch(session_id);
 }
 
 /// Drops expired subscribers and devices no longer in presence; true if any remain.
@@ -2326,14 +2582,23 @@ fn prune_subscribers(inner: &mut super::Inner, now: Instant) -> bool {
     !subscribers.is_empty()
 }
 
-/// Queues an event for every device mirroring its task. Called on the agent-event hot
-/// path: nothing is cloned unless someone mirrors this task.
+/// Numbers an event, keeps it for viewers that come back, and queues it for every device
+/// mirroring its task. Called on the agent-event hot path: nothing is cloned unless
+/// someone follows (or followed) this task.
 pub(crate) fn agent_event(app: &tauri::AppHandle, event: &AgentEvent) {
-    buffer(app, &event.session_id, |subscriber| {
-        if let Ok(value) = serde_json::to_value(event) {
-            push_event(&mut subscriber.events, value);
+    let Some(state) = app.try_state::<super::Remote>() else { return };
+    let delay = {
+        let mut inner = state.lock();
+        let subscribed = inner.subscribers.values().any(|s| s.sessions.contains(&event.session_id));
+        if !inner.settings.host_enabled || !(subscribed || inner.journal.rings.contains_key(&event.session_id)) {
+            return;
         }
-    });
+        let Some(value) = serde_json::to_value(event).ok().and_then(|value| inner.journal.record(&event.session_id, value, subscribed)) else { return };
+        enqueue(&mut inner, &event.session_id, |subscriber| push_event(&mut subscriber.events, value.clone()))
+    };
+    if let Some(delay) = delay {
+        tauri::async_runtime::spawn(flush(app.clone(), delay));
+    }
 }
 
 /// Queues `run.finished` for every device mirroring the task.
@@ -2341,36 +2606,61 @@ pub(crate) fn run_finished(app: &tauri::AppHandle, session_id: &str, successful:
     buffer(app, session_id, |subscriber| subscriber.finished.push(json!({"sessionId": session_id, "successful": successful, "stopped": stopped, "text": text})));
 }
 
-fn buffer(app: &tauri::AppHandle, session_id: &str, mut add: impl FnMut(&mut Subscriber)) {
+/// Queues something other than a numbered agent event (team updates, run ends).
+fn buffer(app: &tauri::AppHandle, session_id: &str, add: impl FnMut(&mut Subscriber)) {
     let Some(state) = app.try_state::<super::Remote>() else { return };
-    let schedule = {
-        let mut inner = state.lock();
-        if !inner.settings.host_enabled || inner.outbox.is_none() || !inner.subscribers.values().any(|s| s.sessions.contains(session_id)) {
-            return;
-        }
-        if !prune_subscribers(&mut inner, Instant::now()) {
-            return;
-        }
-        for subscriber in inner.subscribers.values_mut().filter(|s| s.sessions.contains(session_id)) {
-            add(subscriber);
-        }
-        !std::mem::replace(&mut inner.flushing, true)
-    };
-    if schedule {
-        tauri::async_runtime::spawn(flush(app.clone()));
+    let delay = enqueue(&mut state.lock(), session_id, add);
+    if let Some(delay) = delay {
+        tauri::async_runtime::spawn(flush(app.clone(), delay));
+    }
+}
+
+/// Adds to the buffers of the task's subscribers; the delay of a flush to schedule, if none is.
+fn enqueue(inner: &mut super::Inner, session_id: &str, mut add: impl FnMut(&mut Subscriber)) -> Option<Duration> {
+    if !inner.settings.host_enabled || inner.outbox.is_none() || !inner.subscribers.values().any(|s| s.sessions.contains(session_id)) {
+        return None;
+    }
+    if !prune_subscribers(inner, Instant::now()) {
+        return None;
+    }
+    for subscriber in inner.subscribers.values_mut().filter(|s| s.sessions.contains(session_id)) {
+        add(subscriber);
+    }
+    if std::mem::replace(&mut inner.flushing, true) {
+        return None;
+    }
+    let delay = flush_delay(inner.flushed_at, inner.flush_frames, Instant::now());
+    if delay.is_zero() {
+        inner.flush_frames = 0;
+    }
+    Some(delay)
+}
+
+/// The first event after a quiet spell goes at once (a turn's first delta shows without
+/// waiting); events right behind it are gathered for [`FLUSH`], and once a burst has sent
+/// `frames` frames, for [`SUSTAINED`].
+fn flush_delay(last: Option<Instant>, frames: u32, now: Instant) -> Duration {
+    match last {
+        Some(at) if now.saturating_duration_since(at) < SUSTAINED => if frames < BURST_FRAMES { FLUSH } else { SUSTAINED },
+        _ => Duration::ZERO,
     }
 }
 
 /// Sends each subscriber one `agent.events` frame (more only past the frame budget),
 /// then its `run.finished` events, so a run's last deltas always arrive before its end.
-async fn flush(app: tauri::AppHandle) {
-    tokio::time::sleep(FLUSH).await;
-    let batches: Vec<(String, Vec<Value>, Vec<Value>)> = {
+async fn flush(app: tauri::AppHandle, delay: Duration) {
+    if !delay.is_zero() {
+        tokio::time::sleep(delay).await;
+    }
+    let (epoch, batches): (String, Vec<(String, Vec<Value>, Vec<Value>)>) = {
         let state = remote(&app);
         let mut inner = state.lock();
         inner.flushing = false;
+        inner.flushed_at = Some(Instant::now());
+        inner.flush_frames = inner.flush_frames.saturating_add(1);
         let hosting = inner.settings.host_enabled;
-        inner.subscribers.iter_mut().filter(|_| hosting).map(|(id, s)| (id.clone(), std::mem::take(&mut s.events), std::mem::take(&mut s.finished))).filter(|(_, events, finished)| !events.is_empty() || !finished.is_empty()).collect()
+        let batches = inner.subscribers.iter_mut().filter(|_| hosting).map(|(id, s)| (id.clone(), std::mem::take(&mut s.events), std::mem::take(&mut s.finished))).filter(|(_, events, finished)| !events.is_empty() || !finished.is_empty()).collect();
+        (inner.journal.epoch.clone(), batches)
     };
     // Read after the run end has settled its team (architect::completed follows it), so a
     // team whose workers carry on reports the run's task as still running.
@@ -2393,7 +2683,7 @@ async fn flush(app: tauri::AppHandle) {
             shape_finished(data, team);
         }
         for frame in frames(events) {
-            let _ = socket::send_to_device(&app, &device, &json!({"type": "event", "name": "agent.events", "data": {"events": frame}}));
+            let _ = socket::send_to_device(&app, &device, &json!({"type": "event", "name": "agent.events", "data": {"events": frame, "epoch": epoch}}));
         }
         for data in finished {
             let _ = socket::send_to_device(&app, &device, &json!({"type": "event", "name": "run.finished", "data": data}));
@@ -2737,7 +3027,13 @@ mod tests {
 
     #[test]
     fn requests_are_validated() {
-        assert_eq!(parse(true, "subscribe", &json!({"sessionIds": ["s1", "s2"]})), Ok(Call::Subscribe { session_ids: vec!["s1".into(), "s2".into()] }));
+        assert_eq!(parse(true, "subscribe", &json!({"sessionIds": ["s1", "s2"]})), Ok(Call::Subscribe { session_ids: vec!["s1".into(), "s2".into()], after: HashMap::new(), epoch: None }));
+        // Where a viewer left off: only for requested tasks, and only valid positions.
+        let resume = parse(true, "subscribe", &json!({"sessionIds": ["s1", "s2"], "epoch": "e1", "afterSeq": {"s1": 7, "s2": -1, "other": 3}}));
+        assert_eq!(resume, Ok(Call::Subscribe { session_ids: vec!["s1".into(), "s2".into()], after: HashMap::from([("s1".to_string(), 7)]), epoch: Some("e1".into()) }));
+        assert_eq!(parse(true, "task.startStatus", &json!({"startId": "st1"})), Ok(Call::StartStatus { start_id: "st1".into() }));
+        assert_eq!(parse(true, "task.cancelStart", &json!({"startId": "st1"})), Ok(Call::CancelStart { start_id: "st1".into() }));
+        assert!(parse(true, "task.cancelStart", &json!({})).is_err());
         assert!(parse(true, "subscribe", &json!({})).is_err());
         assert!(parse(true, "subscribe", &json!({"sessionIds": ["a b"]})).is_err());
         assert!(parse(true, "subscribe", &json!({"sessionIds": vec!["s"; MAX_IDS + 1]})).is_err());
@@ -3145,15 +3441,19 @@ mod tests {
         };
         let now = 1_000_000_000;
         let request = |nonce: &str| json!({"ts": now, "nonce": nonce});
-        assert_eq!(admit(&mut inner, "viewer", &request("nonce-0000000000000001"), now), Err(OFF.to_string()));
+        assert_eq!(admit(&inner, "viewer"), Err(OFF.to_string()));
         inner.settings.host_enabled = true;
-        assert_eq!(admit(&mut inner, "viewer", &request("nonce-0000000000000002"), now), Ok(false));
+        assert_eq!(admit(&inner, "viewer"), Ok(false));
         inner.settings.remote_full_access = true;
-        assert_eq!(admit(&mut inner, "viewer", &request("nonce-0000000000000003"), now), Ok(true));
-        assert!(admit(&mut inner, "viewer", &request("nonce-0000000000000003"), now).is_err(), "replayed");
+        assert_eq!(admit(&inner, "viewer"), Ok(true));
         // Revoked (gone from presence) after the request was queued.
         inner.devices.clear();
-        assert_eq!(admit(&mut inner, "viewer", &request("nonce-0000000000000004"), now), Err(super::super::UNKNOWN_DEVICE.to_string()));
+        assert_eq!(admit(&inner, "viewer"), Err(super::super::UNKNOWN_DEVICE.to_string()));
+        // Freshness is checked on arrival: a request that then waits a minute in the
+        // queue still runs, and a replay of it is refused when it arrives.
+        assert_eq!(fresh_request(&mut inner, &request("nonce-0000000000000003"), now), Ok(()));
+        assert!(fresh_request(&mut inner, &request("nonce-0000000000000003"), now + 90_000).is_err(), "replayed or stale");
+        assert!(fresh_request(&mut inner, &request("nonce-0000000000000004"), now + 90_000).is_err(), "stale on arrival");
     }
 
     #[test]
@@ -3225,10 +3525,125 @@ mod tests {
         tagged["data"] = json!({"messageId": "m2"});
         push_event(&mut events, tagged);
         assert_eq!(events.len(), 6);
+        // A joined delta carries the newest seq, so a viewer's position covers all its text.
+        let mut numbered = Vec::new();
+        for seq in [7, 8] {
+            let mut delta = event("a", "text", "x");
+            delta["seq"] = json!(seq);
+            push_event(&mut numbered, delta);
+        }
+        assert_eq!((numbered.len(), numbered[0]["seq"].as_u64(), numbered[0]["text"].as_str()), (1, Some(8), Some("xx")));
         // A viewer that falls far behind stops buffering; it catches up at the run end.
         let mut full: Vec<Value> = (0..MAX_BUFFER).map(|i| event("a", "tool", &i.to_string())).collect();
         push_event(&mut full, event("a", "tool", "late"));
         assert_eq!(full.len(), MAX_BUFFER);
+    }
+
+    #[test]
+    fn a_viewer_that_comes_back_gets_exactly_what_it_missed() {
+        let mut journal = Journal::default();
+        assert!(journal.record("a", event("a", "text", "lost"), false).is_none(), "nobody follows the task");
+        let first = journal.record("a", event("a", "text", "Hel"), true).unwrap();
+        assert_eq!(first["seq"], 1);
+        journal.record("b", event("b", "tool", "ls"), true);
+        journal.record("a", event("a", "text", "lo"), false).unwrap();
+        journal.record("a", event("a", "approval", "Run ls"), false).unwrap();
+        // After seq 1: the rest of a's events, in order, deltas joined under the newest seq.
+        let Missed::Events(missed) = journal.missed("a", 1, REPLAY_BUDGET) else { panic!("no gap") };
+        assert_eq!(missed.iter().map(|e| (e["kind"].as_str().unwrap(), e["text"].as_str().unwrap(), e["seq"].as_u64().unwrap())).collect::<Vec<_>>(), [("text", "lo", 3), ("approval", "Run ls", 4)]);
+        assert_eq!(journal.missed("a", 4, REPLAY_BUDGET), Missed::Events(vec![]));
+        assert_eq!(journal.missed("a", 0, 10), Missed::Gap, "more than fits one reply");
+        assert_eq!(journal.missed("a", 99, REPLAY_BUDGET), Missed::Gap, "a position this journal never gave");
+        assert_eq!(journal.missed("c", 0, REPLAY_BUDGET), Missed::Gap, "a task it never recorded");
+        // A task recorded from a later point can't account for what came before.
+        journal.watch("c");
+        journal.record("c", event("c", "tool", "x"), false).unwrap();
+        assert_eq!(journal.missed("c", 2, REPLAY_BUDGET), Missed::Gap);
+        assert!(matches!(journal.missed("c", 4, REPLAY_BUDGET), Missed::Events(events) if events.len() == 1));
+    }
+
+    #[test]
+    fn the_journal_stays_bounded_and_says_when_it_dropped_events() {
+        let mut journal = Journal::default();
+        for i in 0..JOURNAL_EVENTS + 10 {
+            journal.record("a", event("a", "tool", &i.to_string()), true);
+        }
+        let ring = &journal.rings["a"];
+        assert_eq!((ring.events.len(), ring.dropped), (JOURNAL_EVENTS, 10));
+        assert_eq!(journal.missed("a", 5, usize::MAX), Missed::Gap, "events after 5 were dropped");
+        assert!(matches!(journal.missed("a", 10, usize::MAX), Missed::Events(events) if events.len() == JOURNAL_EVENTS));
+        let big = "x".repeat(600 * 1024);
+        for _ in 0..4 {
+            journal.record("b", event("b", "tool", &big), true);
+        }
+        assert!(journal.rings["b"].bytes <= JOURNAL_BYTES && journal.rings["b"].events.len() < 4);
+        assert_eq!(journal.bytes, journal.rings.values().map(|ring| ring.bytes).sum::<usize>());
+    }
+
+    #[test]
+    fn subscribe_replies_carry_seq_replay_or_a_gap() {
+        let mut journal = Journal::default();
+        let epoch = journal.epoch.clone();
+        let mut tasks = vec![json!({"sessionId": "a"}), json!({"sessionId": "b"})];
+        journal.resume(&mut tasks, &HashMap::new(), None);
+        assert_eq!((tasks[0]["seq"].as_u64(), tasks[0].get("gap")), (Some(0), None), "a new viewer gets only the position");
+        journal.record("a", event("a", "tool", "ls"), false).unwrap();
+        journal.record("b", event("b", "tool", "pwd"), false).unwrap();
+        let mut tasks = vec![json!({"sessionId": "a"}), json!({"sessionId": "b"})];
+        journal.resume(&mut tasks, &HashMap::from([("a".to_string(), 0), ("b".to_string(), 2)]), Some(&epoch));
+        assert_eq!(tasks[0]["events"][0]["text"], "ls");
+        assert_eq!((tasks[1].get("events"), tasks[1].get("gap"), tasks[1]["seq"].as_u64()), (None, None, Some(2)), "nothing missed");
+        // Another epoch: this host restarted, so every position is a gap.
+        let mut tasks = vec![json!({"sessionId": "a"})];
+        journal.resume(&mut tasks, &HashMap::from([("a".to_string(), 0)]), Some("old"));
+        assert_eq!((tasks[0]["gap"].as_bool(), tasks[0].get("events")), (Some(true), None));
+    }
+
+    #[test]
+    fn a_burst_sends_its_first_event_at_once() {
+        let now = Instant::now();
+        assert_eq!(flush_delay(None, 0, now), Duration::ZERO);
+        assert_eq!(flush_delay(Some(now - Duration::from_secs(1)), 9, now), Duration::ZERO, "after a quiet spell");
+        assert_eq!(flush_delay(Some(now - Duration::from_millis(5)), 1, now), FLUSH, "right behind the last frame");
+        assert_eq!(flush_delay(Some(now - Duration::from_millis(60)), BURST_FRAMES, now), SUSTAINED, "a long stream");
+        assert_eq!(FLUSH, Duration::from_millis(40));
+        // Worst case, a burst repeated after each quiet spell, stays under the relay's 20 frames/s.
+        let cycle = FLUSH * (BURST_FRAMES - 1) + SUSTAINED;
+        assert!(f64::from(BURST_FRAMES) / cycle.as_secs_f64() < 20.0);
+    }
+
+    #[test]
+    fn a_start_runs_once_per_start_id_and_can_be_cancelled() {
+        let mut starts = HashMap::new();
+        let now = Instant::now();
+        let (first, fresh) = claim_start(&mut starts, "st1", "viewer", now).unwrap();
+        assert!(fresh);
+        let (again, fresh) = claim_start(&mut starts, "st1", "viewer", now).unwrap();
+        assert!(!fresh && Arc::ptr_eq(&first, &again), "a repeated task.start waits for the first");
+        assert!(claim_start(&mut starts, "st1", "phone", now).is_err(), "another device can't take it over");
+        assert_eq!(start_status(None), json!({"state": "unknown"}));
+        assert_eq!(start_status(Some(&first)), json!({"state": "running"}));
+        // Cancelled while running: callers get CANCELLED at once and the start is told to stop.
+        assert_eq!(cancel_start(&first), json!({"cancelled": true}));
+        assert!(first.cancel.load(Ordering::SeqCst));
+        assert_eq!(*first.result.borrow(), Some(Err(start::CANCELLED.to_string())));
+        assert_eq!(start_status(Some(&first)), json!({"state": "failed", "error": start::CANCELLED}));
+        // A start that already made its task says so and is left alone.
+        let (done, _) = claim_start(&mut starts, "st2", "viewer", now).unwrap();
+        done.result.send_replace(Some(Ok(json!({"sessionId": "h1"}))));
+        assert_eq!(cancel_start(&done), json!({"cancelled": false, "sessionId": "h1"}));
+        assert!(!done.cancel.load(Ordering::SeqCst));
+        assert_eq!(start_status(Some(&done)), json!({"state": "done", "sessionId": "h1"}));
+        // A cancel that arrives before its start was claimed leaves it cancelled, so it never runs.
+        let (early, _) = claim_start(&mut starts, "st5", "viewer", now).unwrap();
+        cancel_start(&early);
+        let (late, fresh) = claim_start(&mut starts, "st5", "viewer", now).unwrap();
+        assert!(!fresh && late.cancel.load(Ordering::SeqCst));
+        assert_eq!(*late.result.borrow(), Some(Err(start::CANCELLED.to_string())));
+        // Finished starts are forgotten after an hour; running ones never are.
+        let (_running, _) = claim_start(&mut starts, "st3", "viewer", now).unwrap();
+        claim_start(&mut starts, "st4", "viewer", now + START_MEMORY + Duration::from_secs(1)).unwrap();
+        assert_eq!(starts.keys().map(String::as_str).collect::<HashSet<_>>(), HashSet::from(["st3", "st4"]));
     }
 
     #[test]

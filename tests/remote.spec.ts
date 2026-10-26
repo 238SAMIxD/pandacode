@@ -74,8 +74,10 @@ test('the computer choice offers setup before sign-in and one row per computer a
   const menu = page.getByRole('menu', { name: 'Run on' });
   await expect(menu.getByRole('menuitemradio', { name: 'This computer' })).toHaveAttribute('aria-checked', 'true');
   await expect(menu.getByRole('menuitemradio', { name: 'Studio iMac' })).toBeEnabled();
-  await expect(menu.getByRole('menuitemradio', { name: 'Old laptop' })).toHaveCount(0);
-  // Every online computer hosting remote control is a target.
+  const laptop = menu.getByRole('menuitemradio', { name: 'Old laptop' });
+  await expect(laptop).toBeDisabled();
+  await expect(laptop).toContainText(/Offline.*last seen/);
+  // Every online computer hosting remote control is a target; offline rows stay visible.
   await expect(menu.getByRole('menuitemradio', { name: 'Home NAS' })).toBeEnabled();
   await page.keyboard.press('Escape');
   // Local / Worktree still shows beside it.

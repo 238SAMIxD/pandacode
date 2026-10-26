@@ -4,8 +4,17 @@ use crate::Result;
 use serde_json::{json, Value};
 use std::time::Duration;
 
-const TIMEOUT: Duration = Duration::from_secs(20);
+pub(crate) const TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_PARAMS: usize = 110 * 1024;
+/// A call that outlived its timeout, or lost the socket while waiting: the host may still
+/// have run it (unlike [`super::socket::OFFLINE`], which was never delivered).
+pub(crate) const TIMED_OUT: &str = "That computer did not answer in time.";
+pub(crate) const LOST: &str = "The connection to the relay was lost.";
+
+/// Whether a failed call may still have reached the host and run there.
+pub(crate) fn maybe_ran(error: &str) -> bool {
+    error == TIMED_OUT || error == LOST
+}
 
 pub(crate) async fn call(app: &tauri::AppHandle, device_id: &str, method: &str, params: Value) -> Result<Value> {
     call_within(app, device_id, method, params, TIMEOUT).await
@@ -41,10 +50,10 @@ pub(crate) async fn call_within(app: &tauri::AppHandle, device_id: &str, method:
     }
     match tokio::time::timeout(timeout, answer).await {
         Ok(Ok(result)) => result,
-        Ok(Err(_)) => Err("The connection to the relay was lost.".into()),
+        Ok(Err(_)) => Err(LOST.into()),
         Err(_) => {
             forget();
-            Err("That computer did not answer in time.".into())
+            Err(TIMED_OUT.into())
         }
     }
 }

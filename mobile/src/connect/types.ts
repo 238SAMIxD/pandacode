@@ -32,7 +32,9 @@ export interface TasksList { tasks: TaskSummary[]; projects: Project[] }
 /** An approval or input request waiting on the host, from a subscribe reply. */
 export interface PendingRequest { kind: 'approval' | 'input_request' | (string & {}); requestId: string; text: string; data?: unknown; tool?: ToolActivity }
 
-export interface SubscribedTask extends HostActivity { sessionId: string; status: TaskStatus; lastId: number; title: string; pending?: PendingRequest[] }
+/** Newer hosts add `seq` (the newest event number), and for a subscribe with `afterSeq` the
+ * missed `events` or `gap: true` (docs/remote-access.md). */
+export interface SubscribedTask extends HostActivity { sessionId: string; status: TaskStatus; lastId: number; title: string; pending?: PendingRequest[]; seq?: number; gap?: boolean; events?: AgentEvent[] }
 
 /** `attachments`: newer hosts' rows (checked by parseAttachments in src/store/attachments.ts). */
 export interface Message { id: number; role: string; content: string; createdAt: number; turnDurationMs: number | null; attachments?: unknown }
@@ -46,7 +48,7 @@ export interface Provider { id: string; name: string; installed: boolean; path?:
 export interface ToolActivity { id: string; name: string; status: 'running' | 'completed' | 'failed'; input: string; output: string }
 
 /** The host's raw AgentEvent (src/types.ts). */
-export interface AgentEvent { sessionId: string; kind: string; text: string; requestId?: string; data?: unknown; tool?: ToolActivity }
+export interface AgentEvent { sessionId: string; kind: string; text: string; requestId?: string; data?: unknown; tool?: ToolActivity; seq?: number }
 
 /** Newer hosts, architect tasks: `status` as tasks.list shows it ('running' while the team works),
  * `team` (`{ status, activeWorkers }`), and `teamSettled` on the extra run.finished sent when the team settles. */

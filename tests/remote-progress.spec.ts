@@ -127,7 +127,7 @@ test('sending a New task to another computer shows its start stages, then opens 
   await expect(page.getByRole('log', { name: 'Conversation' })).toContainText('Run the slow suite over there');
   const started = await page.evaluate(() => (window as any).__remoteStarts);
   expect(started).toHaveLength(1);
-  expect(started[0].startId).toBe(started[0].sessionId);
+  expect(started[0].startId.startsWith(`${started[0].sessionId}.`)).toBe(true);
 });
 
 test('a failed start shows in the strip, not as a toast, and Retry sends it again', async ({ page }) => {

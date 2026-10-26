@@ -699,9 +699,25 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     addProject: name => { const p = { id: crypto.randomUUID(), name, path: `/Users/you/PandaCode Bots/${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}` }; projects.push(p); return p; },
   });
   if (command === 'remote_repo_check') {
+    const w = window as any;
+    (w.__remoteRepoChecks ??= []).push(args);
+    if (w.__remoteRepoCheckManual) await new Promise<void>(resolve => { w.__remoteRepoCheckRelease = () => { w.__remoteRepoCheckManual = false; resolve(); }; });
     // `window.__remoteBehind` lets tests make GitHub lag this computer.
-    const repo = previewGithub.status(args.projectId).repo, behind = (window as any).__remoteBehind ?? {};
+    const repo = previewGithub.status(args.projectId).repo, behind = w.__remoteBehind ?? {};
     return { repo: repo?.nameWithOwner ?? null, branch: git.branch, ahead: behind.ahead ?? 0, dirty: behind.dirty ?? false, pushed: behind.pushed ?? true } as T;
+  }
+  if (command === 'remote_cancel_start') {
+    const w = window as any;
+    (w.__remoteCancelStarts ??= []).push(args);
+    if (w.__remoteCancelStartFail) throw new Error(w.__remoteCancelStartFail);
+    if (w.__remoteCancelStartHold) await new Promise<void>(resolve => { w.__remoteCancelStartRelease = () => { w.__remoteCancelStartHold = false; resolve(); }; });
+    const { cancelPreviewRemoteStart } = await import('./preview-remote');
+    if (!cancelPreviewRemoteStart(String(args.sessionId))) throw new Error('This remote start is no longer active.');
+    return { cancelled: true } as T;
+  }
+  if (command === 'remote_workspace_image') {
+    ((window as any).__remoteWorkspaceImages ??= []).push({ sessionId: args.sessionId, path: args.path });
+    return invoke<T>('workspace_image', args);
   }
   if (command === 'remote_start_task') {
     // The task runs on the other computer; here it is an ordinary session that names it.
@@ -958,8 +974,9 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       savePreviewQueue([...queue, restored]); result = restored; break;
     }
     case 'steer_task': {
-      const s = session(args.sessionId);
+      const s = session(args.sessionId), w = window as any;
       if (!timers.has(s.id) && s.status !== 'running') throw new Error('The agent is not running; the message stays queued.');
+      if (w.__remoteSteerHold && s.remoteDevice) await new Promise<void>(resolve => { w.__remoteSteerRelease = () => { w.__remoteSteerHold = false; resolve(); }; });
       // Claude-family, Codex, Pi, Muse and Devin take it live; others hold it for the next turn of the same run.
       const text = String(args.text).trim(), steerId = `steer-${++id}`;
       const mode = ['claude', 'glm', 'mimo', 'codex', 'pi', 'muse', 'devin'].includes(s.provider) ? 'live' : 'next-turn';
@@ -1148,7 +1165,8 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     }
     case 'send_message': {
       if (resolveSlash(session(args.sessionId).provider, String(args.text)).action) throw new Error('This command opens a PandaCode control.');
-      const s = session(args.sessionId); assertIdle(s);
+      const s = session(args.sessionId), w = window as any; assertIdle(s);
+      if (w.__remoteSendHold && s.remoteDevice) await new Promise<void>(resolve => { w.__remoteSendRelease = () => { w.__remoteSendHold = false; resolve(); }; });
       let moodboardContext = '';
       for (const boardId of args.moodboardIds ?? []) {
         const board = await invoke<import('./moodboards').MoodboardDetail>('read_moodboard', { projectId: s.projectId, boardId });
@@ -1185,6 +1203,8 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     }
     case 'stop_session': {
       if (architect.isActive(args.sessionId)) { result = architect.control(args.sessionId, 'stop'); break; }
+      const w = window as any;
+      if (w.__stopHold) await new Promise<void>(resolve => { w.__stopRelease = () => { w.__stopHold = false; resolve(); }; });
       window.clearTimeout(timers.get(args.sessionId)); timers.delete(args.sessionId);
       finishTiming(args.sessionId);
       const pending = activeTools.get(args.sessionId);

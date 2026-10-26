@@ -1138,10 +1138,12 @@ async fn list_slash_commands(
     let (provider, cwd) = {
         let store = state.store.lock().map_err(|e| e.to_string())?;
         let task = store.session(&session_id)?;
-        (
-            task.provider,
-            store.workspace_root(&task.project_id, Some(&session_id))?,
-        )
+        let cwd = if task.remote_device.is_some() {
+            store.workspace_root(&task.project_id, None)?
+        } else {
+            store.workspace_root(&task.project_id, Some(&session_id))?
+        };
+        (task.provider, cwd)
     };
     if cached_only.unwrap_or(false) {
         return slash_commands::snapshot(&provider, &cwd);
@@ -1161,10 +1163,12 @@ async fn resolve_slash_command(
     let (provider, cwd) = {
         let store = state.store.lock().map_err(|e| e.to_string())?;
         let task = store.session(&session_id)?;
-        (
-            task.provider,
-            store.workspace_root(&task.project_id, Some(&session_id))?,
-        )
+        let cwd = if task.remote_device.is_some() {
+            store.workspace_root(&task.project_id, None)?
+        } else {
+            store.workspace_root(&task.project_id, Some(&session_id))?
+        };
+        (task.provider, cwd)
     };
     slash_commands::resolve(&provider, &cwd, &text).await
 }
@@ -3072,7 +3076,11 @@ async fn search_files(
     query: String,
     limit: Option<usize>,
 ) -> Result<Vec<workspace::FileEntry>> {
-    let root = state.root(&project_id, session_id.as_deref())?;
+    let mirror = match session_id.as_deref() {
+        Some(id) => state.store.lock().map_err(|e| e.to_string())?.session(id)?.remote_device.is_some(),
+        None => false,
+    };
+    let root = state.root(&project_id, if mirror { None } else { session_id.as_deref() })?;
     blocking(move || workspace::search_files(&root, query, limit)).await
 }
 #[tauri::command]
@@ -3128,6 +3136,61 @@ async fn workspace_image(
     let root = state.root(&project_id, session_id.as_deref())?;
     blocking(move || workspace::image_data_url(&root, &path)).await
 }
+
+#[tauri::command]
+async fn remote_resubscribe(app: tauri::AppHandle) -> Result<()> {
+    remote::mirror::subscribe_soon(&app);
+    Ok(())
+}
+
+#[tauri::command]
+async fn remote_workspace_image(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+    path: String,
+) -> Result<String> {
+    use base64::Engine as _;
+    const MAX_IMAGE: usize = 8 * 1024 * 1024;
+    let engine = &base64::engine::general_purpose::STANDARD;
+    let mut offset = 0_u64;
+    let mut mime: Option<String> = None;
+    let mut bytes = Vec::new();
+    loop {
+        let reply = remote::route(&app, &state, &session_id, "task.workspaceImage", serde_json::json!({"path": path, "variant": "full", "offset": offset}))
+            .await?
+            .ok_or_else(|| "This task does not run on another computer.".to_string())?;
+        let chunk_mime = reply["mime"].as_str().ok_or("Invalid workspace image reply.")?;
+        if mime.as_deref().is_some_and(|current| current != chunk_mime) {
+            return Err("Workspace image type changed while loading.".into());
+        }
+        mime = Some(chunk_mime.to_owned());
+        let total = usize::try_from(reply["total"].as_u64().ok_or("Invalid workspace image size.")?).map_err(|_| "Invalid workspace image size.".to_string())?;
+        if total > MAX_IMAGE {
+            return Err("Workspace images must be under 8 MiB.".into());
+        }
+        let chunk_offset = reply["offset"].as_u64().ok_or("Invalid workspace image offset.")?;
+        if chunk_offset != offset || chunk_offset != bytes.len() as u64 {
+            return Err("Invalid workspace image offset.".into());
+        }
+        let encoded = reply["data"].as_str().ok_or("Invalid workspace image data.")?;
+        let chunk = engine.decode(encoded).map_err(|error| error.to_string())?;
+        let done = reply["done"].as_bool().ok_or("Invalid workspace image reply.")?;
+        if chunk.is_empty() && !done {
+            return Err("Workspace image download made no progress.".into());
+        }
+        bytes.extend_from_slice(&chunk);
+        if bytes.len() > total || (done && bytes.len() != total) {
+            return Err("Invalid workspace image length.".into());
+        }
+        if done {
+            break;
+        }
+        offset = bytes.len() as u64;
+    }
+    Ok(format!("data:{};base64,{}", mime.ok_or("Invalid workspace image reply.")?, engine.encode(bytes)))
+}
+
 #[tauri::command]
 async fn resolve_workspace_files(
     state: State<'_, AppState>,
@@ -3514,6 +3577,9 @@ pub fn run() {
                 remote::remote_revoke_device,
                 remote::remote_targets,
                 remote::mirror::remote_start_task,
+                remote::mirror::remote_cancel_start,
+                remote_resubscribe,
+                remote_workspace_image,
                 cloud_agents::tasks::cloud_agent_targets,
                 cloud_agents::tasks::cloud_agent_start,
                 cloud_agents::tasks::cloud_agent_action,

@@ -2,6 +2,7 @@
 //! socket, host RPC for this computer's tasks, and mirrors: local tasks that run on
 //! another of the user's computers. Nothing touches the network until the user signs in.
 mod auth;
+mod bench;
 pub(crate) mod catalog;
 mod client;
 mod config;
@@ -75,7 +76,8 @@ pub(crate) struct Inner {
     connected: bool,
     /// Bumped on every start/stop so an old socket task knows to exit.
     generation: u64,
-    outbox: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    /// Frames waiting for the socket, bounded so a stalled socket can't hoard memory.
+    outbox: Option<tokio::sync::mpsc::Sender<String>>,
     /// The account's devices, as the latest presence frame lists them.
     devices: Vec<Device>,
     /// Whether presence arrived on this socket; until then `remote_devices` asks the relay.
@@ -85,6 +87,14 @@ pub(crate) struct Inner {
     subscribers: HashMap<String, Subscriber>,
     /// A flush of subscriber events is scheduled.
     flushing: bool,
+    /// When subscriber events were last sent, and how many frames this burst has sent; a
+    /// burst's first event goes at once.
+    flushed_at: Option<Instant>,
+    flush_frames: u32,
+    /// Recent numbered events of followed tasks, replayed to viewers that come back.
+    journal: host::Journal,
+    /// This computer as a viewer: event positions, shown cards and starts in flight.
+    viewer: mirror::Viewer,
     replay: host::Replay,
     /// Nonces of replies and events from hosts, refused when repeated or stale.
     inbound: host::Replay,
@@ -140,6 +150,7 @@ impl Inner {
         self.devices.clear();
         self.presence = false;
         self.subscribers.clear();
+        self.viewer = Default::default();
         self.catalog = Default::default();
         self.uploads = Default::default();
         true
@@ -407,7 +418,7 @@ pub async fn remote_set_host_enabled(app: tauri::AppHandle, enabled: Option<bool
                 inner.uploads = Default::default();
             }
             if let Some(outbox) = &inner.outbox {
-                let _ = outbox.send(json!({"kind": "host", "enabled": enabled}).to_string());
+                let _ = outbox.try_send(json!({"kind": "host", "enabled": enabled}).to_string());
             }
         }
         inner.settings.clone()

@@ -36,7 +36,14 @@ while H is still starting it) and `remote_synced_id` (the last of H's message id
 - `list_sessions` (and every `Session`) carries `remoteDevice: { id, name }`. The name comes
   from presence ("another computer" until presence names it).
 - Running state is the row's status, set from H's events, so the sidebar and composer show it
-  as for a local run. A mirror is never reset to interrupted because no local agent runs it.
+  as for a local run. A mirror interrupted by this computer's restart takes H's status at the
+  next subscription (and its messages are copied). A run end always copies the messages, even
+  when the turn already ended here (Stop, an offline host).
+- A subscribed task that H says no longer exists (`missing`) ends a running mirror as failed
+  (`This task is no longer on <host>.`). A row left without `remote_session` by a start this
+  computer quit during is a local draft again at the next launch.
+- Approval and question cards follow H's `pending` list at each subscription: a card missing
+  here (after a restart or a lost frame) is shown again, and one answered elsewhere is cleared.
 - Anything that needs the checkout (git, worktree and diff commands, file reads, launching an
   agent) goes through `Store::workspace_root`, which refuses a mirror with
   `This task runs on <name>.` and never touches the local disk.
@@ -124,7 +131,9 @@ Relay → client:
 - `{ kind: "presence", devices: [{ id, name, platform, publicKey, host, online, lastSeen }] }`, the
   account's full device rows, sent on connect and on every join, leave or device change.
   Each presence frame makes the viewer subscribe again to the hosts it mirrors (a host that
-  restarted has forgotten its subscribers).
+  restarted has forgotten its subscribers). Frames within 250 ms share one round, one round
+  runs at a time (a call during it runs one more after it), every host is asked at once, and a
+  round in which a host with a running mirror failed is retried after 2 s, 4 s… up to 60 s.
 - `{ kind: "undeliverable", ... }` (above)
 - `{ kind: "error", error }`
 
@@ -137,8 +146,14 @@ subscription with it.
 
 Close codes: `4000` (replaced by a newer socket) makes the client wait at least 60 s before it
 reconnects. `4001` (device revoked) signs this computer out locally. Otherwise the client
-reconnects with a backoff that starts at 1 s and doubles to 60 s. The backoff resets to 1 s only
-after a socket stayed up for 30 s or more.
+reconnects at once, then after 1 s, doubling to 60 s, each wait spread over 75–125 %. The
+backoff starts over only after a socket stayed up for 30 s or more, or after a wake.
+
+The client pings every 25 s and treats the socket as dead when nothing arrives within 10 s of a
+ping, or when a frame can't be written within 10 s. Every 2 s it compares the wall clock with
+the monotonic one (which, like tokio's timers, stands still while the computer sleeps); a jump
+of more than 10 s means it slept, and it reconnects at once. At most 512 frames wait for the
+socket; past that a send fails at once (`Too much is waiting to go to the relay.`).
 
 The relay uses the hibernation API (`ctx.acceptWebSocket`, tagged with the device id), so idle
 sockets cost no duration. Device rows live in the Durable Object's SQLite storage.
@@ -154,7 +169,7 @@ sockets cost no duration. Device rows live in the Durable Object's SQLite storag
 | Auth calls | 10/min per IP, 300/min overall | Workers rate-limit bindings |
 | Authenticated HTTP calls | 30/min per account | Workers rate-limit binding |
 | Sign-in body | 256 KiB, counted while streaming | Chunked bodies too |
-| Idle socket | kept (hibernated). The client pings every 30 s. | |
+| Idle socket | kept (hibernated). The client pings every 25 s. | |
 
 ## End-to-end encryption
 
@@ -209,12 +224,14 @@ prevents accidents; it is not a boundary against a device that can also answer a
 
 | Method | Params | Result |
 |---|---|---|
-| `subscribe` | `{ sessionIds: [...] }` (≤ 500) | `{ tasks: [{ sessionId, status, lastId, title, pending, lastEventAt?, runStartedAt?, subagents?, subagentsTruncated?, team? }] }` for those that exist. `status` and `team` follow [Team tasks](#team-tasks). `pending` is the current `[{ kind: "approval" \| "input_request", requestId, text, data, tool? }]` for requests the viewer can still answer; large payloads are cut to fit. Answered, cancelled and ended-run requests are removed. While a host run is active (including waiting for input or approval), `lastEventAt` is the unix-millisecond time of the harness's last event, `runStartedAt` is the latest saved prompt time when known, and `subagents` is a snapshot in the desktop `SubagentActivity` shape: `[{ id, parentId, name, prompt, status, response, tools: [{ id, name, status, input, output, writePaths? }], startedAt, updatedAt }]`. The phone can derive active/total child counts and tool counts from the array and each item's status and tools. `subagentsTruncated: true` appears only when entries or activity text were cut to fit the 40 KiB per-task subagent budget. These live-run fields are absent when the task is not active. Adds the ids to this device's subscription for 10 minutes; the viewer renews every 9 minutes and on every presence frame. An expired subscription starts over. |
+| `subscribe` | `{ sessionIds: [...] (≤ 500), epoch?, afterSeq?: { [sessionId]: seq } }` | `{ tasks: [{ sessionId, status, lastId, title, pending, seq, events?, gap?, lastEventAt?, runStartedAt?, subagents?, subagentsTruncated?, team? }], missing: [sessionId], epoch }` for those that exist; `missing` lists requested ids that are not tasks there. `seq`, `events` and `gap` are described in [Events](#events). `status` and `team` follow [Team tasks](#team-tasks). `pending` is the current `[{ kind: "approval" \| "input_request", requestId, text, data, tool? }]` for requests the viewer can still answer; large payloads are cut to fit. Answered, cancelled and ended-run requests are removed. While a host run is active (including waiting for input or approval), `lastEventAt` is the unix-millisecond time of the harness's last event, `runStartedAt` is the latest saved prompt time when known, and `subagents` is a snapshot in the desktop `SubagentActivity` shape: `[{ id, parentId, name, prompt, status, response, tools: [{ id, name, status, input, output, writePaths? }], startedAt, updatedAt }]`. The phone can derive active/total child counts and tool counts from the array and each item's status and tools. `subagentsTruncated: true` appears only when entries or activity text were cut to fit the 40 KiB per-task subagent budget. These live-run fields are absent when the task is not active. Adds the ids to this device's subscription for 10 minutes; the viewer renews every 9 minutes and on every presence frame. An expired subscription starts over. |
 | `tasks.list` | `{ limit?: 0..500 }` (default 200) | `{ tasks: [{ sessionId, title, status, projectId, projectName, provider, model, effort, mode, pinned, updatedAt, lastPromptAt, lastEventAt?, runStartedAt?, branch?, chat?, botId?, botName?, pending, team? }], projects: [{ id, name, repo: "owner/name" \| null }] }`. `pending` has the same shape and meaning as for `subscribe`; `status` and `team` follow [Team tasks](#team-tasks). `lastEventAt` and `runStartedAt` use the same definitions as `subscribe` and are included only for an active host run. Tasks are ordered by latest prompt or response and omit drafts and mirrors. Bot workspace tasks include `botId` and `botName`; other tasks may include chats (`chat: true`). Projects omit bot workspaces. The tail is dropped to keep the reply under 180 KiB. |
 | `projects.icons` | `{ projectIds: string[] }` (1..=50; use project ids from `tasks.list`) | `{ icons: { [projectId]: string \| null } }`. Known non-bot local projects map to their icon `data:` URL, or `null` when no icon exists or it exceeds 64 KiB. Unknown ids are omitted. Icons stop being added before the result exceeds 180 KiB, so omitted ids can be requested again. |
 | `providers.list` | `{ force?: boolean }` | the host's `list_providers` result: `[{ id, name, installed, path, version, models }]`. `force` drops the same ACP catalog caches. If it would not fit one reply, the longest `models` lists are halved until it does. |
 | `providers.models` | `{ provider, force?: boolean }` | the host's `list_provider_models` result: `[{ id, name, description, reasoningEfforts, defaultReasoningEffort, contextWindow }]`, its tail dropped to fit one reply. `provider` must be a known harness id (`Unknown provider.`). |
-| `task.start` | `{ repo?: "owner/name", projectId?: string, branch?, worktree, prompt, provider, model, mode?, effort? }` (exactly one of `repo` or `projectId`) | `{ sessionId }` |
+| `task.start` | `{ repo?: "owner/name", projectId?: string, branch?, worktree, prompt, provider, model, mode?, effort?, startId? }` (exactly one of `repo` or `projectId`) | `{ sessionId }`. A repeated `startId` from the same device runs nothing new: it waits for (or returns) the first start's result. |
+| `task.startStatus` | `{ startId }` | `{ state: "running" \| "done" \| "failed" \| "unknown", sessionId?, error? }`. Finished starts are remembered for an hour. |
+| `task.cancelStart` | `{ startId }` | `{ cancelled: true }` once a running start was told to stop (its callers get `Start cancelled.` at once, the clone's process group is killed); `{ cancelled: false, sessionId }` when it had already made its task. |
 | `task.messages` | `{ sessionId, afterId?, tail?, beforeId?, limit? }` (`limit` is 1..400; defaults to 100 for `tail`/`beforeId`, 400 for `afterId`) | `{ messages: [{ id, role, content, createdAt, turnDurationMs, attachments }], hasMore, hasOlder, title, lastId }`. `attachments` is always an array; saved images include `{ id, kind: "image", name, mime, bytes, width, height }`, while document and folder context markers carry `{ id, kind, name }`. `tail: true` returns the newest page; `beforeId` returns the page immediately before that message id. Both are oldest-first. Use only one of `afterId`, `tail: true` or `beforeId`; mixing them is refused. `hasMore` means newer rows follow this page, `hasOlder` means older rows precede its first message, and `lastId` is the newest message id (or `null` for an empty thread). |
 | `task.team` | `{ sessionId }` | `{ team: null \| TeamSnapshot }`. The snapshot includes `sessionId`, `status`, `round`, `revision`, `summary`, `updatedAt`, `mode: "auto" \| "classic"`, `rounds: { used, max }`, `workers`, and optional `messages` (the latest 30 coordination messages, oldest first). Each worker includes `{ id, name, provider, model, status, attempt, summary, checkpoint, files, dependsOn, startedAt, updatedAt, sessionId }` plus desktop fields `profileId`, `assignment`, `error`, `readOnly`, `abandoned`, and `createdAt`. `checkpoint` is null or `{ summary, nextSteps, blocker, updatedAt }`. Worker `waiting` is exposed as `running` to match the phone status set. Summary, assignment, error, checkpoint text and coordination messages are cut to fit; `filesTruncated` marks a trimmed file list, while team-level `truncated` and `workersTruncated` appear only if needed to stay under 180 KiB. A task with no team returns `{ team: null }`. |
 | `task.workerMessages` | `{ sessionId, workerId, afterId?, limit? }` (`afterId` defaults to 0; `limit` is 1..100 and defaults to 100) | `{ messages, hasMore, hasOlder, title, lastId }`. `sessionId` identifies the architect task; `workerId` must belong to that team's saved workers. Messages are the worker transcript page returned by the desktop worker-message API: `{ id, sessionId, role, content, createdAt, turnDurationMs, authorProvider?, turnChanges?, coordinationKind? }`, oldest first. `afterId` is an exclusive cursor; pass the last returned message id for the next page. `hasMore` reports newer rows after the page and `hasOlder` reports saved rows before it. The page fits within 180 KiB. |
@@ -274,6 +291,14 @@ viewer waits 3 minutes longer. A `task.start` runs beside the peer's ordered req
 most 4 at once, then it queues), so a slow clone never delays that peer's other requests, which
 stay in order.
 
+The viewer sends a `startId`; the host runs each one once, on its own, so a lost reply never
+stops it halfway. When the reply to `task.start` times out or the socket drops, the mirror row
+stays (running, no `remote_session`) and, once the host is online again, the viewer asks
+`task.startStatus` every 3 s until the start is done (the row is linked), failed or unknown
+(the row is put back and `remote://start-progress` reports `error`). `remote_cancel_start`
+sends `task.cancelStart` and puts the row back; a start cancelled after its task was made is
+stopped on the host. Older hosts refuse both methods (`Unknown method.`): the row is put back.
+
 ### Model lists for another computer
 
 A mirror's model picker lists the host's harnesses and models, not this computer's:
@@ -293,11 +318,25 @@ passes). With nothing cached the host decides, and it refuses a provider it does
 ### Events
 
 Push only; nothing polls. The host buffers the agent events of each subscriber's tasks and sends
-each subscriber at most one `agent.events { events: [...] }` frame every 100 ms (more only when
-the events pass the 180 KiB frame budget; an event over 120 KiB is cut). Consecutive text deltas
-of the same message are merged, so streaming costs at most 10 frames a second per subscriber,
-whatever the token rate. A subscriber more than 4096 events behind stops buffering until it
-catches up at the run end. Each event is an `AgentEvent` with `sessionId`, `kind`, `text`,
+each subscriber an `agent.events { events: [...], epoch }` frame: the first event after a quiet
+100 ms goes at once (a turn's first delta shows without waiting), the next ones are gathered for
+40 ms, and after a burst's first 5 frames for 100 ms (more frames only when the events pass the
+180 KiB frame budget; an event over 120 KiB is cut). Consecutive text deltas of the same message
+are merged, so streaming costs about 10 frames a second per subscriber, whatever the token rate,
+under the relay's 20 frames a second.
+
+Every agent event of a followed task carries `seq`, one counter per host launch (`epoch`, new
+at each launch). The host keeps each task's last 2000 events (at most 2 MiB per task, 32 MiB in
+all) in memory. A viewer remembers the newest `seq` per task and subscribes with `epoch` and
+`afterSeq`; the reply then holds, per task, the events after that position (`events`, in order,
+deltas merged, within a third of the reply) or `gap: true` when some are gone (dropped, too
+many, or another epoch), when the viewer copies the messages instead. Each task's `seq` is the
+position to use next. The viewer drops an event at or before the newest `seq` it saw, so a
+replay and live frames never show twice. Events without `seq` (older hosts) are shown as before,
+and older viewers ignore the new fields.
+
+A subscriber more than 4096 events behind stops buffering until it catches up at the run end.
+Each event is an `AgentEvent` with `sessionId`, `kind`, `text`,
 `requestId`, `data`, and optional `tool`; request ids are included where applicable. These are
 the kinds sent in `agent.events`:
 
@@ -318,7 +357,7 @@ the kinds sent in `agent.events`:
 | `status` | Progress or state text. Plan updates and reasoning/thinking notices use this kind; any provider metadata is reduced to recognized scalar fields. |
 | `steer` | A steer was accepted, delivered, or failed; `data` includes its id, status and mode. |
 | `subagent` | A child-agent snapshot changed. `data` is a desktop `SubagentActivity` (`id`, `parentId`, `name`, `prompt`, `status`, `response`, `tools`, `startedAt`, `updatedAt`); ids are scoped to the parent run. |
-| `team` | A worker row changed in the task's architect team. `sessionId` is the architect task id and `data` is the changed worker row in `task.team` shape. If the team is removed, `data` is `{ "removed": true }`. The desktop emits full `architect-event` snapshots; Connect sends only changed rows through the same 100 ms buffer. |
+| `team` | A worker row changed in the task's architect team. `sessionId` is the architect task id and `data` is the changed worker row in `task.team` shape. If the team is removed, `data` is `{ "removed": true }`. The desktop emits full `architect-event` snapshots; Connect sends only changed rows through the same event buffer. |
 | `task_settings` | Goal runtime task settings changed. |
 | `text` | Assistant text delta. `data.messageId` and optional phase associate it with its message. |
 | `tool` | A tool started or changed; the current `ToolActivity` is in `tool` (`id`, `name`, `status`, `input`, `output`, and optional `writePaths`). |
@@ -412,17 +451,23 @@ is not copied again.
 
 Responses and events are handled as soon as they arrive and never wait behind a slow request.
 Each peer can have up to four read requests in flight. The read lane includes `subscribe`,
-`tasks.list`, `projects.icons`, `providers.list`, `providers.models`, `task.messages`, `task.team`,
+`tasks.list`, `projects.icons`, `providers.list`, `providers.models`, `task.startStatus`,
+`task.cancelStart` (never behind the start it cancels), `task.messages`, `task.team`,
 `task.workerMessages`, `task.attachment`, `task.workspaceImage`, `task.pull`, `task.pullDiff`, `task.pullDetect`,
 `task.changes`, `task.diff` and `bots.list`. Replies may arrive out of order; both the phone
 and desktop client match them by request id. The desktop mirror still copies messages by its
 `afterId` cursor and commits each page before advancing it.
 
 State-changing requests from one peer remain serial and keep their arrival order relative to one
-another. This includes `task.start`, `task.send`, `task.steer`, `task.stop`, `task.configure`,
+another. This includes `task.send`, `task.steer`, `task.stop`, `task.configure`,
 `approval.respond`, `input.respond`, `bot.thread`, `bot.message`, `bot.pause` and `task.pullMerge`.
-Read requests may run while that ordered lane is busy. The 100 ms event flush only batches mirror
+Each `task.start` runs on its own, so a stop or an answer never waits behind a clone.
+Read requests may run while that ordered lane is busy. The event flush only batches mirror
 events; an RPC reply is placed directly on the socket outbox and does not wait for an event tick.
+
+A request's `ts` and `nonce` are checked when it arrives, not when it runs, so time in the queue
+never makes it expire. A request (other than `task.start`) that waited 18 s or more, past its
+caller's 20 s timeout, is refused instead of run, so a prompt the caller sent again can't run twice.
 
 ### Batch requests
 
@@ -503,13 +548,14 @@ state is unchanged.
 | `remote_repo_check` | `{ projectId }` | `{ repo: "owner/name" \| null, branch, ahead, dirty, pushed }`. `repo` is null without a GitHub `origin`; `ahead` is `rev-list --count @{u}..HEAD` (0 without an upstream); `pushed` is whether `origin/<branch>` exists. Local refs only, no network. |
 | `list_providers` | `{ force?, deviceId? }` | as without `deviceId`, from that host (see Model lists) |
 | `list_provider_models` | `{ provider, force?, deviceId? }` | as without `deviceId`, from that host |
-| `remote_start_task` | `{ deviceId, projectId, prompt, provider, model, mode?, effort?, worktree?, branch?, sessionId? }` | the mirror `Session` plus `sessionId`. `branch` defaults to the checkout's. An empty New task draft without its own worktree passed as `sessionId` becomes the mirror; otherwise a new task is made. On failure nothing is left: a new row is deleted, a draft stays a draft. |
+| `remote_start_task` | `{ deviceId, projectId, prompt, provider, model, mode?, effort?, worktree?, branch?, sessionId? }` | the mirror `Session` plus `sessionId`. `branch` defaults to the checkout's. An empty New task draft without its own worktree passed as `sessionId` becomes the mirror; otherwise a new task is made. On failure nothing is left: a new row is deleted, a draft stays a draft. With `startId`, a timeout or a dropped socket keeps the row and returns it (see Starting a task). |
+| `remote_cancel_start` | `{ sessionId }` (the local row) | `{ cancelled }`. Cancels a start that has no host task yet and puts the row back (also when the host can't be reached); `cancelled: false` when the host had already made the task, which then runs as a mirror. |
 
 Window events: `remote://status` (status), `remote://presence` (devices), and for mirrors the
 ordinary `agent-event` and `sessions-changed`.
 
 The agent-event hook in `lib.rs` clones and allocates nothing while hosting is off or nobody
-mirrors that task.
+follows (or followed, since this launch) that task.
 
 ## Privacy
 
