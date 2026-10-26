@@ -1312,7 +1312,7 @@ function savedActivityHtml(messages: Message[], expanded = activityExpanded()): 
   return groupToolRuns(messages, message => message.role === 'tool' ? savedToolKey(message) : undefined)
     .map(run => run.kind === 'tools'
       ? renderToolGroup(run.items.map(message => ({ key: savedToolKey(message), content: message.content })), expanded)
-      : messageHtml(run.item)).join('');
+      : messageHtml(run.item, false, false)).join('');
 }
 /** A turn of only tool calls folds to its summary sentence and mark stack (`Ran 2 searches and read 3 sources`),
  * opening onto the step rail; turns with narration keep `Worked for …` over their groups. */
@@ -1380,7 +1380,8 @@ function restoreTurns(root: ParentNode, views: TurnView[]): void {
   });
 }
 /** `afterTrace`: an answer that follows a tool trace sits flush under it without the avatar/name row (still read out). */
-function messageHtml(m: Message, afterTrace = false): string {
+/** `actions` is false for replies between tool calls: only the turn's last reply carries copy and fork. */
+function messageHtml(m: Message, afterTrace = false, actions = true): string {
   if (m.role === 'handoff') {
     const handoff = decodeHandoff(m);
     if (!handoff) return '';
@@ -1395,7 +1396,7 @@ function messageHtml(m: Message, afterTrace = false): string {
   if (m.role === 'error') return `<div class="message-error">${icon('alert')}<span>${escape(m.content)}</span></div>`;
   const isUser = m.role === 'user';
   const author = historicalProvider(m, state.messages, session()?.provider ?? state.defaultProvider);
-  return `<article class="message ${isUser ? 'user-message' : 'agent-message'}${afterTrace && !isUser ? ' after-trace' : ''}" data-message-id="${m.id}"><div class="message-meta"><span class="message-avatar ${isUser ? 'user-avatar' : ''}">${isUser ? 'Y' : providerLogo(author)}</span><strong>${isUser ? 'You' : escape(provider(author)?.name || 'Agent')}</strong><time>${formatTime(m.createdAt)}</time></div><div class="message-content ${isUser ? '' : 'markdown'}" ${isUser ? '' : `data-markdown="${m.id}"`}>${isUser ? userContent(m.content, m.id) : escape(m.content)}</div>${isUser && m.id < 0 ? steerStateHtml(m) : ''}${messageActionsHtml(m.sessionId, m.id, m.id > 0 && (isUser || m.role === 'assistant'), isUser && m.id > 0)}</article>`;
+  return `<article class="message ${isUser ? 'user-message' : 'agent-message'}${afterTrace && !isUser ? ' after-trace' : ''}" data-message-id="${m.id}"><div class="message-meta"><span class="message-avatar ${isUser ? 'user-avatar' : ''}">${isUser ? 'Y' : providerLogo(author)}</span><strong>${isUser ? 'You' : escape(provider(author)?.name || 'Agent')}</strong><time>${formatTime(m.createdAt)}</time></div><div class="message-content ${isUser ? '' : 'markdown'}" ${isUser ? '' : `data-markdown="${m.id}"`}>${isUser ? userContent(m.content, m.id) : escape(m.content)}</div>${isUser && m.id < 0 ? steerStateHtml(m) : ''}${actions ? messageActionsHtml(m.sessionId, m.id, m.id > 0 && (isUser || m.role === 'assistant'), isUser && m.id > 0) : ''}</article>`;
 }
 // Context appended at send time (files, documents, folders, GitHub, browser, images) shows as
 // read-only chips under what you said; each opens its attachment (see message-attachments.ts).
@@ -1553,7 +1554,7 @@ function paintLiveActivity(region: HTMLElement, current: Stream, transcript: HTM
       if (!node) {
         node = document.createElement('article'); node.className = 'message agent-message activity-commentary-message';
         node.dataset.streamKey = key;
-        node.innerHTML = `<div class="message-content activity-commentary" data-commentary="${escape(key)}"></div>${messageActionsHtml(state.sessionId, 'commentary:' + key, false)}`;
+        node.innerHTML = `<div class="message-content activity-commentary" data-commentary="${escape(key)}"></div>`;
       }
       next.push(node); commentary.push({ node: node.querySelector<HTMLElement>('[data-commentary]')!, content: run.item.content as string });
     } else {
@@ -1587,6 +1588,14 @@ function paintLiveActivity(region: HTMLElement, current: Stream, transcript: HTM
   if (workers?.parentElement === host && !retained.has(workers)) region.after(workers);
   for (const child of [...host.children]) if (!retained.has(child as HTMLElement)) child.remove();
   next.forEach((node, index) => { if (host.children[index] !== node) host.insertBefore(node, host.children[index] ?? null); });
+  // Steps the agent narrated past fold once to their one-line summary, so later work never reopens them.
+  const newestGroup = next.map(node => node.classList.contains('tool-group')).lastIndexOf(true);
+  const narratedPast = next.slice(0, Math.max(newestGroup, 0)).map(node => node.classList.contains('agent-message')).lastIndexOf(true);
+  next.slice(0, Math.max(narratedPast, 0)).forEach(node => {
+    if (!node.classList.contains('tool-group') || node.dataset.earlier !== undefined) return;
+    node.dataset.earlier = '';
+    if (!liveTurnStaysOpen(node)) (node as HTMLDetailsElement).open = false;
+  });
   for (const entry of commentary) { bindFileLinkContext(entry.node, workspaceContext()); streamMarkdown(entry.node, entry.content, transcript); }
 }
 // Measured from the reference at 30 fps: the answer starts at 7.20 s, the open cards fold at 8.25 s
@@ -2097,9 +2106,9 @@ async function latestMessagePage(sessionId: string): Promise<MessagePage> {
   return latest;
 }
 
-async function loadOlderMessages(): Promise<void> {
+async function loadOlderMessages(anywhere = false): Promise<void> {
   const transcript = $('#transcript'), sessionId = state.sessionId, generation = state.generation;
-  if (!sessionId || !state.hasOlder || state.messagesLoading || state.messagesError || !transcriptVisible() || transcript.scrollTop > 200) return;
+  if (!sessionId || !state.hasOlder || state.messagesLoading || state.messagesError || !transcriptVisible() || (!anywhere && transcript.scrollTop > 200)) return;
   if (olderMessagesRequest?.sessionId === sessionId && olderMessagesRequest.generation === generation) return;
   const beforeId = state.messages.find(message => message.id > 0)?.id;
   if (!beforeId) return;
@@ -2116,7 +2125,29 @@ async function loadOlderMessages(): Promise<void> {
     if (sessionId === state.sessionId && generation === state.generation) notify('Could not load earlier messages. Scroll up to retry.');
   } finally {
     if (olderMessagesRequest === request) { olderMessagesRequest = undefined; transcript.removeAttribute('aria-busy'); }
+    if (mirrorOlderPending === sessionId) { mirrorOlderPending = ''; void mirrorMessages({ sessionId, older: true }); }
   }
+}
+
+/* A mirror's history arrives from its host newest page first, then older pages beneath it
+ * (remote/mirror.rs sync). The open thread redraws for newer messages, and prepends older
+ * ones in place until it holds one page; scrolling up loads the rest as for any thread. */
+const MIRROR_PREPEND = 100;
+let mirrorOlderPending = '';
+async function mirrorMessages(event: { sessionId: string; older?: boolean }): Promise<void> {
+  const { sessionId } = event, generation = state.generation;
+  if (sessionId !== state.sessionId || state.streams.has(sessionId) || finishingStreams.has(sessionId)) return;
+  const saved = state.messages.filter(message => message.id > 0).length;
+  if (event.older && saved && !state.messagesLoading) {
+    state.hasOlder = true;
+    if (olderMessagesRequest?.sessionId === sessionId) { mirrorOlderPending = sessionId; return; }
+    if (saved < MIRROR_PREPEND) await loadOlderMessages(true);
+    return;
+  }
+  const page = await latestMessagePage(sessionId);
+  if (sessionId !== state.sessionId || generation !== state.generation || state.streams.has(sessionId)) return;
+  // Replacing the page here also tells an earlier load still in flight to keep it.
+  setMessagePage(page); state.messagesLoading = false; state.messagesError = ''; renderTranscript(); if (stickToBottom) stickTranscript();
 }
 
 const pendingMessageForks = new Set<string>();
@@ -4916,6 +4947,7 @@ async function boot(): Promise<void> {
   window.addEventListener(TEAM_MODE_EVENT, () => { if (session()) renderComposer(); });
   await subscribe('sessions-deleted', event => removeDeletedSessions(event.sessionIds));
   await subscribe('sessions-changed', () => run(reloadSessions()));
+  await subscribe('mirror-messages' as 'queue-changed', (event: { sessionId: string; older?: boolean }) => run(mirrorMessages(event)));
   // An agent booted or asked to show a simulator: bring the panel forward.
   // An agent started or asked to show a VM: bring the panel forward.
   run(subscribe('vm-changed', event => { if (event && !Array.isArray(event) && event.show) openVm(); void vmPanel?.refresh(); }).then(() => undefined));

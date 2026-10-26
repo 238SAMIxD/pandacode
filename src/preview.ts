@@ -499,6 +499,20 @@ function finishTiming(sessionId: string): void {
  * from the host, which happens when a run ends (just before its `done`). */
 const mirrorSynced = new Map<string, number>();
 function syncMirror(sessionId: string): void { if (mirrorSynced.has(sessionId)) mirrorSynced.set(sessionId, id); }
+/* tests: a long mirror thread copied newest page first; older pages land below it with lower
+ * ids (`remote_backfill_base + host id` natively) and announce themselves by `mirror-messages`. */
+(window as any).__previewMirrorThread = (total: number, tail: number) => {
+  const sessionId = 'mirror-long', at = (i: number): Message => ({ id: 100000 + i, sessionId, role: i % 2 ? 'assistant' : 'user', content: `Message ${String(i).padStart(3, '0')}`, createdAt: now - (total - i) * 1000 });
+  sessions.unshift({ ...sessions[0], id: sessionId, title: 'Long remote thread', resumeId: null, remoteDevice: { id: 'dev-studio', name: 'Studio iMac' }, lastResponseAt: now });
+  messages[sessionId] = Array.from({ length: tail }, (_, k) => at(total - tail + k));
+  let oldest = total - tail;
+  (window as any).__previewMirrorBackfill = (count: number) => {
+    const from = Math.max(0, oldest - count);
+    messages[sessionId] = [...Array.from({ length: oldest - from }, (_, k) => at(from + k)), ...messages[sessionId]];
+    oldest = from; emit('mirror-messages', { sessionId, older: true });
+  };
+  emit('sessions-changed', {});
+};
 function finish(sessionId: string, content: string) { const time = Date.now(); messages[sessionId].push({ id: ++id, sessionId, role: 'assistant', content, createdAt: time }); finishTiming(sessionId); const s = session(sessionId); if (content.trim()) s.lastResponseAt = time; s.status = 'idle'; s.taskStage = 'review'; s.updatedAt = time; timers.delete(sessionId); activeTools.delete(sessionId); syncMirror(sessionId); agent({ sessionId, kind: 'done', text: '' }); }
 /** Replays the Morning brief reference: five MCP tools (running, then completed), then the answer in chunks. `?replay=N` scales the pace. */
 function replayBrief(s: Session): void {
