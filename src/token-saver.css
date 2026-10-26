@@ -36,4 +36,9 @@ html[data-theme="dark"] .composer-saver-button[aria-pressed="true"]{color:var(--
 .saver-off{font-size:.72rem;color:var(--muted);padding:3px 6px;border-radius:2px}
 .saver-off:hover:not(:disabled){color:var(--text);background:color-mix(in srgb,var(--text) 6%,transparent)}
 .saver-off:disabled{opacity:.4}
+.saver-hint{display:flex;align-items:center;gap:8px;padding:7px 0 3px;font-size:.72rem;color:var(--muted)}
+.saver-hint b{color:var(--text);font-variant-numeric:tabular-nums}
+.saver-tighten{font-size:.72rem;font-weight:600;padding:3px 8px;border-radius:3px;color:var(--accent-ink);background:var(--accent-tint);--press:1;transition:background-color 160ms}
+.saver-tighten:hover{background:color-mix(in srgb,var(--accent) 24%,transparent)}
+html[data-theme="dark"] .saver-tighten{color:var(--accent)}
 @media(prefers-reduced-motion:reduce){.saver-switch::after{transition:none;animation:none!important}}

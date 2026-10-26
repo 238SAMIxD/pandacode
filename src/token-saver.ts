@@ -113,3 +113,18 @@ export function estimate(packs: PackId[], level: Level, available: { rtk: boolea
   const kept = packs.filter(id => id !== 'rtk' || available.rtk).reduce((left, id) => left * (1 - share[id]), 1);
   return Math.round((1 - kept) * 100);
 }
+
+/** Share of the context window at which the panel offers to tighten a thread's saver. */
+export const CONTEXT_TIGHTEN_AT = 0.75;
+
+/** What Tighten applies in one click: packs to add, and Ultra when the level is below it. */
+export type Tighten = { addPacks: PackId[]; level?: Level };
+
+/** The tightening to offer once a thread's context is mostly full, or null when nothing is left or the window is unknown. */
+export function suggestion(packs: PackId[], level: Level, usage: { usedTokens: number; contextWindow?: number | null } | null | undefined): Tighten | null {
+  if (!usage?.contextWindow || usage.usedTokens / usage.contextWindow < CONTEXT_TIGHTEN_AT) return null;
+  const addPacks = (['caveman', 'quiet-tools'] as PackId[]).filter(id => !packs.includes(id));
+  const nextLevel = level !== 'ultra' ? 'ultra' as Level : undefined;
+  if (!addPacks.length && !nextLevel) return null;
+  return { addPacks, ...(nextLevel && { level: nextLevel }) };
+}
