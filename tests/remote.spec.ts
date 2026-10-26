@@ -175,17 +175,18 @@ test('picking another computer limits the picker to its catalog, and local is re
   await signedInNewTask(page);
   await chooseStudio(page);
   const picker = await openPicker(page);
-  await expect(picker.getByRole('region', { name: 'Claude Code' })).toBeVisible();
-  await expect(picker.getByRole('region', { name: 'Codex' })).toBeVisible();
-  await expect(picker.getByRole('region', { name: 'Kimi Code' })).toHaveCount(0);
-  await expect(picker.getByRole('region', { name: 'OpenCode' })).toHaveCount(0);
+  const rail = picker.getByRole('tablist', { name: 'Harnesses' });
+  await expect(rail.getByRole('tab', { name: 'Claude Code', exact: true })).toBeVisible();
+  await expect(rail.getByRole('tab', { name: 'Codex', exact: true })).toBeVisible();
+  await expect(rail.getByRole('tab', { name: 'Kimi Code', exact: true })).toHaveCount(0);
+  await expect(rail.getByRole('tab', { name: 'OpenCode', exact: true })).toHaveCount(0);
   await page.keyboard.press('Escape');
 
   const computer = page.locator('#composer-computer');
   await computer.click();
   await page.getByRole('menuitemradio', { name: 'This computer' }).click();
   const local = await openPicker(page);
-  await expect(local.getByRole('region', { name: 'Kimi Code' })).toBeVisible();
+  await expect(local.getByRole('tab', { name: 'Kimi Code', exact: true })).toBeVisible();
 });
 
 test('a model missing on the chosen computer is swapped, with a notice', async ({ page }) => {
@@ -194,12 +195,14 @@ test('a model missing on the chosen computer is swapped, with a notice', async (
   await chooseStudio(page);
   await expect(page.locator('#toast')).toContainText('Studio iMac doesn’t have Kimi Code. Using Claude Code.');
   let picker = await openPicker(page);
-  await expect(picker.getByRole('region', { name: 'Claude Code' }).locator('[aria-current="true"]')).toHaveCount(1);
+  await expect(picker.getByRole('tab', { name: 'Claude Code', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(picker.locator('[role="option"][aria-current="true"]')).toHaveCount(1);
   await page.keyboard.press('Escape');
   await page.locator('#composer-computer').click();
   await page.getByRole('menuitemradio', { name: 'This computer' }).click();
   picker = await openPicker(page);
-  await expect(picker.getByRole('region', { name: 'Kimi Code' }).locator('[aria-current="true"]')).toHaveCount(1);
+  await expect(picker.getByRole('tab', { name: 'Kimi Code', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(picker.locator('[role="option"][aria-current="true"]')).toHaveCount(1);
 });
 
 test('a task running on another computer lists that computer’s catalog', async ({ page }) => {
@@ -209,6 +212,6 @@ test('a task running on another computer lists that computer’s catalog', async
   await page.getByRole('button', { name: 'Send message' }).click();
   await expect(page.locator('#composer-area .composer-computer-fixed')).toHaveText('on Studio iMac');
   const picker = await openPicker(page);
-  await expect(picker.getByRole('region', { name: 'Claude Code' })).toBeVisible();
-  await expect(picker.getByRole('region', { name: 'Kimi Code' })).toHaveCount(0);
+  await expect(picker.getByRole('tab', { name: 'Claude Code', exact: true })).toBeVisible();
+  await expect(picker.getByRole('tab', { name: 'Kimi Code', exact: true })).toHaveCount(0);
 });

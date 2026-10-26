@@ -81,7 +81,8 @@ test('a named agent team is a choice in the model picker and lists only its mode
   await closeSettings(page);
 
   await modelButton(page).click();
-  const team = picker(page).getByRole('button', { name: 'Agent team · Reviewers', exact: true });
+  await picker(page).getByRole('tab', { name: /^Teams/ }).click();
+  const team = picker(page).getByRole('option', { name: 'Agent team · Reviewers', exact: true });
   await expect(team).toBeVisible();
   await team.click();
   await expect(picker(page)).toBeHidden();
@@ -96,9 +97,10 @@ test('a named agent team is a choice in the model picker and lists only its mode
 
   // The picker marks the team, not the lead's plain model, as current.
   await modelButton(page).click();
-  await expect(picker(page).getByRole('button', { name: 'Agent team · Reviewers', exact: true })).toHaveAttribute('aria-current', 'true');
+  await expect(picker(page).getByRole('option', { name: 'Agent team · Reviewers', exact: true })).toHaveAttribute('aria-current', 'true');
   await expect(picker(page).locator('[aria-current="true"]')).toHaveCount(1);
   // A plain model leaves the team for a single agent.
+  await picker(page).getByRole('tab', { name: 'Claude Code', exact: true }).click();
   await picker(page).locator('.model-menu-option:not(.model-menu-team):not([disabled])').first().click();
   await expect(picker(page)).toBeHidden();
   expect((await calls(page, 'architect_configure')).at(-1).args).toMatchObject({ config: null });

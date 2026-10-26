@@ -1,3 +1,4 @@
+import { pickModel, showHarness } from './model-picker-helper';
 import { expect, test, type Page } from '@playwright/test';
 
 test('provider connections expose Kilo models, approval modes and executable settings', async ({ page }, testInfo) => {
@@ -6,6 +7,7 @@ test('provider connections expose Kilo models, approval modes and executable set
   const trigger = page.getByRole('button', { name: 'Choose harness and model', exact: true });
   await trigger.click();
   const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
+  await showHarness(page, 'kilo');
   await expect(picker.locator('.model-menu-option[data-provider="kilo"][data-model="default"]')).toBeVisible();
   const model = picker.locator('.model-menu-option[data-provider="kilo"][data-model="kilo/anthropic/claude-sonnet-4.6"]');
   await expect(model).toContainText('Kilo Gateway/Anthropic: Claude Sonnet 4.6');
@@ -224,7 +226,7 @@ for (const providerId of ['claude', 'codex', 'kimi', 'opencode', 'glm', 'antigra
     await expect.poll(readTask).toMatchObject({mode:'plan'});
     await page.getByRole('button', {name:'Choose harness and model',exact:true}).click();
     const next = providerId === 'codex' ? 'claude' : 'codex';
-    await page.getByRole('dialog', {name:'Harness and model',exact:true}).locator(`button[data-provider="${next}"][data-model="${next === 'codex' ? 'gpt-6-astra' : 'sonnet'}"]`).click();
+    await pickModel(page, next, next === 'codex' ? 'gpt-6-astra' : 'sonnet');
     await expect.poll(readTask).toMatchObject({provider:next, mode:'plan'});
     await expect(permissions).toHaveText(next === 'codex' ? 'Read only' : 'Plan mode');
     await page.locator('.new-task-button').click();
@@ -249,11 +251,13 @@ test('GitHub Copilot CLI has CLI sign-in guidance, a path override, Default mode
   const model = page.getByRole('button', { name: 'Choose harness and model', exact: true });
   await model.click();
   const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
+  await showHarness(page, 'github-copilot');
   const copilot = picker.locator('.model-menu-option[data-provider="github-copilot"][data-model="default"]');
   await expect(copilot).toContainText('Default');
-  await page.getByRole('searchbox', { name: 'Search harnesses and models' }).fill('custom-copilot-model');
+  await page.getByRole('combobox', { name: 'Search harnesses and models' }).fill('custom-copilot-model');
   await expect(picker.locator('.model-menu-option[data-provider="github-copilot"][data-model="custom-copilot-model"]')).toHaveCount(0);
-  await page.getByRole('searchbox', { name: 'Search harnesses and models' }).fill('');
+  await page.getByRole('combobox', { name: 'Search harnesses and models' }).fill('');
+  await showHarness(page, 'github-copilot');
   await expect(copilot).toBeVisible();
   await copilot.click();
   await expect(model.locator('.provider-logo[data-provider="github-copilot"]')).toBeVisible();
@@ -288,10 +292,11 @@ test('Devin CLI lists its models with their own thinking levels, Devin modes, an
   await page.keyboard.press('Escape');
 
   const model = page.getByRole('button', { name: 'Choose harness and model', exact: true });
-  const search = page.getByRole('searchbox', { name: 'Search harnesses and models' });
+  const search = page.getByRole('combobox', { name: 'Search harnesses and models' });
   const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
-  const group = picker.getByRole('region', { name: 'Devin CLI', exact: true });
+  const group = picker;
   await model.click();
+  await showHarness(page, 'devin');
   // A long catalog opens as a short list; search covers every model, and custom IDs are not offered.
   await expect(group.locator('.model-menu-option[data-model="adaptive"]')).toBeVisible();
   await expect(group.locator('.model-menu-option[data-model^="fusion-"]')).toHaveCount(0);
@@ -300,18 +305,19 @@ test('Devin CLI lists its models with their own thinking levels, Devin modes, an
   await search.fill('custom-devin-model');
   await expect(picker.locator('.model-menu-option[data-provider="devin"][data-model="custom-devin-model"]')).toHaveCount(0);
   await search.fill('');
+  await showHarness(page, 'devin');
   await group.locator('.model-menu-option[data-model="claude-opus-5-5-medium"]').click();
   await expect(model).toContainText('Claude Opus 5.5');
 
   // Each model carries its own thinking levels.
   await model.click();
-  const effort = picker.getByRole('slider', { name: 'Reasoning effort' });
-  await expect(effort).toHaveAttribute('max', '4');
+  const effort = picker.getByRole('radiogroup', { name: 'Effort' }).getByRole('radio');
+  await expect(effort).toHaveCount(6);
   await search.fill('glm');
-  await expect(group.locator('.model-menu-option[data-model="glm-5-2"]')).toContainText('Text only');
+  await expect(group.locator('.model-menu-option[data-model="glm-5-2"]')).toHaveAttribute('title', 'Text only');
   await group.locator('.model-menu-option[data-model="glm-5-2"]').click();
   await model.click();
-  await expect(effort).toHaveAttribute('max', '2');
+  await expect(effort).toHaveCount(4);
   await page.keyboard.press('Escape');
 
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
@@ -334,6 +340,7 @@ test('GitHub Copilot model discovery does not crash the picker in an existing ch
   await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
   const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
   await expect(picker).toBeVisible();
+  await showHarness(page, 'github-copilot');
   const copilot = picker.locator('.model-menu-option[data-provider="github-copilot"][data-model="default"]');
   await expect(copilot).toContainText('Default');
   await expect.poll(() => errors).toEqual([]);
@@ -356,11 +363,12 @@ test('settings organization supports Pi models and executable settings', async (
   const trigger = page.getByRole('button', { name: 'Choose harness and model', exact: true });
   await trigger.click();
   const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
-  const pi = picker.locator('.model-menu-option').filter({ has: page.locator('[data-provider="pi"]') });
+  await showHarness(page, 'pi');
+  const pi = picker.locator('.model-menu-option[data-provider="pi"]');
   await pi.first().click();
   await expect(trigger.locator('[data-provider="pi"]')).toBeVisible();
   await trigger.click();
-  await expect(picker.locator('.model-menu-option').filter({ has: page.locator('[data-provider="pi"]') }).filter({ hasText: 'Claude Sonnet 4.5' })).toContainText('200K context');
+  await expect(picker.locator('.model-menu-option[data-provider="pi"]').filter({ hasText: 'Claude Sonnet 4.5' })).toContainText('200K');
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('tab', { name: 'Providers', exact: true }).click();

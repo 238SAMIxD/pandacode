@@ -185,7 +185,7 @@ test.describe('concurrency isolation', () => {
       await prompt(page).fill('An unrelated task draft survives four completions.');
       await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
       const menu = page.getByRole('dialog', { name: 'Harness and model', exact: true });
-      await menu.getByRole('searchbox').fill('sol');
+      await menu.getByRole('combobox').fill('sol');
       await page.evaluate(() => {
         (window as any).__reloadCountBeforeDone = (window as any).__concurrent.calls.filter((call: any) => call.command === 'list_sessions').length;
         (window as any).__preservedComposer = document.querySelector('#composer');
@@ -194,7 +194,7 @@ test.describe('concurrency isolation', () => {
         for (const index of [4, 1, 3, 2]) { fixture.tasks['session-' + index].push(`Final ${index}.`); fixture.tasks['session-' + index].done(); }
       });
       await expect(menu).toHaveAttribute('data-popover-state', 'open');
-      await expect(menu.getByRole('searchbox')).toHaveValue('sol');
+      await expect(menu.getByRole('combobox')).toHaveValue('sol');
       await expect.poll(() => page.evaluate(() => (window as any).__concurrent.calls.filter((call: any) => call.command === 'list_sessions').length)).toBeGreaterThan(1);
       await settlePaint(page);
       console.log('CONCURRENT_COMPLETION_RELOADS', view, await page.evaluate(() => (window as any).__concurrent.calls.filter((call: any) => call.command === 'list_sessions').length - (window as any).__reloadCountBeforeDone));
@@ -494,6 +494,9 @@ test('concurrency sidebar timers update for background and pinned tasks and rese
   await page.keyboard.press('Escape');
   await page.evaluate(() => { const task = (window as any).__concurrent.tasks['session-1']; task.push('Finished.'); task.done(); });
   await expect(timer(1)).toHaveCount(0);
+  // While the row is hovered or focused its actions cover the age slot (Escape returned focus to the row).
+  await page.mouse.move(700, 500);
+  await prompt(page).focus();
   await expect(row(1).locator('.task-age')).toBeVisible();
   await startTask(page, 1, 'conversation');
   await expect(timer(1)).toHaveText(/^\d+s$/);

@@ -30,8 +30,8 @@ test('a named connection is added in Settings, chosen for a task in the model pi
 
   await page.locator('#model-picker-trigger').click();
   const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
-  await expect(picker.getByRole('region', { name: 'Claude Work', exact: true })).toBeVisible();
-  await picker.getByRole('button', { name: 'Claude Work · Claude Sonnet 5', exact: true }).click();
+  await picker.getByRole('tab', { name: 'Claude Work', exact: true }).click();
+  await picker.getByRole('option', { name: 'Claude Work · Claude Sonnet 5', exact: true }).click();
   await expect(page.locator('#model-picker-trigger')).toContainText('Claude Work · Claude Sonnet 5');
 
   // Another task keeps the harness's own setup; returning shows the connection again.
@@ -40,9 +40,11 @@ test('a named connection is added in Settings, chosen for a task in the model pi
   await page.locator(`.task-item[data-id="${taskId}"]`).click();
   await expect(page.locator('#model-picker-trigger')).toContainText('Claude Work · Claude Sonnet 5');
   await page.locator('#model-picker-trigger').click();
+  await expect(picker.getByRole('tab', { name: 'Claude Work', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect(picker.locator('.model-menu-option[aria-current="true"]')).toHaveAttribute('aria-label', 'Claude Work · Claude Sonnet 5');
-  // The plain harness group clears it.
-  await picker.getByRole('button', { name: 'Claude Code · Claude Sonnet 5', exact: true }).click();
+  // The plain harness clears it.
+  await picker.getByRole('tab', { name: 'Claude Code', exact: true }).click();
+  await picker.getByRole('option', { name: 'Claude Code · Claude Sonnet 5', exact: true }).click();
   await expect(page.locator('#model-picker-trigger')).not.toContainText('Claude Work');
   expect(errors).toEqual([]);
 });

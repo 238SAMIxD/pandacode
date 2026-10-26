@@ -5,7 +5,8 @@ async function switchHarness(page: Page) {
   await expect(page.locator('.task-item.selected .task-title')).toHaveText('Make search feel instant');
   await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
   const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
-  await picker.getByRole('button', { name: 'Codex · Default', exact: true }).click();
+  await picker.getByRole('tab', { name: 'Codex', exact: true }).click();
+  await picker.getByRole('option', { name: 'Codex · Default', exact: true }).click();
   await expect(picker).not.toBeVisible();
   await expect(page.locator('.transcript .provider-handoff')).toContainText('Conversation carried forward');
 }
