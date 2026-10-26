@@ -227,7 +227,7 @@ mark{background:color-mix(in srgb,var(--accent) 45%,transparent);color:inherit;b
 .tool-group-hint{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .tool-group-status{flex:none;font-size:var(--thread-font);color:var(--accent-ink)}
 .tool-group-status.has-failure{color:var(--danger)}
-.tool-group-body{min-width:0;padding:4px 0 2px 15px;border-left:1px solid var(--border);margin:2px 0 4px 6px}
+.tool-group-body{min-width:0;padding:4px 0 2px 15px;margin:2px 0 4px 6px}
 .tool-group-body .tool-activity{margin-bottom:3px;padding-left:0}
 .live-activity .turn-activity-body{padding-top:2px}
 .live-activity .message-content{font-size:var(--thread-font);line-height:1.65}
