@@ -276,4 +276,46 @@ test.describe('thread order', () => {
     await expect.poll(folders).toEqual(['project-1', 'project-2']);
     await expect(page.locator('.folder-heading').first()).toContainText('orbit');
   });
+
+  test('a flat list replaces folders and names each row’s project; selected options show a trailing check', async ({ page }) => {
+    await open(page);
+    const sort = page.getByRole('button', { name: 'Sort and view', exact: true });
+    await sort.click();
+    const dialog = page.getByRole('dialog', { name: 'Sort and view', exact: true });
+    const manual = dialog.getByRole('group', { name: 'Sort tasks', exact: true }).getByRole('menuitemradio', { name: 'Manual', exact: true });
+    await expect(manual).toHaveAttribute('aria-checked', 'true');
+    await expect(manual.locator('svg.icon').last()).toBeVisible();
+    // On, but not the highlighted row: no fill, only the check.
+    const recent = dialog.getByRole('group', { name: 'Sort projects', exact: true }).getByRole('menuitemradio', { name: 'Recent activity', exact: true });
+    await expect(recent).toHaveAttribute('aria-checked', 'true');
+    await expect(recent).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await expect(recent.locator('svg.icon').last()).toBeVisible();
+    expect((await dialog.boundingBox())!.width).toBe(280);
+    await dialog.getByRole('group', { name: 'Group', exact: true }).getByRole('menuitemradio', { name: 'Flat list', exact: true }).click();
+    await expect(page.locator('#navigation .folder-heading')).toHaveCount(0);
+    await expect.poll(() => ids(page, 'all')).toEqual(['session-1', 'session-2', 'session-3', 'session-4']);
+    await expect(row(page, 'session-4').locator('.task-project-name')).toHaveText('pandacode');
+    await page.reload();
+    await expect(page.locator('#navigation .folder-heading')).toHaveCount(0);
+  });
+
+  test('projects can be arranged by hand: Alt+arrows move a folder and the order is remembered', async ({ page }) => {
+    await open(page);
+    const folders = () => page.locator('#navigation .folder-heading').evaluateAll(nodes => nodes.map(node => (node as HTMLElement).dataset.project));
+    expect(await folders()).toEqual(['project-1', 'project-2']);
+    await expect(page.locator('.folder-heading').first()).toHaveAttribute('draggable', 'false');
+    await page.getByRole('button', { name: 'Sort and view', exact: true }).click();
+    await page.getByRole('group', { name: 'Sort projects', exact: true }).getByRole('menuitemradio', { name: 'Manual', exact: true }).click();
+    await expect(page.locator('.folder-heading').first()).toHaveAttribute('draggable', 'true');
+    expect(await folders()).toEqual(['project-1', 'project-2']);
+    await page.locator('.folder-heading[data-project="project-1"]').focus();
+    await page.keyboard.press('Alt+ArrowDown');
+    await expect.poll(folders).toEqual(['project-2', 'project-1']);
+    await expect(page.locator('.folder-heading[data-project="project-1"]')).toBeFocused();
+    await page.reload();
+    await expect.poll(folders).toEqual(['project-2', 'project-1']);
+    // Dragging a folder heading moves it too.
+    await page.locator('.folder-heading[data-project="project-1"]').dragTo(page.locator('.folder-heading[data-project="project-2"]'), { targetPosition: { x: 30, y: 3 } });
+    await expect.poll(folders).toEqual(['project-1', 'project-2']);
+  });
 });

@@ -20,11 +20,16 @@ export interface SectionInput {
   unseen?(task: Session): boolean;
   /** The open thread is never waiting for review, so it stays in its folder… */
   selectedId?: string;
-  /** …unless held: the open thread stays in the section it was opened from (unless it runs),
-   * so a click on its row (Reopen, Mark complete) never moves the row from under the pointer. */
+  /** …unless held: the open thread stays in the section it was opened from (running work still
+   * goes to Active), so a click on its row (Reopen, Mark complete, a finished run) never moves it. */
   hold?: HeldSection;
 }
-export type HeldSection = 'review' | 'rest' | 'completed';
+export type HeldSection = 'active' | 'review' | 'rest' | 'completed';
+/** The section a sidebar group belongs to: Pinned, Chats, folders and the archive are `rest`. */
+export function sectionOf(group: string | undefined): HeldSection | undefined {
+  if (!group) return undefined;
+  return group === 'active' || group === 'review' || group === 'completed' ? group : 'rest';
+}
 
 export interface Sections {
   active: Session[];

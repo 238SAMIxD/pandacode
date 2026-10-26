@@ -71,7 +71,6 @@ for (const s of sessions) {
   s.taskDescription = '';
   s.completedAt = null;
 }
-loadThreadOrder();
 // One sample task already tracks a GitHub issue so chips have something to show.
 sessions[2].issue = { kind: 'issue', number: 131, url: 'https://github.com/orbit-labs/orbit/issues/131', title: 'Keyboard shortcut cheat sheet', state: 'open', checkedAt: now };
 // Sidebar sections showcase: opt in with ?sections so default session counts stay unchanged.
@@ -92,6 +91,7 @@ if (typeof location !== 'undefined' && new URLSearchParams(location.search).has(
     // A long title on a worktree branch with a linked pull request.
     sample('sections-long', 'project-2', 'Redesign the sidebar rows so long titles, branches and pull requests all fit on one line', { worktreePath: '/Users/you/Projects/pandacode-worktrees/sidebar', worktreeBranch: 'pandacode/sidebar-redesign-compact-rows', pullRequest: { kind: 'pull', number: 482, url: 'https://github.com/aicodeking/pandacode/pull/482', title: 'Compact sidebar rows', state: 'open', checkedAt: now }, lastPromptAt: now - 172000000, lastResponseAt: now - 170000000 }),
     sample('sections-chat', 'sections-chat-project', 'Explain the borrow checker', { lastPromptAt: now - 7000000, lastResponseAt: now - 6900000 }),
+    ...['Compare two date libraries', 'Draft a short changelog', 'Name the new CLI flag'].map((title, index) => sample(`sections-chat-${index + 2}`, 'sections-chat-project', title, { lastPromptAt: now - 9000000 - index * 3600000, lastResponseAt: now - 8900000 - index * 3600000 })),
     // Enough threads for "Show more" in a folder and paging in Completed.
     ...['Tidy the logger', 'Rename the config keys', 'Split the router', 'Cache the icon lookups', 'Drop the legacy flag', 'Add a retry to uploads', 'Trim the bundle'].map((title, index) => sample(`sections-many-${index}`, 'project-1', title, { lastResponseAt: now - 200000000 - index * 9000000 })),
     ...['Pin the Node version', 'Fix the tooltip offset', 'Translate the menus', 'Audit the CSP', 'Retire the old icons', 'Speed up cold start', 'Archive old logs', 'Bump the parser', 'Clean the fixtures'].map((title, index) => sample(`sections-old-${index}`, index % 2 ? 'project-2' : 'project-1', title, { taskStage: 'completed', lastResponseAt: now - 310000000 - index * 30000000, completedAt: now - 300000000 - index * 30000000 })),
@@ -100,6 +100,8 @@ if (typeof location !== 'undefined' && new URLSearchParams(location.search).has(
   // These finished while another thread was open, so they wait in Needs review (or Active, if they failed).
   localStorage.setItem('pandacode.sidebar.unreviewed', JSON.stringify(['sections-review-1', 'sections-review-2', 'sections-failed']));
 }
+// Saved pins and ranks apply to every sample, the ?sections ones included.
+loadThreadOrder();
 let id = 10;
 let previewClaudeMode: 'inherit' | 'subscription' = 'inherit';
 const traceRoot = '/Users/you/Projects/orbit';
@@ -1183,7 +1185,9 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       const s = session(args.sessionId); assertIdle(s);
       if (s.archived) throw new Error('Restore this task before changing its stage.');
       const stage = args.stage as TaskStage;
-      if (!['pending', 'review', 'completed'].includes(stage)) throw new Error('Start the task to move it to work in progress.');
+      // Like the native store: work in progress only by undoing the completion of a stopped run.
+      const undoing = s.taskStage === 'completed' && ['error', 'interrupted'].includes(s.status);
+      if (!['pending', 'review', 'completed'].includes(stage) && !(stage === 'in_progress' && undoing)) throw new Error('Start the task to move it to work in progress.');
       s.completedAt = stage === 'completed' ? s.completedAt ?? Date.now() : null;
       s.taskStage = stage; s.updatedAt = Date.now(); result = s; break;
     }

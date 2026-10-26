@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_SORT, SORT_KEY, compareCompleted, compareManual, matchesFilter, projectComparator, readSort, taskComparator } from '../src/sidebar-sort.ts';
+import { DEFAULT_SORT, PROJECT_ORDER_KEY, SORT_KEY, compareCompleted, readProjectOrder, compareManual, matchesFilter, projectComparator, readSort, taskComparator } from '../src/sidebar-sort.ts';
 import { folderGroups } from '../src/sidebar-tree.ts';
 
 const task = (id, extra = {}) => ({ id, projectId: 'p', title: id, createdAt: 1, updatedAt: 1, lastResponseAt: null, lastPromptAt: null, sidebarOrder: null, ...extra });
@@ -42,7 +42,8 @@ test('the saved sort is validated field by field', () => {
   assert.deepEqual(read(null), DEFAULT_SORT);
   assert.deepEqual(read('not json'), DEFAULT_SORT);
   assert.deepEqual(read(JSON.stringify({ tasks: 'recent', projects: 'bogus', perProject: 7 })), { ...DEFAULT_SORT, tasks: 'recent' });
-  assert.deepEqual(read(JSON.stringify({ tasks: 'created', projects: 'name', perProject: 15 })), { tasks: 'created', projects: 'name', perProject: 15 });
+  assert.deepEqual(read(JSON.stringify({ tasks: 'created', projects: 'name', perProject: 15, group: 'flat' })), { tasks: 'created', projects: 'name', perProject: 15, group: 'flat' });
+  assert.deepEqual(read(JSON.stringify({ projects: 'manual', group: 'tree' })), { ...DEFAULT_SORT, projects: 'manual' });
   assert.deepEqual(readSort({ getItem: () => { throw new Error('denied'); } }), DEFAULT_SORT);
 });
 
@@ -53,6 +54,17 @@ test('projects sort by recent activity, order added, or name', () => {
   assert.deepEqual(order('recent'), ['m', 'z', 'a', 'n']);
   assert.deepEqual(order('added'), ['z', 'a', 'm', 'n']);
   assert.deepEqual(order('name'), ['a', 'n', 'm', 'z']);
+  // Manual: the dragged order; projects not in it yet lead, most recent first.
+  const manual = [...projects].sort(projectComparator('manual', projects, latest, ['a', 'z'])).map(p => p.id);
+  assert.deepEqual(manual, ['m', 'n', 'a', 'z']);
+});
+
+test('the saved folder order keeps unique string ids only', () => {
+  const read = value => readProjectOrder({ getItem: key => key === PROJECT_ORDER_KEY ? value : null });
+  assert.deepEqual(read(JSON.stringify(['b', 'a', 'b', 3, null])), ['b', 'a']);
+  assert.deepEqual(read('{"not":"a list"}'), []);
+  assert.deepEqual(read('broken'), []);
+  assert.deepEqual(read(null), []);
 });
 
 test('a folder holds its place when its newest task moves to Active', () => {

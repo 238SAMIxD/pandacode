@@ -57,13 +57,21 @@ html[data-theme] .sidebar .new-task-button>.icon{color:var(--focus)}
 /* Wrapper lets the heading button and the hover-reveal new-task icon sit side by side. */
 .folder-row{position:relative;display:flex;align-items:center;border-radius:3px}
 .folder-row:hover{background:var(--raised)}
-.folder-row>.folder-heading{flex:1;min-width:0;padding-right:28px}
+.folder-row>.folder-heading{flex:1;min-width:0;padding-right:54px}
+.folder-actions{--press:1}
 .folder-row>.folder-heading:hover{background:transparent}
-.folder-new-task{position:absolute;z-index:1;right:3px;display:grid;place-items:center;width:24px;height:24px;border-radius:4px;color:var(--muted);opacity:0}
-.folder-new-task .icon{width:14px;height:14px}
-.folder-row:hover>.folder-new-task,.folder-row:focus-within>.folder-new-task{opacity:1}
-.folder-new-task:hover{color:var(--text);background:color-mix(in srgb,var(--text) 8%,transparent)}
-@media(hover:none){.folder-new-task{opacity:1}}
+.folder-new-task,.folder-actions{position:absolute;z-index:1;right:3px;display:grid;place-items:center;width:24px;height:24px;border-radius:4px;color:var(--muted);opacity:0}
+.folder-new-task{right:27px}
+.folder-new-task .icon,.folder-actions .icon{width:14px;height:14px}
+/* The chevron says whether the folder is open; it turns without a transition. */
+.folder-heading>.folder-chevron{width:10px;height:10px;margin-right:-3px;color:var(--faint);opacity:1}
+.folder-heading[aria-expanded=true]>.folder-chevron{rotate:90deg}
+.folder-heading[draggable=true]{cursor:grab}
+.folder-heading.drop-before{box-shadow:inset 0 2px 0 var(--accent)}
+.folder-heading.drop-after{box-shadow:inset 0 -2px 0 var(--accent)}
+.folder-row:is(:hover,:focus-within)>:is(.folder-new-task,.folder-actions),.folder-actions[aria-expanded=true]{opacity:1}
+.folder-new-task:hover,.folder-actions:hover{color:var(--text);background:color-mix(in srgb,var(--text) 8%,transparent)}
+@media(hover:none){.folder-new-task,.folder-actions{opacity:1}}
 
 /* Tasks hang off a thin guide under their folder. */
 .sidebar .folder-tasks{margin:1px 0 4px var(--tree-indent);padding-left:6px;border-left:1px solid var(--tree-guide);gap:1px}
@@ -108,7 +116,8 @@ html:not([data-theme=dark]) .sidebar .task-link.pull{color:#7c3aed}
 .sidebar .task-worktree{display:inline-flex;color:var(--muted);flex:none}
 .sidebar .task-indicator{width:6px;height:6px}
 .sidebar .task-indicator.failed{background:var(--danger)}
-.sidebar .task-indicator.unread{width:5px;height:5px;margin-left:auto;background:var(--accent);box-shadow:0 0 0 1px rgb(var(--accent-rgb) / .35)}
+.sidebar .task-indicator.unread{width:6px;height:6px;margin-left:auto;background:var(--accent-ink)}
+html[data-theme=dark] .sidebar .task-indicator.unread{background:var(--accent)}
 .sidebar .task-indicator.unread+.task-age{margin-left:0}
 /* States that need you say so in one word beside their dot. */
 .sidebar .task-status{flex:none;font-size:.7rem;font-weight:600;color:var(--accent-ink)}
@@ -116,7 +125,6 @@ html:not([data-theme=dark]) .sidebar .task-link.pull{color:#7c3aed}
 .sidebar .task-status.limited{font-weight:500;color:var(--muted)}
 .sidebar .task-indicator:is(.attention,.failed,.limited){margin-left:auto}
 .sidebar .task-age{margin-left:auto;flex:none;font-size:.72rem;color:var(--faint);font-variant-numeric:tabular-nums}
-.sidebar .task-item[data-activity=active] .task-age{color:var(--accent-ink)}
 .sidebar .task-runtime{color:var(--accent-ink)}
 .sidebar .task-item.selected .task-age{color:var(--muted)}
 .sidebar .task-item.selected{font-weight:500}
@@ -138,11 +146,16 @@ html:not([data-theme=dark]) .sidebar .task-link.pull{color:#7c3aed}
 .sidebar .task-row[data-actions="2"]{--row-actions:49px}
 .sidebar .task-row[data-actions="3"]{--row-actions:72px}
 .sidebar .task-row:hover>.task-item:not(.selected){background:var(--raised)}
-.sidebar .task-actions{position:absolute;z-index:1;top:4px;right:5px;display:flex;align-items:center;gap:1px;opacity:0;pointer-events:none}
+.sidebar .task-actions{position:absolute;z-index:1;top:4px;right:0;padding-right:5px;display:flex;align-items:center;gap:1px;opacity:0;pointer-events:none}
 .sidebar .task-row-oneline>.task-actions{top:0;bottom:0}
 .sidebar .task-row:is(:hover,:focus-within)>.task-actions{opacity:1;pointer-events:auto}
-.sidebar .task-row:is(:hover,:focus-within)>.task-item>.task-line:first-child{padding-right:var(--row-actions)}
-.sidebar .task-row:is(:hover,:focus-within)>.task-item>.task-line:first-child>:is(.task-age,.task-indicator,.task-provider){position:absolute;opacity:0;pointer-events:none}
+/* The actions cover the status/age slot, which keeps its width, behind a short fade to the row's
+   own background: the title keeps its length instead of shrinking for them. */
+.sidebar .task-row{--row-bg:var(--raised)}
+.sidebar .task-row:has(>.task-item.selected){--row-bg:var(--accent-dim)}
+html[data-theme] .workspace[data-wallpaper]>.sidebar .task-row:has(>.task-item.selected){--row-bg:color-mix(in srgb,var(--accent) 22%,var(--sidebar))}
+.sidebar .task-actions{padding-left:14px;border-radius:0 4px 4px 0;background:linear-gradient(to right,transparent,var(--row-bg) 14px)}
+.sidebar .task-row:is(:hover,:focus-within)>.task-item>.task-line:first-child>:is(.task-age,.task-indicator,.task-provider,.task-status){visibility:hidden}
 .sidebar .task-action{display:grid;place-items:center;width:22px;height:22px;padding:0;border-radius:4px;color:var(--muted);--press:.9}
 .sidebar .task-action .icon{width:13px;height:13px}
 .sidebar .task-more{--press:1}
@@ -209,3 +222,12 @@ html:not([data-theme=dark]) .sidebar .task-link.pull{color:#7c3aed}
 .toast-undo{flex:none;height:24px;margin:-4px -8px -4px 4px;padding:0 9px;border-radius:4px;font-size:.8rem;font-weight:600;color:var(--accent-ink);--press:.96}
 .toast-undo:hover{background:rgb(var(--accent-rgb) / .18);color:var(--text)}
 html[data-theme=dark] .toast-undo{color:var(--accent)}
+
+/* Flat list: each row names its project after the title. */
+.sidebar .flat-group .task-top>.task-app-icon{width:14px;height:14px}
+.sidebar .task-project-name{flex:0 1 auto;min-width:0;max-width:35%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.72rem;color:var(--faint)}
+/* A choice that is on shows a trailing check, not a filled row. */
+:root .choice-menu .choice-menu-option[aria-checked="true"]{background:transparent;box-shadow:none}
+:root .choice-menu .choice-menu-option[aria-checked="true"]:is(.choice-menu-active,:hover){background:color-mix(in srgb,var(--text) 7%,transparent)}
+:root .choice-menu .choice-menu-option[aria-checked="true"]>.icon:last-child{display:block;flex:none;width:14px;height:14px;margin-left:auto;padding:0;border-radius:0;background:none;color:var(--accent-ink)}
+html[data-theme=dark] .choice-menu .choice-menu-option[aria-checked="true"]>.icon:last-child{color:var(--accent)}

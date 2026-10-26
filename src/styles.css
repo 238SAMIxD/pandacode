@@ -906,11 +906,12 @@ html[data-native-platform=macos] .github-view .gh-repos-head{padding-left:calc(8
 @media (max-width:900px){.preview-status{display:none}}
 /* The prompt box and the bar above it have no border, except under increased contrast. */
 @media (prefers-contrast:more){html[data-theme] .workspace :is(.composer,.composer-context,.composer:focus-within),html[data-theme] .workspace[data-wallpaper] .conversation-pane :is(.composer,.composer-context,.composer:focus-within){border-color:var(--text)}}
-/* Dropdowns and popovers are one solid surface with no border (dialogs and toasts keep the glass).
-   `body` lifts this above the per-menu glass rules, including lazily loaded ones. */
-html[data-theme] body :is(.floating-menu,.bp-menu){background:var(--panel);border-color:transparent;backdrop-filter:none;-webkit-backdrop-filter:none;box-shadow:0 14px 36px -10px rgb(0 0 0 / .2),0 3px 10px -4px rgb(0 0 0 / .1)}
-html[data-theme="dark"] body :is(.floating-menu,.bp-menu){box-shadow:0 16px 40px -10px rgb(0 0 0 / .6),0 3px 10px -4px rgb(0 0 0 / .35)}
-@media (prefers-contrast:more){html[data-theme] body :is(.floating-menu,.bp-menu){border-color:var(--text)}}
+/* Popovers other than menus are one solid surface with no border. Menus (.floating-menu) keep
+   the warm glass from the --glass-* tokens, with solid fallbacks under reduced transparency/contrast. */
+html[data-theme] body .bp-menu{background:var(--panel);border-color:transparent;backdrop-filter:none;-webkit-backdrop-filter:none;box-shadow:0 14px 36px -10px rgb(0 0 0 / .2),0 3px 10px -4px rgb(0 0 0 / .1)}
+html[data-theme="dark"] body .bp-menu{box-shadow:0 16px 40px -10px rgb(0 0 0 / .6),0 3px 10px -4px rgb(0 0 0 / .35)}
+@media (prefers-reduced-transparency:reduce){html[data-theme] body .floating-menu{background:var(--panel);backdrop-filter:none;-webkit-backdrop-filter:none}}
+@media (prefers-contrast:more){html[data-theme] body :is(.floating-menu,.bp-menu){background:var(--panel);border-color:var(--text);backdrop-filter:none;-webkit-backdrop-filter:none}}
 /* Modals are one solid surface with no border: no glass, sheen or hairline on the plate. */
 html[data-theme] body .dialog-plate{background:var(--panel);border-color:transparent;backdrop-filter:none;-webkit-backdrop-filter:none;box-shadow:0 40px 100px -30px rgb(0 0 0 / .32),0 16px 36px -20px rgb(0 0 0 / .2)}
 html[data-theme="dark"] body .dialog-plate{box-shadow:0 40px 100px -30px rgb(0 0 0 / .7),0 16px 36px -20px rgb(0 0 0 / .45)}

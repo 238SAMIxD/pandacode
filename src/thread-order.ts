@@ -30,9 +30,45 @@ export function threadGroupRows(row: HTMLElement): HTMLElement[] {
 export function bindThreadReordering(nav: HTMLElement, options: {
   busy(): boolean;
   reorder(ids: string[], focusedId: string): void;
+  /** Folder headings are draggable only under Projects: Manual; ids are project ids in order. */
+  reorderFolders(ids: string[], focusedId: string): void;
   dragging(active: boolean): void;
   menu(row: HTMLElement): void;
+  folderMenu(heading: HTMLElement): void;
 }): void {
+  const folderIds = () => [...nav.querySelectorAll<HTMLElement>('.folder-heading[draggable=true]')].map(item => item.dataset.project!);
+  let folder: HTMLElement | null = null, folderTarget: HTMLElement | null = null, folderAfter = false;
+  const clearFolder = () => { folderTarget?.classList.remove('drop-before', 'drop-after'); folderTarget = null; };
+  nav.addEventListener('dragstart', event => {
+    const heading = (event.target as Element).closest<HTMLElement>('.folder-heading[draggable=true]');
+    if (!heading || !event.dataTransfer) return;
+    event.stopImmediatePropagation();
+    folder = heading; event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('application/x-pandacode-folder', heading.dataset.project!);
+    heading.classList.add('task-dragging'); options.dragging(true);
+  });
+  nav.addEventListener('dragover', event => {
+    if (!folder) return;
+    event.stopImmediatePropagation();
+    const heading = (event.target as Element).closest('.folder-group')?.querySelector<HTMLElement>('.folder-heading[draggable=true]');
+    clearFolder();
+    if (!heading) return;
+    event.preventDefault(); folderTarget = heading;
+    const box = heading.getBoundingClientRect(); folderAfter = event.clientY > box.top + box.height / 2;
+    if (heading !== folder) heading.classList.add(folderAfter ? 'drop-after' : 'drop-before');
+  });
+  const endFolder = () => { const active = Boolean(folder); folder?.classList.remove('task-dragging'); folder = null; clearFolder(); if (active) options.dragging(false); };
+  nav.addEventListener('drop', event => {
+    if (!folder) return;
+    event.stopImmediatePropagation(); event.preventDefault();
+    const id = folder.dataset.project!, current = folderIds(), ids = current.filter(value => value !== id);
+    if (folderTarget && folderTarget !== folder) {
+      ids.splice(ids.indexOf(folderTarget.dataset.project!) + Number(folderAfter), 0, id);
+      if (ids.join('\0') !== current.join('\0')) options.reorderFolders(ids, id);
+    }
+    endFolder();
+  });
+  nav.addEventListener('dragend', () => { if (folder) endFolder(); });
   let source: HTMLElement | null = null, target: HTMLElement | null = null, after = false;
   let scroll = 0, speed = 0;
   const clearTarget = () => { target?.classList.remove('drop-before', 'drop-after'); target = null; };
@@ -77,7 +113,9 @@ export function bindThreadReordering(nav: HTMLElement, options: {
   window.addEventListener('blur', finish);
   nav.addEventListener('contextmenu', event => {
     const row = (event.target as Element).closest<HTMLElement>('.task-item');
-    if (row) { event.preventDefault(); options.menu(row); }
+    if (row) { event.preventDefault(); options.menu(row); return; }
+    const heading = (event.target as Element).closest('.folder-row')?.querySelector<HTMLElement>('.folder-heading');
+    if (heading) { event.preventDefault(); options.folderMenu(heading); }
   });
   nav.addEventListener('focusin', event => { if ((event.target as Element).matches(STOPS)) syncRovingFocus(nav); });
   nav.addEventListener('keydown', event => {
@@ -85,6 +123,18 @@ export function bindThreadReordering(nav: HTMLElement, options: {
     if (!event.altKey && !event.metaKey && !event.ctrlKey && ['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key) && target.matches(STOPS)) {
       if (moveFocus(nav, target, event.key)) event.preventDefault();
       return;
+    }
+    // Alt+↑/↓ moves a folder under Projects: Manual; the menu key opens its menu.
+    if (target.matches('.folder-heading')) {
+      if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); options.folderMenu(target); return; }
+      if (event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+        event.preventDefault();
+        if (target.draggable) {
+          const ids = folderIds(), index = ids.indexOf(target.dataset.project!), next = index + (event.key === 'ArrowUp' ? -1 : 1);
+          if (index >= 0 && next >= 0 && next < ids.length) { [ids[index], ids[next]] = [ids[next], ids[index]]; options.reorderFolders(ids, target.dataset.project!); }
+        }
+        return;
+      }
     }
     // → opens and ← closes a folder or section from its heading.
     if ((event.key === 'ArrowRight' || event.key === 'ArrowLeft') && target.matches('.folder-heading, .section-toggle')) {

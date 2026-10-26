@@ -1116,7 +1116,9 @@ test('all projects: folder headings show the project icon and rows are one line 
   const folders = page.locator('#navigation .folder-group:not(.single-project)');
   await expect(page.locator('#navigation .folder-heading')).toHaveCount(2);
   await expect(page.locator('#navigation .folder-heading > .task-app-icon')).toHaveCount(2);
-  await expect(page.locator('#navigation .folder-heading > svg.icon')).toHaveCount(0);
+  // The only drawn icon is the open/closed chevron; the project shows its own icon.
+  await expect(page.locator('#navigation .folder-heading > svg.icon:not(.folder-chevron)')).toHaveCount(0);
+  await expect(page.locator('#navigation .folder-heading > svg.folder-chevron')).toHaveCount(2);
   await expect(folders.locator('.task-item .task-checkout')).toHaveCount(0);
   await expect(folders.locator('.task-item .task-top .task-title').first()).toBeVisible();
   // Each row is one line, with its harness and linked PR beside the title.

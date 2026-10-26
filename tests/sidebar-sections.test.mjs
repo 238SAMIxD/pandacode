@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { REVIEW_WINDOW, readOpen, sidebarSections } from '../src/sidebar-sections.ts';
+import { REVIEW_WINDOW, readOpen, sectionOf, sidebarSections } from '../src/sidebar-sections.ts';
 
 const now = 10 * REVIEW_WINDOW;
 const task = (id, extra = {}) => ({ id, projectId: 'p', createdAt: 1, updatedAt: 1, lastResponseAt: null, taskStage: 'pending', ...extra });
@@ -69,6 +69,17 @@ test('the open thread holds its section, so a click on its row never moves it; r
   assert.deepEqual(ids(split([done], { selectedId: 'done', hold: 'rest' }).rest), ['done']);
   assert.deepEqual(ids(split([done], { selectedId: 'other', hold: 'rest' }).completed), ['done']);
   assert.deepEqual(ids(split([{ ...idea, running: true }], { selectedId: 'idea', hold: 'rest' }).active), ['idea']);
+  // Opened from Active, a finished run stays there while the thread is open.
+  assert.deepEqual(ids(split([idea], { selectedId: 'idea', hold: 'active' }).active), ['idea']);
+  assert.deepEqual(ids(split([idea], { selectedId: 'other', hold: 'active' }).rest), ['idea']);
+});
+
+test('sectionOf maps sidebar groups to the section a thread holds', () => {
+  assert.equal(sectionOf('active'), 'active');
+  assert.equal(sectionOf('review'), 'review');
+  assert.equal(sectionOf('completed'), 'completed');
+  for (const group of ['pinned', 'chats', 'project:p', 'all', 'archived']) assert.equal(sectionOf(group), 'rest');
+  assert.equal(sectionOf(undefined), undefined);
 });
 
 test('the Completed section reads its open state safely', () => {

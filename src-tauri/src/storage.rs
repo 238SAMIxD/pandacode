@@ -164,6 +164,20 @@ pub const SCHEMA_VERSION: i64 = 31;
 
 const SIDEBAR_ORDER: &str = "pinned DESC,sidebar_order IS NULL,sidebar_order,COALESCE(MAX(last_response_at,last_prompt_at),last_response_at,last_prompt_at,created_at) DESC,id";
 
+/// Once the sidebar has been arranged by hand, a New task published by its first prompt goes to
+/// the top: every rank moves down one and it takes rank 0. Without this the next reorder would
+/// rank it after every arranged task. Forks and imports stay unranked. A TEMP trigger lives on
+/// this connection only, so it needs no schema change; it is added once ranks exist.
+fn rank_published_drafts(db: &Connection) -> Result<()> {
+    db.execute_batch("CREATE TEMP TRIGGER IF NOT EXISTS rank_published_draft AFTER UPDATE OF draft ON main.sessions
+        WHEN OLD.draft=1 AND NEW.draft=0 AND NEW.sidebar_order IS NULL AND NEW.pinned=0
+          AND EXISTS(SELECT 1 FROM main.sessions WHERE sidebar_order IS NOT NULL)
+        BEGIN
+          UPDATE sessions SET sidebar_order=sidebar_order+1 WHERE sidebar_order IS NOT NULL;
+          UPDATE sessions SET sidebar_order=0 WHERE id=NEW.id;
+        END;").map_err(|e| e.to_string())
+}
+
 fn settle_unfinished_tools(db: &Connection, sid: Option<&str>, notice: &str) -> Result<()> {
     db.execute("UPDATE messages SET content=json_set(content,'$.status','failed','$.output',
         COALESCE(json_extract(content,'$.output'),'') || ?2)
@@ -507,6 +521,8 @@ impl Store {
             '$.workers',json((SELECT json_group_array(json(CASE WHEN json_extract(value,'$.status') IN ('running','waiting') THEN json_set(value,'$.status','stopped') ELSE value END)) FROM json_each(content,'$.workers'))))
             WHERE json_extract(content,'$.status') IN ('running','waiting');").map_err(|e|e.to_string())?;
         recovery.commit().map_err(|e| e.to_string())?;
+        let ranked: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE sidebar_order IS NOT NULL)", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+        if ranked { rank_published_drafts(&db)?; }
         let store = Self {
             db,
             path: path.to_path_buf(),
@@ -899,6 +915,7 @@ impl Store {
             }
         }
         transaction.commit().map_err(|e| e.to_string())?;
+        rank_published_drafts(&self.db)?;
         self.sessions()
     }
     fn attach_links(&self, sessions: &mut [Session]) -> Result<()> {
@@ -1152,13 +1169,16 @@ impl Store {
 
     pub fn set_task_stage(&self, sid: &str, stage: &str) -> Result<Session> {
         crate::architect::check_manual(self, sid)?;
-        if stage == "in_progress" {
+        let current = self.session(sid)?;
+        // Work in progress comes from starting a task. The one way back by hand is undoing the
+        // completion of a run that stopped or failed, which never left work in progress.
+        let undoing = current.task_stage == "completed" && matches!(current.status.as_str(), "error" | "interrupted");
+        if stage == "in_progress" && !undoing {
             return Err("Start the task to move it to work in progress.".into());
         }
-        if !matches!(stage, "pending" | "review" | "completed") {
+        if !matches!(stage, "pending" | "review" | "completed" | "in_progress") {
             return Err("Unknown task stage.".into());
         }
-        self.session(sid)?;
         let changed = self
             .db
             .execute(
@@ -1803,6 +1823,26 @@ mod tests {
     }
 
     #[test]
+    fn a_new_task_published_after_a_manual_reorder_is_listed_first_and_stays_there() {
+        let (store, first) = empty_session();
+        let second = store.create_session(&first.project_id, "claude", "sonnet", "auto").unwrap();
+        let ids = |store: &Store| store.sessions().unwrap().into_iter().map(|task| task.id).collect::<Vec<_>>();
+        // Nothing arranged yet: a published draft stays unranked and activity orders the list.
+        let early = store.mark_draft(&store.create_session(&first.project_id, "claude", "sonnet", "auto").unwrap().id).unwrap();
+        store.message(&early.id, "user", "First").unwrap();
+        assert_eq!(store.session(&early.id).unwrap().sidebar_order, None);
+        store.reorder_sessions(&[first.id.clone(), second.id.clone(), early.id.clone()]).unwrap();
+        let draft = store.mark_draft(&store.create_session(&first.project_id, "codex", "gpt-5", "auto").unwrap().id).unwrap();
+        assert_eq!(store.session(&draft.id).unwrap().sidebar_order, None, "drafts are not ranked");
+        store.message(&draft.id, "user", "Build the thing").unwrap();
+        assert_eq!(store.session(&draft.id).unwrap().sidebar_order, Some(0));
+        assert_eq!(ids(&store), vec![draft.id.clone(), first.id.clone(), second.id.clone(), early.id.clone()]);
+        // Reordering two other tasks keeps it on top instead of ranking it last.
+        store.reorder_sessions(&[second.id.clone(), first.id.clone()]).unwrap();
+        assert_eq!(ids(&store), vec![draft.id.clone(), second.id.clone(), first.id.clone(), early.id.clone()]);
+    }
+
+    #[test]
     fn new_task_drafts_stay_hidden_until_their_first_prompt() {
         let (store, listed) = empty_session();
         let draft = store.create_session(&listed.project_id, "codex", "gpt-5", "auto").unwrap();
@@ -2059,9 +2099,16 @@ mod tests {
         let stopped = store.session(&task.id).unwrap();
         assert_eq!(stopped.status, "interrupted");
         assert_eq!(stopped.task_stage, "in_progress");
+        // Completing a stopped run can be undone back to work in progress.
+        store.set_task_stage(&task.id, "completed").unwrap();
+        let undone = store.set_task_stage(&task.id, "in_progress").unwrap();
+        assert_eq!(undone.task_stage, "in_progress");
+        assert!(undone.completed_at.is_none());
         store.begin_task_turn(&task.id, "Finish").unwrap();
         store.finish_task_turn(&task.id, true, false).unwrap();
         let review = store.session(&task.id).unwrap();
+        // Undoing a completion puts a stopped run back in progress; nothing else may.
+        assert!(store.set_task_stage(&task.id, "in_progress").is_err());
         assert_eq!(review.status, "idle");
         assert_eq!(review.task_stage, "review");
         assert!(review.completed_at.is_none());

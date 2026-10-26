@@ -69,3 +69,20 @@ test('/ focuses the filter from the sidebar and ⌘Z undoes completing a task', 
   await expect(page.locator('#navigation [data-thread-group="completed"]')).toHaveCount(0);
   await expect(row(page, 'session-3')).toHaveCount(1);
 });
+
+test('jump shortcuts never fire while typing, and / focuses the filter from the page body', async ({ page }) => {
+  await open(page);
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+  const prompt = page.getByRole('textbox', { name: 'Message your coding agent', exact: true });
+  await prompt.focus();
+  await page.keyboard.press(`${mod}+2`);
+  await page.keyboard.press(`${mod}+Shift+BracketRight`);
+  await expect(row(page, 'session-1')).toHaveAttribute('aria-current', 'page');
+  await expect(prompt).toBeFocused();
+  await prompt.fill('a/b');
+  await expect(page.getByRole('searchbox', { name: 'Filter tasks', exact: true })).not.toBeFocused();
+  await prompt.fill('');
+  await page.evaluate(() => (document.activeElement as HTMLElement).blur());
+  await page.keyboard.press('/');
+  await expect(page.getByRole('searchbox', { name: 'Filter tasks', exact: true })).toBeFocused();
+});

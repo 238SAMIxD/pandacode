@@ -24,14 +24,16 @@ export interface TreeInput {
   /** Keep folders without tasks (hidden while searching). */
   includeEmpty: boolean;
   sort?: ProjectSort;
+  /** The dragged folder order, for `sort: 'manual'`. */
+  manual?: readonly string[];
 }
 
 /** Folders ordered by the project sort; within a folder, tasks keep their sidebar order. */
-export function folderGroups({ projects, tasks, all = tasks, includeEmpty, sort = 'recent' }: TreeInput): FolderGroup[] {
+export function folderGroups({ projects, tasks, all = tasks, includeEmpty, sort = 'recent', manual = [] }: TreeInput): FolderGroup[] {
   const byProject = new Map<string, Session[]>(), latest = new Map<string, number>();
   for (const task of tasks) byProject.set(task.projectId, [...(byProject.get(task.projectId) ?? []), task]);
   for (const task of all) latest.set(task.projectId, Math.max(latest.get(task.projectId) ?? 0, activityAt(task)));
-  const order = projectComparator(sort, projects, latest);
+  const order = projectComparator(sort, projects, latest, manual);
   return [...projects].sort(order)
     .map(project => ({ project, tasks: byProject.get(project.id) ?? [], latest: latest.get(project.id) ?? 0 }))
     .filter(group => group.tasks.length || includeEmpty);
