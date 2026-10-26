@@ -35,10 +35,11 @@ interface Entry {
 
 const EAGER = 8;
 const REFETCH_GAP = 1_000;
-// Applied inside each diff's shadow root: wrapped code may break anywhere (so indentation never
+// Applied inside each diff's shadow root: long lines scroll with a visible bar; wrapped code may break anywhere (so indentation never
 // sits alone on a row), and hunk headers are one slim muted line.
 const SHADOW_CSS = `
   pre[data-diff][data-overflow='wrap'] [data-line] { white-space: pre-wrap; word-break: break-all; overflow-wrap: anywhere; }
+  pre[data-diff] [data-code] { scrollbar-width: thin; }
   pre[data-diff] [data-separator='metadata'] { height: 20px; }
   pre[data-diff] [data-separator='metadata'] [data-separator-wrapper] {
     font-size: .68rem; line-height: 20px; opacity: .8;

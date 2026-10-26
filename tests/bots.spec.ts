@@ -202,6 +202,7 @@ test.describe('bots', () => {
     await newBot(page);
     await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
     const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
+    await picker.getByRole('tab', { name: 'Kimi Code' }).click();
     await picker.getByRole('combobox', { name: 'Search harnesses and models', exact: true }).fill('bot-thread-model');
     await picker.getByRole('option', { name: 'Use "bot-thread-model" with Kimi Code', exact: true }).click();
     await expect(page.locator('#composer')).toContainText('bot-thread-model');
