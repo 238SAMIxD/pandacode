@@ -106,3 +106,34 @@ test('/ also works from the transcript, but not on a control outside the list, a
   }));
   expect(prevented).toBe(false);
 });
+
+test('in the sort menu ↓/↑ step over the per-project row, ←/→ move along it; focus looks like hover', async ({ page }) => {
+  await open(page);
+  await page.getByRole('button', { name: 'Sort and view', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Sort and view', exact: true });
+  const item = (group: string, name: string) => dialog.getByRole('group', { name: group, exact: true }).getByRole('menuitemradio', { name, exact: true });
+  const segment = (name: string) => dialog.getByRole('group', { name: 'Show per project', exact: true }).getByRole('menuitemradio', { name, exact: true });
+  await expect(dialog.locator('.choice-menu-option:focus')).toHaveCount(1);
+  await page.keyboard.press('End');
+  await expect(item('Group', 'Flat list')).toBeFocused();
+  await page.keyboard.press('ArrowUp');
+  await expect(item('Group', 'By project')).toBeFocused();
+  // Entering the row lands on its current choice…
+  await page.keyboard.press('ArrowUp');
+  await expect(segment('6 tasks')).toBeFocused();
+  // …→ moves along it, and ↑/↓ leave it whole.
+  await page.keyboard.press('ArrowRight');
+  await expect(segment('10 tasks')).toBeFocused();
+  await page.keyboard.press('ArrowUp');
+  await expect(item('Sort projects', 'Manual')).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(segment('6 tasks')).toBeFocused();
+  await page.keyboard.press('ArrowLeft');
+  await expect(segment('3 tasks')).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(item('Group', 'By project')).toBeFocused();
+  const focused = item('Group', 'By project');
+  await expect(focused).toHaveCSS('outline-style', 'none');
+  await expect(focused).toHaveCSS('box-shadow', /0px 0px 0px 1px inset/);
+  expect(await focused.evaluate(node => getComputedStyle(node).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
+});

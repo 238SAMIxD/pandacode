@@ -33,8 +33,8 @@ export function bindThreadReordering(nav: HTMLElement, options: {
   /** Folder headings are draggable only under Projects: Manual; ids are project ids in order. */
   reorderFolders(ids: string[], focusedId: string): void;
   dragging(active: boolean): void;
-  menu(row: HTMLElement): void;
-  folderMenu(heading: HTMLElement): void;
+  menu(row: HTMLElement, point?: { x: number; y: number }): void;
+  folderMenu(heading: HTMLElement, point?: { x: number; y: number }): void;
 }): void {
   const folderIds = () => [...nav.querySelectorAll<HTMLElement>('.folder-heading[draggable=true]')].map(item => item.dataset.project!);
   let folder: HTMLElement | null = null, folderTarget: HTMLElement | null = null, folderAfter = false;
@@ -112,10 +112,12 @@ export function bindThreadReordering(nav: HTMLElement, options: {
   nav.addEventListener('dragleave', event => { if (!nav.contains(event.relatedTarget as Node | null)) { clearTarget(); speed = 0; } });
   window.addEventListener('blur', finish);
   nav.addEventListener('contextmenu', event => {
+    // A pointer opens the menu where it is; the menu key (no coordinates) keeps it on the row.
+    const point = event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : undefined;
     const row = (event.target as Element).closest<HTMLElement>('.task-item');
-    if (row) { event.preventDefault(); options.menu(row); return; }
+    if (row) { event.preventDefault(); options.menu(row, point); return; }
     const heading = (event.target as Element).closest('.folder-row')?.querySelector<HTMLElement>('.folder-heading');
-    if (heading) { event.preventDefault(); options.folderMenu(heading); }
+    if (heading) { event.preventDefault(); options.folderMenu(heading, point); }
   });
   nav.addEventListener('focusin', event => { if ((event.target as Element).matches(STOPS)) syncRovingFocus(nav); });
   nav.addEventListener('keydown', event => {

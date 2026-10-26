@@ -35,8 +35,8 @@ html[data-theme] .sidebar .new-task-button>.icon{color:var(--focus)}
 .sidebar-search-clear:hover{color:var(--text);background:color-mix(in srgb,var(--text) 8%,transparent)}
 .sidebar-search-clear .icon{width:11px;height:11px}
 .sidebar .sidebar-no-match{padding:6px 9px;font-size:.76rem;color:var(--muted)}
-/* Narrow windows hide it, except in the archive view, where it is the way to find old work. */
-@media(max-width:650px){.sidebar-search{display:none}.sidebar.archive-view .sidebar-search{display:flex}}
+/* Narrow windows (the rail) hide it, as they hide the task list. */
+@media(max-width:650px){.sidebar-search{display:none}}
 .sidebar .task-group+.task-group{margin-top:2px}
 .sidebar .pinned-group{margin-bottom:6px}
 .sidebar .group-heading{display:flex;align-items:center;gap:6px;height:24px;padding:0 9px;font-size:.72rem;font-weight:600;color:var(--muted)}
@@ -142,14 +142,14 @@ html[data-theme=dark] .sidebar .task-indicator.unread{background:var(--accent)}
 
 /* Row actions are the row button's siblings, over its right edge: shown on hover or focus,
    where the row's age and status step aside for them. A completed row keeps its tick. */
-.sidebar .task-row{position:relative;--row-actions:0px}
-.sidebar .task-row[data-actions="1"]{--row-actions:26px}
-.sidebar .task-row[data-actions="2"]{--row-actions:49px}
-.sidebar .task-row[data-actions="3"]{--row-actions:72px}
+.sidebar .task-row{position:relative}
 .sidebar .task-row:is(:hover,:focus-within)>.task-item:not(.selected){background:var(--raised)}
 .sidebar .task-actions{position:absolute;z-index:1;top:4px;right:0;padding-right:5px;display:flex;align-items:center;gap:1px;opacity:0;pointer-events:none}
 .sidebar .task-row-oneline>.task-actions{top:0;bottom:0}
 .sidebar .task-row:is(:hover,:focus-within)>.task-actions{opacity:1;pointer-events:auto}
+/* Light wallpaper: ages, counts and "Show N more" sit on frost over the scene, which darker scenes
+   pull toward grey; these keep them ≥6:1 on every scene at the default visibility. */
+html:not([data-theme="dark"]) .workspace[data-wallpaper]>.sidebar{--muted:#45483f;--faint:#4b4e45}
 /* The actions cover the status/age slot, which keeps its width, behind a short fade to the row's
    own background: the title keeps its length instead of shrinking for them. */
 .sidebar .task-row{--row-bg:var(--raised)}
@@ -170,6 +170,8 @@ html[data-theme] .workspace[data-wallpaper]>.sidebar .task-row:has(>.task-item.s
 
 .folder-more{display:block;width:100%;height:26px;padding:0 8px 0 29px;border-radius:3px;text-align:left;font-size:.76rem;color:var(--muted);--press:1}
 .folder-more:hover{color:var(--text);background:var(--raised)}
+/* Outside a folder (Completed, Chats) it lines up with the rows above it. */
+.sidebar .task-list:not(.folder-tasks)>.folder-more{padding-left:9px}
 .sidebar .folder-tasks>.no-tasks{padding:5px 8px 6px;font-size:.74rem}
 .sidebar .single-project .task-list{gap:1px}
 .sidebar .single-project .folder-more{padding-left:31px}

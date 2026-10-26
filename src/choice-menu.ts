@@ -31,6 +31,8 @@ type ChoiceItem = {
 };
 type ChoiceMenuOptions = {
   anchor: HTMLElement;
+  /** Opens at this viewport point (a right-click) instead of under the anchor, which still owns focus. */
+  point?: { x: number; y: number };
   title: string;
   items: ChoiceItem[];
   onSelect: (id: string) => void | Promise<void>;
@@ -90,7 +92,7 @@ export function openChoiceMenu(options: ChoiceMenuOptions): () => void {
     const leftEdge = (viewport?.offsetLeft ?? 0) + 12, topEdge = (viewport?.offsetTop ?? 0) + 12;
     const width = Math.max(0, (viewport?.width ?? innerWidth) - 24);
     const height = Math.max(0, (viewport?.height ?? innerHeight) - 24);
-    const rect = anchor.getBoundingClientRect();
+    const rect = options.point ? new DOMRect(options.point.x, options.point.y, 0, 0) : anchor.getBoundingClientRect();
     panel.style.position = 'fixed';
     // One-line rows need room for a label and its detail: 280px unless the caller sizes it.
     panel.style.width = `${Math.min(340, options.width ?? Math.max(280, rect.width), width)}px`;
@@ -222,8 +224,15 @@ export function openChoiceMenu(options: ChoiceMenuOptions): () => void {
     if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(key)) {
       event.preventDefault();
       const current = enabled.indexOf(active);
-      const next = event.target === search ? key === 'ArrowUp' ? enabled.length - 1 : Math.max(0, current) : key === 'Home' ? 0 : key === 'End' ? enabled.length - 1 : (current + (key === 'ArrowDown' ? 1 : -1) + enabled.length) % enabled.length;
-      focusItem(enabled[next]);
+      const step = (from: number) => (from + (key === 'ArrowDown' ? 1 : -1) + enabled.length) % enabled.length;
+      let next = event.target === search ? key === 'ArrowUp' ? enabled.length - 1 : Math.max(0, current) : key === 'Home' ? 0 : key === 'End' ? enabled.length - 1 : step(current);
+      // ↓ and ↑ leave a segmented row whole (← and → move along it), and enter one at its current choice.
+      const group = (n: number) => items[enabled[n]]?.segment;
+      if (segment && event.key !== 'ArrowRight' && event.key !== 'ArrowLeft' && (key === 'ArrowDown' || key === 'ArrowUp')) {
+        for (let n = 0; n < enabled.length && group(next) === group(current); n++) next = step(next);
+      }
+      const entered = group(next) && group(next) !== group(current) ? enabled.findIndex(index => items[index].segment === group(next) && items[index].selected) : -1;
+      focusItem(enabled[entered >= 0 ? entered : next]);
     } else if (event.key === 'Enter' && event.target === search) {
       event.preventDefault(); void select(active);
     } else if (event.target !== search && event.key.length === 1 && event.key !== ' ' && !event.metaKey && !event.ctrlKey && !event.altKey) {

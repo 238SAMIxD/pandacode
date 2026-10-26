@@ -10,7 +10,7 @@
 .sidebar-bots-unread{width:7px;height:7px;border-radius:50%;background:var(--accent);flex:none}
 
 /* In the Bots view the task list, its actions and filters give way to the bots. */
-.sidebar.bots-view :is(.sidebar-actions,.sidebar-projects,.navigation,.sidebar-note){display:none}
+.sidebar.bots-view :is(.sidebar-actions,.sidebar-projects,.sidebar-search,.navigation,.sidebar-note){display:none}
 .bots-panel{display:none}
 .sidebar.bots-view .bots-panel{display:flex;flex-direction:column;flex:1;min-height:0}
 .bots-panel-head{display:flex;align-items:center;gap:6px;padding:6px 10px 10px 14px}

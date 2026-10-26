@@ -326,4 +326,35 @@ test.describe('thread order', () => {
     await page.locator('.folder-heading[data-project="project-1"]').dragTo(page.locator('.folder-heading[data-project="project-2"]'), { targetPosition: { x: 30, y: 3 } });
     await expect.poll(folders).toEqual(['project-1', 'project-2']);
   });
+
+  test('picking Projects: Manual from a flat list saves every project in its current order', async ({ page }) => {
+    await open(page);
+    const choose = async (group: string, name: string) => {
+      await page.getByRole('button', { name: 'Sort and view', exact: true }).click();
+      await page.getByRole('group', { name: group, exact: true }).getByRole('menuitemradio', { name, exact: true }).click();
+    };
+    await choose('Group', 'Flat list');
+    await expect(page.locator('#navigation .folder-heading')).toHaveCount(0);
+    await choose('Sort projects', 'Manual');
+    const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('pandacode.sidebar.projectOrder') ?? '[]'));
+    expect(saved).toEqual(['project-1', 'project-2']);
+    await choose('Group', 'By project');
+    await expect.poll(() => page.locator('#navigation .folder-heading').evaluateAll(nodes => nodes.map(node => (node as HTMLElement).dataset.project))).toEqual(['project-1', 'project-2']);
+  });
+
+  test('a right-click opens the task menu at the pointer; the … button keeps it on the row', async ({ page }) => {
+    await open(page);
+    const box = (await row(page, 'session-2').boundingBox())!;
+    await row(page, 'session-2').click({ button: 'right', position: { x: 60, y: 6 } });
+    let panel = (await menu(page).boundingBox())!;
+    expect(Math.abs(panel.x - (box.x + 60))).toBeLessThan(2);
+    expect(panel.y).toBeGreaterThan(box.y + 6);
+    await page.keyboard.press('Escape');
+    await expect(menu(page)).toBeHidden();
+    await row(page, 'session-2').hover();
+    await page.locator('#task-row-session-2 .task-more').click();
+    panel = (await menu(page).boundingBox())!;
+    expect(Math.abs(panel.x - box.x)).toBeLessThan(2);
+    expect(panel.y).toBeGreaterThanOrEqual(box.y + box.height);
+  });
 });

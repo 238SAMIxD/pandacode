@@ -354,8 +354,8 @@ bindThreadReordering($('#navigation'), {
   dragging: active => { sidebarDragging = active; if (!active) renderNavigation(); },
   reorder: (ids, focus) => run(reorderThreads(ids, focus)),
   reorderFolders: (ids, focus) => reorderFolders(ids, focus),
-  menu: row => run(showSidebarTaskMenu(row)),
-  folderMenu: heading => run(showFolderMenu(heading)),
+  menu: (row, point) => run(showSidebarTaskMenu(row, point)),
+  folderMenu: (heading, point) => run(showFolderMenu(heading, point)),
 });
 /* Branch and worktree control, plus optional GitHub through the user's gh CLI. */
 const github = createGithub({
@@ -1067,8 +1067,7 @@ function renderNavigation(): void {
     const extra = state.archived
       ? `<button class="task-action task-archive" data-action="sidebar-archive" data-task="${id}" tabindex="-1" aria-label="Restore: ${title}" title="Restore task">${icon('undo')}</button><button class="task-action task-delete" data-action="sidebar-delete" data-task="${id}" tabindex="-1" aria-label="Delete: ${title}" title="${busy ? 'Stop the agent before deleting this task' : 'Delete task…'}" ${busy ? 'disabled' : ''}>${icon('trash')}</button>`
       : `<button class="task-action task-more" data-action="sidebar-more" data-task="${id}" tabindex="-1" aria-haspopup="menu" aria-label="Task actions: ${title}" title="Task actions">${icon('more')}</button>`;
-    const count = (tick ? 1 : 0) + (state.archived ? 2 : 1);
-    const wrap = (content: string) => `<div class="task-row${card ? '' : ' task-row-oneline'}" id="task-row-${id}" data-stage="${stage}" data-actions="${count}">${content}<span class="task-actions">${tick}${extra}</span></div>`;
+    const wrap = (content: string) => `<div class="task-row${card ? '' : ' task-row-oneline'}" id="task-row-${id}" data-stage="${stage}">${content}<span class="task-actions">${tick}${extra}</span></div>`;
     // One line: the title, then the worktree mark, linked PR or issue, status, age and harness.
     // A flat list names each row's project: its icon first, its name after the title.
     if (!card && showProject) return wrap(`${button}<span class="task-line task-top">${projectAppIcon(s.projectId, p?.name ?? '')}<span class="task-title">${title}</span><span class="task-project-name" aria-hidden="true">${escape(chatTask(s) ? 'Chat' : p?.name ?? 'Project')}</span>${worktreeMark}${linkMark}${pin}${projectLabel}${signals}${providerLogo(s.provider, 'task-provider')}</span></button>`);
@@ -3731,7 +3730,7 @@ function sidebarTaskAction(kind: 'complete' | 'reopen' | 'archive' | 'delete', i
     }));
   }
 }
-async function showSidebarTaskMenu(anchor: HTMLElement): Promise<void> {
+async function showSidebarTaskMenu(anchor: HTMLElement, point?: { x: number; y: number }): Promise<void> {
   const id = anchor.dataset.id!, task = state.sessions.find(item => item.id === id);
   if (!task) return;
   const ids = threadGroupRows(anchor).map(row => row.dataset.id!), index = ids.indexOf(id);
@@ -3741,7 +3740,7 @@ async function showSidebarTaskMenu(anchor: HTMLElement): Promise<void> {
   const fixed = !anchor.draggable, busy = isRunning(id) || configuringSessions.has(id), done = taskStage(task) === 'completed';
   const unread = unreviewed?.has(id) ?? false, path = task.worktreePath ?? state.projects.find(p => p.id === task.projectId)?.path ?? '';
   const branch = task.worktreeBranch ?? '';
-  await showChoices(anchor, { title: 'Task actions', actions: true, width: 280, items: [
+  await showChoices(anchor, { title: 'Task actions', point, actions: true, width: 280, items: [
     { id: 'pin', label: task.pinned ? 'Unpin task' : 'Pin task', icon: 'pin', disabled: orderingBusy },
     ...movable ? [
       { id: 'up', label: 'Move up', icon: 'arrow', disabled: fixed || orderingBusy || index < 1 },
@@ -3784,11 +3783,11 @@ async function showSidebarTaskMenu(anchor: HTMLElement): Promise<void> {
   } });
 }
 /** A folder's menu (… or right-click): new task, collapse the others, reveal, remove. */
-async function showFolderMenu(heading: HTMLElement): Promise<void> {
+async function showFolderMenu(heading: HTMLElement, point?: { x: number; y: number }): Promise<void> {
   const id = heading.dataset.project!, project = state.projects.find(p => p.id === id);
   if (!project) return;
   const anchor = heading.parentElement?.querySelector<HTMLElement>('.folder-actions') ?? heading;
-  await showChoices(anchor, { title: 'Project actions', actions: true, width: 280, items: [
+  await showChoices(anchor, { title: 'Project actions', point, actions: true, width: 280, items: [
     { id: 'new', label: 'New task', icon: 'plus' },
     { id: 'collapse', label: 'Collapse other projects', icon: 'folder' },
     { id: 'reveal', label: isMac ? 'Reveal in Finder' : isWindows ? 'Show in Explorer' : 'Open folder', icon: 'folder', separator: true },
@@ -3829,7 +3828,11 @@ async function showSidebarSort(anchor: HTMLElement): Promise<void> {
   ], onSelect: id => {
     const [key, value] = id.split(':');
     // Manual starts from the folders as they are now, so nothing moves until you drag.
-    if (key === 'projects' && value === 'manual' && !projectOrder.length) reorderFolders([...$('#navigation').querySelectorAll<HTMLElement>('.folder-heading')].map(item => item.dataset.project!), '');
+    // Seeded from the data, not the DOM: a flat list, one project or a filter draws only some folders.
+    if (key === 'projects' && value === 'manual' && !projectOrder.length) {
+      const all = listedSessions().filter(s => s.archived === state.archived);
+      reorderFolders(folderGroups({ projects: userProjects(), tasks: all, includeEmpty: true, sort: sort.projects }).map(group => group.project.id), '');
+    }
     const next: SidebarSort = key === 'perProject' ? { ...sidebarSort, perProject: Number(value) } : { ...sidebarSort, [key]: value };
     sidebarSort = readSort({ getItem: () => JSON.stringify(next) });
     try { localStorage.setItem(SORT_KEY, JSON.stringify(sidebarSort)); } catch { /* per-launch preference only */ }
