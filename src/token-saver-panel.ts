@@ -1,7 +1,9 @@
 import './token-saver.css';
 import { escape, icon } from './dom';
 import { hidePopover, showPopover } from './popover-motion';
+import { tokenCount } from './model-catalog';
 import { LEVELS, PACKS, contextFor, defaults, estimate, setDefaults, threadSaver, updateThread, type PackId } from './token-saver';
+import type { TaskTokenUsage } from './types';
 
 /* The composer's Saver control and its panel: per-thread token-saving packs. */
 
@@ -13,16 +15,46 @@ export type TokenSaverHost = {
   changed(sessionId: string): void;
 };
 
+/** Rough age for a measured-usage line: one precision step is enough. */
+function ago(at: number): string {
+  const minutes = Math.max(1, Math.round((Date.now() - at) / 60000));
+  return minutes < 60 ? `${minutes}m ago` : `${Math.round(minutes / 60)}h ago`;
+}
+
+/** The measured totals for a window, as one quiet line. */
+function measuredText(changedAt: number, usage: TaskTokenUsage): string {
+  const parts = [`${tokenCount(usage.input)} in`, `${tokenCount(usage.output)} out`];
+  const cached = usage.input + usage.cacheRead + usage.cacheWrite;
+  if (cached > 0) parts.push(`${Math.round(usage.cacheRead / cached * 100)}% cache reads`);
+  return `Since the packs changed ${ago(changedAt)}: ${parts.join(' · ')}`;
+}
+
 export function createTokenSaver(host: TokenSaverHost) {
   let tools: Tools = { rtk: false, rtkVersion: '', rtkInstall: 'brew install rtk' };
   let loading: Promise<void> | undefined;
   let panel: HTMLElement | undefined, panelSession = '', cleanup: (() => void) | undefined;
   let installing = false;
+  /** Usage since the packs changed; undefined while loading, null when the harness keeps no logs. */
+  let measured: TaskTokenUsage | null | undefined;
 
   const available = () => ({ rtk: tools.rtk });
   function loadTools(force = false): Promise<void> {
     if (!loading || force) loading = host.call<Tools>('token_saver_tools').then(value => { tools = value; }).catch(() => { /* Optional tools stay off. */ });
     return loading;
+  }
+
+  /** Measured usage since the configuration was sent; harnesses without local logs report nothing. */
+  function loadMeasured(sessionId: string): void {
+    const since = threadSaver(sessionId).changedAt;
+    if (!since) { measured = undefined; return; }
+    measured = undefined;
+    void host.call<TaskTokenUsage | null>('task_token_usage', { sessionId, since }).then(value => {
+      if (panelSession !== sessionId) return;
+      measured = value ?? null;
+      render(sessionId);
+    }).catch(() => {
+      if (panelSession === sessionId) { measured = null; render(sessionId); }
+    });
   }
 
   /** The composer control: a leaf that glows and counts packs while the thread saves. */
@@ -46,6 +78,7 @@ export function createTokenSaver(host: TokenSaverHost) {
       return `<li class="saver-row ${missing ? 'saver-missing' : ''}"><span class="saver-name" id="saver-${id}" data-tip="${escape(about)}">${pack.title}</span><span class="sr-only" id="saver-${id}-about">${escape(about)}</span>${install}<button type="button" role="switch" class="saver-switch" data-pack="${id}" aria-labelledby="saver-${id}" aria-describedby="saver-${id}-about" aria-checked="${active}" ${missing ? 'data-install="rtk"' : ''} ${missing && installing ? 'aria-busy="true" aria-disabled="true"' : ''}></button></li>${levels ? `<li class="saver-levels-row">${levels}</li>` : ''}`;
     };
     panel.innerHTML = `<header class="saver-head"><strong id="saver-title" data-tip="Applies to this thread. Guidance rides along folded with your next message, then every few messages. Savings are estimates from each project's benchmarks.">Token saver</strong><span class="saver-total" aria-label="${saving ? `About ${saving}% fewer tokens` : 'Off'}">${saving ? `−${saving}%` : 'Off'}</span></header>
+      ${saver.packs.length && saver.changedAt && measured ? `<div class="saver-measured">${escape(measuredText(saver.changedAt, measured))}</div>` : ''}
       <ul class="saver-list">${PACKS.map(pack => row(pack.id)).join('')}</ul>
       <footer class="saver-foot"><label class="saver-default"><input type="checkbox" ${sameAsDefault ? 'checked' : ''} ${saver.packs.length ? '' : 'disabled'}><span>Start new threads like this</span></label><button type="button" class="saver-off" ${saver.packs.length ? '' : 'disabled'}>Turn all off</button></footer>`;
   }
@@ -79,6 +112,7 @@ export function createTokenSaver(host: TokenSaverHost) {
     render(sessionId); place(anchor); showPopover(panel, anchor);
     anchor.setAttribute('aria-expanded', 'true');
     panel.querySelector<HTMLElement>('.saver-switch')?.focus({ preventScroll: true });
+    loadMeasured(sessionId);
     // Re-checked on every open, so a fresh `brew install rtk` shows up without a restart.
     void loadTools(true).then(() => { if (panelSession === sessionId) render(sessionId); });
 

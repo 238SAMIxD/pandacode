@@ -55,3 +55,22 @@ test('the estimate compounds, ignores unavailable tools, and stays plausible', (
   assert.ok(all > 50 && all < 75, String(all));
   assert.ok(estimate(['caveman'], 'lite', noRtk) < estimate(['caveman'], 'ultra', noRtk));
 });
+
+test('the saver stamps when its configuration was sent, and reminders keep the stamp', () => {
+  memory.clear();
+  updateThread('t5', { packs: ['caveman'] });
+  contextFor('t5', noRtk);
+  const at = threadSaver('t5').changedAt;
+  assert.equal(typeof at, 'number');
+  for (let i = 0; i < REMIND_EVERY; i++) contextFor('t5', noRtk);
+  assert.equal(threadSaver('t5').changedAt, at, 'reminders keep the original stamp');
+  updateThread('t5', { packs: ['caveman', 'quiet-tools'] });
+  const realNow = Date.now;
+  try {
+    Date.now = () => realNow() + 60000;
+    contextFor('t5', noRtk);
+    assert.ok(threadSaver('t5').changedAt > at, 'a new configuration stamps again');
+  } finally {
+    Date.now = realNow;
+  }
+});

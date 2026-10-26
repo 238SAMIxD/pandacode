@@ -10,6 +10,7 @@ html[data-theme="dark"] .composer-saver-button[aria-pressed="true"]{color:var(--
 .saver-head{display:flex;align-items:center;gap:6px;padding:2px 0 4px}
 .saver-head strong{font-size:.82rem;font-weight:620}
 .saver-total{margin-left:auto;font-size:.74rem;font-weight:600;color:var(--muted);font-variant-numeric:tabular-nums}
+.saver-measured{padding:2px 0 4px;font-size:.72rem;color:var(--muted)}
 .saver-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
 .saver-row{display:flex;align-items:center;gap:5px;min-height:34px}
 .saver-name{font-size:.8rem}

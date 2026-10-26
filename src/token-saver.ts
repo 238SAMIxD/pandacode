@@ -10,7 +10,7 @@
 export type PackId = 'caveman' | 'lean-code' | 'quiet-tools' | 'rtk';
 export type Level = 'lite' | 'full' | 'ultra';
 export type Pack = { id: PackId; title: string; summary: string; saves: string; source: string; needs?: 'rtk' };
-export type ThreadSaver = { packs: PackId[]; level: Level; sentKey?: string; turns?: number };
+export type ThreadSaver = { packs: PackId[]; level: Level; sentKey?: string; turns?: number; /** When the current configuration was last sent, for measured usage. */ changedAt?: number };
 type Store = { defaults: ThreadSaver | null; threads: Record<string, ThreadSaver> };
 
 export const PACKS: Pack[] = [
@@ -69,7 +69,7 @@ const valid = (packs: unknown): PackId[] => Array.isArray(packs) ? PACKS.map(pac
 /** A thread's saver; a new thread starts from the saved default, if any. */
 export function threadSaver(sessionId: string): ThreadSaver {
   const store = read(), saved = store.threads[sessionId] ?? store.defaults ?? { packs: [], level: 'full' };
-  return { ...saved, packs: valid(saved.packs), level: LEVELS.some(level => level.id === saved.level) ? saved.level : 'full' };
+  return { ...saved, packs: valid(saved.packs), level: LEVELS.some(level => level.id === saved.level) ? saved.level : 'full', changedAt: typeof saved.changedAt === 'number' ? saved.changedAt : undefined };
 }
 export function updateThread(sessionId: string, patch: Partial<Pick<ThreadSaver, 'packs' | 'level'>>): ThreadSaver {
   const store = read(), next = { ...threadSaver(sessionId), ...patch };
@@ -102,7 +102,7 @@ export function contextFor(sessionId: string, available: { rtk: boolean }): stri
   const changed = key !== (saver.sentKey ?? '');
   const due = Boolean(key) && (changed || turns >= REMIND_EVERY);
   const store = read();
-  write({ ...store, threads: { ...store.threads, [sessionId]: { ...saver, sentKey: key, turns: due || changed ? 0 : turns } } });
+  write({ ...store, threads: { ...store.threads, [sessionId]: { ...saver, sentKey: key, turns: due || changed ? 0 : turns, ...(changed && { changedAt: Date.now() }) } } });
   if (!changed && !due) return '';
   return `\n\n${guidance(saver.packs, saver.level, available)}`;
 }
