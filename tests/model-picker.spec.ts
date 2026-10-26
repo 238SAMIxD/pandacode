@@ -60,18 +60,23 @@ test('opens on the current harness with one-line rows, a scrollable rail and a f
 
 test('search flattens matches across harnesses and the rail becomes a hit map', async ({ page }) => {
   await open(page);
-  await page.keyboard.type('sonnet');
-  await expect(search(page)).toHaveValue('sonnet');
+  await page.keyboard.type('sonne');
+  await expect(search(page)).toHaveValue('sonne');
   const rail = picker(page).getByRole('tablist');
   await expect(rail.getByRole('tab', { name: 'Codex', exact: true })).toHaveClass(/is-dim/);
   await expect(rail.getByRole('tab', { name: 'Claude Code', exact: true }).locator('.model-menu-count')).toHaveText('1');
   await expect(activeOption(page)).toHaveAccessibleName('Claude Code · Claude Sonnet 5');
-  await expect(picker(page).getByRole('option', { name: 'Use "sonnet" with Codex', exact: true })).toBeVisible();
+  // One custom row, for the viewed harness, after the real hits.
+  await expect(picker(page).getByRole('option', { name: /^Use "/ })).toHaveCount(1);
+  await expect(picker(page).getByRole('option').last()).toHaveAccessibleName('Use "sonne" with Claude Code');
+  await expect(picker(page).locator('.model-menu-empty')).toHaveCount(0);
   // A query that names a harness offers no custom row.
   await search(page).fill('codex');
   await expect(picker(page).getByRole('option', { name: /^Use "/ })).toHaveCount(0);
   await search(page).fill('no-such-thing-at-all');
-  await expect(picker(page).getByRole('option', { name: /with GitHub Copilot CLI/ })).toHaveCount(0);
+  await expect(picker(page).locator('.model-menu-empty')).toHaveText('No matching models.');
+  await expect(picker(page).getByRole('option')).toHaveCount(1);
+  await expect(picker(page).getByRole('option').first()).toHaveAccessibleName('Use "no-such-thing-at-all" with Claude Code');
   await search(page).fill('Ship');
   await expect(picker(page).getByRole('option').first()).toHaveAccessibleName('Agent team · Ship crew');
 });

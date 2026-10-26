@@ -139,6 +139,7 @@ export function openModelPicker(options: ModelPickerOptions): () => void {
     panel.style.left = `${left}px`;
     panel.style.top = `${top}px`;
     panel.dataset.placement = below ? 'below' : 'above';
+    syncRailFade();
   }
 
   function schedulePosition(): void {
@@ -192,7 +193,7 @@ export function openModelPicker(options: ModelPickerOptions): () => void {
   }
 
   function teamRow(team: PickerTeam): string {
-    return `<button type="button" role="option" tabindex="-1" class="model-menu-option model-menu-team${team.selected ? ' model-menu-current' : ''}" data-team="${escape(team.id)}" data-provider="team" data-model="${escape(team.id)}" data-available="true" aria-label="${escape(`Agent team · ${team.name}`)}" title="${escape(team.detail)}" ${team.selected ? 'aria-current="true"' : ''}>${teamLogos(team)}<span class="model-menu-name">${escape(team.name)}</span><span class="model-menu-meta">${escape(team.detail)}</span>${team.selected ? icon('check', 'model-menu-check') : ''}</button>`;
+    return `<button type="button" role="option" tabindex="-1" class="model-menu-option model-menu-team${team.selected ? ' model-menu-current' : ''}" data-team="${escape(team.id)}" data-provider="team" data-model="${escape(team.id)}" data-available="true" aria-label="${escape(`Agent team · ${team.name}`)}" title="${escape(`${team.name} · ${team.detail}`)}" ${team.selected ? 'aria-current="true"' : ''}>${teamLogos(team)}<span class="model-menu-name">${escape(team.name)}</span><span class="model-menu-meta">${escape(team.detail)}</span>${team.selected ? icon('check', 'model-menu-check') : ''}</button>`;
   }
 
   /** One line: name left, context (or the harness in mixed lists) right, a check on the current model. */
@@ -205,7 +206,7 @@ export function openModelPicker(options: ModelPickerOptions): () => void {
     const title = [model.contextWindow ? `${context} context` : '', model.description || (model.name !== model.id && model.id !== 'default' ? model.id : '')].filter(Boolean).join(' · ');
     const meta = mixed ? group.name : context;
     const name = custom ? `Use “${escape(query)}”` : escape(model.name);
-    return `<button type="button" role="option" tabindex="-1" class="model-menu-option${selected ? ' model-menu-current' : ''}${custom ? ' model-menu-custom' : ''}" data-provider="${group.provider.id}" data-model="${escape(model.id)}"${group.connection ? ` data-connection="${escape(group.connection.id)}"` : ''} data-available="${!disabled}" aria-label="${escape(accessible)}" title="${escape(custom ? accessible : title)}" ${selected ? 'aria-current="true"' : ''} ${disabled ? 'aria-disabled="true" disabled' : ''}>${mixed ? providerLogo(group.provider.id) : ''}<span class="model-menu-name">${name}</span>${meta ? `<span class="model-menu-meta">${escape(meta)}</span>` : ''}${selected ? icon('check', 'model-menu-check') : custom ? icon('plus', 'model-menu-check') : ''}</button>`;
+    return `<button type="button" role="option" tabindex="-1" class="model-menu-option${selected ? ' model-menu-current' : ''}${custom ? ' model-menu-custom' : ''}" data-provider="${group.provider.id}" data-model="${escape(model.id)}"${group.connection ? ` data-connection="${escape(group.connection.id)}"` : ''} data-available="${!disabled}" aria-label="${escape(accessible)}" title="${escape(custom ? accessible : title)}" ${selected ? 'aria-current="true"' : ''} ${disabled ? 'aria-disabled="true" disabled' : ''}>${mixed ? providerLogo(group.provider.id) : ''}<span class="model-menu-name" title="${custom ? escape(query) : escape(model.name)}">${name}</span>${meta ? `<span class="model-menu-meta">${escape(meta)}</span>` : ''}${selected ? icon('check', 'model-menu-check') : custom ? icon('plus', 'model-menu-check') : ''}</button>`;
   }
 
   function heading(logo: string, name: string, status = ''): string {
@@ -244,7 +245,11 @@ export function openModelPicker(options: ModelPickerOptions): () => void {
       const classes = `${group.connection ? ' is-connection' : ''}${inUse(group.key) ? ' has-current' : ''}${group.locked || group.unavailable || (query && !count) ? ' is-dim' : ''}`;
       return railItem(group.key, providerLogo(group.provider.id), group.name, count ? String(count) : '', classes, !query && view === group.key);
     }).join('');
-    if (railHtml !== railMarkup) { rail.innerHTML = railHtml; railMarkup = railHtml; }
+    if (railHtml !== railMarkup) {
+      rail.innerHTML = railHtml;
+      railMarkup = railHtml;
+      if (query) rail.querySelector('.model-menu-count:not(:empty)')?.parentElement?.scrollIntoView({ block: 'nearest' });
+    }
 
     // List: the viewed harness, Recent, Teams, or flat search results.
     let markup = '';
@@ -254,11 +259,13 @@ export function openModelPicker(options: ModelPickerOptions): () => void {
       markup += matchedTeams.map(teamRow).join('');
       const rows = all.flatMap(group => hits.get(group.key)!);
       total += rows.length;
+      if (!total) markup += '<p class="model-menu-empty">No matching models.</p>';
       markup += rows.map(row => modelRow(row, true, query)).join('');
-      // A custom ID per harness that takes one, unless the query names a harness or an existing model.
-      const custom = all.filter(group => !advertisedModelsOnly(group.provider.id) && !namedHarness && !group.locked && !group.unavailable && !models(group).some(model => [model.id, model.name].some(value => value.toLowerCase() === normalized)));
-      total += custom.length;
-      markup += custom.map(group => modelRow({ group, model: fallbackModel(group.provider.id, query), custom: true }, true, query)).join('');
+      // One custom ID row: the viewed harness, else the current one, unless the query names a harness or an existing model.
+      const takesCustom = (group?: Group): group is Group => Boolean(group) && !advertisedModelsOnly(group!.provider.id) && !group!.locked && !group!.unavailable && !models(group!).some(model => [model.id, model.name].some(value => value.toLowerCase() === normalized));
+      const viewed = all.find(group => group.key === view);
+      const custom = namedHarness ? undefined : [viewed, all.find(group => group.key === `h:${current.provider}`)].find(takesCustom);
+      if (custom) { total++; markup += modelRow({ group: custom, model: fallbackModel(custom.provider.id, query), custom: true }, true, query); }
     } else if (view === 'recent') {
       total = recent.length;
       markup = heading(icon('undo'), 'Recent') + recent.map(row => modelRow(row, true, '')).join('');
@@ -277,9 +284,10 @@ export function openModelPicker(options: ModelPickerOptions): () => void {
     if (providersStatus) markup = `<button type="button" role="option" tabindex="-1" class="model-menu-option" data-available="false" disabled>${icon('monitor')}<span class="model-menu-name">${escape(providersStatus)}</span></button>`;
     else if (!total) markup = '<p class="model-menu-empty">No matching models.</p>';
     // Loading and saving are in-place updates: retain rows and scroll position.
-    if (markup !== listMarkup) {
-      list.innerHTML = markup;
-      listMarkup = markup;
+    const changed = markup !== listMarkup;
+    if (changed) { list.innerHTML = markup; listMarkup = markup; }
+    // Typing clears the active row even when the list is unchanged; pick one again.
+    if (changed || !enabledButtons().some(button => optionKey(button) === activeKey)) {
       const buttons = enabledButtons();
       const next = buttons.find(button => optionKey(button) === activeKey) ?? (query ? buttons[0] : buttons.find(button => button.getAttribute('aria-current') === 'true') ?? buttons[0]);
       setActive(next);
@@ -289,6 +297,11 @@ export function openModelPicker(options: ModelPickerOptions): () => void {
     catalogError.textContent = catalogErrors.size ? `Could not load models for ${providers.filter(provider => catalogErrors.has(provider.id)).map(provider => { const reason = catalogErrors.get(provider.id)?.replace(/\.$/, ''); return reason ? `${provider.name} (${reason})` : provider.name; }).join(', ')}. You can enter model IDs for agents that support custom models.` : '';
     updateControls();
     position();
+  }
+
+  /** A fade at the rail's bottom edge while more harnesses sit below the fold. */
+  function syncRailFade(): void {
+    rail.classList.toggle('has-more', rail.scrollTop + rail.clientHeight < rail.scrollHeight - 1);
   }
 
   function enabledButtons(): HTMLButtonElement[] {
@@ -467,6 +480,7 @@ export function openModelPicker(options: ModelPickerOptions): () => void {
   }
 
   search.addEventListener('input', () => { activeKey = ''; renderChoices(); });
+  rail.addEventListener('scroll', syncRailFade, { passive: true });
   rail.addEventListener('click', event => {
     const tab = (event.target as Element).closest<HTMLElement>('[role="tab"]');
     if (tab) { showView(tab.dataset.view!); search.focus({ preventScroll: true }); }

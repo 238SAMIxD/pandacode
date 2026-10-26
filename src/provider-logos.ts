@@ -5,7 +5,7 @@ import clineLogo from './assets/providers/cline.svg?raw';
 import devinLogo from './assets/providers/devin.svg?raw';
 
 // Original provider assets; see docs/brand-assets.md for provenance.
-// Harnesses without an asset (omp) show no mark; their name stands alone.
+// Harnesses without an asset (omp, kilo) show a neutral lettered tile at the logo size.
 const logos: Partial<Record<ProviderId, string>> = {
   claude: new URL('./assets/providers/claude.svg', import.meta.url).href,
   codex: new URL('./assets/providers/openai.svg', import.meta.url).href,
@@ -30,6 +30,6 @@ export function providerLogo(id: ProviderId, cls = ''): string {
     return inline.replace('<svg ', `<svg class="${className}" data-provider="${id}" aria-hidden="true" focusable="false" `);
   }
   const src = logos[id];
-  if (!src) return '';
+  if (!src) return `<span class="${className} provider-logo-tile" data-provider="${id}" aria-hidden="true">${escape(id.charAt(0).toUpperCase())}</span>`;
   return `<img class="${className}" data-provider="${id}" src="${escape(src)}" width="20" height="20" alt="" aria-hidden="true" draggable="false">`;
 }

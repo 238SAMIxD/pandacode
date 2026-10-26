@@ -1268,6 +1268,7 @@ test('starts new tasks with Full access and preserves deliberate permissions acr
       await menu.getByRole('menuitemradio', { name: selection.mode === 'plan' ? 'Read only' : 'Standard', exact: true }).click();
     }
     await modelTrigger(page).click();
+    await modelPicker(page).getByRole('tab', { name: selection.provider, exact: true }).click();
     await modelPicker(page).getByRole('combobox', { name: 'Search harnesses and models', exact: true }).fill('approval-preserved-model');
     await modelPicker(page).getByRole('option', { name: `Use "approval-preserved-model" with ${selection.provider}`, exact: true }).click();
     await expect.poll(() => savedSelection(page)).toEqual({ provider: selection.id, model: 'approval-preserved-model' });
@@ -2356,6 +2357,7 @@ test('renaming and changing a model do not make an old response active', async (
   await expect(taskRow(page, 'session-4', 'inactive').locator('.task-title')).toHaveText('Renamed older conversation');
   await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
   const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
+  await picker.getByRole('tab', { name: 'Codex', exact: true }).click();
   await picker.getByRole('combobox', { name: 'Search harnesses and models', exact: true }).fill('review-old-response');
   await picker.getByRole('option', { name: 'Use "review-old-response" with Codex', exact: true }).click();
   await expect(picker).not.toBeVisible();
@@ -2462,7 +2464,7 @@ test('renders provider logos in task rows, composer, picker, and settings', asyn
   await expect(settings.getByRole('button', { name: 'Default agent for new tasks', exact: true }).locator('.provider-logo[data-provider="claude"]')).toBeVisible();
   const logos = await page.locator('.provider-logo').evaluateAll(elements => elements.map(element => ({
     decorative: element.getAttribute('aria-hidden'),
-    graphic: element.matches('svg,img') || Boolean(element.querySelector('svg,img')),
+    graphic: element.matches('svg,img,.provider-logo-tile') || Boolean(element.querySelector('svg,img')),
   })));
   expect(logos.length).toBeGreaterThan(6);
   expect(logos.every(logo => logo.decorative === 'true' && logo.graphic)).toBe(true);
@@ -2549,6 +2551,7 @@ test('changes the empty task project while keeping its draft, harness, model, an
   await prompt(page).fill('Keep this plan while I choose the right repository');
   await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
   const modelPicker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
+  await modelPicker.getByRole('tab', { name: 'Kimi Code', exact: true }).click();
   await modelPicker.getByRole('combobox', { name: 'Search harnesses and models', exact: true }).fill('project-switch-model');
   await modelPicker.getByRole('option', { name: 'Use \"project-switch-model" with Kimi Code', exact: true }).click();
   await expect.poll(() => savedSelection(page)).toEqual({ provider: 'kimi', model: 'project-switch-model' });
@@ -2809,6 +2812,7 @@ test('chooses a harness and custom model inline without losing the draft, stream
   await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
   const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
   await expect(picker).toBeVisible();
+  await picker.getByRole('tab', { name: 'Kimi Code', exact: true }).click();
   await picker.getByRole('combobox', { name: 'Search harnesses and models', exact: true }).fill('kimi-test-model');
   await picker.getByRole('option', { name: 'Use "kimi-test-model" with Kimi Code', exact: true }).click();
   await expect(picker).not.toBeVisible();
