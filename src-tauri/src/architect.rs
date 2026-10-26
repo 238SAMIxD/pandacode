@@ -525,6 +525,15 @@ pub async fn architect_configure(
     }
     Ok(changed)
 }
+/// A task on another computer runs its team there (docs/remote-access.md): this computer
+/// only shows it, so nothing may configure, start or control a local team for it.
+pub(crate) fn refuse_mirror(store: &Store, session_id: &str) -> Result<()> {
+    let device: Option<String> = store.db.query_row("SELECT remote_device FROM sessions WHERE id=?1", [session_id], |r| r.get(0)).optional().map_err(|e| e.to_string())?.flatten();
+    match device {
+        Some(device) => Err(format!("This task's team runs on {}.", crate::remote::device_label(&device))),
+        None => Ok(()),
+    }
+}
 pub(super) fn configure_state(
     state: &AppState,
     session_id: &str,
@@ -537,6 +546,7 @@ pub(super) fn configure_state(
     }
     let agents = state.agents.lock().map_err(|e| e.to_string())?;
     let store = state.store.lock().map_err(|e| e.to_string())?;
+    refuse_mirror(&store, session_id)?;
     if parent_of(&store, session_id)?.is_some() {
         return Err("This worker is managed by its architect. Use the team controls.".into());
     }
@@ -734,6 +744,7 @@ pub(crate) fn start_state(
 ) -> Result<(TeamSnapshot, Admission)> {
     let agents = state.agents.lock().map_err(|e| e.to_string())?;
     let store = state.store.lock().map_err(|e| e.to_string())?;
+    refuse_mirror(&store, session_id)?;
     if let Some(project) = expected_project {
         if store.session(session_id)?.project_id != project {
             return Err("Task moved to a different project. Read its details again.".into());
@@ -817,6 +828,7 @@ fn control_state(state: &AppState, session_id: &str, action: &str) -> Result<Tea
     let team = {
         let agents = state.agents.lock().map_err(|e| e.to_string())?;
         let store = state.store.lock().map_err(|e| e.to_string())?;
+        refuse_mirror(&store, session_id)?;
         let mut team = load(&store, session_id)?.ok_or("Team is unavailable.")?;
         match action {
             "pause" | "stop" => {

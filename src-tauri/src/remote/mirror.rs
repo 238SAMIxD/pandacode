@@ -379,6 +379,7 @@ fn show(app: &tauri::AppHandle, from: &str, list: &[Value]) {
         let Ok(store) = state.store.lock() else { return };
         let mut ids: HashMap<String, Option<String>> = HashMap::new();
         let events = relabel(list, |remote| ids.entry(remote.to_owned()).or_insert_with(|| local_id(&store, from, remote)).clone());
+        save_subagents(&store, &events);
         let mut changed = false;
         for event in &events {
             let (Some(id), Some(kind)) = (event["sessionId"].as_str(), event["kind"].as_str()) else { continue };
@@ -403,6 +404,127 @@ fn show(app: &tauri::AppHandle, from: &str, list: &[Value]) {
     if changed {
         let _ = app.emit("sessions-changed", ());
     }
+}
+
+/// Saves the newest snapshot of each child agent among relabelled events, so a mirror's
+/// Subagents panel (`list_subagents`) has them after a reload, as a local run's does.
+fn save_subagents(store: &Store, events: &[Value]) {
+    for (session, data) in newest_subagents(events) {
+        let saved = serde_json::from_value::<crate::providers::SubagentActivity>(data.clone()).map_err(|e| e.to_string()).and_then(|activity| store.save_subagent(session, &activity));
+        if let Err(error) = saved {
+            eprintln!("PandaCode Connect: could not keep a remote subagent: {error}");
+        }
+    }
+}
+
+/// The last `subagent` snapshot per (task, child), in first-seen order.
+fn newest_subagents(events: &[Value]) -> Vec<(&str, &Value)> {
+    let mut newest: Vec<(&str, &str, &Value)> = Vec::new();
+    for event in events.iter().filter(|event| event["kind"] == "subagent") {
+        let (Some(session), Some(id)) = (event["sessionId"].as_str(), event["data"]["id"].as_str()) else { continue };
+        match newest.iter_mut().find(|(s, i, _)| *s == session && *i == id) {
+            Some(slot) => slot.2 = &event["data"],
+            None => newest.push((session, id, &event["data"])),
+        }
+    }
+    newest.into_iter().map(|(session, _, data)| (session, data)).collect()
+}
+
+/// Forward pages read per call: after a tail page cut to fit, or from an older host.
+// ponytail: an older host is read from the start; its workers' newest work past this is missed until it updates.
+const WORKER_PAGES: usize = 10;
+const WORKER_TAIL: usize = 200;
+
+/// A mirror's architect team, read from its host (`task.team`) in the desktop's
+/// TeamSnapshot shape. None for a task without a team or a host too old to say.
+#[tauri::command]
+pub async fn remote_team(app: tauri::AppHandle, state: tauri::State<'_, AppState>, session_id: String) -> Result<Option<Value>> {
+    let Ok(Some(mirror)) = of(&*lock(&state)?, &session_id) else { return Ok(None) };
+    match client::call(&app, &mirror.device, "task.team", json!({"sessionId": mirror.session})).await {
+        Ok(reply) => Ok(desktop_team(&reply["team"], &session_id)),
+        Err(error) if error == "Unknown method." => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// A worker's transcript on a mirror's host (`task.workerMessages`) as a desktop MessagePage:
+/// the newest page, or the one before `before_id`, with the host's `hasOlder`.
+#[tauri::command]
+pub async fn remote_worker_messages(app: tauri::AppHandle, state: tauri::State<'_, AppState>, session_id: String, worker_id: String, before_id: Option<i64>) -> Result<Value> {
+    let mirror = of(&*lock(&state)?, &session_id)?.ok_or("That task does not run on another computer.")?;
+    let ask = |key: &str, value: Value| {
+        let mut params = json!({"sessionId": mirror.session, "workerId": worker_id});
+        params[key] = value;
+        client::call(&app, &mirror.device, "task.workerMessages", params)
+    };
+    worker_pages(ask, before_id).await
+}
+
+/// Reads one desktop page of a worker's transcript with `ask(param, value)`. A backward host
+/// answers the tail or the page before `before_id` in one call: a page it cut keeps the rows
+/// next to the cursor and reports `hasOlder`, so the viewer goes on backward with its next
+/// `beforeId`, never forward (the newer rows are already shown). An older host reads forward
+/// from the start, following `hasMore`.
+pub(crate) async fn worker_pages<Ask, Reply>(ask: Ask, before_id: Option<i64>) -> Result<Value>
+where
+    Ask: Fn(&str, Value) -> Reply,
+    Reply: std::future::Future<Output = Result<Value>>,
+{
+    let first = match before_id { Some(id) => ask("beforeId", json!(id)), None => ask("tail", json!(true)) }.await?;
+    let backward = first["tail"] == true;
+    if !backward && before_id.is_some() {
+        // An older host pages forward only; its first page was everything it could give.
+        return Ok(json!({"messages": [], "hasOlder": false}));
+    }
+    let mut pages = vec![first];
+    while !backward && pages.len() < WORKER_PAGES && pages.last().is_some_and(|page| page["hasMore"] == true) {
+        let Some(after) = pages.last().and_then(|page| page["messages"].as_array()?.last()?["id"].as_i64()) else { break };
+        pages.push(ask("afterId", json!(after)).await?);
+    }
+    Ok(worker_page(&pages, backward))
+}
+
+/// Joins a worker's pages into one MessagePage. A backward first page reports the host's
+/// `hasOlder`. An older host can't page backward, so its forward read never offers older
+/// messages, even when only the newest are kept.
+fn worker_page(pages: &[Value], backward: bool) -> Value {
+    let mut messages: Vec<Value> = Vec::new();
+    for message in pages.iter().flat_map(|page| page["messages"].as_array().cloned().unwrap_or_default()) {
+        if messages.last().and_then(|last| last["id"].as_i64()) < message["id"].as_i64() {
+            messages.push(message);
+        }
+    }
+    let keep = messages.len().saturating_sub(WORKER_TAIL);
+    let has_older = backward && (pages.first().is_some_and(|page| page["hasOlder"] == true) || keep > 0);
+    json!({"messages": messages.split_off(keep), "hasOlder": has_older})
+}
+
+/// The host's `task.team` reply as the desktop's TeamSnapshot, under the local task id.
+fn desktop_team(team: &Value, local: &str) -> Option<Value> {
+    let text = |value: &Value| json!(value.as_str().unwrap_or_default());
+    let number = |value: &Value| json!(value.as_u64().unwrap_or_default());
+    let workers: Vec<Value> = team["workers"]
+        .as_array()?
+        .iter()
+        .filter(|worker| worker["id"].is_string() && worker["sessionId"].is_string())
+        .map(|w| {
+            json!({
+                "id": w["id"], "sessionId": w["sessionId"], "name": text(&w["name"]), "profileId": text(&w["profileId"]),
+                "provider": text(&w["provider"]), "model": text(&w["model"]), "reasoningEffort": w["reasoningEffort"].as_str(),
+                "status": text(&w["status"]), "assignment": text(&w["assignment"]), "summary": text(&w["summary"]), "error": w["error"].as_str(),
+                "dependsOn": w["dependsOn"].as_array().map_or_else(Vec::new, |ids| ids.iter().filter(|id| id.is_string()).cloned().collect()),
+                "files": w["files"].as_array().map_or_else(Vec::new, |files| files.iter().filter(|file| file.is_string()).cloned().collect()),
+                "readOnly": w["readOnly"] == true, "abandoned": w["abandoned"] == true, "attempt": number(&w["attempt"]),
+                "checkpoint": w["checkpoint"].is_object().then(|| &w["checkpoint"]), "createdAt": number(&w["createdAt"]), "updatedAt": number(&w["updatedAt"]),
+            })
+        })
+        .collect();
+    Some(json!({
+        "sessionId": local,
+        "config": {"auto": team["mode"] == "auto", "workers": [], "maxParallel": 0, "maxRounds": number(&team["rounds"]["max"]), "maxAssignments": 0, "workspace": "shared", "summaryLimit": 0},
+        "status": text(&team["status"]), "round": number(&team["round"]), "revision": number(&team["revision"]),
+        "workers": workers, "error": null, "summary": team["summary"].as_str(), "updatedAt": number(&team["updatedAt"]),
+    }))
 }
 
 /// `run.finished` from the task's host. Newer hosts number it like an event (`seq`), so it
@@ -1106,6 +1228,16 @@ fn catch_up(app: &tauri::AppHandle, device: &str, reply: &Value, requested: &[St
                 let _ = app.emit("agent-event", event);
             }
         }
+        // Child agents still at work: the snapshot covers events this viewer missed.
+        if let Some(children) = task["subagents"].as_array() {
+            let events: Vec<Value> = children.iter().map(|data| json!({"sessionId": local, "kind": "subagent", "text": "", "requestId": null, "data": data})).collect();
+            if let Ok(store) = lock(&app.state::<AppState>()) {
+                save_subagents(&store, &events);
+            }
+            for event in events {
+                let _ = app.emit("agent-event", event);
+            }
+        }
         // A gap means events were lost: the messages copy is the full catch-up.
         if task["gap"] == true || task["lastId"].as_i64().is_some_and(|last| last > synced) || (unfinished && synced > 0) {
             pending.push((local, None));
@@ -1184,7 +1316,8 @@ fn resume_starts(app: &tauri::AppHandle, online: &HashSet<String>) {
 #[derive(Debug, PartialEq)]
 enum StartState {
     Running,
-    Done(String),
+    /// The host task, and its worktree note (see [`start_note`]).
+    Done(String, Option<String>),
     Failed(String),
     /// Ask again once the host is back.
     Unreachable,
@@ -1206,7 +1339,7 @@ fn start_state(reply: &Result<Value>) -> StartState {
         Err(error) => StartState::Failed(error.clone()),
         Ok(reply) => match reply["state"].as_str() {
             Some("running") => StartState::Running,
-            Some("done") => started_session(reply).map_or_else(StartState::Failed, StartState::Done),
+            Some("done") => started_session(reply).map_or_else(StartState::Failed, |session| StartState::Done(session, start_note(reply))),
             Some("failed") => StartState::Failed(reply["error"].as_str().unwrap_or("The other computer could not start the task.").chars().take(1000).collect()),
             _ => StartState::Failed("The other computer lost track of this start.".into()),
         },
@@ -1227,7 +1360,8 @@ async fn resume_start(app: tauri::AppHandle, local: String) {
         if cancelling && !uncancellable {
             let reply = client::call(&app, &device, "task.cancelStart", json!({"startId": start_id})).await;
             match cancel_outcome(&reply) {
-                Cancel::Unsupported => {
+                // Too late (the host is making the task now): follow it and stop it once made.
+                Cancel::Unsupported | Cancel::TooLate => {
                     uncancellable = true;
                     continue;
                 }
@@ -1264,10 +1398,14 @@ async fn resume_start(app: tauri::AppHandle, local: String) {
                 waiting_for(&app, &device, &start_id, None);
                 return;
             }
-            StartState::Done(session) => {
+            StartState::Done(session, note) => {
                 let stop_now = remote(&app).lock().viewer.starts.remove(&local).is_some_and(|start| start.cancelling);
                 if let Err(error) = linked(&app, &state, &local, &session, stop_now) {
                     eprintln!("PandaCode Connect: could not link a remote task: {error}");
+                }
+                // The note the lost `task.start` reply carried, shown under the prompt as then.
+                if let Some(note) = note {
+                    let _ = app.emit("remote://start-note", json!({"sessionId": local, "note": note}));
                 }
             }
             StartState::Failed(error) => {
@@ -1310,6 +1448,9 @@ enum Cancel {
     Cancelled,
     /// The host had already made its task.
     Started(String),
+    /// The host is making its task now: it can't be cancelled, so it is linked and stopped
+    /// once its start reply (or `task.startStatus`) names it.
+    TooLate,
     /// The call may not have arrived (or the host is gone from the account): keep the start
     /// and ask again when the host is back.
     Pending,
@@ -1322,6 +1463,7 @@ enum Cancel {
 
 fn cancel_outcome(reply: &Result<Value>) -> Cancel {
     match reply {
+        Ok(reply) if reply["cancelled"] == false && reply["pending"] == true => Cancel::TooLate,
         Ok(reply) if reply["cancelled"] == false => started_session(reply).map_or_else(Cancel::Refused, Cancel::Started),
         Ok(_) => Cancel::Cancelled,
         // Only the host's own answer cancels: one that can't be reached stays pending.
@@ -1350,7 +1492,7 @@ fn settle_cancel(app: &tauri::AppHandle, state: &AppState, local: &str, outcome:
             let _ = app.emit("sessions-changed", ());
             Ok(json!({"cancelled": true}))
         }
-        Cancel::Pending | Cancel::Unsupported => Ok(json!({"cancelled": false, "pending": true})),
+        Cancel::Pending | Cancel::Unsupported | Cancel::TooLate => Ok(json!({"cancelled": false, "pending": true})),
         Cancel::Refused(error) => {
             if let Some(start) = remote(app).lock().viewer.starts.get_mut(local) {
                 start.cancelling = false;
@@ -1361,6 +1503,12 @@ fn settle_cancel(app: &tauri::AppHandle, state: &AppState, local: &str, outcome:
 }
 
 /// The host task id in a `task.start` (or `task.startStatus`) reply.
+/// Why the host started the task somewhere other than asked (its busy main checkout gave way
+/// to a worktree), cut to one short line. Older hosts send none.
+fn start_note(reply: &Value) -> Option<String> {
+    reply["note"].as_str().map(|note| note.lines().next().unwrap_or_default().chars().take(300).collect::<String>()).filter(|note| !note.trim().is_empty())
+}
+
 fn started_session(reply: &Value) -> Result<String> {
     reply["sessionId"].as_str().filter(|id| host::valid_id(id).is_ok()).map(str::to_owned).ok_or_else(|| "The other computer did not start the task.".to_string())
 }
@@ -1473,7 +1621,9 @@ pub async fn remote_start_task(
         reply = client::call_within(&app, &device_id, "task.start", request, START_TIMEOUT) => reply,
         _ = cancel.notified() => Err(super::start::CANCELLED.into()),
     }
-    .and_then(|reply| started_session(&reply));
+    .and_then(|reply| Ok((started_session(&reply)?, start_note(&reply))));
+    let note = started.as_ref().ok().and_then(|(_, note)| note.clone());
+    let started = started.map(|(session, _)| session);
     match started {
         // The reply was lost, maybe not the start: the row stays (running) in `starts`, so
         // Stop cancels it, and the host is asked by `startId` how it went once it is back
@@ -1513,6 +1663,9 @@ pub async fn remote_start_task(
     let _ = app.emit("sessions-changed", ());
     let mut session = serde_json::to_value(lock(&state)?.session(&local)?).map_err(|e| e.to_string())?;
     session["sessionId"] = json!(local);
+    if let Some(note) = note {
+        session["note"] = json!(note);
+    }
     Ok(session)
 }
 
@@ -1583,6 +1736,67 @@ mod tests {
         let task = store.create_session(&project.id, "claude", "sonnet", "full").unwrap();
         store.db.execute("UPDATE sessions SET remote_device='host',remote_session='h1' WHERE id=?1", [&task.id]).unwrap();
         (store, task.id)
+    }
+
+    #[test]
+    fn a_worktree_fallback_note_is_one_short_line() {
+        assert_eq!(start_note(&json!({"sessionId": "s"})), None);
+        assert_eq!(start_note(&json!({"note": "  "})), None);
+        assert_eq!(start_note(&json!({"note": "Started in a worktree: busy.\nmore"})).as_deref(), Some("Started in a worktree: busy."));
+        assert_eq!(start_note(&json!({"note": "x".repeat(500)})).map(|note| note.len()), Some(300));
+    }
+
+    #[test]
+    fn subagent_snapshots_keep_the_newest_per_child() {
+        let events = [
+            json!({"sessionId": "l", "kind": "subagent", "data": {"id": "r:a", "status": "running"}}),
+            json!({"sessionId": "l", "kind": "text", "text": "x"}),
+            json!({"sessionId": "l", "kind": "subagent", "data": {"id": "r:b", "status": "running"}}),
+            json!({"sessionId": "l", "kind": "subagent", "data": {"id": "r:a", "status": "completed"}}),
+            json!({"sessionId": "l", "kind": "subagent", "data": {}}),
+        ];
+        let newest = newest_subagents(&events);
+        assert_eq!(newest.iter().map(|(s, d)| (*s, d["id"].as_str().unwrap(), d["status"].as_str().unwrap())).collect::<Vec<_>>(), [("l", "r:a", "completed"), ("l", "r:b", "running")]);
+    }
+
+    #[test]
+    fn a_mirror_never_gets_a_local_team() {
+        let (store, mirror) = store();
+        assert!(crate::architect::refuse_mirror(&store, &mirror).unwrap_err().starts_with("This task's team runs on "));
+        let project = store.add_project(&std::env::temp_dir()).unwrap();
+        let local = store.create_session(&project.id, "claude", "sonnet", "full").unwrap();
+        assert_eq!(crate::architect::refuse_mirror(&store, &local.id), Ok(()));
+    }
+
+    #[test]
+    fn worker_pages_join_in_order_and_say_when_older_ones_exist() {
+        let page = |ids: &[i64], older: bool| json!({"messages": ids.iter().map(|id| json!({"id": id})).collect::<Vec<_>>(), "hasOlder": older, "tail": true});
+        let ids = |page: &Value| page["messages"].as_array().unwrap().iter().map(|m| m["id"].as_i64().unwrap()).collect::<Vec<_>>();
+        let joined = worker_page(&[page(&[5, 6], true), page(&[6, 7], true)], true);
+        assert_eq!((ids(&joined), joined["hasOlder"].as_bool()), (vec![5, 6, 7], Some(true)), "a repeat is dropped, the host's hasOlder kept");
+        assert_eq!(worker_page(&[page(&[1], false)], true)["hasOlder"], false);
+        let long: Vec<i64> = (1..=(WORKER_TAIL as i64 + 3)).collect();
+        let legacy = worker_page(&[page(&long, false)], false);
+        assert_eq!((ids(&legacy).len(), ids(&legacy)[0], legacy["hasOlder"].as_bool()), (WORKER_TAIL, 4, Some(false)), "an older host's read keeps the newest and offers nothing older it cannot page back to");
+    }
+
+    #[test]
+    fn a_host_team_becomes_a_desktop_snapshot_under_the_local_id() {
+        assert_eq!(desktop_team(&Value::Null, "local"), None, "no team");
+        let host = json!({"sessionId": "h1", "status": "running", "round": 2, "revision": 7, "mode": "auto", "rounds": {"used": 2, "max": 6}, "summary": null, "updatedAt": 5, "messages": [{"id": 1}],
+            "workers": [{"id": "w1", "sessionId": "hw1", "name": "Docs", "provider": "codex", "model": "gpt", "status": "running", "attempt": 1, "summary": "", "files": ["a.md", 3], "dependsOn": [], "checkpoint": {"summary": "half", "nextSteps": "", "blocker": null, "updatedAt": 4}, "createdAt": 1, "updatedAt": 2, "profileId": "auto", "assignment": "Write", "error": null, "readOnly": true, "abandoned": false},
+                {"name": "no id"}]});
+        let team = desktop_team(&host, "local").unwrap();
+        assert_eq!(team["sessionId"], "local");
+        assert_eq!(team["config"]["auto"], true);
+        assert_eq!(team["config"]["maxRounds"], 6);
+        assert_eq!((team["status"].as_str(), team["round"].as_u64(), team["revision"].as_u64()), (Some("running"), Some(2), Some(7)));
+        assert!(team.get("messages").is_none() && team.get("mode").is_none());
+        let workers = team["workers"].as_array().unwrap();
+        assert_eq!(workers.len(), 1, "a row without ids is dropped");
+        assert_eq!(workers[0]["files"], json!(["a.md"]));
+        assert_eq!(workers[0]["checkpoint"]["summary"], "half");
+        assert_eq!((workers[0]["readOnly"].as_bool(), workers[0]["reasoningEffort"].is_null()), (Some(true), true));
     }
 
     #[test]
@@ -1862,6 +2076,7 @@ mod tests {
     fn only_a_definite_answer_cancels_a_start() {
         assert_eq!(cancel_outcome(&Ok(json!({"cancelled": true}))), Cancel::Cancelled);
         assert_eq!(cancel_outcome(&Ok(json!({"cancelled": false, "sessionId": "h1"}))), Cancel::Started("h1".into()));
+        assert_eq!(cancel_outcome(&Ok(json!({"cancelled": false, "pending": true}))), Cancel::TooLate, "the host is making the task: keep the start, stop it once linked");
         assert!(matches!(cancel_outcome(&Ok(json!({"cancelled": false}))), Cancel::Refused(_)));
         // The cancel may not have arrived: keep the start and ask again when the host is back.
         for error in [client::TIMED_OUT, client::LOST, super::super::socket::OFFLINE] {
@@ -1981,7 +2196,8 @@ mod tests {
     #[test]
     fn a_lost_start_is_asked_about_until_it_ends() {
         assert_eq!(start_state(&Ok(json!({"state": "running"}))), StartState::Running);
-        assert_eq!(start_state(&Ok(json!({"state": "done", "sessionId": "h1"}))), StartState::Done("h1".into()));
+        assert_eq!(start_state(&Ok(json!({"state": "done", "sessionId": "h1"}))), StartState::Done("h1".into(), None));
+        assert_eq!(start_state(&Ok(json!({"state": "done", "sessionId": "h1", "worktree": true, "note": "Started in a worktree: busy.\nmore"}))), StartState::Done("h1".into(), Some("Started in a worktree: busy.".into())), "a resumed start keeps its note");
         assert_eq!(start_state(&Ok(json!({"state": "failed", "error": "Cloning failed."}))), StartState::Failed("Cloning failed.".into()));
         assert!(matches!(start_state(&Ok(json!({"state": "unknown"}))), StartState::Failed(_)));
         assert!(matches!(start_state(&Ok(json!({"state": "done"}))), StartState::Failed(_)));
@@ -1998,7 +2214,7 @@ mod tests {
     fn a_start_still_running_at_the_deadline_keeps_waiting() {
         assert_eq!(past_deadline(StartState::Running, true), StartState::Unreachable, "not a failure: asked again later");
         assert_eq!(past_deadline(StartState::Running, false), StartState::Running);
-        assert_eq!(past_deadline(StartState::Done("h1".into()), true), StartState::Done("h1".into()), "linked whenever the host reports it");
+        assert_eq!(past_deadline(StartState::Done("h1".into(), None), true), StartState::Done("h1".into(), None), "linked whenever the host reports it");
     }
 
     #[test]

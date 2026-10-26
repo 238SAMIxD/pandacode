@@ -890,10 +890,11 @@ fn task_subagents(state: &AppState, session_id: &str) -> Result<Vec<providers::S
         .transpose()
         .map_err(|error| error.to_string())?;
     let store = state.store.lock().map_err(|error| error.to_string())?;
-    if live.is_none() {
+    // A mirror's children run on its host: they settle there while its turn is open.
+    let task = live.is_none().then(|| store.session(session_id)).transpose()?;
+    if let Some(task) = task.filter(|task| task.remote_device.is_none() || !matches!(task.status.as_str(), "running" | "waiting")) {
         // Retry a completion write that may have failed without reviving old
         // children just because their final snapshot could not reach disk.
-        let task = store.session(session_id)?;
         store.finish_subagents(
             session_id,
             if task.status == "error" {
@@ -3577,6 +3578,8 @@ pub fn run() {
                 remote::remote_revoke_device,
                 remote::remote_targets,
                 remote::mirror::remote_start_task,
+                remote::mirror::remote_team,
+                remote::mirror::remote_worker_messages,
                 remote::mirror::remote_cancel_start,
                 remote::routes::remote_reconnect,
                 remote::grants::remote_device_grants,

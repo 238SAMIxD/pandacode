@@ -2,6 +2,7 @@
 // Owns the relay socket, the pending calls and the store; screens call `connect.*` and read
 // state with the hooks in src/store. See README.md beside this file.
 import './polyfill.ts';
+import { startNote } from './start-note.ts';
 import { initialState, taskKey, useConnect, type ConnectState } from '../store/index.ts';
 import { chunks, dueIcons, mergeIcons } from '../store/icon-cache.ts';
 import { clearIcons, loadIcons, resetIcons, saveIcons, useIcons } from '../store/icons.ts';
@@ -906,13 +907,15 @@ async function listModels(deviceId: string, provider: string, force = false): Pr
   return models;
 }
 
-/** Starts a task on the host (repo OR projectId) and watches it. */
-async function startTask(deviceId: string, params: StartParams): Promise<string> {
+/** Starts a task on the host (repo OR projectId) and watches it; `note` says when a busy
+ * checkout made the host use a worktree instead. */
+async function startTask(deviceId: string, params: StartParams): Promise<{ sessionId: string; note?: string }> {
   if (!params.repo === !params.projectId) throw new Error('Choose a repository or a project.');
-  const { sessionId } = await call<{ sessionId: string }>(deviceId, 'task.start', params, START_TIMEOUT_MS);
+  const reply = await call<{ sessionId: string }>(deviceId, 'task.start', params, START_TIMEOUT_MS);
+  const { sessionId } = reply;
   watch(deviceId, [sessionId]);
   patch(s => ({ live: { ...s.live, [taskKey(deviceId, sessionId)]: { ...idleLive(), status: 'running', activity: 'Starting' } } }));
-  return sessionId;
+  return { sessionId, note: startNote(reply) };
 }
 
 /** Applies `edit` to one task's sent list; unchanged → same object, an empty list is dropped. */

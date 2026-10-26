@@ -5,6 +5,7 @@ import { historicalProvider } from './provider-handoff';
 import { isPreviewableFile } from './file-links';
 import type { CommandPanel, GoalState } from './command-center';
 import { createPreviewArchitect } from './preview-architect';
+import type { TeamSnapshot, TeamWorker } from './architect-types';
 import { createPreviewCloud, createPreviewVm } from './preview-vm';
 import { createPreviewTurnChanges } from './preview-turn-changes';
 // Bundled with the preview, not lazily imported: a late module load during a paused test clock stalled startup.
@@ -500,6 +501,32 @@ function syncMirror(sessionId: string): void { if (mirrorSynced.has(sessionId)) 
   };
   emit('sessions-changed', {});
 };
+/* tests: a mirror whose host runs subagents and an architect team. `list_subagents` answers
+ * with what native code would have saved from the host's events; `remote_team` and
+ * `remote_worker_messages` answer like remote/mirror.rs from the host's `task.team`. */
+const mirrorSubagents = new Map<string, Map<string, unknown>>();
+const mirrorTeams = new Map<string, TeamSnapshot>();
+const mirrorWorkerMessages = new Map<string, Message[]>();
+(window as any).__previewMirrorTeam = (sessionId = 'mirror-team') => {
+  sessions.unshift({ ...sessions[0], id: sessionId, title: 'Remote team task', resumeId: null, status: 'running', remoteDevice: { id: 'dev-studio', name: 'Studio iMac' }, lastResponseAt: now });
+  messages[sessionId] = [{ id: ++id, sessionId, role: 'user', content: 'Split the docs work', createdAt: now }];
+  const worker = (n: number, status: TeamWorker['status'], summary: string): TeamWorker => ({ id: `w${n}`, sessionId: `host-worker-${n}`, profileId: 'auto', name: `Worker ${n}`, provider: 'codex', model: 'gpt-5.5', status, assignment: `Part ${n}`, summary, error: null, dependsOn: [], files: [], readOnly: false, attempt: 1, abandoned: false, checkpoint: null, createdAt: now, updatedAt: now });
+  mirrorTeams.set(sessionId, { sessionId, config: { auto: true, workers: [], maxParallel: 0, maxRounds: 6, maxAssignments: 0, workspace: 'shared', summaryLimit: 0 }, status: 'running', round: 1, revision: 1, workers: [worker(1, 'completed', 'Wrote the intro'), worker(2, 'running', '')], error: null, summary: null, updatedAt: now });
+  // `__previewMirrorLongWorker(n)`: worker 1's transcript becomes n messages, several pages long.
+  (window as any).__previewMirrorLongWorker = (count: number) => mirrorWorkerMessages.set('w1', Array.from({ length: count }, (_, index) => ({ id: index + 1, sessionId: 'host-worker-1', role: index % 2 ? 'assistant' : 'user', content: `Worker line ${index + 1}`, createdAt: now }) as Message));
+  mirrorWorkerMessages.set('w1', [{ id: 1, sessionId: 'host-worker-1', role: 'user', content: 'Part 1', createdAt: now }, { id: 2, sessionId: 'host-worker-1', role: 'assistant', content: 'Intro written on the host.', createdAt: now }]);
+  emit('sessions-changed', {});
+  const w = window as any;
+  // The host's `subagent` events, re-emitted under the local id (and saved, as natively).
+  w.__mirrorSubagent = (data: { id: string }) => { mirrorSubagents.set(sessionId, new Map(mirrorSubagents.get(sessionId)).set(data.id, data)); agent({ sessionId, kind: 'subagent', text: '', data } as unknown as AgentEvent); };
+  // A `team` event: the host changed a worker row.
+  w.__mirrorTeamWorker = (row: Partial<TeamWorker> & { id: string }) => {
+    const team = mirrorTeams.get(sessionId)!;
+    const workers = team.workers.some(item => item.id === row.id) ? team.workers.map(item => item.id === row.id ? { ...item, ...row } : item) : [...team.workers, { ...team.workers[0], ...row }];
+    mirrorTeams.set(sessionId, { ...team, workers, revision: team.revision + 1 });
+    agent({ sessionId, kind: 'team', text: '', data: row } as unknown as AgentEvent);
+  };
+};
 function finish(sessionId: string, content: string) { const time = Date.now(); messages[sessionId].push({ id: ++id, sessionId, role: 'assistant', content, createdAt: time }); finishTiming(sessionId); const s = session(sessionId); if (content.trim()) s.lastResponseAt = time; s.status = 'idle'; s.taskStage = 'review'; s.updatedAt = time; timers.delete(sessionId); activeTools.delete(sessionId); syncMirror(sessionId); agent({ sessionId, kind: 'done', text: '' }); }
 /** Replays the Morning brief reference: five MCP tools (running, then completed), then the answer in chunks. `?replay=N` scales the pace. */
 function replayBrief(s: Session): void {
@@ -797,15 +824,16 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       emit('remote://start-progress', { deviceId: args.deviceId, startId: args.startId ?? null, repo: null, stage: 'starting', percent: null, detail: `Waiting for ${target.name}…` });
       const { holdPreviewRemoteStart } = await import('./preview-remote');
       holdPreviewRemoteStart(String(args.sessionId ?? args.startId ?? ''), () => { Object.assign(session(s.id), { remoteDevice: null, status: 'idle', draft: true }); emit('sessions-changed', {}); });
-      w.__remoteStartAttach = async () => { holdPreviewRemoteStart(String(args.sessionId ?? args.startId ?? ''), undefined); session(s.id).status = 'idle'; await invoke('send_message', { sessionId: s.id, text: args.prompt, imageIds: args.imageIds ?? [] }); emit('sessions-changed', {}); };
+      // `note`: the worktree note `task.startStatus` carries for the resumed start (remote/mirror.rs `resume_start`).
+      w.__remoteStartAttach = async (note?: string) => { holdPreviewRemoteStart(String(args.sessionId ?? args.startId ?? ''), undefined); session(s.id).status = 'idle'; await invoke('send_message', { sessionId: s.id, text: args.prompt, imageIds: args.imageIds ?? [] }); emit('sessions-changed', {}); if (note) emit('remote://start-note', { sessionId: s.id, note }); };
       emit('sessions-changed', {});
       return { sessionId: s.id } as T;
     }
     await invoke('send_message', { sessionId: s.id, text: args.prompt, imageIds: args.imageIds ?? [] });
     emit('sessions-changed', {});
-    return { sessionId: s.id } as T;
+    return (w.__remoteStartBusy ? { sessionId: s.id, note: w.__remoteStartBusy } : { sessionId: s.id }) as T;
   }
-  if (command.startsWith('remote_')) return invokeRemote<T>(command, args, emit);
+  if (command.startsWith('remote_') && command !== 'remote_team' && command !== 'remote_worker_messages') return invokeRemote<T>(command, args, emit);
   if (command === 'cloud_agent_targets') return previewCloud.agentTargets() as T;
   if (command === 'cloud_agent_set_claude_token') { if (!String(args.token ?? '').trim()) throw new Error('Paste the token from claude setup-token.'); return null as T; }
   if (command === 'cloud_agent_start') {
@@ -989,7 +1017,14 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     }
     case 'archive_codex_task': { const task = codexTask(args.sessionId); assertIdle(task); task.archived = true; task.updatedAt = Date.now(); break; }
     case 'export_task': { const task = session(args.sessionId); result = `# ${task.title}\n\n` + (messages[task.id] ?? []).map(message => `## ${message.role}\n\n${message.content}\n\n`).join(''); break; }
-    case 'list_subagents': return [] as T;
+    case 'list_subagents': return [...(mirrorSubagents.get(String(args.sessionId))?.values() ?? [])] as T;
+    case 'remote_team': return structuredClone(mirrorTeams.get(String(args.sessionId)) ?? null) as T;
+    case 'remote_worker_messages': {
+      // Pages of 40 back from the tail, as `worker_pages` in remote/mirror.rs joins the host's.
+      const all = mirrorWorkerMessages.get(String(args.workerId)) ?? [], before = all.filter(message => !args.beforeId || message.id < args.beforeId);
+      ((window as any).__remoteWorkerPages ??= []).push(args.beforeId ?? null);
+      return { messages: structuredClone(before.slice(-40)), hasOlder: before.length > 40 } as T;
+    }
     case 'list_local_servers': result = [{ port: 3000, process: 'node', url: 'http://localhost:3000' }, { port: 5173, process: 'vite', url: 'http://localhost:5173' }]; break;
     case 'browser_open': {
       const url = new URL(args.url); if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Use an HTTP or HTTPS address.');

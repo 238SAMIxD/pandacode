@@ -177,7 +177,7 @@ void call<import('./jev').JevConfiguration>('jev_configuration').then(config => 
 window.addEventListener('pandacode:jev-settings', event => setJevAvailability(Boolean((event as CustomEvent<import('./jev').JevConfiguration>).detail.decisionsEnabled)));
 async function ensureArchitectView(): Promise<ArchitectView> {
   return architectLoading ??= import('./architect').then(({ ArchitectView }) => {
-    architectView = new ArchitectView({ setup: anchor => run(showArchitectSetup(anchor)), loadModels, updated: onArchitect, report, onFork: forkAtMessage, fileContext: sessionId => ({ projectId: state.projectId, sessionId }), assist: (sessionId, kind) => run(openJevAssist(kind, sessionId)) });
+    architectView = new ArchitectView({ setup: anchor => run(showArchitectSetup(anchor)), loadModels, updated: onArchitect, report, onFork: forkAtMessage, fileContext: sessionId => ({ projectId: state.projectId, sessionId }), assist: (sessionId, kind) => run(openJevAssist(kind, sessionId)), remote: sessionId => Boolean(state.sessions.find(task => task.id === sessionId)?.remoteDevice) });
     architectView.setAssistEnabled(jevDecisionsEnabled);
     $('#subagents-host').before(architectView.host);
     architectView.setTask(state.sessionId, teams.get(state.sessionId) ?? null, state.providers);
@@ -205,8 +205,8 @@ function onArchitect(team: TeamEvent): void {
 }
 async function loadTeam(id: string): Promise<TeamSnapshot | null> {
   const known = teams.has(id), before = teams.get(id);
-  // A task on another computer is one agent there; a team saved on it (a default team) never runs here.
-  const loaded = state.sessions.find(task => task.id === id)?.remoteDevice ? null : await call<TeamSnapshot | null>('architect_get', { sessionId: id });
+  // A task on another computer shows the team its host runs; older hosts have none to show.
+  const loaded = state.sessions.find(task => task.id === id)?.remoteDevice ? await call<TeamSnapshot | null>('remote_team', { sessionId: id }).catch(() => null) : await call<TeamSnapshot | null>('architect_get', { sessionId: id });
   if (deletedSessions.has(id)) return null;
   // An update or a removal that arrived during the fetch is newer than this snapshot.
   if (teams.has(id) !== known || teams.get(id) !== before) return teams.get(id) ?? null;
@@ -216,9 +216,21 @@ async function loadTeam(id: string): Promise<TeamSnapshot | null> {
   if (id === state.sessionId) architectView?.setTask(id, loaded, state.providers);
   return loaded;
 }
+/** A mirror's host reports changed worker rows (`team` events) and run ends: reread its team. */
+const mirrorTeamReads = new Map<string, number>();
+function refreshMirrorTeam(id: string): void {
+  if (mirrorTeamReads.has(id)) return;
+  mirrorTeamReads.set(id, window.setTimeout(() => {
+    mirrorTeamReads.delete(id);
+    void call<TeamSnapshot | null>('remote_team', { sessionId: id }).then(team => {
+      if (team) onArchitect(team); else if (teams.get(id)) onArchitect({ sessionId: id, removed: true });
+    }).catch(() => undefined);
+  }, 300));
+}
 async function showArchitectSetup(anchor: HTMLElement): Promise<void> {
   if (architectSetupCleanup) { architectSetupCleanup(); return; }
   const task = session(); if (!task) return;
+  if (task.remoteDevice) { notify(mirrorTeamNote(task)); return; }
   closeMenus();
   const request = ++architectSetupRequest;
   const { openArchitectSetup } = await import('./architect');
@@ -270,8 +282,10 @@ async function autoRoster(): Promise<WorkerProfile[]> {
   return roster;
 }
 let teamToggleBusy = false;
+const mirrorTeamNote = (task: Session) => `Teams for this task are set up on ${task.remoteDevice?.name ?? 'the other computer'}.`;
 async function toggleTeam(): Promise<void> {
   const task = session(); if (!task || teamToggleBusy) return;
+  if (task.remoteDevice) { notify(mirrorTeamNote(task)); return; }
   closeMenus();
   teamToggleBusy = true;
   try {
@@ -1951,7 +1965,8 @@ async function startBoardTask(id: string): Promise<void> {
       state.messages = [...state.messages, { id: transientId--, sessionId: id, role: 'user', content: text, createdAt: Date.now() }];
       render();
     } else renderNavigation();
-    const team = await loadTeam(id);
+    // A mirror's team (if any) runs on its host, which starts it from the routed prompt.
+    const team = await loadTeam(id) && !selected.remoteDevice;
     await call(team ? 'architect_start' : 'start_task', { sessionId: id, ...(team ? { text } : {}) });
   } catch (error) {
     state.streams.delete(id);
@@ -2422,6 +2437,15 @@ async function steerFromComposer(): Promise<void> {
     return enqueueFromComposer();
   }
   clearComposerNote(s); clearComposer(s); renderComposer();
+  // A mirror whose start has not attached has no run to steer yet: the message waits in the queue.
+  const starting = remoteStart(s.id);
+  if (starting && starting.stage !== 'error') {
+    const entry = await call<QueuedMessage>('queue_add', { sessionId: s.id, text, attachments: [] }).catch(() => null);
+    if (entry) { setQueue(s.id, [...queueOf(s.id), entry]); notify(`${starting.device} is still starting this task; your message is queued for after it.`); }
+    else restoreComposer(s, text, [], []);
+    if (s.id === state.sessionId) renderComposer();
+    return;
+  }
   try {
     await steer(s, text);
   } catch (error) {
@@ -2438,6 +2462,8 @@ async function steerFromComposer(): Promise<void> {
 async function steerQueued(s: Session, id: string): Promise<void> {
   const entry = queueOf(s.id).find(item => item.id === id); if (!entry || steeringQueued.has(id)) return;
   if (entry.attachments.length) { notify('Queued messages with attachments are sent after the run.'); return; }
+  const starting = remoteStart(s.id);
+  if (starting && starting.stage !== 'error') { notify(`${starting.device} is still starting this task; the message stays queued.`); return; }
   steeringQueued.add(id); renderComposer();
   try {
     await steer(s, entry.text);
@@ -2474,7 +2500,7 @@ async function sendQueuedNow(s: Session, id: string): Promise<void> {
   }
   sendFirst.set(s.id, { id, stopping: true, hold: state.queueHolds.get(s.id) });
   runEndings.set(s.id, 'stopped');
-  const team = teams.get(s.id);
+  const team = teams.get(s.id) && !s.remoteDevice;
   await call(team ? 'architect_control' : 'stop_session', { sessionId: s.id, ...(team ? { action: 'stop' } : {}) });
   notify('Stopping the run to send this message…');
 }
@@ -2833,6 +2859,10 @@ function onAgent(event: AgentEvent): void {
   if (event.kind === 'turn_start') return;
   if (event.kind === 'commands_changed') { if (event.sessionId === state.sessionId) slashPicker?.refresh(true); return; }
   if (event.kind === 'subagent') { subagents.receive(event.sessionId, event.data); return; }
+  // Hosts send `team` (a changed worker row) only for mirrors; it is not a local event kind.
+  const workerRow = (event.kind as string) === 'team';
+  if ((workerRow || event.kind === 'done' && teams.get(event.sessionId)) && state.sessions.find(task => task.id === event.sessionId)?.remoteDevice) refreshMirrorTeam(event.sessionId);
+  if (workerRow) return;
   // Native reports each steer's pending, delivered or failed state.
   if (event.kind === 'steer') { steerEvent(event); return; }
   const s = state.sessions.find(s => s.id === event.sessionId);
@@ -3421,7 +3451,7 @@ async function showModel(anchor: HTMLElement): Promise<void> {
   if (pendingMenuOpen?.anchor === anchor) { cancelPendingMenu(); return; }
   if (modelPickerCleanup) { closeModelPicker(); return; }
   const selected = session(); if (!selected || configuringSessions.has(selected.id)) return;
-  if (teams.get(selected.id) && !teams.get(selected.id)?.config.auto) { await showArchitectSetup(anchor); return; }
+  if (teams.get(selected.id) && !selected.remoteDevice && !teams.get(selected.id)?.config.auto) { await showArchitectSetup(anchor); return; }
   if (isRunning()) return;
   closeProjectPicker();
   closeChoiceMenu();
@@ -4195,7 +4225,7 @@ async function stopTask(s: Session): Promise<void> {
   runEndings.set(s.id, 'stopped');
   const current = state.streams.get(s.id);
   if (current) { current.status = 'Stopping agent'; current.revision++; clearAgentInputs(current); renderStream(); }
-  const team = teams.get(s.id);
+  const team = teams.get(s.id) && !s.remoteDevice;
   await call(team ? 'architect_control' : 'stop_session', { sessionId: s.id, ...(team ? { action: 'stop' } : {}) });
 }
 /* Cloud agents (docs/cloud-agents.md): connected cloud providers are "Run on" targets too,
@@ -4276,6 +4306,11 @@ async function initRemote(): Promise<void> {
   let signedIn = false;
   await subscribe('remote://status', (status: RemoteStatus) => { signedIn = status.signedIn; remoteConnected = status.connected; run(refreshRemoteTargets(signedIn)); });
   await subscribe('remote://presence', () => run(refreshRemoteTargets(signedIn)));
+  // A start whose reply was lost links later (`resume_start`) and brings the host's worktree note.
+  await (subscribe as unknown as (name: string, callback: (note: { sessionId: string; note: string }) => void) => Promise<unknown>)('remote://start-note', ({ sessionId, note }) => {
+    const mirror = state.sessions.find(task => task.id === sessionId);
+    if (mirror) showComposerNote(mirror, note);
+  });
   // A build without the Connect commands, or a signed-out one, simply offers no other computers.
   const status = await call<RemoteStatus>('remote_status').catch(() => undefined);
   if (status) { signedIn = status.signedIn; remoteConnected = status.connected; await refreshRemoteTargets(signedIn); }
@@ -4340,7 +4375,7 @@ async function sendRemote(s: Session, target: RemoteTarget, draft: string, text:
       if (state.sessionId === s.id) renderStream();
     };
     // A failure shows in the strip above the composer with Retry, so it is not also a toast.
-    const started = await trackRemoteStart(s.id, target, startId => call<{ sessionId: string }>('remote_start_task', {
+    const started = await trackRemoteStart(s.id, target, startId => call<{ sessionId: string; note?: string }>('remote_start_task', {
       // The empty New task draft becomes the mirror, so no stray draft is left behind.
       sessionId: s.id, deviceId: target.deviceId, projectId: s.projectId, prompt: content, provider: s.provider, model: s.model, mode: s.mode,
       effort: s.reasoningEffort ?? null, worktree: Boolean(s.worktreePath), branch: s.worktreeBranch || state.git?.branch || check.branch || null, startId, imageIds,
@@ -4369,6 +4404,9 @@ async function sendRemote(s: Session, target: RemoteTarget, draft: string, text:
     state.attachments = state.attachments.filter(path => !filePaths.includes(path));
     await reloadSessions();
     state.query = ''; await selectSession(sessionId, true);
+    // A busy or dirty checkout on the host gave way to a worktree: say so once, under the prompt.
+    const mirror = state.sessions.find(task => task.id === sessionId);
+    if (started.note && mirror) showComposerNote(mirror, started.note);
     if (remoteStartCancels.delete(s.id)) {
       // Stop was pressed while the host could not yet say whether the start was cancelled; it attached, so stop it now.
       runEndings.set(sessionId, 'stopped');

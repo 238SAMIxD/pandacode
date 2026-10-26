@@ -390,6 +390,8 @@ the kinds sent in `agent.events`:
 | `turn_start` | A Codex goal turn started. |
 | `usage` | Sanitized context-token usage snapshot; `data` carries recognized usage fields only. |
 
+A desktop mirror keeps `subagent` snapshots (live and from `subscribe`'s `subagents`) in its own store, so its Subagents panel matches the host's after missed frames or a reopen. It reads the host's team with `task.team` when the task opens and after each `team` event or run end (`remote_team` in `remote/mirror.rs`, mapped to the desktop TeamSnapshot) and a worker's transcript with `task.workerMessages` (`remote_worker_messages`). The workers panel is read-only there: no pause, resume, setup or team messages. Hosts without these methods show no team.
+
 There are no separate `plan`, `todo`, `thinking` or `reasoning` event kinds: those provider
 updates are represented as `status` text and/or data. The provider's `done` event is consumed by
 the desktop run loop and is not sent in `agent.events`. Likewise, local `status: running`,

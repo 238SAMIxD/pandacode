@@ -276,13 +276,14 @@ export class ArchitectView {
   private assistEnabled = false;
   private childAgents?: Subagents;
   private teamMessages?: TeamMessages;
-  constructor(private options: { setup: (anchor: HTMLElement) => void; loadModels: (provider: ProviderId) => Promise<ProviderModel[]>; updated: (team: TeamSnapshot) => void; report: (error: unknown) => void; onFork?: (sessionId: string, messageId: number) => Promise<void>; fileContext?: (sessionId: string) => FileLinkContext | undefined; assist?: (sessionId: string, kind: 'review' | 'route') => void }) {
+  constructor(private options: { setup: (anchor: HTMLElement) => void; loadModels: (provider: ProviderId) => Promise<ProviderModel[]>; updated: (team: TeamSnapshot) => void; report: (error: unknown) => void; onFork?: (sessionId: string, messageId: number) => Promise<void>; fileContext?: (sessionId: string) => FileLinkContext | undefined; assist?: (sessionId: string, kind: 'review' | 'route') => void; remote?: (sessionId: string) => boolean }) {
     this.host.className = 'architect-host'; this.host.hidden = true;
     this.trigger.className = 'architect-trigger'; this.trigger.type = 'button'; this.trigger.setAttribute('aria-label', 'Open workers'); this.trigger.setAttribute('aria-expanded', 'false');
     this.trigger.addEventListener('click', () => this.panel ? this.close() : this.open()); this.host.append(this.trigger);
     this.host.addEventListener('keydown', event => { if (event.key === 'Escape' && this.panel) { event.preventDefault(); event.stopPropagation(); this.close(); this.trigger.focus(); } });
     bindMessageActions(this.host, {
-      content: (sessionId, key) => key === 'live' ? this.live.get(sessionId)?.text : call<string>('get_message_content', {sessionId, messageId: Number(key)}),
+      // A team on another computer has its workers' messages only as loaded from the host.
+      content: (sessionId, key) => key === 'live' ? this.live.get(sessionId)?.text : this.options.remote?.(this.taskId) ? (this.historyWorker === sessionId ? this.historyMessages.get(Number(key))?.content : undefined) : call<string>('get_message_content', {sessionId, messageId: Number(key)}),
       onFork: options.onFork, report: options.report,
     });
   }
@@ -297,7 +298,11 @@ export class ArchitectView {
     this.taskId = taskId; this.providers = providers; this.team = team; this.paint();
   }
   update(team: TeamSnapshot): void {
-    if (team.sessionId === this.taskId && (!this.team || team.revision >= this.team.revision)) { this.team = team; this.paint(); }
+    if (team.sessionId === this.taskId && (!this.team || team.revision >= this.team.revision)) {
+      this.team = team; this.paint();
+      // A team on another computer streams no worker events here: reread the open transcript.
+      if (this.selected && this.options.remote?.(team.sessionId)) void this.loadMessages();
+    }
     // Retain only active worker streams and unresolved requests, not completed histories.
     for (const worker of team.workers) if (!['running', 'waiting'].includes(worker.status) && worker.id !== this.selected) {
       const live = this.live.get(worker.sessionId); if (live?.ended && !live.approvals.size && !live.inputs.size) this.live.delete(worker.sessionId);
@@ -352,8 +357,11 @@ export class ArchitectView {
     });
     panel.querySelector('.architect-panel-controls')!.append(assist);
     this.paintAssist();
-    this.teamMessages = new TeamMessages(this.team);
-    panel.querySelector('.architect-worker-list')!.after(this.teamMessages.host);
+    // Messages between teammates stay on the host of a team on another computer.
+    if (!this.options.remote?.(this.taskId)) {
+      this.teamMessages = new TeamMessages(this.team);
+      panel.querySelector('.architect-worker-list')!.after(this.teamMessages.host);
+    }
     panel.querySelector('.architect-close')!.addEventListener('click', () => { this.close(); this.trigger.focus(); });
     panel.querySelector('.architect-back')!.addEventListener('click', () => { this.selected = ''; this.historyWorker = ''; this.historyLoading = false; this.historyRefreshQueued = false; ++this.request; this.paint(); });
     panel.querySelector('.architect-configure')!.addEventListener('click', event => this.options.setup(event.currentTarget as HTMLElement));
@@ -411,6 +419,8 @@ export class ArchitectView {
     // Resume at the round limit grants more rounds natively, up to the maximum of 20.
     panel.querySelector<HTMLButtonElement>('[data-team-control=resume]')!.hidden = !['paused', 'failed', 'interrupted'].includes(team.status) || team.round >= MAX_ROUNDS;
     panel.querySelectorAll<HTMLButtonElement>('[data-team-control]').forEach(button => { button.disabled = this.busy; });
+    // Teams running on another computer are shown read-only.
+    panel.querySelector<HTMLElement>('.architect-panel-controls')!.hidden = Boolean(this.options.remote?.(this.taskId));
     const error = panel.querySelector<HTMLElement>('.architect-panel-error')!; error.textContent = team.error ?? ''; error.hidden = !team.error;
     // Pausing or stopping is the user's own choice, not a failure.
     error.classList.toggle('is-notice', team.status === 'paused' && /^Team (paused|stopped)\./.test(team.error ?? ''));
@@ -481,14 +491,15 @@ export class ArchitectView {
     retry.hidden = true; this.historyLoading = true;
     let loaded = false;
     try {
-      const page = await call<MessagePage>('architect_worker_messages', { sessionId: taskId, workerId: worker.id, ...(beforeId ? { beforeId } : {}) });
+      const command = this.options.remote?.(taskId) ? 'remote_worker_messages' : 'architect_worker_messages';
+      const page = await call<MessagePage>(command, { sessionId: taskId, workerId: worker.id, ...(beforeId ? { beforeId } : {}) });
       if (!current()) return;
       // A completed worker can persist more than one page between refreshes.
       // Fill that gap before merging, without discarding scrollback already read.
       const newest = this.historyMessages.size ? Math.max(...this.historyMessages.keys()) : undefined;
       let first = page.messages[0]?.id;
       while (!older && newest !== undefined && first !== undefined && first > newest && page.hasOlder) {
-        const gap = await call<MessagePage>('architect_worker_messages', { sessionId: taskId, workerId: worker.id, beforeId: first });
+        const gap = await call<MessagePage>(command, { sessionId: taskId, workerId: worker.id, beforeId: first });
         if (!current()) return;
         if (!gap.messages.length || gap.messages[0].id >= first) break;
         page.messages = [...gap.messages, ...page.messages]; page.hasOlder = gap.hasOlder; first = page.messages[0].id;
@@ -526,7 +537,7 @@ export class ArchitectView {
             article.dataset.savedToolId = tool.id; article.innerHTML = renderToolActivity(tool, 'tool:' + tool.id); } else article.textContent = message.content; }
         else { const label = document.createElement('small'); label.textContent = message.role === 'assistant' ? worker.name : message.role === 'user' ? 'Assignment' : 'Activity'; const body = document.createElement('div'); article.append(label, body); bindFileLinkContext(body, fileContext); void markdown(body, message.content, scroll);
           if (message.role === 'user' || message.role === 'assistant') {
-            article.insertAdjacentHTML('beforeend', messageActionsHtml(worker.sessionId, message.id, Boolean(this.options.onFork) && message.id > 0));
+            article.insertAdjacentHTML('beforeend', messageActionsHtml(worker.sessionId, message.id, Boolean(this.options.onFork) && message.id > 0 && !this.options.remote?.(taskId)));
           }
         }
         fragment.append(article);

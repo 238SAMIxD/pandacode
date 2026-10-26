@@ -32,10 +32,11 @@ export function NewThread() {
   const send = async () => {
     if (!form.canStart(prompt)) return;
     try {
-      const session = await form.start(prompt);
+      const { sessionId: session, note } = await form.start(prompt);
       setPrompt('');
       form.setStarting(false);
       router.push({ pathname: '/task/[device]/[session]', params: { device: deviceId, session } });
+      if (note) Alert.alert('Started in a worktree', note.replace(/^Started in a worktree: /, ''));
     } catch (e) {
       Alert.alert('Could not start the task', (e as Error).message);
     }

@@ -39,7 +39,7 @@ export function useNewTask(initialDevice?: string) {
   const pickModel = (id: string) => pick({ model: id, effort: options.defaultEffort(id) });
 
   const canStart = (prompt: string) => !!(deviceId && projectId && provider && prompt.trim()) && !starting;
-  /** Starts the task and returns its session id; throws (and clears `starting`) on failure. */
+  /** Starts the task and returns its session id and any worktree note; throws (and clears `starting`) on failure. */
   const start = async (prompt: string) => {
     setStarting(true);
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
