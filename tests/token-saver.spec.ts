@@ -106,5 +106,8 @@ test('the panel shows measured usage since the packs changed', async ({ page }) 
   await expect(measured).toContainText('91.2K in');
   await expect(measured).toContainText('152.3K out');
   await expect(measured).toContainText('cache reads');
+  // A configuration that has not gone out yet has no window to measure.
+  await panel.getByRole('switch', { name: /Quiet tools/ }).click();
+  await expect(measured).toHaveCount(0);
   await page.keyboard.press('Escape');
 });

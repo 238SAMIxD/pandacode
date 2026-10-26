@@ -36,6 +36,7 @@ export function createTokenSaver(host: TokenSaverHost) {
   let installing = false;
   /** Usage since the packs changed; undefined while loading, null when the harness keeps no logs. */
   let measured: TaskTokenUsage | null | undefined;
+  let measuredToken = 0;
 
   const available = () => ({ rtk: tools.rtk });
   function loadTools(force = false): Promise<void> {
@@ -45,15 +46,18 @@ export function createTokenSaver(host: TokenSaverHost) {
 
   /** Measured usage since the configuration was sent; harnesses without local logs report nothing. */
   function loadMeasured(sessionId: string): void {
-    const since = threadSaver(sessionId).changedAt;
-    if (!since) { measured = undefined; return; }
+    const saver = threadSaver(sessionId);
+    const active = saver.packs.filter(id => id !== 'rtk' || tools.rtk);
+    // Only a configuration that has gone out has a meaningful window; a just-toggled one has not.
+    if (!saver.changedAt || !active.length || saver.sentKey !== `${active.join(',')}:${saver.level}`) { measured = undefined; return; }
     measured = undefined;
-    void host.call<TaskTokenUsage | null>('task_token_usage', { sessionId, since }).then(value => {
-      if (panelSession !== sessionId) return;
+    const token = ++measuredToken;
+    void host.call<TaskTokenUsage | null>('task_token_usage', { sessionId, since: saver.changedAt }).then(value => {
+      if (token !== measuredToken || panelSession !== sessionId) return;
       measured = value ?? null;
       render(sessionId);
     }).catch(() => {
-      if (panelSession === sessionId) { measured = null; render(sessionId); }
+      if (token === measuredToken && panelSession === sessionId) { measured = null; render(sessionId); }
     });
   }
 
@@ -68,6 +72,8 @@ export function createTokenSaver(host: TokenSaverHost) {
   function render(sessionId: string): void {
     if (!panel) return;
     const saver = threadSaver(sessionId), saving = estimate(saver.packs, saver.level, available()), on = new Set(saver.packs);
+    const active = saver.packs.filter(id => id !== 'rtk' || tools.rtk);
+    const sentKey = active.length ? `${active.join(',')}:${saver.level}` : '';
     const preset = defaults();
     const sameAsDefault = Boolean(preset) && preset!.level === saver.level && preset!.packs.join() === saver.packs.join();
     const row = (id: PackId) => {
@@ -78,7 +84,7 @@ export function createTokenSaver(host: TokenSaverHost) {
       return `<li class="saver-row ${missing ? 'saver-missing' : ''}"><span class="saver-name" id="saver-${id}" data-tip="${escape(about)}">${pack.title}</span><span class="sr-only" id="saver-${id}-about">${escape(about)}</span>${install}<button type="button" role="switch" class="saver-switch" data-pack="${id}" aria-labelledby="saver-${id}" aria-describedby="saver-${id}-about" aria-checked="${active}" ${missing ? 'data-install="rtk"' : ''} ${missing && installing ? 'aria-busy="true" aria-disabled="true"' : ''}></button></li>${levels ? `<li class="saver-levels-row">${levels}</li>` : ''}`;
     };
     panel.innerHTML = `<header class="saver-head"><strong id="saver-title" data-tip="Applies to this thread. Guidance rides along folded with your next message, then every few messages. Savings are estimates from each project's benchmarks.">Token saver</strong><span class="saver-total" aria-label="${saving ? `About ${saving}% fewer tokens` : 'Off'}">${saving ? `−${saving}%` : 'Off'}</span></header>
-      ${saver.packs.length && saver.changedAt && measured ? `<div class="saver-measured">${escape(measuredText(saver.changedAt, measured))}</div>` : ''}
+      ${saver.changedAt !== undefined && measured && saver.sentKey === sentKey ? `<div class="saver-measured">${escape(measuredText(saver.changedAt, measured))}</div>` : ''}
       <ul class="saver-list">${PACKS.map(pack => row(pack.id)).join('')}</ul>
       <footer class="saver-foot"><label class="saver-default"><input type="checkbox" ${sameAsDefault ? 'checked' : ''} ${saver.packs.length ? '' : 'disabled'}><span>Start new threads like this</span></label><button type="button" class="saver-off" ${saver.packs.length ? '' : 'disabled'}>Turn all off</button></footer>`;
   }
@@ -96,6 +102,7 @@ export function createTokenSaver(host: TokenSaverHost) {
     if (!panel) return;
     const closing = panel, session = panelSession;
     panel = undefined; panelSession = ''; cleanup?.(); cleanup = undefined;
+    measured = undefined;
     hidePopover(closing);
     host.changed(session);
   }
