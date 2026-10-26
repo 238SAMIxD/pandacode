@@ -1016,8 +1016,9 @@ function renderNavigation(): void {
   const reviewed = [...seen].filter(id => { const task = state.sessions.find(s => s.id === id); return id === state.sessionId || (task ? task.archived || taskStage(task) === 'completed' : state.sessions.length > 0); });
   if (reviewed.length) { for (const id of reviewed) seen.delete(id); saveUnreviewed(); }
   const failed = (s: Session) => FAILED_STATUS.has(s.status);
-  // A held thread that starts running moves to Active for good: after its run it returns to its
-  // folder, not to the section (say Completed) it was opened from.
+  // A held thread that starts running is held in Active from then on: after its run it stays there
+  // while it is open, and goes to its folder once you open another thread, never back to (say)
+  // the Completed section it was opened from.
   if (sectionHold && sectionHold.section !== 'active' && isRunning(sectionHold.id)) sectionHold = { ...sectionHold, section: 'active' };
   const order = taskComparator(sidebarSort.tasks), manual = sidebarSort.tasks === 'manual';
   const sections = sidebarSections({
@@ -1029,6 +1030,7 @@ function renderNavigation(): void {
   const visible = state.archived ? matching : sections.rest;
   renderBots();
   $('#archive-toggle').classList.toggle('active', state.archived);
+  $('#workspace-sidebar').classList.toggle('archive-view', state.archived);
   $('#archive-toggle').setAttribute('aria-pressed', String(state.archived));
   /** `card`: two lines (where, then what) for Active, Needs review and Pinned; otherwise one line. */
   const row = (s: Session, card = false, reorderable = false, showProject = false): string => {
@@ -1054,7 +1056,7 @@ function renderNavigation(): void {
     const signals = `${status ? `<span class="task-indicator ${status}" role="img" aria-label="${statusLabel}" title="${statusLabel}"></span>` : unread ? '<span class="task-indicator unread" role="img" aria-label="Unread" title="Unread"></span>' : ''}${word ? `<span class="task-status ${status}" aria-hidden="true">${word}</span>` : ''}${age && !word ? `<span class="task-age${elapsed ? ' task-runtime' : ''}"${elapsed ? ` data-started-at="${startedAt}"` : ''} title="${elapsed ? `Working for ${elapsed}` : `Last message: ${escape(new Date(activityAt!).toLocaleString())}`}">${age}</span>` : ''}`;
     const stage = taskStage(s), done = stage === 'completed';
     const selected = s.id === state.sessionId;
-    const button = `<button class="task-item${card ? '' : ' task-oneline'}${selected ? ' selected' : ''}${unread ? ' unread' : ''}" data-action="select-task" data-id="${escape(s.id)}" data-activity="${activeTask(s, now) ? 'active' : 'inactive'}" draggable="${reorderable}" data-pinned="${Boolean(s.pinned)}" tabindex="-1" ${reorderable ? 'aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"' : ''} ${selected ? 'aria-current="page"' : ''} aria-description="${shortProvider(s.provider)}" title="${escape(s.worktreeBranch ? `${s.title}\n${s.worktreeBranch}` : s.title)}">`;
+    const button = `<button class="task-item${card ? '' : ' task-oneline'}${selected ? ' selected' : ''}${unread ? ' unread' : ''}" data-action="select-task" data-id="${escape(s.id)}" data-activity="${activeTask(s, now) ? 'active' : 'inactive'}" draggable="${reorderable}" data-pinned="${Boolean(s.pinned)}" tabindex="-1" ${reorderable ? 'aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"' : ''} ${selected ? 'aria-current="page"' : ''} aria-description="${shortProvider(s.provider)}" title="${escape([s.title, showProject ? chatTask(s) ? 'Chat' : p?.name ?? '' : '', s.worktreeBranch ?? ''].filter(Boolean).join('\n'))}">`;
     const pin = s.pinned ? `<span class="task-pin" role="img" aria-label="Pinned">${icon('pin')}</span>` : '';
     const projectLabel = `<span class="task-project">${escape(p?.name ?? 'Project')}</span>`;
     // Row actions sit beside the row's button (buttons cannot nest), over its right edge. They
@@ -1084,7 +1086,8 @@ function renderNavigation(): void {
   // this draw only (nothing is saved).
   const filtering = Boolean(state.query.trim());
   const completedVisible = completedOpen || filtering;
-  const completedRows = filtering ? sections.completed : sections.completed.slice(0, completedShown);
+  // The open (held) thread always shows, even past the first page, as in a folder.
+  const completedRows = filtering ? sections.completed : shownTasks(sections.completed, false, state.sessionId, completedShown);
   const completedMore = sections.completed.length - completedRows.length;
   const completedSection = sections.completed.length
     ? `<section class="task-group sidebar-section completed-group" data-thread-group="completed" aria-label="Completed tasks"><button class="group-heading section-heading section-toggle" data-action="toggle-completed" tabindex="-1" aria-expanded="${completedVisible}" aria-controls="completed-tasks">${icon('chevron')}Completed<span class="section-count">${sections.completed.length}</span></button><div id="completed-tasks" class="task-list" ${completedVisible ? '' : 'hidden'}>${completedVisible ? completedRows.map(s => row(s)).join('') + (completedMore ? `<button class="folder-more" data-action="completed-more" tabindex="-1">Show ${Math.min(COMPLETED_PAGE, completedMore)} more</button>` : '') : ''}</div></section>` : '';
@@ -1145,7 +1148,7 @@ function renderNavigation(): void {
   // Morph rather than replace: unchanged rows keep their nodes, so nothing flickers.
   // Rows sit one level deeper than before (.task-row around .task-item), so morph one level deeper.
   morph(nav, !userProjects().length && !chats.length && !pinned.length && !(state.archived ? 0 : sectioned) ? '<div class="sidebar-empty">Open a project to get started.</div>' : state.archived
-    ? `<section class="task-group archived-group" data-thread-group="archived" aria-label="Archived tasks"><div class="group-heading">Archived<span>${visible.length}</span></div><div class="task-list">${archivedRows.map(s => row(s, false, manual)).join('') || (filtering ? empty : '<div class="no-tasks">No archived tasks</div>')}</div></section>`
+    ? `<section class="task-group archived-group" data-thread-group="archived" aria-label="Archived tasks"><div class="group-heading section-heading">Archived<span class="section-count">${visible.length}</span></div><div class="task-list">${archivedRows.map(s => row(s, false, manual)).join('') || (filtering ? empty : '<div class="no-tasks">No archived tasks</div>')}</div></section>`
     : `${section('active', 'Active', 'Active tasks', sections.active)}${section('review', 'Needs review', 'Tasks to review', sections.review)}${pinnedGroup}${chatGroup}${flatGroup}${folders.map(folder).join('')}${filtering && !matching.length ? empty : ''}${completedSection}`, 5);
   if (retainedRow) {
     const replacement = nav.querySelector<HTMLElement>(`.task-item[data-id="${CSS.escape(retainedRow.dataset.id!)}"]`);
@@ -3788,7 +3791,7 @@ async function showFolderMenu(heading: HTMLElement): Promise<void> {
   await showChoices(anchor, { title: 'Project actions', actions: true, width: 280, items: [
     { id: 'new', label: 'New task', icon: 'plus' },
     { id: 'collapse', label: 'Collapse other projects', icon: 'folder' },
-    { id: 'reveal', label: 'Reveal in Finder', icon: 'folder', separator: true },
+    { id: 'reveal', label: isMac ? 'Reveal in Finder' : isWindows ? 'Show in Explorer' : 'Open folder', icon: 'folder', separator: true },
     { id: 'remove', label: 'Remove project…', icon: 'trash', danger: true, separator: true },
   ], onSelect: async choice => {
     closeChoiceMenu();
@@ -3820,7 +3823,7 @@ async function showSidebarSort(anchor: HTMLElement): Promise<void> {
     { id: 'projects:added', label: 'Added', selected: sort.projects === 'added' },
     { id: 'projects:name', label: 'Name', selected: sort.projects === 'name' },
     { id: 'projects:manual', label: 'Manual', description: 'drag folders', selected: sort.projects === 'manual' },
-    ...PER_PROJECT.map((count, index) => ({ id: `perProject:${count}`, label: `${count} tasks`, heading: index ? undefined : 'Show per project', selected: sort.perProject === count })),
+    ...PER_PROJECT.map(count => ({ id: `perProject:${count}`, label: `${count} tasks`, short: String(count), segment: 'Show per project', selected: sort.perProject === count })),
     { id: 'group:project', label: 'By project', heading: 'Group', selected: sort.group === 'project' },
     { id: 'group:flat', label: 'Flat list', selected: sort.group === 'flat' },
   ], onSelect: id => {
@@ -3860,9 +3863,12 @@ function sidebarShortcut(event: KeyboardEvent): boolean {
     if (next) run(selectSession(next.dataset.id!));
     return true;
   }
-  const sidebar = $('#workspace-sidebar');
-  if (event.key === '/' && !command && !event.altKey && (sidebar.contains(target) || target === document.body) && sidebar.getClientRects().length && !sidebar.closest('.sidebar-hidden, [hidden]')) {
-    event.preventDefault(); $('#sidebar-filter').focus(); return true;
+  // / filters from the task list or anywhere that is not a control (the typing guard above already
+  // passed); when the field is not shown (a narrow window) the key is left alone.
+  const filter = $('#sidebar-filter');
+  const control = !$('#navigation').contains(target) && target.closest('button, a[href], [role="button"], [role="menuitem"], [role="tab"], summary');
+  if (event.key === '/' && !command && !event.altKey && !control && filter.getClientRects().length) {
+    event.preventDefault(); filter.focus(); return true;
   }
   if (command && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'z' && toastUndo) {
     event.preventDefault(); const undo = toastUndo; toastUndo = undefined; void hideToast($('#toast')); undo(); return true;
@@ -4662,6 +4668,8 @@ async function action(name: string, element: HTMLElement): Promise<void> {
     case 'board-reopen': await changeBoardStage('review'); break;
     case 'project-task': await createTask(element.dataset.id!); break;
     case 'toggle-folder': {
+      // While filtering every folder shows its matches; a click must not quietly save open/closed.
+      if (state.query.trim()) break;
       const id = element.dataset.project!;
       if (element.getAttribute('aria-expanded') === 'true') state.collapsedFolders.add(id); else state.collapsedFolders.delete(id);
       if (revealedFolder === id) revealedFolder = '';
@@ -4688,7 +4696,7 @@ async function action(name: string, element: HTMLElement): Promise<void> {
     case 'sidebar-archive': sidebarTaskAction('archive', element.dataset.task!); break;
     case 'sidebar-delete': sidebarTaskAction('delete', element.dataset.task!); break;
     case 'sidebar-more': { const row = element.closest('.task-row')?.querySelector<HTMLElement>('.task-item'); if (row) await showSidebarTaskMenu(row); break; }
-    case 'toggle-completed': completedOpen = !completedOpen; completedShown = COMPLETED_FIRST; try { localStorage.setItem(COMPLETED_OPEN_KEY, String(completedOpen)); } catch { /* per-launch preference only */ } renderNavigation(); break;
+    case 'toggle-completed': if (state.query.trim()) break; completedOpen = !completedOpen; completedShown = COMPLETED_FIRST; try { localStorage.setItem(COMPLETED_OPEN_KEY, String(completedOpen)); } catch { /* per-launch preference only */ } renderNavigation(); break;
     case 'select-project': await selectProject(element.dataset.id!); break;
     case 'archive-view': state.archived = !state.archived; renderNavigation(); break;
     case 'toggle-theme': toggleTheme(); break;

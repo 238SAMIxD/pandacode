@@ -59,6 +59,11 @@ test('projects sort by recent activity, order added, or name', () => {
   assert.deepEqual(manual, ['m', 'n', 'a', 'z']);
 });
 
+test('Added follows each project’s addedOrder, not the name order the list arrives in', () => {
+  const listed = [{ id: 'a', name: 'Alpha', path: '/a', addedOrder: 7 }, { id: 'b', name: 'beta', path: '/b', addedOrder: 2 }, { id: 'c', name: 'gamma', path: '/c', addedOrder: 5 }];
+  assert.deepEqual([...listed].sort(projectComparator('added', listed, new Map())).map(p => p.id), ['b', 'c', 'a']);
+});
+
 test('the saved folder order keeps unique string ids only', () => {
   const read = value => readProjectOrder({ getItem: key => key === PROJECT_ORDER_KEY ? value : null });
   assert.deepEqual(read(JSON.stringify(['b', 'a', 'b', 3, null])), ['b', 'a']);

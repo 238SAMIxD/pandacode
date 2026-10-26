@@ -30,6 +30,8 @@ pub struct Project {
     pub id: String,
     pub name: String,
     pub path: String,
+    /// When the project was added, as an increasing number (its rowid): the sidebar's Added sort.
+    pub added_order: i64,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -598,7 +600,7 @@ impl Store {
     }
     fn read_projects(db: &Connection) -> Result<Vec<Project>> {
         let mut stmt = db
-            .prepare("SELECT id,name,path FROM projects ORDER BY name COLLATE NOCASE")
+            .prepare("SELECT id,name,path,rowid FROM projects ORDER BY name COLLATE NOCASE")
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([], |r| {
@@ -606,6 +608,7 @@ impl Store {
                     id: r.get(0)?,
                     name: r.get(1)?,
                     path: r.get(2)?,
+                    added_order: r.get(3)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -632,13 +635,14 @@ impl Store {
             .map_err(|e| e.to_string())?;
         self.db
             .query_row(
-                "SELECT id,name,path FROM projects WHERE path=?1",
+                "SELECT id,name,path,rowid FROM projects WHERE path=?1",
                 [path_str],
                 |r| {
                     Ok(Project {
                         id: r.get(0)?,
                         name: r.get(1)?,
                         path: r.get(2)?,
+                        added_order: r.get(3)?,
                     })
                 },
             )
@@ -647,13 +651,14 @@ impl Store {
     pub fn project(&self, project_id: &str) -> Result<Project> {
         self.db
             .query_row(
-                "SELECT id,name,path FROM projects WHERE id=?1",
+                "SELECT id,name,path,rowid FROM projects WHERE id=?1",
                 [project_id],
                 |r| {
                     Ok(Project {
                         id: r.get(0)?,
                         name: r.get(1)?,
                         path: r.get(2)?,
+                        added_order: r.get(3)?,
                     })
                 },
             )
@@ -893,7 +898,7 @@ impl Store {
         // Work from the entire order, not the currently displayed project/search
         // result or the 500-row listing window, so hidden tasks keep their slots.
         let mut ordered = {
-            let mut query = transaction.prepare(&format!("SELECT id,pinned FROM sessions WHERE id NOT IN (SELECT session_id FROM architect_workers) ORDER BY {SIDEBAR_ORDER}")).map_err(|e| e.to_string())?;
+            let mut query = transaction.prepare(&format!("SELECT id,pinned FROM sessions WHERE draft=0 AND id NOT IN (SELECT session_id FROM architect_workers) ORDER BY {SIDEBAR_ORDER}")).map_err(|e| e.to_string())?;
             let rows = query.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?))).map_err(|e| e.to_string())?;
             rows.collect::<std::result::Result<Vec<_>, _>>().map_err(|e| e.to_string())?
         };
@@ -1840,6 +1845,37 @@ mod tests {
         // Reordering two other tasks keeps it on top instead of ranking it last.
         store.reorder_sessions(&[second.id.clone(), first.id.clone()]).unwrap();
         assert_eq!(ids(&store), vec![draft.id.clone(), second.id.clone(), first.id.clone(), early.id.clone()]);
+    }
+
+    #[test]
+    fn projects_list_by_name_and_carry_the_order_they_were_added() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let root = std::env::temp_dir().join(format!("pandacode-added-{}", id()));
+        for name in ["zeta", "alpha", "mid"] { std::fs::create_dir_all(root.join(name)).unwrap(); }
+        let added = ["zeta", "alpha", "mid"].map(|name| store.add_project(&root.join(name)).unwrap());
+        assert!(added[0].added_order < added[1].added_order && added[1].added_order < added[2].added_order);
+        let listed = store.projects().unwrap();
+        assert_eq!(listed.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["alpha", "mid", "zeta"]);
+        assert_eq!(listed.iter().find(|p| p.name == "zeta").unwrap().added_order, added[0].added_order);
+        assert_eq!(store.project(&added[2].id).unwrap().added_order, added[2].added_order);
+        let json = serde_json::to_value(&listed[0]).unwrap();
+        assert!(json.get("addedOrder").is_some_and(|value| value.is_i64()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_draft_open_during_a_reorder_stays_unranked_and_publishes_to_the_top() {
+        let (store, first) = empty_session();
+        let second = store.create_session(&first.project_id, "claude", "sonnet", "auto").unwrap();
+        let draft = store.mark_draft(&store.create_session(&first.project_id, "codex", "gpt-5", "auto").unwrap().id).unwrap();
+        // The draft is invisible, so a reorder must not rank it (it would then skip the publish rank).
+        store.reorder_sessions(&[second.id.clone(), first.id.clone()]).unwrap();
+        assert_eq!(store.session(&draft.id).unwrap().sidebar_order, None);
+        assert_eq!(store.session(&second.id).unwrap().sidebar_order, Some(0));
+        store.message(&draft.id, "user", "Now publish").unwrap();
+        assert_eq!(store.session(&draft.id).unwrap().sidebar_order, Some(0));
+        let ids = store.sessions().unwrap().into_iter().map(|task| task.id).collect::<Vec<_>>();
+        assert_eq!(ids, vec![draft.id.clone(), second.id.clone(), first.id.clone()]);
     }
 
     #[test]

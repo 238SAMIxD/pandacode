@@ -264,4 +264,71 @@ test.describe('sidebar sections', () => {
     await expect(pandacode).toHaveCount(0);
     await expect(row(page, 'session-4')).toHaveCount(0);
   });
+
+  test('the open Completed thread stays listed past the first page', async ({ page }) => {
+    await open(page);
+    await toggle(page).click();
+    await section(page, 'completed').getByRole('button', { name: 'Show 2 more', exact: true }).click();
+    await row(page, 'sections-old-8').click();
+    await expect(row(page, 'sections-old-8')).toHaveAttribute('aria-current', 'page');
+    // Closing and reopening resets the page to 10 rows; the open thread is still there.
+    await toggle(page).click();
+    await toggle(page).click();
+    await expect(row(page, 'sections-old-8')).toBeVisible();
+    await expect(section(page, 'completed').locator('.task-item')).toHaveCount(11);
+  });
+
+  test('while filtering, heading clicks do not save open or closed state', async ({ page }) => {
+    await open(page);
+    await page.getByRole('searchbox', { name: 'Filter tasks', exact: true }).fill('the');
+    const orbit = page.locator('.folder-heading[data-project="project-1"]');
+    await orbit.click();
+    await toggle(page).click();
+    await expect(orbit).toHaveAttribute('aria-expanded', 'true');
+    await expect(toggle(page)).toHaveAttribute('aria-expanded', 'true');
+    await page.getByRole('searchbox', { name: 'Filter tasks', exact: true }).fill('');
+    await expect(orbit).toHaveAttribute('aria-expanded', 'true');
+    await expect(toggle(page)).toHaveAttribute('aria-expanded', 'false');
+    expect(await page.evaluate(() => [localStorage.getItem('pandacode.collapsedFolders'), localStorage.getItem('pandacode.sidebar.completedOpen')])).not.toContain('true');
+  });
+
+  test('folder counts show on hover; a focused row’s actions fade into the row’s own background', async ({ page }) => {
+    await open(page);
+    const count = page.locator('.folder-heading[data-project="project-1"] .folder-count');
+    await expect(count).toBeHidden();
+    await page.locator('.folder-row').first().hover();
+    await expect(count).toBeVisible();
+    await page.mouse.move(900, 600);
+    await row(page, 'session-2').focus();
+    const [rowBg, fade] = await row(page, 'session-2').evaluate(item => [getComputedStyle(item).backgroundColor, getComputedStyle(item.parentElement!).getPropertyValue('--row-bg')]);
+    expect(rowBg).not.toBe('rgba(0, 0, 0, 0)');
+    const probe = await page.evaluate(value => { const el = document.createElement('div'); el.style.background = value; document.body.append(el); const color = getComputedStyle(el).backgroundColor; el.remove(); return color; }, fade.trim());
+    expect(probe).toBe(rowBg);
+  });
+
+  test('the archive heading count matches the other sections', async ({ page }) => {
+    await open(page);
+    await page.getByRole('button', { name: 'Archived tasks', exact: true }).click();
+    await expect(section(page, 'archived').locator('.section-heading .section-count')).toHaveCount(1);
+  });
+
+  test('the sort menu fits a 720px window, with tasks per project as one segmented row', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await open(page);
+    await page.getByRole('button', { name: 'Sort and view', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Sort and view', exact: true });
+    const flat = dialog.getByRole('group', { name: 'Group', exact: true }).getByRole('menuitemradio', { name: 'Flat list', exact: true });
+    await expect(flat).toBeInViewport();
+    expect(await dialog.locator('.choice-menu-list').evaluate(list => list.scrollHeight <= list.clientHeight)).toBe(true);
+    const perProject = dialog.getByRole('group', { name: 'Show per project', exact: true });
+    await expect(perProject.getByRole('menuitemradio')).toHaveText(['3', '6', '10', '15']);
+    await expect(perProject.getByRole('menuitemradio', { name: '6 tasks', exact: true })).toHaveAttribute('aria-checked', 'true');
+    // ← and → move along the row; Enter picks.
+    await perProject.getByRole('menuitemradio', { name: '6 tasks', exact: true }).focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(perProject.getByRole('menuitemradio', { name: '10 tasks', exact: true })).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(dialog).toBeHidden();
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('pandacode.sidebar.sort')!).perProject)).toBe(10);
+  });
 });

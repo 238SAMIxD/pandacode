@@ -294,7 +294,15 @@ test.describe('thread order', () => {
     await dialog.getByRole('group', { name: 'Group', exact: true }).getByRole('menuitemradio', { name: 'Flat list', exact: true }).click();
     await expect(page.locator('#navigation .folder-heading')).toHaveCount(0);
     await expect.poll(() => ids(page, 'all')).toEqual(['session-1', 'session-2', 'session-3', 'session-4']);
+    // At the default width titles come first: the name hides (the tooltip keeps it), the icon stays.
+    await expect(row(page, 'session-4').locator('.task-project-name')).toBeHidden();
+    await expect(row(page, 'session-4').locator('.task-app-icon')).toBeVisible();
+    await expect(row(page, 'session-4')).toHaveAttribute('title', /\npandacode/);
+    // A wider sidebar shows the name in full.
+    await page.evaluate(() => document.querySelector<HTMLElement>('.workspace')!.style.setProperty('--sidebar-width', '320px'));
     await expect(row(page, 'session-4').locator('.task-project-name')).toHaveText('pandacode');
+    const name = await row(page, 'session-4').locator('.task-project-name').evaluate(node => node.scrollWidth <= node.clientWidth);
+    expect(name).toBe(true);
     await page.reload();
     await expect(page.locator('#navigation .folder-heading')).toHaveCount(0);
   });

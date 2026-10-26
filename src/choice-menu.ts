@@ -24,6 +24,10 @@ type ChoiceItem = {
   heading?: string;
   /** Draws a line above the item, starting an unnamed group. */
   separator?: boolean;
+  /** Consecutive items with the same `segment` share one row named by it, as a segmented choice
+   * showing `short` (← and → move along it, like ↑ and ↓). Search results list them as plain rows. */
+  segment?: string;
+  short?: string;
 };
 type ChoiceMenuOptions = {
   anchor: HTMLElement;
@@ -136,6 +140,12 @@ export function openChoiceMenu(options: ChoiceMenuOptions): () => void {
     const grouped = !query;
     let open = false;
     list.innerHTML = items.map((item, index) => {
+      if (grouped && item.segment) {
+        const first = items[index - 1]?.segment !== item.segment, last = items[index + 1]?.segment !== item.segment;
+        const start = first ? `${open ? '</div>' : ''}${index ? '<div class="choice-menu-separator" role="separator"></div>' : ''}<div class="choice-menu-segments" role="group" aria-label="${escape(item.segment)}"><span class="choice-menu-label" aria-hidden="true">${escape(item.segment)}</span><span class="choice-menu-segment-list">` : '';
+        if (first) open = false;
+        return `${start}<button type="button" class="choice-menu-option choice-menu-segment" role="menuitemradio" aria-checked="${Boolean(item.selected)}" aria-label="${escape(item.label)}" data-choice-index="${index}" tabindex="-1" ${item.disabled ? 'disabled aria-disabled="true"' : ''}>${escape(item.short ?? item.label)}</button>${last ? '</span></div>' : ''}`;
+      }
       const heading = grouped && item.heading ? `${open ? '</div>' : ''}${index ? '<div class="choice-menu-separator" role="separator"></div>' : ''}<div class="choice-menu-group" role="group" aria-label="${escape(item.heading)}"><div class="choice-menu-heading" aria-hidden="true">${escape(item.heading)}</div>` : '';
       if (heading) open = true;
       const separator = grouped && !item.heading && item.separator && index ? '<div class="choice-menu-separator" role="separator"></div>' : '';
@@ -206,10 +216,13 @@ export function openChoiceMenu(options: ChoiceMenuOptions): () => void {
     const enabled = buttons.flatMap((button, index) => button.disabled ? [] : [index]);
     if (!enabled.length) return;
     if (event.target === search && (event.key === 'Home' || event.key === 'End')) return;
-    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+    // Along a segmented row, → and ← step like ↓ and ↑.
+    const segment = event.target instanceof Element && event.target.classList.contains('choice-menu-segment');
+    const key = segment && event.key === 'ArrowRight' ? 'ArrowDown' : segment && event.key === 'ArrowLeft' ? 'ArrowUp' : event.key;
+    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(key)) {
       event.preventDefault();
       const current = enabled.indexOf(active);
-      const next = event.target === search ? event.key === 'ArrowUp' ? enabled.length - 1 : Math.max(0, current) : event.key === 'Home' ? 0 : event.key === 'End' ? enabled.length - 1 : (current + (event.key === 'ArrowDown' ? 1 : -1) + enabled.length) % enabled.length;
+      const next = event.target === search ? key === 'ArrowUp' ? enabled.length - 1 : Math.max(0, current) : key === 'Home' ? 0 : key === 'End' ? enabled.length - 1 : (current + (key === 'ArrowDown' ? 1 : -1) + enabled.length) % enabled.length;
       focusItem(enabled[next]);
     } else if (event.key === 'Enter' && event.target === search) {
       event.preventDefault(); void select(active);

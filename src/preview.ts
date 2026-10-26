@@ -1000,7 +1000,8 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'browser_bounds': break;
     case 'browser_close': browserHistory = []; browserIndex = -1; browserState = { url: '', title: '', loading: false, canGoBack: false, canGoForward: false, picking: false }; browserChanged(); break;
     case 'browser_capture': result = { id: crypto.randomUUID(), name: 'Sample screenshot', path: '/sample/browser-capture.png', mimeType: 'image/png', url: browserState.url, title: browserState.title, width: 1280, height: 800, dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==' }; break;
-    case 'list_projects': result = projects; break;
+    // Like the native rowid: projects are pushed in the order they were added.
+    case 'list_projects': result = projects.map((project, index) => ({ ...project, addedOrder: index + 1 })); break;
     case 'list_sessions': archiveCompletedTasks(); sessions.forEach(settleDraft); result = [...sessions].filter(task => !task.draft).sort(compareThreadOrder).map(taskSummary); break;
     case 'set_resume_at_reset': {
       const s = session(args.sessionId);

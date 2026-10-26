@@ -86,3 +86,23 @@ test('jump shortcuts never fire while typing, and / focuses the filter from the 
   await page.keyboard.press('/');
   await expect(page.getByRole('searchbox', { name: 'Filter tasks', exact: true })).toBeFocused();
 });
+
+test('/ also works from the transcript, but not on a control outside the list, and is left alone when the filter is hidden', async ({ page }) => {
+  await open(page);
+  const filter = page.getByRole('searchbox', { name: 'Filter tasks', exact: true });
+  await page.locator('#transcript').evaluate(node => { node.tabIndex = -1; node.focus(); });
+  await page.keyboard.press('/');
+  await expect(filter).toBeFocused();
+  await filter.press('Escape');
+  await page.getByRole('button', { name: 'Board view', exact: true }).focus();
+  await page.keyboard.press('/');
+  await expect(filter).not.toBeFocused();
+  await page.setViewportSize({ width: 600, height: 800 });
+  await expect(filter).toBeHidden();
+  await page.locator('#transcript').evaluate(node => node.focus());
+  const prevented = await page.evaluate(() => new Promise<boolean>(resolve => {
+    document.addEventListener('keydown', event => resolve(event.defaultPrevented), { once: true });
+    document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: '/', bubbles: true, cancelable: true }));
+  }));
+  expect(prevented).toBe(false);
+});

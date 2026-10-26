@@ -82,7 +82,8 @@ export function projectComparator(sort: ProjectSort, projects: readonly Project[
   const byName = (a: Project, b: Project) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   const recent = (a: Project, b: Project) => (latest.get(b.id) ?? 0) - (latest.get(a.id) ?? 0) || byName(a, b);
   if (sort === 'name') return byName;
-  if (sort === 'added') return (a, b) => (added.get(a.id) ?? 0) - (added.get(b.id) ?? 0);
+  // The native list comes sorted by name, so Added reads each project's addedOrder (its rowid).
+  if (sort === 'added') return (a, b) => (a.addedOrder ?? added.get(a.id) ?? 0) - (b.addedOrder ?? added.get(b.id) ?? 0) || byName(a, b);
   if (sort === 'manual') {
     const rank = new Map(manual.map((id, index) => [id, index]));
     return (a, b) => (rank.get(a.id) ?? -1) - (rank.get(b.id) ?? -1) || recent(a, b);

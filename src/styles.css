@@ -659,11 +659,14 @@ button:hover>.info-mark,button:focus-visible>.info-mark,.info-mark:hover{color:v
 .model-menu-option,.project-menu-option,.choice-menu-option{border-radius:4px;position:relative}
 .model-menu-option{min-height:28px;padding:4px 8px;font-size:.84rem}
 .model-menu-option:not(:disabled):hover,.project-menu-option:not(:disabled):hover,.choice-menu-option:not(:disabled):hover,.model-menu-option.model-menu-active,.project-menu-option.project-menu-active,.choice-menu-option.choice-menu-active{background:color-mix(in srgb,var(--text) 7%,transparent)}
-/* The current choice is a solid fill of the chosen accent, like the selected task. */
-.model-menu-option.model-menu-current,.project-menu-option[aria-selected="true"],.choice-menu-option[aria-checked="true"]{background:rgb(var(--accent-rgb) / .22);box-shadow:none;color:var(--text)}
+/* Model and project menus fill the current choice with the accent, like the selected task. */
+.model-menu-option.model-menu-current,.project-menu-option[aria-selected="true"]{background:rgb(var(--accent-rgb) / .22);box-shadow:none;color:var(--text)}
 .model-menu-option:not(:disabled):active,.project-menu-option:not(:disabled):active,.choice-menu-option:not(:disabled):active,.project-menu-open:not(:disabled):active{background:color-mix(in srgb,var(--accent) 50%,var(--bg));box-shadow:inset 0 0 0 1px rgb(var(--accent-rgb) / .14)}
-/* The current choice is shown by its fill alone; no tick. */
-.model-menu-option.model-menu-current>.icon:last-child,.project-menu-option[aria-selected="true"]>.icon:last-child,.choice-menu-option[aria-checked="true"]>.icon:last-child{display:none}
+/* …and show it by that fill alone, no tick. */
+.model-menu-option.model-menu-current>.icon:last-child,.project-menu-option[aria-selected="true"]>.icon:last-child{display:none}
+/* Choice menus (sidebar, filters, settings pickers) mark the current choice with a trailing check only. */
+.choice-menu-option[aria-checked="true"]>.icon:last-child{flex:none;width:14px;height:14px;margin-left:auto;color:var(--accent-ink)}
+html[data-theme="dark"] .choice-menu-option[aria-checked="true"]>.icon:last-child{color:var(--accent)}
 .project-menu-path{color:#716e63}
 .choice-menu{width:300px}
 .task-title-row{display:flex;align-items:center;gap:6px;min-width:0}
@@ -785,9 +788,9 @@ html[data-theme="dark"] :is(.model-menu-search,.project-menu-search,.choice-menu
 html[data-theme="dark"] :is(.model-menu-group+.model-menu-group,.project-menu-footer){border-color:var(--border)}
 html[data-theme="dark"] :is(.model-menu-option,.project-menu-option,.choice-menu-option):not(:disabled):hover,
 html[data-theme="dark"] :is(.model-menu-option.model-menu-active,.project-menu-option.project-menu-active,.choice-menu-option.choice-menu-active){background:color-mix(in srgb,var(--text) 9%,transparent)}
-html[data-theme="dark"] :is(.model-menu-option.model-menu-current,.project-menu-option[aria-selected="true"],.choice-menu-option[aria-checked="true"]){background:rgb(var(--accent-rgb) / .24);box-shadow:none}
+html[data-theme="dark"] :is(.model-menu-option.model-menu-current,.project-menu-option[aria-selected="true"]){background:rgb(var(--accent-rgb) / .24);box-shadow:none}
 html[data-theme="dark"] :is(.model-menu-option,.project-menu-option,.choice-menu-option,.project-menu-open):not(:disabled):active{background:color-mix(in srgb,var(--accent) 35%,var(--bg));box-shadow:inset 0 0 0 1px rgb(var(--accent-rgb) / .18)}
-html[data-theme="dark"] :is(.model-menu-option.model-menu-current,.project-menu-option[aria-selected="true"],.choice-menu-option[aria-checked="true"])>.icon:last-child{background:var(--accent);color:var(--on-accent)}
+html[data-theme="dark"] :is(.model-menu-option.model-menu-current,.project-menu-option[aria-selected="true"])>.icon:last-child{background:var(--accent);color:var(--on-accent)}
 html[data-theme="dark"] .project-menu-path{color:var(--muted)}
 html[data-theme="dark"] .settings-select{background:linear-gradient(#33332e,#2b2b27);border-color:#4a4a42;box-shadow:0 1px 3px rgb(0 0 0 / .1)}
 html[data-theme="dark"] :is(.project-filter,.model-picker,.mode-picker,.composer-project,.settings-select)[aria-expanded="true"]{background:var(--accent-dim);box-shadow:inset 0 0 0 1px rgb(var(--accent-rgb) / .14)}
