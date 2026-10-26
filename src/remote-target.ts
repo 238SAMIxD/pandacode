@@ -3,7 +3,7 @@ import type { RemoteRepoCheck, RemoteTarget } from './remote-types';
 import type { Session } from './types';
 import { cloudChip, cloudItems, cloudProvider, type CloudTarget } from './cloud-agents';
 // Start progress for a New task sent to another computer; importing it here loads its strip actions.
-export { clearRemoteStart, remoteStart, remoteStartStrip, startStageText, trackRemoteStart } from './remote-progress';
+export { cancelledRemoteStart, clearRemoteStart, remoteStart, remoteStartAttached, remoteStartStrip, startStageText, trackRemoteStart } from './remote-progress';
 
 /* The context bar's computer choice (PandaCode Connect). A new task can start on another
  * signed-in computer; a task that runs there shows that computer, locked. */
@@ -25,7 +25,7 @@ export function lastSeenText(target: Pick<RemoteTarget, 'lastSeen'>): string {
 export function offlineText(target: RemoteTarget): string { return `Offline · ${lastSeenText(target)}`; }
 
 /** The control beside Local / Worktree. A New task always offers it, so other computers and cloud providers can be found and set up from here. */
-export function computerControl(session: Session, fresh: boolean, targets: RemoteTarget[], chosen: string, clouds: CloudTarget[] = []): string {
+export function computerControl(session: Session, fresh: boolean, targets: RemoteTarget[], chosen: string, clouds: CloudTarget[] = [], chosenName?: string): string {
   if (session.cloud) return cloudChip(session);
   if (session.remoteDevice) {
     const name = escape(session.remoteDevice.name), target = targets.find(item => item.deviceId === session.remoteDevice!.id);
@@ -36,9 +36,11 @@ export function computerControl(session: Session, fresh: boolean, targets: Remot
   if (!fresh) return '';
   const cloud = clouds.find(item => item.provider === cloudProvider(chosen));
   const target = targets.find(item => item.deviceId === chosen), offline = !cloud && target && !target.online;
-  const name = cloud ? `Cloud · ${cloud.label}` : target?.name ?? 'This computer';
-  const status = offline ? ` · ${escape(offlineText(target))}` : '';
-  return `<button type="button" id="composer-computer" class="composer-computer" data-action="computer-menu" aria-label="Computer: ${escape(name)}${status}" aria-haspopup="menu" aria-expanded="false" title="Where this task runs">${icon('monitor')}<span>${escape(name)}${offline ? ' · Offline' : ''}</span>${icon('down')}</button>`;
+  // A chosen computer that left the list (signed out or revoked) keeps its last known name.
+  const missing = !cloud && !target && chosen !== LOCAL && !cloudProvider(chosen);
+  const name = cloud ? `Cloud · ${cloud.label}` : target?.name ?? (missing ? chosenName ?? 'That computer' : 'This computer');
+  const status = offline ? ` · ${escape(offlineText(target))}` : missing ? ' · Not paired' : '';
+  return `<button type="button" id="composer-computer" class="composer-computer" data-action="computer-menu" aria-label="Computer: ${escape(name)}${status}" aria-haspopup="menu" aria-expanded="false" title="Where this task runs">${icon('monitor')}<span>${escape(name)}${offline ? ' · Offline' : missing ? ' · Not paired' : ''}</span>${icon('down')}</button>`;
 }
 
 export function computerItems(targets: RemoteTarget[], chosen: string, clouds: CloudTarget[] = []) {

@@ -4,9 +4,10 @@ import type { RemoteDevice, RemoteSignIn, RemoteStatus, RemoteTarget } from './r
 const THIS = 'dev-this';
 let signedIn = false, hostEnabled = false, remoteFullAccess = false;
 let devices: RemoteDevice[] = [], cancelSignIn: (() => void) | undefined;
-const offline = new Set<string>();
+const offline = new Set<string>(), revoked = new Set<string>();
 const status = (): RemoteStatus => ({ configured: true, signedIn, account: signedIn ? { login: 'octocat' } : undefined, device: { id: THIS, name: 'This Mac', fingerprint: '3fa91c07d2b64e58a1e07c94b25d3f66' }, hostEnabled, remoteFullAccess, connected: signedIn });
-const sampleDevices = (): RemoteDevice[] => [
+const sampleDevices = (): RemoteDevice[] => allDevices().filter(device => !revoked.has(device.id));
+const allDevices = (): RemoteDevice[] => [
   { id: THIS, name: 'This Mac', platform: 'macOS', fingerprint: '3fa91c07d2b64e58a1e07c94b25d3f66', host: hostEnabled, online: true, lastSeen: Date.now(), current: true },
   { id: 'dev-studio', name: 'Studio iMac', platform: 'macOS', fingerprint: '9b02e4aa71c3d6050c8e2b7f41a96d13', host: true, online: !offline.has('dev-studio'), lastSeen: Date.now(), current: false },
   { id: 'dev-nas', name: 'Home NAS', platform: 'Linux', fingerprint: '17aa5e90b3c4d2867f30e1ac95b4c028', host: true, online: true, lastSeen: Date.now(), current: false },
@@ -20,7 +21,9 @@ function handle(command: string, args: Record<string, any>, emit: (name: string,
   switch (command) {
     case 'remote_status':
       if (w.__remoteStatusFailures > 0) { w.__remoteStatusFailures--; throw new Error('The relay is unavailable.'); }
-      w.__remoteOnline = (id: string, online: boolean) => setPreviewOnline(id, online, emit); return status();
+      w.__remoteOnline = (id: string, online: boolean) => setPreviewOnline(id, online, emit);
+      w.__remoteRevoke = (id: string) => { revoked.add(id); devices = sampleDevices(); emit('remote://presence', devices); };
+      return status();
     case 'remote_sign_in_start': return { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresIn: 900 } satisfies RemoteSignIn;
     case 'remote_sign_in_finish': return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { cancelSignIn = undefined; signedIn = true; devices = sampleDevices(); emit('remote://status', status()); resolve(status()); }, (window as any).__signInDelay ?? 400);
@@ -49,6 +52,10 @@ function handle(command: string, args: Record<string, any>, emit: (name: string,
  * Tests steer it: `__remoteStartStep` (ms per step, default 250), `__remoteStartManual` (each
  * step waits for `__remoteStartNext()`), `__remoteStartFail` (an error text sent at preparing). */
 const activeStarts = new Map<string, () => void>();
+/** A start whose reply was lost waits here until cancelled (or `undefined` once it attached). */
+export function holdPreviewRemoteStart(sessionId: string, cancel: (() => void) | undefined): void {
+  if (cancel) activeStarts.set(sessionId, () => { activeStarts.delete(sessionId); cancel(); }); else activeStarts.delete(sessionId);
+}
 export function cancelPreviewRemoteStart(sessionId: string): boolean {
   const cancel = activeStarts.get(sessionId); if (!cancel) return false;
   cancel(); return true;

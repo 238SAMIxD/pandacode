@@ -33,8 +33,16 @@ export interface TasksList { tasks: TaskSummary[]; projects: Project[] }
 export interface PendingRequest { kind: 'approval' | 'input_request' | (string & {}); requestId: string; text: string; data?: unknown; tool?: ToolActivity }
 
 /** Newer hosts add `seq` (the newest event number), and for a subscribe with `afterSeq` the
- * missed `events` or `gap: true` (docs/remote-access.md). */
-export interface SubscribedTask extends HostActivity { sessionId: string; status: TaskStatus; lastId: number; title: string; pending?: PendingRequest[]; seq?: number; gap?: boolean; events?: AgentEvent[] }
+ * missed `events` (team updates and `run.finished` entries included) or `gap: true`. With
+ * `more`, the replay continues in another subscribe from `seq`, the last one replayed
+ * (docs/remote-access.md). */
+export interface SubscribedTask extends HostActivity { sessionId: string; status: TaskStatus; lastId: number; title: string; pending?: PendingRequest[]; seq?: number; gap?: boolean; more?: boolean; events?: AgentEvent[] }
+
+/** A subscribe reply; `more`: some task's replay continues in another page. */
+export interface SubscribeReply { tasks: SubscribedTask[]; epoch?: string; more?: boolean; missing?: string[] }
+
+/** `agent.events` frame data; `lagged`: the host dropped what it could not buffer, so subscribe again from `seq`. */
+export interface AgentEventsFrame { events: AgentEvent[]; epoch?: string; lagged?: boolean }
 
 /** `attachments`: newer hosts' rows (checked by parseAttachments in src/store/attachments.ts). */
 export interface Message { id: number; role: string; content: string; createdAt: number; turnDurationMs: number | null; attachments?: unknown }
@@ -52,12 +60,19 @@ export interface AgentEvent { sessionId: string; kind: string; text: string; req
 
 /** Newer hosts, architect tasks: `status` as tasks.list shows it ('running' while the team works),
  * `team` (`{ status, activeWorkers }`), and `teamSettled` on the extra run.finished sent when the team settles. */
-export interface RunFinished { sessionId: string; successful: boolean; stopped: boolean; text: string; status?: TaskStatus; team?: unknown; teamSettled?: boolean }
+export interface RunFinished { sessionId: string; successful: boolean; stopped: boolean; text: string; status?: TaskStatus; team?: unknown; teamSettled?: boolean; kind?: 'run.finished'; seq?: number }
 
+/** `startId`: one per deliberate start; the host runs a repeated start with it once. */
 export interface StartParams {
   repo?: string; projectId?: string; branch?: string; worktree: boolean; prompt: string;
-  provider: string; model: string; mode?: string; effort?: string;
+  provider: string; model: string; mode?: string; effort?: string; startId?: string;
 }
+
+/** `task.startStatus`: how a start by `startId` stands on its host ('unknown': never seen, or forgotten after an hour or a restart). */
+export interface StartStatus { state: 'running' | 'done' | 'failed' | 'unknown'; sessionId?: string; error?: string }
+
+/** `task.cancelStart`: `cancelled: false` (with `sessionId`) when the host had already made the task. */
+export interface CancelStart { cancelled: boolean; sessionId?: string }
 
 export interface ConfigureParams { sessionId: string; provider?: string; model?: string; effort?: string | null; mode?: string }
 

@@ -13,6 +13,7 @@ import { applyTeamEvent, decodeTeam, decodeTeamRun, teamBusy, teamRun, type Team
 import { applyEvent, ended, fromList, fromSubscribe, idleLive, lastId, mergeMessages, prependMessages, staleLists, withTeamRun } from '../store/reduce.ts';
 import { cachedLastId, clearThreads, readThread, saveThread } from '../store/threads.ts';
 import { PrefetchQueue, prefetchOrder } from '../store/prefetch.ts';
+import { Cursors, followReplay } from '../store/replay.ts';
 import { clearBlobs } from '../store/attachment-files.ts';
 import type { Variant } from '../store/attachments.ts';
 import { fetchAttachment, type AttachmentDeps, type Source } from './attachments.ts';
@@ -30,7 +31,7 @@ import { decodeInbox, encodeInbox, type RestoredInbox } from '../store/inbox-cac
 import { attempt, configured, stopping, unanswered, unconfigured, unpaused, unstopping } from './optimistic.ts';
 import { newestPage, olderByAfterId, pageMessages, type Fetch } from './paging.ts';
 import type { Live } from '../store/reduce.ts';
-import type { AgentEvent, Bot, Changes, ConfigureParams, Device, Diff, MergeMethod, Message, MessagePage, Provider, ProviderModel, PullDetail, RunFinished, StartParams, SubscribedTask, TaskSummary, TasksList } from './types.ts';
+import type { AgentEvent, Bot, Changes, ConfigureParams, Device, Diff, MergeMethod, Message, MessagePage, Provider, ProviderModel, PullDetail, RunFinished, StartParams, SubscribeReply, TaskSummary, TasksList } from './types.ts';
 
 const RENEW_MS = 9 * 60_000;
 const REFRESH_MS = 12 * 3600_000;
@@ -429,38 +430,28 @@ function frame(text: string) {
     return;
   }
   if (message?.type === 'res') pending.resolve(from, message);
-  else if (message?.type === 'event' && message.name === 'agent.events') events(from, message.data?.events, message.data?.epoch);
+  else if (message?.type === 'event' && message.name === 'agent.events') {
+    events(from, message.data?.events, message.data?.epoch);
+    // The host dropped events it could not buffer: hold what comes next and replay from here.
+    if (message.data?.lagged === true) {
+      cursors.hold(from);
+      void subscribeHost(from);
+    }
+  }
   else if (message?.type === 'event' && message.name === 'run.finished') void finished(from, message.data);
 }
 
 const active = (status?: string) => status === 'running' || status === 'waiting';
 
-/** Per host: its event journal's epoch (new with every host launch) and the newest event `seq`
- * seen per task, so a subscribe asks only for what was missed (docs/remote-access.md). */
-const cursors = new Map<string, { epoch: string; seqs: Map<string, number> }>();
+/** Per host: its event journal's epoch and the newest `seq` seen per task, so a subscribe asks
+ * only for what was missed; live events wait while a subscribe's replay is in flight. */
+const cursors = new Cursors();
 
-function cursor(host: string, epoch: unknown) {
-  let known = cursors.get(host);
-  if (typeof epoch === 'string' && known?.epoch !== epoch) cursors.set(host, known = { epoch, seqs: new Map() });
-  return known;
-}
-
-/** Drops events already seen (a replay overlapping live frames). Older hosts send no `seq`. */
-function unseen(host: string, epoch: unknown, list: AgentEvent[]): AgentEvent[] {
-  const known = cursor(host, epoch);
-  if (!known) return list;
-  return list.filter(event => {
-    if (typeof event?.seq !== 'number' || typeof event.sessionId !== 'string') return true;
-    if (event.seq <= (known.seqs.get(event.sessionId) ?? 0)) return false;
-    known.seqs.set(event.sessionId, event.seq);
-    return true;
-  });
-}
-
-function events(host: string, raw: unknown, epoch?: unknown) {
+function events(host: string, raw: unknown, epoch?: unknown, live = true) {
   const ids = subscribed(host);
   if (!ids.size || !Array.isArray(raw)) return;
-  const list = unseen(host, epoch, raw as AgentEvent[]);
+  if (live && cursors.keep(host, epoch, raw as AgentEvent[])) return;
+  const list = cursors.fresh(host, epoch, raw as AgentEvent[]);
   const started = new Set<string>();
   patch(s => {
     const live = { ...s.live };
@@ -591,21 +582,15 @@ function subscribeHost(deviceId: string): Promise<void> {
 async function subscribeOnce(deviceId: string): Promise<void> {
   const ids = [...subscribed(deviceId)].slice(0, 500);
   if (!ids.length || !socket.open) return;
-  let reply: { tasks: SubscribedTask[]; epoch?: string };
-  const known = cursors.get(deviceId);
-  // Newer hosts replay what was missed after each `afterSeq` (or answer `gap`).
-  const params = known ? { sessionIds: ids, epoch: known.epoch, afterSeq: Object.fromEntries(ids.flatMap(id => known.seqs.has(id) ? [[id, known.seqs.get(id)]] : [])) } : { sessionIds: ids };
-  try {
-    // Only glanced tasks (no open thread on this host): background work.
-    reply = await call(deviceId, 'subscribe', params, TIMEOUT_MS, !watched.get(deviceId)?.size);
-  } catch {
-    return; // offline; the next presence frame or renewal retries
-  }
-  const tasks = Array.isArray(reply?.tasks) ? reply.tasks : [];
-  // The missed events first, in order; the status snapshot below is newer.
-  for (const t of tasks) if (Array.isArray(t.events) && t.events.length) events(deviceId, t.events, reply.epoch);
-  const now = cursor(deviceId, reply?.epoch);
-  if (now) for (const t of tasks) if (typeof t.seq === 'number') now.seqs.set(t.sessionId, Math.max(now.seqs.get(t.sessionId) ?? 0, t.seq));
+  // Only glanced tasks (no open thread on this host): background work.
+  const background = !watched.get(deviceId)?.size;
+  // Newer hosts replay what was missed after each `afterSeq` (or answer `gap`), in pages while `more`.
+  const { reply, tasks, held } = await followReplay(cursors, deviceId, ids, params => call<SubscribeReply>(deviceId, 'subscribe', params, TIMEOUT_MS, background), (list, epoch) => events(deviceId, list, epoch, false));
+  const showHeld = () => {
+    for (const entry of held.entries) events(deviceId, entry.events, entry.epoch, false);
+    if (held.overflow) resubscribe.add(deviceId);
+  };
+  if (!reply) return showHeld(); // offline; the next presence frame or renewal retries
   patch(s => {
     const live = { ...s.live };
     for (const t of tasks) {
@@ -614,6 +599,8 @@ async function subscribeOnce(deviceId: string): Promise<void> {
     }
     return { live, tasks: withStatuses(s, deviceId, live) };
   });
+  // What arrived live meanwhile is newer than the snapshot.
+  showHeld();
   // A gap means events were lost: the messages copy catches up.
   for (const t of tasks) if (watched.get(deviceId)?.has(t.sessionId) && (t.gap === true || t.lastId > lastId(state().messages[taskKey(deviceId, t.sessionId)]))) void loadMessages(deviceId, t.sessionId).catch(() => undefined);
 }

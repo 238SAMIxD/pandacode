@@ -45,6 +45,7 @@ shell-words = "1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tauri-plugin-updater = ">=2, <2.10"
 tauri-plugin-process = ">=2, <2.4"
+if-addrs = "=0.15.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"

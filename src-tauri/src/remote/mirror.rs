@@ -25,6 +25,13 @@ const RETRY_MAX: Duration = Duration::from_secs(60);
 const START_POLL: Duration = Duration::from_secs(3);
 /// Pages per sync; a longer history continues at the next run end or subscription.
 const MAX_PAGES: usize = 50;
+/// Replay pages per host and subscribe round; a replay longer still becomes a gap.
+const MAX_REPLAY_PAGES: usize = 20;
+/// Live entries held per host while its subscribe is in flight; past this they are dropped
+/// and the host is asked again from where this viewer is.
+const MAX_HELD: usize = 4096;
+/// Cursors are saved at most this often while events stream, and after every subscribe round.
+const SAVE_EVERY: Duration = Duration::from_secs(5);
 const NO_REPO: &str = "This project has no GitHub origin, so it can't run on another computer. Add a GitHub remote named origin first.";
 
 #[derive(Debug)]
@@ -99,7 +106,7 @@ fn start_turn(store: &Store, local: &str) -> Result<String> {
 pub(crate) fn relabel(events: &[Value], mut local: impl FnMut(&str) -> Option<String>) -> Vec<Value> {
     events
         .iter()
-        .filter(|event| event["kind"].as_str().is_some_and(|kind| kind != "done") && event["text"].is_string())
+        .filter(|event| event["kind"].as_str().is_some_and(|kind| kind != "done" && kind != RUN_END) && event["text"].is_string())
         .filter_map(|event| {
             let id = local(event["sessionId"].as_str()?)?;
             let mut event = event.clone();
@@ -134,6 +141,23 @@ pub(crate) struct Viewer {
     cards: HashMap<String, HashMap<String, String>>,
     /// Starts not yet answered, by local id.
     starts: HashMap<String, PendingStart>,
+    /// Per host with a subscribe (and its replay pages) in flight: the live entries that
+    /// arrived meanwhile, shown once the replay is, so none hides an older replayed one.
+    held: HashMap<String, Held>,
+    /// Cursors were read from the store (they survive a restart of this computer).
+    loaded: bool,
+    /// Hosts whose cursors changed since they were saved, and when they last were.
+    dirty: HashSet<String>,
+    saved_at: Option<Instant>,
+    save_scheduled: bool,
+}
+
+#[derive(Default)]
+struct Held {
+    /// (epoch, entry) in arrival order.
+    entries: Vec<(Option<String>, Value)>,
+    /// Some were dropped: ask the host again once this round is over.
+    overflow: bool,
 }
 
 pub(crate) struct PendingStart {
@@ -145,7 +169,12 @@ pub(crate) struct PendingStart {
     cancel: Arc<Notify>,
     /// A call for it (the start, or asking how it went) is in flight.
     busy: bool,
+    /// The user stopped it but the host has not confirmed: asked again when it is back.
+    cancelling: bool,
 }
+
+/// The journal entry (and live frame) of a run end.
+const RUN_END: &str = "run.finished";
 
 impl Viewer {
     /// Moves to a host's epoch: a new one (the host restarted) forgets its old `seq`s.
@@ -154,6 +183,7 @@ impl Viewer {
         if self.epochs.get(device).map(String::as_str) != Some(epoch) {
             self.epochs.insert(device.to_owned(), epoch.to_owned());
             self.seqs.retain(|(host, _), _| host != device);
+            self.dirty.insert(device.to_owned());
         }
     }
 
@@ -165,12 +195,69 @@ impl Viewer {
             return false;
         }
         *last = seq;
+        self.dirty.insert(device.to_owned());
         true
     }
 
     fn advance(&mut self, device: &str, session: &str, seq: u64) {
         let last = self.seqs.entry((device.to_owned(), session.to_owned())).or_default();
-        *last = (*last).max(seq);
+        if seq > *last {
+            *last = seq;
+            self.dirty.insert(device.to_owned());
+        }
+    }
+
+    /// Moves to a subscribe reply's `seq` for a task. One this viewer had no position in was
+    /// not replayed, so its live entries held meanwhile set its position instead.
+    fn settle(&mut self, device: &str, session: &str, seq: u64) {
+        let unknown = !self.seqs.contains_key(&(device.to_owned(), session.to_owned()));
+        if unknown && self.held.get(device).is_some_and(|held| held.entries.iter().any(|(_, entry)| entry["sessionId"] == session)) {
+            return;
+        }
+        self.advance(device, session, seq);
+    }
+
+    /// Holds a host's live entries from now until [`Viewer::release`].
+    fn hold(&mut self, device: &str) {
+        self.held.entry(device.to_owned()).or_default();
+    }
+
+    /// Keeps live entries while the host is held; false when it is not.
+    fn keep(&mut self, device: &str, epoch: Option<&str>, list: &[Value]) -> bool {
+        let Some(held) = self.held.get_mut(device) else { return false };
+        if held.entries.len() + list.len() > MAX_HELD {
+            held.overflow = true;
+        } else {
+            held.entries.extend(list.iter().map(|entry| (epoch.map(str::to_owned), entry.clone())));
+        }
+        true
+    }
+
+    fn release(&mut self, device: &str) -> Held {
+        self.held.remove(device).unwrap_or_default()
+    }
+
+    /// Cursors read back from the store, unless this run already has its own for a host.
+    fn restore(&mut self, rows: Vec<(String, String, String, u64)>) {
+        self.loaded = true;
+        for (device, session, epoch, seq) in rows {
+            if self.epochs.get(&device).is_some_and(|known| *known != epoch) {
+                continue;
+            }
+            self.epochs.entry(device.clone()).or_insert(epoch);
+            let last = self.seqs.entry((device, session)).or_default();
+            *last = (*last).max(seq);
+        }
+    }
+
+    /// What to save: each changed host's epoch and positions.
+    fn unsaved(&mut self) -> Vec<(String, String, Vec<(String, u64)>)> {
+        let dirty = std::mem::take(&mut self.dirty);
+        dirty.into_iter().filter_map(|device| {
+            let epoch = self.epochs.get(&device)?.clone();
+            let seqs = self.seqs.iter().filter(|((host, _), _)| *host == device).map(|((_, session), seq)| (session.clone(), *seq)).collect();
+            Some((device, epoch, seqs))
+        }).collect()
     }
 
     /// `subscribe` params: the tasks, and where this viewer left off in each it has seen.
@@ -227,26 +314,54 @@ impl Viewer {
     }
 }
 
-/// `agent.events` from the task's host.
+/// `agent.events` from the task's host. `lagged`: the host dropped events it could not
+/// buffer, so this viewer holds what comes next and subscribes again from where it is.
 pub(crate) fn events(app: &tauri::AppHandle, from: &str, data: &Value) {
-    let Some(list) = data["events"].as_array() else { return };
-    apply(app, from, data["epoch"].as_str(), list);
+    if let Some(list) = data["events"].as_array() {
+        apply(app, from, data["epoch"].as_str(), list, true);
+    }
+    if data["lagged"] == true {
+        super::diagnostics::record("viewer.lagged", super::device_label(from));
+        remote(app).lock().viewer.hold(from);
+        subscribe_soon(app);
+    }
+    save_cursors(app, false);
 }
 
-/// Shows a host's events (live or replayed) under their local ids, each once: one at or
-/// before the newest `seq` already seen is dropped.
-fn apply(app: &tauri::AppHandle, from: &str, epoch: Option<&str>, list: &[Value]) {
+/// Shows a host's entries (live or replayed) under their local ids, each once and in
+/// order: one at or before the newest `seq` already seen is dropped, and live entries wait
+/// while a subscribe to their host is in flight. Run ends end the turn where they fall.
+fn apply(app: &tauri::AppHandle, from: &str, epoch: Option<&str>, list: &[Value], live: bool) {
     let list: Vec<Value> = {
         let state = remote(app);
         let mut inner = state.lock();
+        if live && inner.viewer.keep(from, epoch, list) {
+            return;
+        }
         inner.viewer.epoch(from, epoch);
         list.iter().filter(|event| inner.viewer.fresh(from, event)).cloned().collect()
     };
+    let mut rest = list.as_slice();
+    while !rest.is_empty() {
+        let split = rest.iter().position(|entry| entry["kind"] == RUN_END).unwrap_or(rest.len());
+        show(app, from, &rest[..split]);
+        if let Some(end) = rest.get(split) {
+            run_ended(app, from, end);
+        }
+        rest = &rest[(split + 1).min(rest.len())..];
+    }
+}
+
+/// Emits a host's agent events under their local ids and moves the mirrors' statuses.
+fn show(app: &tauri::AppHandle, from: &str, list: &[Value]) {
+    if list.is_empty() {
+        return;
+    }
     let state = app.state::<AppState>();
     let (events, changed) = {
         let Ok(store) = state.store.lock() else { return };
         let mut ids: HashMap<String, Option<String>> = HashMap::new();
-        let events = relabel(&list, |remote| ids.entry(remote.to_owned()).or_insert_with(|| local_id(&store, from, remote)).clone());
+        let events = relabel(list, |remote| ids.entry(remote.to_owned()).or_insert_with(|| local_id(&store, from, remote)).clone());
         let mut changed = false;
         for event in &events {
             let (Some(id), Some(kind)) = (event["sessionId"].as_str(), event["kind"].as_str()) else { continue };
@@ -273,8 +388,20 @@ fn apply(app: &tauri::AppHandle, from: &str, epoch: Option<&str>, list: &[Value]
     }
 }
 
-/// `run.finished` from the task's host: copy the run's messages, then end the local turn.
+/// `run.finished` from the task's host. Newer hosts number it like an event (`seq`), so it
+/// is held, ordered and shown once like one, and comes back in a replay.
 pub(crate) fn finished(app: &tauri::AppHandle, from: &str, data: &Value) {
+    if !data.is_object() {
+        return;
+    }
+    let mut entry = data.clone();
+    entry["kind"] = json!(RUN_END);
+    apply(app, from, None, &[entry], true);
+    save_cursors(app, false);
+}
+
+/// A run end: copy the run's messages, then end the local turn.
+fn run_ended(app: &tauri::AppHandle, from: &str, data: &Value) {
     let Some(session) = data["sessionId"].as_str() else { return };
     let Some(local) = app.state::<AppState>().store.lock().ok().and_then(|store| local_id(&store, from, session)) else { return };
     let (successful, stopped) = (data["successful"].as_bool().unwrap_or(false), data["stopped"].as_bool().unwrap_or(false));
@@ -327,6 +454,10 @@ fn unreachable(error: &str, online: bool) -> bool {
 /// Stops a mirror's run. When its host is offline the run can't be reached, so the local
 /// turn ends as stopped and the spinner clears. None for a local task.
 pub(crate) async fn stop(app: &tauri::AppHandle, state: &AppState, local: &str) -> Result<Option<()>> {
+    // Still starting (its reply was lost): Stop cancels the start, now or once the host is back.
+    if remote(app).lock().viewer.starts.contains_key(local) {
+        return cancel_start(app, state, local).await.map(|_| Some(()));
+    }
     let device = { of(&*lock(state)?, local)?.map(|mirror| mirror.device) };
     let Some(device) = device else { return Ok(None) };
     match route(app, state, local, "task.stop", json!({})).await {
@@ -501,27 +632,131 @@ async fn subscribe_all(app: &tauri::AppHandle) -> bool {
             *active |= running;
         }
     }
+    load_cursors(app);
     let online: HashSet<String> = remote(app).lock().devices.iter().filter(|d| d.online).map(|d| d.id.clone()).collect();
     resume_starts(app, &online);
+    let followed: HashSet<String> = hosts.keys().filter(|device| online.contains(*device)).cloned().collect();
+    // A host held after `lagged` that is not asked this round shows what it holds now.
+    let idle: Vec<String> = remote(app).lock().viewer.held.keys().filter(|device| !followed.contains(*device)).cloned().collect();
+    for device in idle {
+        show_held(app, &device);
+    }
     let rounds = hosts.into_iter().filter(|(device, _)| online.contains(device)).map(|(device, (sessions, active))| async move {
-        let params = remote(app).lock().viewer.subscribe_params(&device, &sessions);
-        match client::call(app, &device, "subscribe", params).await {
-            Ok(reply) => {
-                catch_up(app, &device, &reply, &sessions).await;
-                false
-            }
+        match follow_host(app, &device, &sessions).await {
+            Ok(()) => false,
             Err(error) => {
                 eprintln!("PandaCode Connect: could not follow tasks on {}: {error}", super::device_label(&device));
+                if client::maybe_ran(&error) {
+                    super::diagnostics::record("rpc.timeout", format!("subscribe to {}", super::device_label(&device)));
+                }
                 active
             }
         }
     });
-    futures_util::future::join_all(rounds).await.into_iter().any(|failed| failed)
+    let failed = futures_util::future::join_all(rounds).await.into_iter().any(|failed| failed);
+    save_cursors(app, true);
+    failed
 }
 
-async fn catch_up(app: &tauri::AppHandle, device: &str, reply: &Value, requested: &[String]) {
-    let epoch = reply["epoch"].as_str();
+/// Subscribes to one host and follows its replay pages (`more`), holding live entries
+/// meanwhile; then the snapshot's statuses and cards, what arrived meanwhile, and last the
+/// messages copies of tasks that need them.
+async fn follow_host(app: &tauri::AppHandle, device: &str, sessions: &[String]) -> Result<()> {
+    remote(app).lock().viewer.hold(device);
+    let (mut asked, mut latest, mut first) = (sessions.to_vec(), Vec::<Value>::new(), None);
+    let (mut failure, mut cut) = (None, None);
+    for page in 1..=MAX_REPLAY_PAGES {
+        let params = remote(app).lock().viewer.subscribe_params(device, &asked);
+        let reply = match client::call(app, device, "subscribe", params).await {
+            Ok(reply) => reply,
+            Err(error) => {
+                failure = Some(error);
+                break;
+            }
+        };
+        let more = replay(app, device, &reply);
+        let tasks = reply["tasks"].as_array().cloned().unwrap_or_default();
+        // Later pages carry newer snapshots of the tasks they continue.
+        latest.retain(|task: &Value| !tasks.iter().any(|newer| newer["sessionId"] == task["sessionId"]));
+        latest.extend(tasks);
+        first.get_or_insert(reply.clone());
+        if reply["more"] != true || more.is_empty() {
+            break;
+        }
+        asked = more;
+        if page == MAX_REPLAY_PAGES {
+            cut = Some(format!("the replay went past {MAX_REPLAY_PAGES} pages"));
+        }
+    }
+    let Some(first) = first else {
+        show_held(app, device);
+        return Err(failure.unwrap_or_default());
+    };
+    if let Some(error) = cut.as_ref().or(failure.as_ref()) {
+        // A replay cut short: the messages copy catches those tasks up.
+        super::diagnostics::record("replay.gap", format!("{} tasks on {}: {error}", asked.len(), super::device_label(device)));
+        for task in latest.iter_mut().filter(|task| task["sessionId"].as_str().is_some_and(|id| asked.iter().any(|a| a == id))) {
+            task["gap"] = json!(true);
+        }
+    }
+    let pending = catch_up(app, device, &first, sessions, &latest);
+    show_held(app, device);
     let mut changed = false;
+    for (local, ended) in pending {
+        match ended {
+            Some((successful, stopped)) => end_turn(app, &local, successful, stopped, if successful { "Turn complete" } else if stopped { "Turn stopped" } else { "Turn failed" }).await,
+            None => changed |= sync(app, &local).await.is_ok(),
+        }
+    }
+    if changed {
+        let _ = app.emit("sessions-changed", ());
+    }
+    failure.map_or(Ok(()), Err)
+}
+
+/// Shows a subscribe reply's replayed entries in order and moves this viewer's positions;
+/// the tasks whose replay continues in another page.
+fn replay(app: &tauri::AppHandle, device: &str, reply: &Value) -> Vec<String> {
+    let epoch = reply["epoch"].as_str();
+    let mut more = Vec::new();
+    for task in reply["tasks"].as_array().map(Vec::as_slice).unwrap_or_default() {
+        let Some(session) = task["sessionId"].as_str() else { continue };
+        // What this viewer missed while away, in order, before the snapshot.
+        if let Some(events) = task["events"].as_array() {
+            apply(app, device, epoch, events, false);
+        }
+        if let Some(seq) = task["seq"].as_u64() {
+            let state = remote(app);
+            let mut inner = state.lock();
+            inner.viewer.epoch(device, epoch);
+            inner.viewer.settle(device, session, seq);
+        }
+        if task["more"] == true {
+            more.push(session.to_owned());
+        }
+        if task["gap"] == true {
+            super::diagnostics::record("replay.gap", format!("a task on {}", super::device_label(device)));
+        }
+    }
+    more
+}
+
+/// Shows the live entries held for a host while it was being subscribed to.
+fn show_held(app: &tauri::AppHandle, device: &str) {
+    let held = remote(app).lock().viewer.release(device);
+    for (epoch, entry) in held.entries {
+        apply(app, device, epoch.as_deref(), std::slice::from_ref(&entry), false);
+    }
+    if held.overflow {
+        subscribe_soon(app);
+    }
+}
+
+/// Applies a subscribe's snapshot: gone tasks end, statuses and cards follow the host.
+/// Returns the mirrors still to finish (`Some(successful, stopped)`) or copy messages for.
+fn catch_up(app: &tauri::AppHandle, device: &str, reply: &Value, requested: &[String], tasks: &[Value]) -> Vec<(String, Option<(bool, bool)>)> {
+    let mut changed = false;
+    let mut pending = Vec::new();
     // A task deleted on the host (or never made there) would otherwise spin forever.
     for session in gone(reply, requested) {
         let state = app.state::<AppState>();
@@ -530,18 +765,8 @@ async fn catch_up(app: &tauri::AppHandle, device: &str, reply: &Value, requested
             finish(app, &local, false, false, &format!("This task is no longer on {}.", super::device_label(device)));
         }
     }
-    for task in reply["tasks"].as_array().map(Vec::as_slice).unwrap_or_default() {
+    for task in tasks {
         let (Some(session), Some(status)) = (task["sessionId"].as_str(), task["status"].as_str()) else { continue };
-        // What this viewer missed while away, in order, before the snapshot below.
-        if let Some(events) = task["events"].as_array() {
-            apply(app, device, epoch, events);
-        }
-        if let Some(seq) = task["seq"].as_u64() {
-            let state = remote(app);
-            let mut inner = state.lock();
-            inner.viewer.epoch(device, epoch);
-            inner.viewer.advance(device, session, seq);
-        }
         let row = app.state::<AppState>().store.lock().ok().and_then(|store| {
             let local = local_id(&store, device, session)?;
             store.db.query_row("SELECT status,remote_synced_id FROM sessions WHERE id=?1", [&local], |r| Ok((local.clone(), r.get::<_, String>(0)?, r.get::<_, i64>(1)?))).ok()
@@ -549,27 +774,76 @@ async fn catch_up(app: &tauri::AppHandle, device: &str, reply: &Value, requested
         let Some((local, current, synced)) = row else { continue };
         match reconcile(&current, status) {
             Reconcile::Ended { successful, stopped } => {
-                end_turn(app, &local, successful, stopped, if successful { "Turn complete" } else if stopped { "Turn stopped" } else { "Turn failed" }).await;
+                pending.push((local, Some((successful, stopped))));
                 continue;
             }
             Reconcile::Set(status) => changed |= lock(&app.state::<AppState>()).and_then(|store| store.status(&local, &status)).is_ok(),
             Reconcile::Same => {}
         }
         // Approvals and questions still waiting come back after a restart or a lost frame.
-        if let Some(pending) = task["pending"].as_array() {
-            let shown = remote(app).lock().viewer.sync_cards(&local, pending);
+        if let Some(requests) = task["pending"].as_array() {
+            let shown = remote(app).lock().viewer.sync_cards(&local, requests);
             for event in shown {
                 let _ = app.emit("agent-event", event);
             }
         }
         // A gap means events were lost: the messages copy is the full catch-up.
         if task["gap"] == true || task["lastId"].as_i64().is_some_and(|last| last > synced) {
-            changed |= sync(app, &local).await.is_ok();
+            pending.push((local, None));
         }
     }
     if changed {
         let _ = app.emit("sessions-changed", ());
     }
+    pending
+}
+
+/// Reads the cursors saved by an earlier run, once per sign-in.
+fn load_cursors(app: &tauri::AppHandle) {
+    if remote(app).lock().viewer.loaded {
+        return;
+    }
+    let rows = lock(&app.state::<AppState>()).and_then(|store| store.remote_cursors());
+    if let Err(error) = &rows {
+        eprintln!("PandaCode Connect: could not read saved event positions: {error}");
+    }
+    remote(app).lock().viewer.restore(rows.unwrap_or_default());
+}
+
+/// Saves changed cursors: with `force` now, else at most every [`SAVE_EVERY`] (a save is
+/// then scheduled), so a restart of this computer replays instead of copying everything.
+fn save_cursors(app: &tauri::AppHandle, force: bool) {
+    let unsaved = {
+        let state = remote(app);
+        let mut inner = state.lock();
+        let viewer = &mut inner.viewer;
+        if !viewer.loaded || viewer.dirty.is_empty() {
+            return;
+        }
+        if !force && viewer.saved_at.is_some_and(|at| at.elapsed() < SAVE_EVERY) {
+            if !std::mem::replace(&mut viewer.save_scheduled, true) {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(SAVE_EVERY).await;
+                    remote(&app).lock().viewer.save_scheduled = false;
+                    save_cursors(&app, true);
+                });
+            }
+            return;
+        }
+        viewer.saved_at = Some(Instant::now());
+        viewer.unsaved()
+    };
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let Ok(store) = state.store.lock() else { return };
+        for (device, epoch, seqs) in unsaved {
+            if let Err(error) = store.save_remote_cursors(&device, &epoch, &seqs) {
+                eprintln!("PandaCode Connect: could not save event positions: {error}");
+            }
+        }
+    });
 }
 
 /// Follows up, on each host that is online, every start whose reply was lost.
@@ -597,6 +871,15 @@ enum StartState {
     Unreachable,
 }
 
+/// A start still running on its host when this viewer stops polling is not a failure: it
+/// stays waiting (and stoppable), asked again when the host is next seen, linked if it ends.
+fn past_deadline(outcome: StartState, late: bool) -> StartState {
+    match outcome {
+        StartState::Running if late => StartState::Unreachable,
+        outcome => outcome,
+    }
+}
+
 fn start_state(reply: &Result<Value>) -> StartState {
     match reply {
         Err(error) if client::maybe_ran(error) || error == super::socket::OFFLINE => StartState::Unreachable,
@@ -615,15 +898,41 @@ fn start_state(reply: &Result<Value>) -> StartState {
 /// then links the mirror or puts the row back.
 async fn resume_start(app: tauri::AppHandle, local: String) {
     let deadline = Instant::now() + START_TIMEOUT;
+    // The host can't cancel (an older one): follow the start instead, stopping it once made.
+    let mut uncancellable = false;
     loop {
-        let start = remote(&app).lock().viewer.starts.get(&local).map(|start| (start.device.clone(), start.start_id.clone(), start.created));
-        let Some((device, start_id, created)) = start else { return };
-        let reply = client::call(&app, &device, "task.startStatus", json!({"startId": start_id})).await;
+        let start = remote(&app).lock().viewer.starts.get(&local).map(|start| (start.device.clone(), start.start_id.clone(), start.created, start.cancelling));
+        let Some((device, start_id, created, cancelling)) = start else { return };
         let state = app.state::<AppState>();
-        let outcome = match start_state(&reply) {
-            StartState::Running if Instant::now() >= deadline => StartState::Failed("The other computer took too long to start the task.".into()),
-            outcome => outcome,
-        };
+        // Stopped while the host could not be reached: ask it again to cancel.
+        if cancelling && !uncancellable {
+            let reply = client::call(&app, &device, "task.cancelStart", json!({"startId": start_id})).await;
+            match cancel_outcome(&reply) {
+                Cancel::Unsupported => {
+                    uncancellable = true;
+                    continue;
+                }
+                // Made before the cancel arrived: the user asked for it to stop.
+                Cancel::Started(session) => {
+                    remote(&app).lock().viewer.starts.remove(&local);
+                    if let Err(error) = linked(&app, &state, &local, &session, true) {
+                        eprintln!("PandaCode Connect: could not link a remote task: {error}");
+                    }
+                    let _ = app.emit("sessions-changed", ());
+                }
+                outcome => {
+                    if let Err(error) = settle_cancel(&app, &state, &local, outcome) {
+                        eprintln!("PandaCode Connect: could not cancel a start on {}: {error}", super::device_label(&device));
+                    }
+                }
+            }
+            if let Some(start) = remote(&app).lock().viewer.starts.get_mut(&local) {
+                start.busy = false;
+            }
+            return;
+        }
+        let reply = client::call(&app, &device, "task.startStatus", json!({"startId": start_id})).await;
+        let outcome = past_deadline(start_state(&reply), Instant::now() >= deadline);
         match outcome {
             StartState::Running => {
                 tokio::time::sleep(START_POLL).await;
@@ -633,23 +942,102 @@ async fn resume_start(app: tauri::AppHandle, local: String) {
                 if let Some(start) = remote(&app).lock().viewer.starts.get_mut(&local) {
                     start.busy = false;
                 }
+                waiting_for(&app, &device, &start_id, None);
                 return;
             }
             StartState::Done(session) => {
-                remote(&app).lock().viewer.starts.remove(&local);
-                if let Err(error) = attach(&state, &local, &session) {
+                let stop_now = remote(&app).lock().viewer.starts.remove(&local).is_some_and(|start| start.cancelling);
+                if let Err(error) = linked(&app, &state, &local, &session, stop_now) {
                     eprintln!("PandaCode Connect: could not link a remote task: {error}");
                 }
-                subscribe_soon(&app);
             }
             StartState::Failed(error) => {
                 remote(&app).lock().viewer.starts.remove(&local);
                 abandon(&state, &local, created);
+                super::diagnostics::record("start.failed", error.chars().take(200).collect::<String>());
                 let _ = app.emit("remote://start-progress", json!({"deviceId": device, "startId": start_id, "repo": null, "stage": "error", "percent": null, "detail": error}));
             }
         }
         let _ = app.emit("sessions-changed", ());
         return;
+    }
+}
+
+/// While a start's outcome is unknown (its reply was lost or the host is away), the row
+/// says what it waits for.
+fn waiting_for(app: &tauri::AppHandle, device: &str, start_id: &str, repo: Option<&str>) {
+    let _ = app.emit("remote://start-progress", json!({"deviceId": device, "startId": start_id, "repo": repo, "stage": "starting", "percent": null, "detail": format!("Waiting for {}…", super::device_label(device))}));
+}
+
+/// Links a started mirror; one the user stopped meanwhile is stopped on its host now.
+fn linked(app: &tauri::AppHandle, state: &AppState, local: &str, session: &str, stop_now: bool) -> Result<()> {
+    attach(state, local, session)?;
+    subscribe_soon(app);
+    if stop_now {
+        let (app, local) = (app.clone(), local.to_owned());
+        tauri::async_runtime::spawn(async move {
+            if let Err(error) = stop(&app, &app.state::<AppState>(), &local).await {
+                eprintln!("PandaCode Connect: could not stop a cancelled remote task: {error}");
+            }
+        });
+    }
+    Ok(())
+}
+
+/// What a `task.cancelStart` call settled.
+#[derive(Debug, PartialEq)]
+enum Cancel {
+    /// The host confirmed it stopped it (or never had it): put the row back.
+    Cancelled,
+    /// The host had already made its task.
+    Started(String),
+    /// The call may not have arrived (or the host is gone from the account): keep the start
+    /// and ask again when the host is back.
+    Pending,
+    /// An older host can't cancel: keep the start, follow it with `task.startStatus`, and
+    /// stop it once it is made.
+    Unsupported,
+    /// The host answered with an error; the start stays as it was.
+    Refused(String),
+}
+
+fn cancel_outcome(reply: &Result<Value>) -> Cancel {
+    match reply {
+        Ok(reply) if reply["cancelled"] == false => started_session(reply).map_or_else(Cancel::Refused, Cancel::Started),
+        Ok(_) => Cancel::Cancelled,
+        // Only the host's own answer cancels: one that can't be reached stays pending.
+        Err(error) if client::maybe_ran(error) || error == super::socket::OFFLINE || error == super::UNKNOWN_DEVICE => Cancel::Pending,
+        Err(error) if error == "Unknown method." => Cancel::Unsupported,
+        Err(error) => Cancel::Refused(error.clone()),
+    }
+}
+
+/// Acts on a cancel's outcome; the `remote_cancel_start` reply.
+fn settle_cancel(app: &tauri::AppHandle, state: &AppState, local: &str, outcome: Cancel) -> Result<Value> {
+    match outcome {
+        Cancel::Started(session) => {
+            remote(app).lock().viewer.starts.remove(local);
+            attach(state, local, &session)?;
+            subscribe_soon(app);
+            let _ = app.emit("sessions-changed", ());
+            Ok(json!({"cancelled": false}))
+        }
+        Cancel::Cancelled => {
+            let start = remote(app).lock().viewer.starts.remove(local);
+            if let Some(start) = start {
+                start.cancel.notify_one();
+                abandon(state, local, start.created);
+            }
+            let _ = app.emit("sessions-changed", ());
+            Ok(json!({"cancelled": true}))
+        }
+        Cancel::Pending | Cancel::Unsupported => Ok(json!({"cancelled": false, "pending": true})),
+        Cancel::Refused(error) => {
+            if let Some(start) = remote(app).lock().viewer.starts.get_mut(local) {
+                start.cancelling = false;
+            }
+            Err(error)
+        }
     }
 }
 
@@ -759,7 +1147,7 @@ pub async fn remote_start_task(
     let start_id = start_id.filter(|id| host::valid_id(id).is_ok());
     let cancel = Arc::new(Notify::new());
     if let Some(start_id) = &start_id {
-        remote(&app).lock().viewer.starts.insert(local.clone(), PendingStart { device: device_id.clone(), start_id: start_id.clone(), created, cancel: cancel.clone(), busy: true });
+        remote(&app).lock().viewer.starts.insert(local.clone(), PendingStart { device: device_id.clone(), start_id: start_id.clone(), created, cancel: cancel.clone(), busy: true, cancelling: false });
     }
     let request = json!({"repo": repo, "branch": branch, "worktree": worktree.unwrap_or(false), "prompt": prompt, "provider": provider, "model": model, "mode": mode, "effort": effort, "startId": start_id, "imageIds": image_ids});
     let started = tokio::select! {
@@ -768,21 +1156,37 @@ pub async fn remote_start_task(
     }
     .and_then(|reply| started_session(&reply));
     match started {
-        // The reply was lost, maybe not the start: the row stays (running), and the host is
-        // asked by `startId` how it went once it is back (`resume_start`).
+        // The reply was lost, maybe not the start: the row stays (running) in `starts`, so
+        // Stop cancels it, and the host is asked by `startId` how it went once it is back
+        // (`resume_start`). Meanwhile the row says what it waits for.
         Err(error) if start_id.is_some() && client::maybe_ran(&error) => {
-            if let Some(start) = remote(&app).lock().viewer.starts.get_mut(&local) {
-                start.busy = false;
+            let kept = {
+                let state = remote(&app);
+                let mut inner = state.lock();
+                inner.viewer.starts.get_mut(&local).map(|start| {
+                    start.busy = false;
+                    start.start_id.clone()
+                })
+            };
+            if let Some(start_id) = kept {
+                waiting_for(&app, &device_id, &start_id, Some(&repo));
             }
+            super::diagnostics::record("rpc.timeout", format!("task.start on {}: {error}", super::device_label(&device_id)));
             eprintln!("PandaCode Connect: lost the reply to a start ({error}); asking the host again when it is back.");
         }
         started => {
-            remote(&app).lock().viewer.starts.remove(&local);
-            if let Err(error) = started.and_then(|session| attach(&state, &local, &session)) {
-                // Leave nothing behind: a new row goes, a reused draft is a local draft again.
-                abandon(&state, &local, created);
-                let _ = app.emit("sessions-changed", ());
-                return Err(error);
+            let stop_now = remote(&app).lock().viewer.starts.remove(&local).is_some_and(|start| start.cancelling);
+            match started.and_then(|session| linked(&app, &state, &local, &session, stop_now)) {
+                Ok(()) => {}
+                Err(error) => {
+                    // Leave nothing behind: a new row goes, a reused draft is a local draft again.
+                    abandon(&state, &local, created);
+                    if error != super::start::CANCELLED {
+                        super::diagnostics::record("start.failed", error.chars().take(200).collect::<String>());
+                    }
+                    let _ = app.emit("sessions-changed", ());
+                    return Err(error);
+                }
             }
         }
     }
@@ -793,30 +1197,32 @@ pub async fn remote_start_task(
     Ok(session)
 }
 
-/// Cancels a start that has not made its host task yet (`sessionId` is the local row): the
-/// host stops it, clone included, and the row is put back (a new row goes, a reused draft
-/// is a draft again), also when the host can't be reached. `cancelled: false` when the
-/// host had already made the task; the mirror then runs as usual and Stop ends it.
+/// Cancels a start that has not made its host task yet (`sessionId` is the local row),
+/// also one whose reply was lost: once the host confirms, it stops it, clone included, and
+/// the row is put back (a new row goes, a reused draft is a draft again). `cancelled:
+/// false` when the host had already made the task; the mirror then runs as usual and Stop
+/// ends it. When the cancel may not have arrived, the start is kept and cancelled again
+/// once the host is back: `{cancelled: false, pending: true}` (the row keeps "Stopping").
 #[tauri::command]
 pub async fn remote_cancel_start(app: tauri::AppHandle, state: tauri::State<'_, AppState>, session_id: String) -> Result<Value> {
-    let start = remote(&app).lock().viewer.starts.get(&session_id).map(|start| (start.device.clone(), start.start_id.clone(), start.created, start.cancel.clone()));
-    let Some((device, start_id, created, cancel)) = start else { return Err("That task is not starting.".into()) };
-    let reply = client::call(&app, &device, "task.cancelStart", json!({"startId": start_id})).await;
-    if let Some(session) = reply.as_ref().ok().filter(|reply| reply["cancelled"] == false).and_then(|reply| started_session(reply).ok()) {
-        remote(&app).lock().viewer.starts.remove(&session_id);
-        attach(&state, &session_id, &session)?;
-        subscribe_soon(&app);
-        let _ = app.emit("sessions-changed", ());
-        return Ok(json!({"cancelled": false}));
-    }
+    cancel_start(&app, &state, &session_id).await
+}
+
+async fn cancel_start(app: &tauri::AppHandle, state: &AppState, local: &str) -> Result<Value> {
+    let start = remote(app).lock().viewer.starts.get_mut(local).map(|start| {
+        start.cancelling = true;
+        (start.device.clone(), start.start_id.clone())
+    });
+    let Some((device, start_id)) = start else { return Err("That task is not starting.".into()) };
+    let reply = client::call(app, &device, "task.cancelStart", json!({"startId": start_id})).await;
+    let outcome = cancel_outcome(&reply);
     if let Err(error) = &reply {
         eprintln!("PandaCode Connect: could not cancel a start on {}: {error}", super::device_label(&device));
+        if client::maybe_ran(error) {
+            super::diagnostics::record("rpc.timeout", format!("task.cancelStart on {}: {error}", super::device_label(&device)));
+        }
     }
-    remote(&app).lock().viewer.starts.remove(&session_id);
-    cancel.notify_one();
-    abandon(&state, &session_id, created);
-    let _ = app.emit("sessions-changed", ());
-    Ok(json!({"cancelled": true}))
+    settle_cancel(app, state, local, outcome)
 }
 
 /// Makes (or converts an empty draft into) the local mirror row, published and running.
@@ -868,7 +1274,7 @@ mod tests {
             store.db.execute_batch("DROP INDEX sessions_remote; ALTER TABLE sessions DROP COLUMN remote_device; ALTER TABLE sessions DROP COLUMN remote_session; ALTER TABLE sessions DROP COLUMN remote_synced_id; PRAGMA user_version=25;").unwrap();
         }
         let store = Store::open(&path).unwrap();
-        assert_eq!((crate::storage::SCHEMA_VERSION, store.db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0)).unwrap()), (30, 30));
+        assert_eq!((crate::storage::SCHEMA_VERSION, store.db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0)).unwrap()), (31, 31));
         let columns: i64 = store.db.query_row("SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name IN ('remote_device','remote_session','remote_synced_id')", [], |r| r.get(0)).unwrap();
         assert_eq!(columns, 3);
         let project = store.add_project(&std::env::temp_dir()).unwrap();
@@ -1047,6 +1453,113 @@ mod tests {
         assert!(viewer.fresh("other", &event("h1", Some(2))), "another host keeps its place");
     }
 
+    /// What `apply` lets through: held while the host is held, else each new entry once.
+    fn through(viewer: &mut Viewer, live: bool, list: &[Value]) -> Vec<u64> {
+        if live && viewer.keep("host", Some("e1"), list) {
+            return Vec::new();
+        }
+        viewer.epoch("host", Some("e1"));
+        list.iter().filter(|event| viewer.fresh("host", event)).filter_map(|event| event["seq"].as_u64()).collect()
+    }
+
+    #[test]
+    fn a_live_frame_before_the_subscribe_reply_hides_no_replayed_event() {
+        let event = |seq: u64| json!({"sessionId": "h1", "kind": "text", "text": "x", "seq": seq});
+        let mut viewer = Viewer::default();
+        assert_eq!(through(&mut viewer, true, &[event(80)]), [80]);
+        // Subscribe sent (afterSeq 80); a live frame (105) beats the reply (replay 90..100).
+        viewer.hold("host");
+        assert_eq!(through(&mut viewer, true, &[event(105)]), Vec::<u64>::new(), "held, not shown yet");
+        assert_eq!(through(&mut viewer, false, &[event(90), event(100)]), [90, 100], "the replay is shown in full");
+        viewer.settle("host", "h1", 104);
+        let held = viewer.release("host");
+        assert!(!held.overflow);
+        let live: Vec<Value> = held.entries.into_iter().map(|(_, entry)| entry).collect();
+        assert_eq!(through(&mut viewer, false, &live), [105], "then what came meanwhile");
+        assert_eq!(through(&mut viewer, true, &[event(100), event(106)]), [106], "and duplicates stay out");
+        // Holding is bounded: past it entries are dropped and the host is asked again.
+        viewer.hold("host");
+        let many: Vec<Value> = (0..MAX_HELD as u64 + 1).map(|i| event(200 + i)).collect();
+        assert!(viewer.keep("host", None, &many));
+        assert!(viewer.release("host").overflow);
+    }
+
+    #[test]
+    fn a_task_without_a_position_takes_it_from_its_held_entries() {
+        let mut viewer = Viewer::default();
+        viewer.epoch("host", Some("e1"));
+        viewer.hold("host");
+        // A task followed a moment ago: its first live event waits for the reply, which
+        // replays nothing for it (no afterSeq) and says seq 9.
+        viewer.keep("host", Some("e1"), &[json!({"sessionId": "new", "kind": "text", "text": "x", "seq": 7})]);
+        viewer.settle("host", "new", 9);
+        viewer.settle("host", "old", 9);
+        assert_eq!(viewer.seqs.get(&("host".into(), "new".into())), None, "its held event sets it");
+        assert_eq!(viewer.seqs[&("host".into(), "old".into())], 9);
+        let held = viewer.release("host");
+        assert!(viewer.fresh("host", &held.entries[0].1));
+    }
+
+    #[test]
+    fn cursors_survive_a_restart_of_this_computer() {
+        let path = std::env::temp_dir().join(format!("pandacode-cursors-{}.sqlite3", uuid::Uuid::new_v4()));
+        {
+            let store = Store::open(&path).unwrap();
+            let mut viewer = Viewer { loaded: true, ..Default::default() };
+            viewer.epoch("host", Some("e1"));
+            viewer.advance("host", "h1", 41);
+            viewer.advance("host", "h2", 7);
+            viewer.epoch("other", Some("x9"));
+            viewer.advance("other", "h1", 3);
+            for (device, epoch, seqs) in viewer.unsaved() {
+                store.save_remote_cursors(&device, &epoch, &seqs).unwrap();
+            }
+            assert!(viewer.unsaved().is_empty(), "nothing changed since");
+            // The host restarted: its old positions are replaced, not kept beside the new.
+            viewer.epoch("host", Some("e2"));
+            viewer.advance("host", "h1", 2);
+            for (device, epoch, seqs) in viewer.unsaved() {
+                store.save_remote_cursors(&device, &epoch, &seqs).unwrap();
+            }
+        }
+        let store = Store::open(&path).unwrap();
+        let mut viewer = Viewer::default();
+        viewer.restore(store.remote_cursors().unwrap());
+        assert!(viewer.loaded);
+        assert_eq!(viewer.subscribe_params("host", &["h1".into(), "h2".into()]), json!({"sessionIds": ["h1", "h2"], "epoch": "e2", "afterSeq": {"h1": 2}}));
+        assert_eq!(viewer.subscribe_params("other", &["h1".into()]), json!({"sessionIds": ["h1"], "epoch": "x9", "afterSeq": {"h1": 3}}));
+        // What this run already learned wins over what was saved.
+        let mut live = Viewer::default();
+        live.epoch("host", Some("e3"));
+        live.restore(store.remote_cursors().unwrap());
+        assert_eq!(live.subscribe_params("host", &["h1".into()]), json!({"sessionIds": ["h1"], "epoch": "e3", "afterSeq": {}}));
+        drop(store);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    }
+
+    #[test]
+    fn only_a_definite_answer_cancels_a_start() {
+        assert_eq!(cancel_outcome(&Ok(json!({"cancelled": true}))), Cancel::Cancelled);
+        assert_eq!(cancel_outcome(&Ok(json!({"cancelled": false, "sessionId": "h1"}))), Cancel::Started("h1".into()));
+        assert!(matches!(cancel_outcome(&Ok(json!({"cancelled": false}))), Cancel::Refused(_)));
+        // The cancel may not have arrived: keep the start and ask again when the host is back.
+        for error in [client::TIMED_OUT, client::LOST, super::super::socket::OFFLINE] {
+            assert_eq!(cancel_outcome(&Err(error.into())), Cancel::Pending, "{error}");
+        }
+        // Nothing but the host's own answer counts as cancelled.
+        assert_eq!(cancel_outcome(&Err("Unknown method.".into())), Cancel::Unsupported, "an older host can't cancel: keep following it");
+        assert_eq!(cancel_outcome(&Err(super::super::UNKNOWN_DEVICE.into())), Cancel::Pending, "a host gone from the account can't confirm");
+        assert_eq!(cancel_outcome(&Err("Invalid startId.".into())), Cancel::Refused("Invalid startId.".into()));
+    }
+
+    #[test]
+    fn run_ends_are_not_agent_events() {
+        let events = [json!({"sessionId": "h1", "kind": "run.finished", "text": "Turn complete", "successful": true, "seq": 4})];
+        assert!(relabel(&events, |_| Some("local".into())).is_empty());
+    }
+
     #[test]
     fn cards_come_back_after_a_restart_and_clear_when_answered_elsewhere() {
         let mut viewer = Viewer::default();
@@ -1096,6 +1609,13 @@ mod tests {
         // An older host without task.startStatus.
         assert_eq!(start_state(&Err("Unknown method.".into())), StartState::Failed("Unknown method.".into()));
         assert!(client::maybe_ran(client::TIMED_OUT) && !client::maybe_ran(super::super::socket::OFFLINE));
+    }
+
+    #[test]
+    fn a_start_still_running_at_the_deadline_keeps_waiting() {
+        assert_eq!(past_deadline(StartState::Running, true), StartState::Unreachable, "not a failure: asked again later");
+        assert_eq!(past_deadline(StartState::Running, false), StartState::Running);
+        assert_eq!(past_deadline(StartState::Done("h1".into()), true), StartState::Done("h1".into()), "linked whenever the host reports it");
     }
 
     #[test]

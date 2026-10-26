@@ -1,0 +1,28 @@
+.remote-diagnostics{display:grid;gap:14px;font-size:.84rem;min-width:0}
+.remote-diagnostics h4{margin:0 0 6px;font-size:.75rem;font-weight:600;color:var(--muted);display:flex;align-items:center;gap:6px}
+.remote-diagnostics section{min-width:0}
+.diag-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.diag-note{font-size:.78rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.diag-stages{list-style:none;margin:0;padding:0;display:grid;border:1px solid var(--border);border-radius:6px}
+.diag-stages li{display:grid;grid-template-columns:10px minmax(120px,max-content) 52px minmax(0,1fr);align-items:center;gap:10px;padding:6px 10px;white-space:nowrap}
+.diag-stages li+li{border-top:1px solid var(--border)}
+.diag-stages small{color:var(--muted);overflow:hidden;text-overflow:ellipsis}
+.diag-dot{width:8px;height:8px;border-radius:50%;background:var(--danger)}
+.diag-stages li[data-ok="true"] .diag-dot{background:var(--accent);box-shadow:0 0 0 3px rgb(var(--accent-rgb) / .22)}
+.diag-state{font-size:.72rem;color:var(--danger)}
+.diag-stages li[data-ok="true"] .diag-state{color:var(--accent-ink)}
+.diag-meta{margin:6px 0 0;font-size:.76rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.diag-error{color:var(--danger)}
+.diag-routes{width:100%;border-collapse:collapse;table-layout:fixed;border:1px solid var(--border)}
+.diag-routes th{text-align:left;font-size:.72rem;font-weight:600;color:var(--muted);padding:5px 10px;border-bottom:1px solid var(--border)}
+.diag-routes td{padding:5px 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.diag-routes tr+tr td{border-top:1px solid var(--border)}
+.diag-chip{font-size:.7rem;padding:1px 6px;border-radius:999px;background:var(--raised);color:var(--muted)}
+.diag-chip[data-state="connected"],.diag-chip[data-state="direct"]{background:var(--accent-tint);color:var(--accent-ink)}
+.diag-events{max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:6px;font-family:var(--mono);font-size:.74rem;overscroll-behavior:contain}
+.diag-events:focus-visible{outline:2px solid var(--focus);outline-offset:-2px}
+.diag-event{display:grid;grid-template-columns:62px 150px minmax(0,1fr);gap:10px;padding:3px 10px;white-space:nowrap}
+.diag-event time{color:var(--muted)}
+.diag-event b{font-weight:600;overflow:hidden;text-overflow:ellipsis}
+.diag-event span{overflow:hidden;text-overflow:ellipsis;color:var(--muted)}
+.diag-empty{padding:8px 10px;color:var(--muted)}

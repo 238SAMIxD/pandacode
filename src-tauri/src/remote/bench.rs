@@ -30,8 +30,6 @@ use tokio_tungstenite::tungstenite::{
 // Production values that are private to their modules; keep them in sync.
 /// images.rs `PACE` before the pipelined upload replaced it.
 const PACE: Duration = Duration::from_millis(75);
-/// host.rs `FLUSH`.
-const FLUSH: Duration = Duration::from_millis(100);
 /// socket.rs `run`: the first retry waits this long.
 const FIRST_BACKOFF: Duration = Duration::from_secs(1);
 /// socket.rs `PING` and `SILENT`.
@@ -929,8 +927,17 @@ fn task_start_phases() {
 #[ignore]
 async fn first_event_after_send() {
     let event = json!({"type": "event", "name": "agent.events", "data": {"events": [{"sessionId": "h1", "kind": "text", "text": "Looking at the build"}]}});
+    // The host's own pacing: host::flush_delay against when it last sent a frame and how
+    // many frames this burst sent (host.rs enqueue/flush).
+    let flushed: Mutex<(Option<Instant>, u32)> = Mutex::new((None, 0));
     let handler: Handler = Arc::new(move |_, method, _| match method {
-        "task.send" => Reply { result: Ok(json!({})), event: Some((FLUSH, event.clone())) },
+        "task.send" => {
+            let mut flushed = flushed.lock().unwrap();
+            let now = Instant::now();
+            let delay = host::flush_delay(flushed.0, flushed.1, now);
+            *flushed = (Some(now + delay), if delay.is_zero() { 1 } else { flushed.1.saturating_add(1) });
+            Reply { result: Ok(json!({})), event: Some((delay, event.clone())) }
+        }
         _ => Reply { result: Ok(json!({})), event: Some((Duration::ZERO, event.clone())) },
     });
     let mut table = Table::new("task.send: response and first agent.events frame (harness start and model latency excluded)");
@@ -938,7 +945,8 @@ async fn first_event_after_send() {
         for nagle in [true, false] {
             let label = if nagle { "nagle on (prod)" } else { "nodelay" };
             let session = pair(profile, handler.clone(), nagle).await;
-            for (method, note) in [("task.send", "host.rs FLUSH = 100 ms"), ("task.send.noflush", "model: flush at once")] {
+            let paced = format!("host.rs flush_delay: first event at once, then FLUSH = {} ms, SUSTAINED = {} ms after {} frames", host::FLUSH.as_millis(), host::SUSTAINED.as_millis(), host::BURST_FRAMES);
+            for (method, note) in [("task.send", paced.as_str()), ("task.send.noflush", "model: flush at once")] {
                 let (mut acks, mut firsts) = (Vec::new(), Vec::new());
                 for _ in 0..30 {
                     // The host sends two frames per prompt: stay under 20 frames/s.

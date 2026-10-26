@@ -41,7 +41,10 @@ pub(crate) async fn call_within(app: &tauri::AppHandle, device_id: &str, method:
         inner.callable(device_id)?;
         inner.pending.insert(id.clone(), (device_id.to_owned(), reply));
     }
-    let forget = || remote(app).lock().pending.remove(&id);
+    let forget = || {
+        super::routes::settled(&id);
+        remote(app).lock().pending.remove(&id)
+    };
     // Sealing adds `ts` and a fresh `nonce`, so the host can refuse replays.
     let request = json!({"type": "req", "id": id, "method": method, "params": params});
     if let Err(error) = socket::send_to_device(app, device_id, &request) {
@@ -66,6 +69,8 @@ pub(crate) fn resolve(app: &tauri::AppHandle, from: &str, message: &Value) {
     if inner.pending.get(id).is_none_or(|(device, _)| device != from) {
         return;
     }
+    // Answered on whichever route: a failing direct link no longer retries it.
+    super::routes::settled(id);
     let Some((_, reply)) = inner.pending.remove(id) else { return };
     let result = if message["ok"].as_bool() == Some(true) {
         Ok(message["result"].clone())

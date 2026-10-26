@@ -160,7 +160,7 @@ pub struct Store {
 type Result<T> = std::result::Result<T, String>;
 /// The newest `PRAGMA user_version`. Every migration step below must run for any
 /// database older than this, so the guard reads this constant, never a literal.
-pub const SCHEMA_VERSION: i64 = 30;
+pub const SCHEMA_VERSION: i64 = 31;
 
 const SIDEBAR_ORDER: &str = "pinned DESC,sidebar_order IS NULL,sidebar_order,COALESCE(MAX(last_response_at,last_prompt_at),last_response_at,last_prompt_at,created_at) DESC,id";
 
@@ -465,6 +465,11 @@ impl Store {
                   CREATE INDEX IF NOT EXISTS message_attachments_message ON message_attachments(message_id,session_id);
                   PRAGMA user_version=30;").map_err(|e|e.to_string())?;
             }
+            if version < 31 {
+                // Connect viewer cursors: where this computer left off in each host's event
+                // journal, so a restart replays what it missed (docs/remote-access.md).
+                migration.execute_batch("CREATE TABLE IF NOT EXISTS remote_cursors(device TEXT NOT NULL,session TEXT NOT NULL,epoch TEXT NOT NULL,seq INTEGER NOT NULL CHECK(seq>=0),PRIMARY KEY(device,session)); PRAGMA user_version=31;").map_err(|e| e.to_string())?;
+            }
             migration.commit().map_err(|e| e.to_string())?;
         }
         let recovery = db.transaction().map_err(|e| e.to_string())?;
@@ -719,6 +724,25 @@ impl Store {
         let mut session = self.db.query_row("SELECT id,project_id,title,provider,model,mode,status,created_at,updated_at,archived,resume_id,last_response_at,worktree_path,reasoning_effort,context_used_tokens,context_window,task_stage,task_description,completed_at,goal_state,codex_settings,worktree_branch,last_prompt_at,pinned,sidebar_order,draft,limited_at,limited_until,resume_at_reset,remote_device,cloud FROM sessions WHERE id=?1",[sid],Self::session_row).optional().map_err(|e|e.to_string())?.ok_or_else(||String::from("Conversation not found."))?;
         self.attach_links(std::slice::from_mut(&mut session))?;
         Ok(session)
+    }
+
+    /// Saved Connect viewer cursors: (host device, host task, journal epoch, newest seq seen).
+    pub fn remote_cursors(&self) -> Result<Vec<(String, String, String, u64)>> {
+        let mut statement = self.db.prepare("SELECT device,session,epoch,seq FROM remote_cursors").map_err(|e| e.to_string())?;
+        let rows = statement.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, i64>(3)?.max(0) as u64))).map_err(|e| e.to_string())?;
+        rows.collect::<rusqlite::Result<_>>().map_err(|e| e.to_string())
+    }
+
+    /// Replaces one host's saved cursors with `seqs` under `epoch`.
+    pub fn save_remote_cursors(&self, device: &str, epoch: &str, seqs: &[(String, u64)]) -> Result<()> {
+        let transaction = self.db.unchecked_transaction().map_err(|e| e.to_string())?;
+        transaction.execute("DELETE FROM remote_cursors WHERE device=?1", [device]).map_err(|e| e.to_string())?;
+        let mut insert = transaction.prepare("INSERT INTO remote_cursors(device,session,epoch,seq) VALUES (?1,?2,?3,?4)").map_err(|e| e.to_string())?;
+        for (session, seq) in seqs {
+            insert.execute(params![device, session, epoch, i64::try_from(*seq).unwrap_or(i64::MAX)]).map_err(|e| e.to_string())?;
+        }
+        drop(insert);
+        transaction.commit().map_err(|e| e.to_string())
     }
 
     /// Prompts sent from PandaCode per hour and agent since `since_ms`, for the usage calendar.
@@ -3014,7 +3038,7 @@ mod tests {
     fn migration_30_creates_message_attachments_index() {
         let (store, _) = empty_session();
         let version: i64 = store.db.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-        assert_eq!(version, 30);
+        assert_eq!(version, SCHEMA_VERSION);
         let table: bool = store.db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_attachments')", [], |row| row.get(0)).unwrap();
         let index: bool = store.db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='message_attachments_session_id')", [], |row| row.get(0)).unwrap();
         assert!(table && index);
