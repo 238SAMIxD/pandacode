@@ -1,6 +1,7 @@
 import './settings.css';
 import { mountProviderReadiness } from './provider-readiness';
 import { escape, icon } from './dom';
+import { infoMark } from './tooltip';
 import { providerLogo } from './provider-logos';
 import { uiSizeControls } from './ui-size';
 import type { Project, Provider, ProviderId } from './types';
@@ -71,8 +72,9 @@ export const SECTIONS: { id: SettingsSection; label: string; icon: string; descr
 /** Key-based plans that run through Claude Code; they are set up under Providers, not listed as agents. */
 const PLANS = new Set<ProviderId>(['glm', 'mimo']);
 
+const LONG_DETAIL = 80;
 const switchRow = (id: string, title: string, detail: string, checked: boolean) =>
-  `<div class="setting-row"><div><strong>${title}</strong><small>${detail}</small></div><input type="checkbox" class="settings-switch" id="${id}" aria-label="${title}" ${checked ? 'checked' : ''}></div>`;
+  `<div class="setting-row"><div><strong>${title}${detail.length > LONG_DETAIL ? ` ${infoMark(detail)}` : ''}</strong>${detail.length > LONG_DETAIL ? '' : `<small>${detail}</small>`}</div><input type="checkbox" class="settings-switch" id="${id}" aria-label="${title}" ${checked ? 'checked' : ''}></div>`;
 
 function sectionHtml(id: SettingsSection, options: SettingsOptions): string {
   const defaultName = options.providers.find(provider => provider.id === options.defaultProvider)?.name ?? options.defaultProvider;

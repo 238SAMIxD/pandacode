@@ -26,10 +26,10 @@ html[data-theme="dark"] .wallpaper-preview-scrim{background:linear-gradient(180d
 .wallpaper-settings .wallpaper-range-slider{display:block;appearance:none;-webkit-appearance:none;width:100%;height:1.85rem;padding:0;margin:.35rem 0 0;border:0;border-radius:var(--radius-sm);box-shadow:none;background:none;accent-color:var(--accent);cursor:ew-resize;touch-action:pan-y}
 .wallpaper-settings .wallpaper-range-slider:focus-visible{outline:2px solid var(--focus);outline-offset:3px}
 .wallpaper-range-slider::-webkit-slider-runnable-track{height:.45rem;border-radius:var(--radius-md);background:linear-gradient(to right,var(--accent) 0 var(--wallpaper-range-value),var(--raised) var(--wallpaper-range-value) 100%);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--text) 8%,transparent)}
-.wallpaper-range-slider::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;width:1.3rem;height:1.3rem;margin-top:-.425rem;border-radius:50%;background:#fff;border:1px solid rgb(0 0 0 / .1);box-shadow:0 1px 4px rgb(0 0 0 / .22)}
+.wallpaper-range-slider::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;width:1.3rem;height:1.3rem;margin-top:-.425rem;border-radius:var(--radius-full);background:#fff;border:1px solid rgb(0 0 0 / .1);box-shadow:0 1px 4px rgb(0 0 0 / .22)}
 .wallpaper-range-slider::-moz-range-track{height:.45rem;border-radius:var(--radius-md);background:var(--raised)}
 .wallpaper-range-slider::-moz-range-progress{height:.45rem;border-radius:var(--radius-md);background:var(--accent)}
-.wallpaper-range-slider::-moz-range-thumb{width:1.3rem;height:1.3rem;border-radius:50%;background:#fff;border:1px solid rgb(0 0 0 / .1);box-shadow:0 1px 4px rgb(0 0 0 / .22)}
+.wallpaper-range-slider::-moz-range-thumb{width:1.3rem;height:1.3rem;border-radius:var(--radius-full);background:#fff;border:1px solid rgb(0 0 0 / .1);box-shadow:0 1px 4px rgb(0 0 0 / .22)}
 .wallpaper-range-endpoints{display:flex;justify-content:space-between;font-size:var(--text-xs);color:var(--muted)}
 .wallpaper-accessibility-note{grid-column:1/-1;font-size:var(--text-xs);color:var(--muted);line-height:1.55;margin:0;padding:.7rem .8rem;border-radius:var(--radius-sm);background:var(--raised)}
 .wallpaper-section-heading{margin-bottom:.7rem;min-height:1.3rem}

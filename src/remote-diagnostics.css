@@ -7,7 +7,7 @@
 .diag-stages li{display:grid;grid-template-columns:10px minmax(120px,max-content) 52px minmax(0,1fr);align-items:center;gap:10px;padding:6px 10px;white-space:nowrap}
 .diag-stages li+li{border-top:1px solid var(--border)}
 .diag-stages small{color:var(--muted);overflow:hidden;text-overflow:ellipsis}
-.diag-dot{width:8px;height:8px;border-radius:50%;background:var(--danger)}
+.diag-dot{width:8px;height:8px;border-radius:var(--radius-full);background:var(--danger)}
 .diag-stages li[data-ok="true"] .diag-dot{background:var(--accent);box-shadow:0 0 0 3px rgb(var(--accent-rgb) / .22)}
 .diag-state{font-size:var(--text-xs);color:var(--danger)}
 .diag-stages li[data-ok="true"] .diag-state{color:var(--accent-ink)}
