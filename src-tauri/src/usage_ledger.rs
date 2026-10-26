@@ -337,3 +337,76 @@ pub(crate) async fn usage_ledger(app: tauri::AppHandle, window: tauri::WebviewWi
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     Ok(Ledger::clone(&*build(dir, refresh.unwrap_or(false)).await?))
 }
+
+/// Token totals for the harness sessions one task has run under, summed from the
+/// cached log records.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TaskUsage {
+    pub input: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    pub output: u64,
+    pub first_used: Option<i64>,
+    pub last_used: Option<i64>,
+}
+
+/// Whether one cached log file belongs to the harness session: Claude names the file
+/// after the session, Codex ends the rollout file name with the session id.
+fn file_belongs_to(link: &str, agent: Agent, path: &Path) -> bool {
+    let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else { return false };
+    match agent {
+        Agent::Claude => stem == link,
+        Agent::Codex => stem.len() > link.len() && stem.ends_with(link),
+    }
+}
+
+/// Sums the cached records of every log file belonging to one of `links`, keeping
+/// only records from `since_hour` on. Pure so tests can build the cache by hand.
+fn task_usage_from_cache(cache: &Cache, links: &[String], since_hour: i64) -> TaskUsage {
+    let mut usage = TaskUsage::default();
+    for (path, entry) in &cache.files {
+        let Some(agent) = entry.agent else { continue };
+        if !links.iter().any(|link| file_belongs_to(link, agent, Path::new(path))) {
+            continue;
+        }
+        for record in &entry.records {
+            if record.hour < since_hour {
+                continue;
+            }
+            usage.input += record.input;
+            usage.cache_read += record.cache_read;
+            usage.cache_write += record.cache_write + record.cache_write_1h;
+            usage.output += record.output;
+            let started = record.hour * 3_600_000;
+            usage.first_used = Some(usage.first_used.map_or(started, |first| first.min(started)));
+            usage.last_used = Some(usage.last_used.map_or(started, |last| last.max(started)));
+        }
+    }
+    usage
+}
+
+/// Task totals sharing the ledger's log cache; `since_ms` trims older records.
+pub(crate) async fn task_usage(dir: PathBuf, links: Vec<String>, since_ms: Option<i64>) -> crate::Result<TaskUsage> {
+    let mut state = state().lock().await;
+    let cache_path = dir.join("usage-ledger-cache.json");
+    let since_scan = crate::storage::now() - HISTORY_DAYS * 86_400_000;
+    let cache = state.cache.take();
+    let (cache, usage) = tokio::time::timeout(
+        Duration::from_secs(300),
+        tauri::async_runtime::spawn_blocking(move || {
+            let mut cache = cache.unwrap_or_else(|| load_cache(&cache_path));
+            if refresh_cache(&mut cache, since_scan) {
+                save_cache(&cache_path, &cache);
+            }
+            let since_hour = since_ms.map_or(0, |ms| ms.div_euclid(3_600_000));
+            let usage = task_usage_from_cache(&cache, &links, since_hour);
+            (cache, usage)
+        }),
+    )
+    .await
+    .map_err(|_| "Reading agent logs took too long. Try again later.".to_string())?
+    .map_err(|e| e.to_string())?;
+    state.cache = Some(cache);
+    Ok(usage)
+}

@@ -26,7 +26,7 @@ import { classicTeamSetup, isTeam, namedTeams, teamDetail, TEAM_MODE_EVENT } fro
 import { renderCoordination } from './coordination-message';
 import { renderTurnChanges, changeRequest, captureChangeCards, restoreChangeCards } from './turn-changes';
 import { mountWallpapers } from './wallpapers';
-import type { AgentEvent, BrowserAttachment, ContextUsage, FileEntry, GitStatus, Message, MessagePage, Mode, Project, Provider, ProviderId, ProviderModel, Session, TaskLink, ToolActivity, TurnChanges } from './types';
+import type { AgentEvent, BrowserAttachment, ContextUsage, FileEntry, GitStatus, Message, MessagePage, Mode, Project, Provider, ProviderId, ProviderModel, Session, TaskLink, TaskTokenUsage, ToolActivity, TurnChanges } from './types';
 import type { BrowserPanel } from './browser';
 import { call, chooseFolder, preview, subscribe } from './bridge';
 import { jjChip, showJjPanel, type JjStatus } from './jj';
@@ -42,7 +42,7 @@ import { groupTurns, formatDuration, turnLabel } from './turn-activity';
 import { initializeNativeAppearance } from './appearance';
 import { currentTheme, setTheme } from './theme';
 import { palette } from './palette';
-import { contextSummary, fallbackModel, parseContextUsage } from './model-catalog';
+import { contextSummary, fallbackModel, parseContextUsage, tokenCount } from './model-catalog';
 import { openCodeChoices, type OpenCodeModels } from './preview-opencode';
 import { approvalMode, approvalModes } from './approval-modes';
 import { renderTaskBoard, renderTaskDetails, taskStage } from './task-board';
@@ -356,6 +356,19 @@ const tokenSaver = createTokenSaver({
   },
 });
 void tokenSaver.loadTools();
+/* Per-task token totals from the agents' own logs; one fetch per session, refetched when a run ends. */
+const taskUsage = new Map<string, TaskTokenUsage | null>();
+function usageLine(usage: TaskTokenUsage): string {
+  return `This task so far: ${tokenCount(usage.input)} in, ${tokenCount(usage.output)} out, ${tokenCount(usage.cacheRead)} cache reads.`;
+}
+function ensureTaskUsage(sessionId: string): void {
+  if (taskUsage.has(sessionId)) return;
+  taskUsage.set(sessionId, null);
+  void call<TaskTokenUsage | null>('task_token_usage', { sessionId }).then(usage => {
+    taskUsage.set(sessionId, usage ?? null);
+    if (state.sessionId === sessionId) renderContextUsage();
+  }).catch(() => taskUsage.delete(sessionId));
+}
 const searchPanel = createSearchPanel({
   call,
   context: () => project() ? workspaceContext() : null,
@@ -796,6 +809,12 @@ function renderContextUsage(): void {
   const label = context?.label ?? '';
   if (indicator.textContent !== label) indicator.textContent = label;
   indicator.title = context?.detail ?? '';
+  const usage = taskUsage.get(s.id);
+  if (usage && context) {
+    const line = usageLine(usage);
+    if (!indicator.title.includes(line)) indicator.title += `\n${line}`;
+  }
+  ensureTaskUsage(s.id);
   // The line keeps its place when empty, so the prompt never moves between threads.
   indicator.parentElement!.classList.toggle('is-empty', !context && !s.archived);
 }
@@ -4684,6 +4703,8 @@ async function boot(): Promise<void> {
   run((subscribe as (name: string, callback: () => void) => Promise<() => void>)('design-changed', () => void designPanel?.refresh()).then(() => undefined));
   run(subscribe('agent-event', (event: AgentEvent) => {
     if (event.kind !== 'done' || event.sessionId !== state.sessionId) return;
+    taskUsage.delete(event.sessionId);
+    ensureTaskUsage(event.sessionId);
     void designPanel?.refresh();
     if (document.hasFocus()) markTraySeen(event.sessionId);
   }).then(() => undefined));

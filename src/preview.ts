@@ -1405,6 +1405,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       s.pullRequest = { kind: 'pull', number, url: `${repo.url}/pull/${number}`, title: pull.title, state: 'open', checkedAt: Date.now() };
       result = s; break;
     }
+    case 'task_token_usage': result = { input: 91234, cacheRead: 1000000, cacheWrite: 45000, output: 152340, firstUsed: Date.now() - 86400000, lastUsed: Date.now() - 300000 }; break;
     case 'token_saver_tools': result = { rtk: previewRtk, rtkVersion: previewRtk ? '1.0.1' : '', rtkInstall: 'brew install rtk' }; break;
     case 'token_saver_install': {
       if (args.tool !== 'rtk') throw new Error('Unknown tool.');

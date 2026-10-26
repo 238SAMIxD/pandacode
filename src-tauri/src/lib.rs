@@ -31,6 +31,7 @@ mod cloud_agents;
 mod capabilities;
 mod vsix_themes;
 mod token_saver;
+mod task_usage;
 mod skills;
 mod goal_state;
 #[cfg(test)]
@@ -3795,6 +3796,7 @@ pub fn run() {
                 vsix_themes::theme_remove,
                 token_saver::token_saver_tools,
                 token_saver::token_saver_install,
+                task_usage::task_token_usage,
                 skills::skills_list,
                 skills::skills_import_folder,
                 skills::skills_import_github,
