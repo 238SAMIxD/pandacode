@@ -158,7 +158,7 @@ html[data-theme] dialog .settings-home .setting-row small{font-size:var(--text-x
 html[data-theme] dialog .settings-home .secondary-button{min-height:1.75rem;padding:.25rem .6rem;font-size:var(--text-xs)}
 html[data-theme] dialog .settings-home .settings-select{padding:.35rem .6rem;font-size:var(--text-xs);min-width:9.5rem}
 html[data-theme] dialog .settings-home .text-size-controls button{padding:.25rem .45rem;font-size:var(--text-xs)}
-html[data-theme] dialog .settings-group{border-radius:var(--radius-sm)}
+html[data-theme] dialog .settings-group{border-radius:var(--radius-md)}
 html[data-theme] dialog .bots-field :is(input,select){padding:6px 10px}
 html[data-theme] dialog .bots-field textarea{padding:7px 10px}
 html[data-theme] dialog :is(.bots-tabs,.usage-tabs)>button{padding:4px 10px;font-size:var(--text-xs)}

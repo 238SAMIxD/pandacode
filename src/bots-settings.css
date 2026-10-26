@@ -112,3 +112,5 @@ dialog.bot-settings-dialog{width:min(880px,calc(100vw - 32px));max-height:88dvh}
 .bots-soul-actions{display:flex;gap:.5rem;flex-wrap:wrap}
 .bots-soul-actions [hidden],.bots-soul-error[hidden]{display:none}
 .bots-soul-error{margin:0}
+/* A native select wears the .settings-select look: same fill, border and radius, with the chevron drawn from --muted instead of the system arrow. */
+.bots-detail select,.bots-detail .bs-row>select{appearance:none;-webkit-appearance:none;border:1px solid var(--line);border-radius:var(--radius-sm);background-color:var(--surface-2);background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 15px) 50%,calc(100% - 10px) 50%;background-size:5px 5px;background-repeat:no-repeat;padding-right:var(--space-6)}

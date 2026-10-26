@@ -7,9 +7,17 @@ import type { FileEntry, ProviderId, ProviderModel } from './types';
 import { fallbackModel } from './model-catalog';
 import type { OverlayThreadView } from './overlay-thread';
 import { mountFileMentions } from './file-mentions';
+import { CLASSIC } from './palette';
+import { accentTokens } from './palette-core';
+import { parseHex } from './color';
 
 function refreshTheme(): void {
   try { document.documentElement.dataset.theme = localStorage.getItem('pandacode.theme') === 'light' ? 'light' : 'dark'; } catch { /* Default to dark. */ }
+  // palette.ts restores last session's accent on import; classic yellow leaves nothing saved, so derive it.
+  const root = document.documentElement;
+  if (!root.style.getPropertyValue('--accent')) {
+    for (const [name, value] of Object.entries(accentTokens(parseHex(CLASSIC)!.rgb, root.dataset.theme as 'light' | 'dark'))) root.style.setProperty(name, value);
+  }
 }
 refreshTheme();
 window.addEventListener('storage', event => { if (event.key === 'pandacode.theme') refreshTheme(); });
