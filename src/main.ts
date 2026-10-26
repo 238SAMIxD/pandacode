@@ -1503,6 +1503,14 @@ function paintLiveActivity(region: HTMLElement, current: Stream, transcript: HTM
   if (workers?.parentElement === host && !retained.has(workers)) region.after(workers);
   for (const child of [...host.children]) if (!retained.has(child as HTMLElement)) child.remove();
   next.forEach((node, index) => { if (host.children[index] !== node) host.insertBefore(node, host.children[index] ?? null); });
+  // Steps the agent narrated past fold once to their one-line summary, so later work never reopens them.
+  const newestGroup = next.map(node => node.classList.contains('tool-group')).lastIndexOf(true);
+  const narratedPast = next.slice(0, Math.max(newestGroup, 0)).map(node => node.classList.contains('agent-message')).lastIndexOf(true);
+  next.slice(0, Math.max(narratedPast, 0)).forEach(node => {
+    if (!node.classList.contains('tool-group') || node.dataset.earlier !== undefined) return;
+    node.dataset.earlier = '';
+    if (!liveTurnStaysOpen(node)) (node as HTMLDetailsElement).open = false;
+  });
   for (const entry of commentary) { bindFileLinkContext(entry.node, workspaceContext()); streamMarkdown(entry.node, entry.content, transcript); }
 }
 // Measured from the reference at 30 fps: the answer starts at 7.20 s, the open cards fold at 8.25 s

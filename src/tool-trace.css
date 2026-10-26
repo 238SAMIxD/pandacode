@@ -104,6 +104,7 @@ html[data-theme="dark"] .tool-activity .tool-trace-card pre{background:var(--bg)
 .live-activity:not(:has(.tool-activity))>.turn-activity-summary>.icon{transform:none}
 .is-steps .tool-group{margin:0}
 .is-steps .tool-group>.tool-group-summary{display:none}
+.is-steps .tool-group[data-earlier]>.tool-group-summary{display:flex}
 .is-steps .tool-group-body{margin:0 0 0 7px;padding:0 0 4px 22px;border-left:1px solid color-mix(in srgb,var(--border) 70%,var(--muted))}
 .is-steps .tool-group:has(+ .tool-group)>.tool-group-body{padding-bottom:0}
 .is-steps .tool-group-body .tool-activity{margin:0}
