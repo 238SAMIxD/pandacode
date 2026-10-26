@@ -29,7 +29,7 @@
   border-radius: 3px;
   font-weight: 550 !important;
 }
-.cv-scope .icon { width: 14px; height: 14px; color: var(--muted); }
+.cv-scope .icon { width: var(--icon-sm); height: var(--icon-sm); color: var(--muted); }
 .cv-scope .cv-caret { width: 12px; height: 12px; }
 .cv-scope:hover, .cv-icon:hover:not(:disabled) { background: var(--raised); }
 .cv-files { color: var(--muted); }
@@ -46,7 +46,7 @@
 }
 .cv-icon:hover:not(:disabled) { color: var(--text) !important; }
 .cv-icon:disabled { opacity: .4; cursor: default; }
-.cv-icon .icon { width: 15px; height: 15px; }
+.cv-icon .icon { width: var(--icon-sm); height: var(--icon-sm); }
 
 .cv-commit {
   display: flex;
@@ -125,15 +125,15 @@
 .cv-pill {
   flex: 0 0 auto;
   padding: 0 6px;
-  border-radius: 3px;
-  font-size: .68rem;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-2xs);
   line-height: 17px;
   color: var(--muted);
-  background: color-mix(in srgb, var(--muted) 14%, transparent);
+  background: var(--fill-active);
 }
-.cv-pill[data-status="added"], .cv-pill[data-status="untracked"] { color: var(--success); background: color-mix(in srgb, var(--success) 14%, transparent); }
-.cv-pill[data-status="deleted"], .cv-pill[data-status="conflict"] { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
-.cv-pill[data-status="modified"], .cv-pill[data-status="renamed"], .cv-pill[data-status="copied"] { color: var(--accent-ink); background: rgb(var(--accent-rgb) / .2); }
+.cv-pill[data-status="added"], .cv-pill[data-status="untracked"] { color: var(--success); background: var(--tone-success-bg); }
+.cv-pill[data-status="deleted"], .cv-pill[data-status="conflict"] { color: var(--danger); background: var(--tone-danger-bg); }
+.cv-pill[data-status="modified"], .cv-pill[data-status="renamed"], .cv-pill[data-status="copied"] { color: var(--info); background: var(--tone-info-bg); }
 .cv-file-header > .cv-icon { width: 22px; height: 22px; }
 
 .cv-file-body { position: relative; }
@@ -149,7 +149,7 @@
 }
 .cv-error .icon { width: 14px; height: 14px; color: var(--danger); flex: 0 0 auto; }
 .cv-link { color: var(--accent-ink) !important; text-decoration: underline; text-underline-offset: 2px; }
-.cv-raw { margin: 0; padding: 6px 10px; font: .74rem/1.35 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.cv-raw { margin: 0; padding: 6px 10px; font: var(--text-xs)/1.35 var(--mono); white-space: pre; overflow-x: auto; }
 
 /* The inline diff is a plain strip under its file header: no toolbar, card or inner scroll. */
 .cv-file-body .diff-viewer { max-height: none; overflow: visible; background: transparent; border-radius: 0; }

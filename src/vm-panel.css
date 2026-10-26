@@ -10,11 +10,11 @@
 .vm-empty{display:flex;flex-direction:column;align-items:center;gap:8px;max-width:340px;text-align:center;font-size:.8rem;color:var(--muted)}
 .vm-empty strong{font-size:.9rem;font-weight:600;color:var(--text)}
 .vm-empty p{margin:0;line-height:1.5}
-.vm-empty small{font-size:.7rem;line-height:1.45}
+.vm-empty small{font-size:var(--text-xs);line-height:1.45}
 .vm-empty .primary-button,.vm-empty .secondary-button{margin-top:4px}
 .vm-images{display:flex;flex-direction:column;gap:6px;width:100%;margin-top:4px}
 .vm-images .secondary-button{display:flex;justify-content:space-between;align-items:center;gap:10px;width:100%;min-height:36px;font-size:.8rem}
-.vm-images small{font-size:.7rem;color:var(--muted)}
+.vm-images small{font-size:var(--text-xs);color:var(--muted)}
 
 .vm-status{margin:0 12px 6px;font-size:.76rem;color:var(--muted);text-align:center;overflow-wrap:anywhere}
 .vm-dock{display:flex;flex-direction:column;align-items:center;gap:6px;padding:4px 12px 14px;min-width:0}

@@ -38,7 +38,7 @@ html[data-theme="dark"] .pull-tabs>.segment-thumb{background:#3a3a35;box-shadow:
 .pull-content{padding:4px 0 18px;min-width:0}
 .pull-section{padding:10px 14px;border-top:1px solid var(--border)}
 .pull-section:first-child{border-top:0}
-.pull-section h4{margin:0 0 8px;font-size:.74rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.pull-section h4{margin:0 0 8px;font-size:var(--text-xs);font-weight:var(--weight-strong);color:var(--muted)}
 .pull-section h4 small{font-weight:500;margin-left:3px}
 .pull-body{font-size:.84rem;overflow-wrap:anywhere}
 .pull-body>:last-child,.pull-comment-body>:last-child{margin-bottom:0}

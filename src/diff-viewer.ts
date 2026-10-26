@@ -68,7 +68,7 @@ export function mountDiffViewer(host: HTMLElement, input: DiffViewerInput): Diff
   let resizeFrame = 0;
   let requestedLayout = input.layout ?? 'unified';
   let layout: 'unified' | 'split' = 'unified';
-  let wrap = true;
+  let wrap = false;
   let files: FileDiffMetadata[] = [];
   const listeners = new AbortController();
 

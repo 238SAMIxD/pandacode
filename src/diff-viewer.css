@@ -89,15 +89,15 @@
 .diff-viewer-file diffs-container {
   display: block;
   --diffs-font-family: var(--mono);
-  --diffs-font-size: .86rem;
+  --diffs-font-size: var(--mono-size);
   --diffs-line-height: 1.45rem;
 }
 .diff-viewer-raw {
   padding: 12px 16px;
   margin: 0;
-  font: .86rem/1.6 var(--mono);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  font: var(--mono-size)/var(--leading-code) var(--mono);
+  white-space: pre;
+  overflow-x: auto;
   tab-size: 2;
 }
 @media (prefers-reduced-motion: reduce) {

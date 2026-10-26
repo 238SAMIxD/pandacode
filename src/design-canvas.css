@@ -34,7 +34,7 @@
 .design-comment .design-note{white-space:normal}
 .design-comment.resolved p{color:var(--muted);text-decoration:line-through}
 .design-comment .icon-button{width:26px;height:24px;flex-shrink:0}
-.design-comment-number{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;margin-top:1px;border-radius:9px;font-size:11px;font-weight:600;background:var(--accent);color:var(--on-accent)}
+.design-comment-number{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;margin-top:1px;border-radius:var(--radius-full);font-size:var(--text-xs);font-weight:var(--weight-strong);background:var(--accent);color:var(--on-accent)}
 .design-comment.resolved .design-comment-number{background:transparent;color:var(--muted)}
 .design-comment-number .icon{width:12px;height:12px}
 .design-new{display:flex;flex-direction:column;gap:6px;padding:8px 10px;border-bottom:1px solid var(--border)}

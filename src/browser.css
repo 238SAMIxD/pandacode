@@ -28,15 +28,15 @@
 .browser-home{position:relative;isolation:isolate;height:100%;overflow:auto;padding:30px 22px}
 .browser-home-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
 .browser-home h2{margin:0;font-size:1rem;letter-spacing:-.015em;font-weight:600}
-.browser-servers{border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--panel)}
-.browser-server{display:flex;width:100%;align-items:center;gap:13px;padding:16px;text-align:left;border-bottom:1px solid var(--border);transition:background 120ms ease}
+.browser-servers{border:1px solid var(--border);border-radius:var(--radius-md);overflow:hidden;background:var(--panel)}
+.browser-server{display:flex;width:100%;align-items:center;gap:var(--space-2);padding:var(--space-2) var(--space-3);min-height:var(--row-lg);text-align:left;border-bottom:1px solid var(--border);transition:background 120ms ease}
 .browser-server:last-child{border-bottom:0}
 .browser-server:hover{background:var(--accent-dim)}
 .browser-server-icon{display:grid;place-items:center;width:35px;height:35px;border:1px solid var(--border);border-radius:4px;background:var(--bg);flex-shrink:0;color:var(--muted)}
 .browser-server-icon .icon{width:17px;height:17px}
 .browser-server>span:nth-child(2){display:flex;flex-direction:column;gap:3px;flex:1;min-width:0}
-.browser-server strong{font-weight:550;font-size:.86rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.browser-server small{color:var(--muted);font-size:.76rem}
+.browser-server strong{font-weight:550;font-size:var(--text-sm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.browser-server small{color:var(--muted);font-size:var(--text-xs)}
 .browser-server>.icon{width:12px;height:12px;color:var(--muted)}
 .browser-server-dot{width:6px;height:6px;border-radius:50%;background:#35a779;flex-shrink:0}
 .browser-home-hint{font-size:.75rem;color:var(--muted);line-height:1.6;margin:15px 3px}

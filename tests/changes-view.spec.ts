@@ -115,7 +115,7 @@ test('update keeps unchanged diffs mounted and re-mounts only changed patches', 
   await expect(page.locator('.cv-files')).toHaveText('4 files');
 });
 
-test('narrow panels keep trailing folders, wrap code anywhere and slim hunk headers', async ({ page }) => {
+test('narrow panels keep trailing folders, keep code unbroken (scrolls) and slim hunk headers', async ({ page }) => {
   const path = 'packages/frontend/src/components/settings/Account.tsx';
   const long = `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1,2 +1,2 @@\n keep\n-a\n+            const message = "averyveryverylongunbrokenstringliteralthatmustwrapsomewhereinsideitselfok";\n@@ -40,2 +40,2 @@ second\n keep2\n-b\n+c\n`;
   await page.setViewportSize({ width: 440, height: 600 });
@@ -131,9 +131,8 @@ test('narrow panels keep trailing folders, wrap code anywhere and slim hunk head
     const separator = root.querySelector<HTMLElement>('[data-content] [data-separator="metadata"]')!;
     return { wordBreak: getComputedStyle(line).wordBreak, firstRow: line.getClientRects()[0] && line.querySelector('span')!.getClientRects()[0].top - line.getBoundingClientRect().top, separator: separator.getBoundingClientRect().height };
   });
-  await expect.poll(async () => (await metrics()).wordBreak).toBe('break-all');
-  const { firstRow, separator } = await metrics();
-  expect(firstRow).toBeLessThan(4);
+  await expect.poll(async () => (await metrics()).wordBreak).not.toBe('break-all');
+  const { separator } = await metrics();
   expect(separator).toBeLessThanOrEqual(21);
   await page.screenshot({ path: 'test-results/changes-view-narrow.png', clip: { x: 0, y: 0, width: 410, height: 260 } });
 });
