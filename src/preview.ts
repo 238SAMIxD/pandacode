@@ -85,9 +85,20 @@ if (typeof location !== 'undefined' && new URLSearchParams(location.search).has(
     sample('sections-done-1', 'project-1', 'Add dark mode tokens', { taskStage: 'completed', lastResponseAt: now - 90000000, completedAt: now - 86000000 }),
     sample('sections-done-2', 'project-2', 'Remove the old onboarding', { taskStage: 'completed', lastResponseAt: now - 200000000, completedAt: now - 190000000 }),
     sample('sections-done-3', 'project-1', 'Document the keyboard map', { provider: 'kimi', model: '', taskStage: 'completed', lastResponseAt: now - 300000000, completedAt: now - 290000000 }),
+    // Needs you without running: a failed run you have not seen, and a usage limit.
+    sample('sections-failed', 'project-2', 'Upgrade the build toolchain', { status: 'error', lastPromptAt: now - 900000, lastResponseAt: now - 600000 }),
+    sample('sections-limited', 'project-1', 'Profile startup time', { lastPromptAt: now - 1800000, lastResponseAt: now - 1700000, limitedAt: now - 1700000, limitedUntil: now + 3600000 }),
+    sample('sections-pinned', 'project-1', 'Release checklist for 1.0', { pinned: true, sidebarOrder: 0, lastResponseAt: now - 432000000 }),
+    // A long title on a worktree branch with a linked pull request.
+    sample('sections-long', 'project-2', 'Redesign the sidebar rows so long titles, branches and pull requests all fit on one line', { worktreePath: '/Users/you/Projects/pandacode-worktrees/sidebar', worktreeBranch: 'pandacode/sidebar-redesign-compact-rows', pullRequest: { kind: 'pull', number: 482, url: 'https://github.com/aicodeking/pandacode/pull/482', title: 'Compact sidebar rows', state: 'open', checkedAt: now }, lastPromptAt: now - 172000000, lastResponseAt: now - 170000000 }),
+    sample('sections-chat', 'sections-chat-project', 'Explain the borrow checker', { lastPromptAt: now - 7000000, lastResponseAt: now - 6900000 }),
+    // Enough threads for "Show more" in a folder and paging in Completed.
+    ...['Tidy the logger', 'Rename the config keys', 'Split the router', 'Cache the icon lookups', 'Drop the legacy flag', 'Add a retry to uploads', 'Trim the bundle'].map((title, index) => sample(`sections-many-${index}`, 'project-1', title, { lastResponseAt: now - 200000000 - index * 9000000 })),
+    ...['Pin the Node version', 'Fix the tooltip offset', 'Translate the menus', 'Audit the CSP', 'Retire the old icons', 'Speed up cold start', 'Archive old logs', 'Bump the parser', 'Clean the fixtures'].map((title, index) => sample(`sections-old-${index}`, index % 2 ? 'project-2' : 'project-1', title, { taskStage: 'completed', lastResponseAt: now - 310000000 - index * 30000000, completedAt: now - 300000000 - index * 30000000 })),
   );
-  // These two finished while another thread was open, so they wait in Needs review.
-  localStorage.setItem('pandacode.sidebar.unreviewed', JSON.stringify(['sections-review-1', 'sections-review-2']));
+  projects.push({ id: 'sections-chat-project', name: 'Chat', path: '/Users/you/PandaCode Chats/chat-5ec7105a' });
+  // These finished while another thread was open, so they wait in Needs review (or Active, if they failed).
+  localStorage.setItem('pandacode.sidebar.unreviewed', JSON.stringify(['sections-review-1', 'sections-review-2', 'sections-failed']));
 }
 let id = 10;
 let previewClaudeMode: 'inherit' | 'subscription' = 'inherit';

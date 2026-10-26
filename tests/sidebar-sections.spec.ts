@@ -1,11 +1,14 @@
 import { expect, test, type Page } from '@playwright/test';
 
-// ?sections adds preview threads for every section: one running, one waiting for approval,
-// two unseen finished turns and three completed tasks.
+// ?sections adds preview threads for every section: running, waiting for approval, a failed run
+// and a usage limit (Active); two unseen finished turns (Needs review); a pinned task; a chat; a long
+// worktree title with a PR; enough folder tasks for "Show more"; and twelve completed tasks.
 const section = (page: Page, name: string) => page.locator(`#navigation [data-thread-group="${name}"]`);
 const row = (page: Page, id: string) => page.locator(`#navigation .task-item[data-id="${id}"]`);
 const toggle = (page: Page) => page.getByRole('button', { name: /^Completed/ });
 const action = (page: Page, name: string) => page.getByRole('button', { name, exact: true });
+const menu = (page: Page) => page.getByRole('dialog', { name: 'Task actions', exact: true });
+const ids = (page: Page, name: string) => section(page, name).locator('.task-item').evaluateAll(rows => rows.map(r => (r as HTMLElement).dataset.id));
 
 async function open(page: Page): Promise<void> {
   await page.goto('/?sections');
@@ -13,51 +16,111 @@ async function open(page: Page): Promise<void> {
 }
 
 test.describe('sidebar sections', () => {
-  test('lists active and recently finished threads under headings with counts', async ({ page }) => {
+  test('lists work that needs you, then review, pinned and chats, each under a heading with a count', async ({ page }) => {
     await open(page);
     const active = page.getByRole('region', { name: 'Active tasks', exact: true });
     const review = page.getByRole('region', { name: 'Tasks to review', exact: true });
-    await expect(active.locator('.section-heading')).toHaveText('Active2');
-    await expect(active.locator('.task-item')).toHaveCount(2);
+    await expect(active.locator('.section-heading')).toHaveText('Active4');
+    // Latest start first: running, approval, the failed run, then the usage limit.
+    expect(await ids(page, 'active')).toEqual(['sections-running', 'sections-approval', 'sections-failed', 'sections-limited']);
     await expect(review.locator('.section-heading')).toHaveText('Needs review2');
-    await expect(review.locator('.task-item')).toHaveCount(2);
+    expect(await ids(page, 'review')).toEqual(['sections-review-1', 'sections-review-2']);
     await expect(row(page, 'sections-approval').locator('.task-indicator')).toHaveAttribute('aria-label', 'Needs approval');
+    await expect(row(page, 'sections-approval').locator('.task-status')).toHaveText('Approval');
+    await expect(row(page, 'sections-failed').locator('.task-indicator')).toHaveAttribute('aria-label', 'Failed');
+    await expect(row(page, 'sections-limited').locator('.task-indicator')).toHaveAttribute('aria-label', /^Usage limit · /);
+    await expect(row(page, 'sections-running').locator('.task-runtime')).toBeVisible();
+    await expect(row(page, 'sections-review-1')).toHaveClass(/\bunread\b/);
+    await expect(row(page, 'sections-review-1').locator('.task-indicator.unread')).toHaveAttribute('aria-label', 'Unread');
+    expect(await ids(page, 'pinned')).toEqual(['sections-pinned']);
+    expect(await ids(page, 'chats')).toEqual(['sections-chat']);
+    // Two-line cards in the sections, one line in folders; cards are compact.
+    const card = await row(page, 'sections-approval').boundingBox();
+    expect(card!.height).toBeLessThanOrEqual(54);
+    const line = await row(page, 'session-2').boundingBox();
+    expect(line!.height).toBeLessThanOrEqual(30);
     // Each thread appears once.
-    for (const id of ['sections-running', 'sections-review-1', 'session-1']) await expect(row(page, id)).toHaveCount(1);
+    for (const id of ['sections-running', 'sections-review-1', 'session-1', 'sections-chat']) await expect(row(page, id)).toHaveCount(1);
   });
 
-  test('Completed starts closed, opens on click and stays open after reload', async ({ page }) => {
+  test('a long title keeps its branch tail and PR visible on the row', async ({ page }) => {
+    await open(page);
+    const long = row(page, 'sections-long');
+    await expect(long.locator('.task-link')).toHaveText('#482');
+    await expect(long.locator('.task-worktree')).toHaveAttribute('aria-label', 'Worktree');
+    await expect(long).toHaveAttribute('title', /pandacode\/sidebar-redesign-compact-rows/);
+  });
+
+  test('Completed starts closed, opens on click, pages in more and stays open after reload', async ({ page }) => {
     await open(page);
     await expect(toggle(page)).toHaveAttribute('aria-expanded', 'false');
-    await expect(toggle(page)).toContainText('3');
+    await expect(toggle(page)).toContainText('12');
     await expect(section(page, 'completed').locator('.task-item')).toHaveCount(0);
     await toggle(page).click();
     await expect(toggle(page)).toHaveAttribute('aria-expanded', 'true');
-    expect(await section(page, 'completed').locator('.task-item').evaluateAll(rows => rows.map(r => (r as HTMLElement).dataset.id)))
-      .toEqual(['sections-done-1', 'sections-done-2', 'sections-done-3']);
+    expect((await ids(page, 'completed')).slice(0, 3)).toEqual(['sections-done-1', 'sections-done-2', 'sections-done-3']);
+    await expect(section(page, 'completed').locator('.task-item')).toHaveCount(10);
+    await section(page, 'completed').getByRole('button', { name: 'Show 2 more', exact: true }).click();
+    await expect(section(page, 'completed').locator('.task-item')).toHaveCount(12);
     await page.reload();
     await expect(toggle(page)).toHaveAttribute('aria-expanded', 'true');
-    await expect(section(page, 'completed').locator('.task-item')).toHaveCount(3);
+    await expect(section(page, 'completed').locator('.task-item')).toHaveCount(10);
   });
 
-  test('the row tick completes a review thread and the checked tick reopens it', async ({ page }) => {
+  test('completed titles use the row width until hovered', async ({ page }) => {
+    await open(page);
+    await toggle(page).click();
+    const line = row(page, 'sections-done-1').locator('.task-line').first();
+    await expect(line).toHaveCSS('padding-right', '0px');
+    await expect(row(page, 'sections-done-1').locator('.task-age')).toBeVisible();
+    await row(page, 'sections-done-1').hover();
+    await expect(line).not.toHaveCSS('padding-right', '0px');
+    await expect(action(page, 'Reopen: Add dark mode tokens')).toBeVisible();
+  });
+
+  test('the row tick completes a review thread, Undo brings it back, and the checked tick reopens it', async ({ page }) => {
     await open(page);
     await toggle(page).click();
     await row(page, 'sections-review-1').hover();
     await action(page, 'Mark complete: Fix the flaky filter test').click();
     await expect(section(page, 'completed').locator('.task-item').first()).toHaveAttribute('data-id', 'sections-review-1');
     await expect(section(page, 'review').locator('.task-item')).toHaveCount(1);
-    await expect(toggle(page)).toContainText('4');
-    await action(page, 'Reopen: Fix the flaky filter test').click();
+    await expect(toggle(page)).toContainText('13');
+    await page.locator('#toast').getByRole('button', { name: 'Undo', exact: true }).click();
     await expect(section(page, 'completed').locator('[data-id="sections-review-1"]')).toHaveCount(0);
-    await expect(section(page, 'project:project-1').locator('[data-id="sections-review-1"]')).toHaveCount(1);
-    await expect(row(page, 'sections-review-1')).toHaveCount(1);
+    await expect(toggle(page)).toContainText('12');
+    await row(page, 'sections-review-2').hover();
+    await action(page, 'Mark complete: Write the release notes').click();
+    await expect(section(page, 'completed').locator('.task-item').first()).toHaveAttribute('data-id', 'sections-review-2');
+    await action(page, 'Reopen: Write the release notes').click();
+    await expect(section(page, 'completed').locator('[data-id="sections-review-2"]')).toHaveCount(0);
+    await expect(section(page, 'project:project-2').locator('[data-id="sections-review-2"]')).toHaveCount(1);
   });
 
-  test('archiving from the row moves the thread to the archive view', async ({ page }) => {
+  test('the open thread stays under the pointer when its own tick moves it to another section', async ({ page }) => {
     await open(page);
-    await row(page, 'sections-review-2').hover();
-    await action(page, 'Archive: Write the release notes').click();
+    await toggle(page).click();
+    await row(page, 'sections-done-2').click();
+    await expect(row(page, 'sections-done-2')).toHaveAttribute('aria-current', 'page');
+    const before = await row(page, 'sections-done-2').boundingBox();
+    await action(page, 'Reopen: Remove the old onboarding').click();
+    await expect(action(page, 'Mark complete: Remove the old onboarding')).toBeVisible();
+    expect(await ids(page, 'completed')).toContain('sections-done-2');
+    expect((await row(page, 'sections-done-2').boundingBox())!.y).toBeCloseTo(before!.y, 0);
+    // Opening another thread lets it move to its folder.
+    await row(page, 'session-2').click();
+    await expect(section(page, 'project:project-2').locator('[data-id="sections-done-2"]')).toHaveCount(1);
+  });
+
+  test('archiving from the row menu moves the thread to the archive view, and Undo restores it', async ({ page }) => {
+    await open(page);
+    await row(page, 'sections-review-2').click({ button: 'right' });
+    await menu(page).getByRole('menuitem', { name: 'Archive', exact: true }).click();
+    await expect(row(page, 'sections-review-2')).toHaveCount(0);
+    await page.locator('#toast').getByRole('button', { name: 'Undo', exact: true }).click();
+    await expect(row(page, 'sections-review-2')).toHaveCount(1);
+    await row(page, 'sections-review-2').click({ button: 'right' });
+    await menu(page).getByRole('menuitem', { name: 'Archive', exact: true }).click();
     await expect(row(page, 'sections-review-2')).toHaveCount(0);
     await page.getByRole('button', { name: 'Archived tasks', exact: true }).click();
     await expect(section(page, 'archived').locator('[data-id="sections-review-2"]')).toBeVisible();
@@ -72,12 +135,31 @@ test.describe('sidebar sections', () => {
     const more = action(page, 'Task actions: Fix the flaky filter test');
     await expect(more).toHaveAttribute('aria-haspopup', 'menu');
     await more.click();
-    await page.getByRole('dialog', { name: 'Task actions', exact: true }).getByRole('menuitem', { name: 'Delete task…', exact: true }).click();
+    await menu(page).getByRole('menuitem', { name: 'Delete task…', exact: true }).click();
     const confirm = page.getByRole('dialog', { name: 'Delete task?', exact: true });
     await expect(confirm).toContainText('Fix the flaky filter test');
     await confirm.getByRole('button', { name: 'Delete task', exact: true }).click();
     await expect(confirm).toBeHidden();
     await expect(row(page, 'sections-review-1')).toHaveCount(0);
     await expect(section(page, 'review').locator('.section-count')).toHaveText('1');
+  });
+
+  test('the filter field narrows every section by title, branch, PR or project, and Esc clears it', async ({ page }) => {
+    await open(page);
+    const filter = page.getByRole('searchbox', { name: 'Filter tasks', exact: true });
+    await filter.fill('toolchain');
+    await expect(page.locator('#navigation .task-item')).toHaveCount(1);
+    await expect(row(page, 'sections-failed')).toBeVisible();
+    await filter.fill('compact-rows');
+    await expect(page.locator('#navigation .task-item')).toHaveCount(1);
+    await expect(row(page, 'sections-long')).toBeVisible();
+    await filter.fill('#482');
+    await expect(row(page, 'sections-long')).toBeVisible();
+    await filter.fill('no such task');
+    await expect(page.locator('#navigation .task-item')).toHaveCount(0);
+    await expect(page.locator('#navigation')).toContainText('No tasks match');
+    await filter.press('Escape');
+    await expect(filter).toHaveValue('');
+    await expect(row(page, 'sections-failed')).toBeVisible();
   });
 });

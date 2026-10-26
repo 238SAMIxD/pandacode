@@ -1,10 +1,25 @@
-import type { Session } from './types';
 import './thread-order.css';
 
-export function compareThreadOrder(a: Session, b: Session): number {
-  const rank = (task: Session) => task.sidebarOrder ?? Number.MAX_SAFE_INTEGER;
-  const activity = (task: Session) => task.lastPromptAt == null ? task.lastResponseAt ?? task.createdAt : Math.max(task.lastPromptAt, task.lastResponseAt ?? 0);
-  return rank(a) - rank(b) || activity(b) - activity(a) || a.id.localeCompare(b.id);
+export { compareManual as compareThreadOrder } from './sidebar-sort';
+
+/** Everything in the list that takes focus: rows, folder and section headings, "Show more". */
+const STOPS = '.task-item, .folder-heading, .section-toggle, .folder-more';
+function stops(nav: HTMLElement): HTMLElement[] {
+  return [...nav.querySelectorAll<HTMLElement>(STOPS)].filter(item => !item.closest('[hidden]') && item.getClientRects().length > 0);
+}
+/** The list is one Tab stop: the open row (or the first one) takes Tab; arrows move between rows. */
+export function syncRovingFocus(nav: HTMLElement): void {
+  const items = stops(nav), focused = items.find(item => item === document.activeElement);
+  const current = focused ?? items.find(item => item.classList.contains('selected')) ?? items[0];
+  for (const item of nav.querySelectorAll<HTMLElement>(`${STOPS}, .task-action, .folder-new-task`)) item.tabIndex = item === current ? 0 : -1;
+}
+function moveFocus(nav: HTMLElement, from: HTMLElement, key: string): boolean {
+  const items = stops(nav), index = items.indexOf(from);
+  const next = key === 'Home' ? 0 : key === 'End' ? items.length - 1 : index + (key === 'ArrowUp' ? -1 : 1);
+  const target = items[next];
+  if (index < 0 || !target) return false;
+  from.tabIndex = -1; target.tabIndex = 0; target.focus(); target.scrollIntoView({ block: 'nearest' });
+  return true;
 }
 
 export function threadGroupRows(row: HTMLElement): HTMLElement[] {
@@ -64,9 +79,26 @@ export function bindThreadReordering(nav: HTMLElement, options: {
     const row = (event.target as Element).closest<HTMLElement>('.task-item');
     if (row) { event.preventDefault(); options.menu(row); }
   });
+  nav.addEventListener('focusin', event => { if ((event.target as Element).matches(STOPS)) syncRovingFocus(nav); });
   nav.addEventListener('keydown', event => {
-    const row = (event.target as Element).closest<HTMLElement>('.task-item');
+    const target = event.target as HTMLElement;
+    if (!event.altKey && !event.metaKey && !event.ctrlKey && ['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key) && target.matches(STOPS)) {
+      if (moveFocus(nav, target, event.key)) event.preventDefault();
+      return;
+    }
+    // → opens and ← closes a folder or section from its heading.
+    if ((event.key === 'ArrowRight' || event.key === 'ArrowLeft') && target.matches('.folder-heading, .section-toggle')) {
+      if ((target.getAttribute('aria-expanded') === 'true') !== (event.key === 'ArrowRight')) { event.preventDefault(); target.click(); }
+      return;
+    }
+    const row = target.closest<HTMLElement>('.task-item');
     if (!row) return;
+    // ⌘/Ctrl Enter completes or reopens the row: its tick is not a Tab stop.
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      const tick = row.parentElement?.querySelector<HTMLButtonElement>('.task-check');
+      if (tick && !tick.disabled) { event.preventDefault(); tick.click(); }
+      return;
+    }
     if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') {
       event.preventDefault(); options.menu(row); return;
     }

@@ -6,6 +6,8 @@ import { infoMark } from './tooltip';
 
 /** Label plus detail up to this length fit on one row; longer details move behind an info mark. */
 const BRIEF_ROW = 48;
+/** Space between a menu and its trigger. */
+const GAP = 4;
 
 type ChoiceItem = {
   id: string;
@@ -18,6 +20,10 @@ type ChoiceItem = {
   selected?: boolean;
   disabled?: boolean;
   danger?: boolean;
+  /** Starts a named group (radio groups in a settings menu); the name is shown above it. */
+  heading?: string;
+  /** Draws a line above the item, starting an unnamed group. */
+  separator?: boolean;
 };
 type ChoiceMenuOptions = {
   anchor: HTMLElement;
@@ -82,16 +88,16 @@ export function openChoiceMenu(options: ChoiceMenuOptions): () => void {
     const height = Math.max(0, (viewport?.height ?? innerHeight) - 24);
     const rect = anchor.getBoundingClientRect();
     panel.style.position = 'fixed';
-    // One-line rows need room for a label and its detail; never narrower than 280px.
+    // One-line rows need room for a label and its detail: 280px unless the caller sizes it.
     panel.style.width = `${Math.min(340, options.width ?? Math.max(280, rect.width), width)}px`;
     panel.style.maxHeight = `${Math.min(400, height)}px`;
     const desired = panel.offsetHeight;
-    const above = Math.max(0, rect.top - topEdge - 6), below = Math.max(0, topEdge + height - rect.bottom - 6);
+    const above = Math.max(0, rect.top - topEdge - GAP), below = Math.max(0, topEdge + height - rect.bottom - GAP);
     const placeBelow = below >= desired || below >= above;
     const available = placeBelow ? below : above;
     panel.style.maxHeight = `${Math.min(400, available >= 120 ? available : height)}px`;
     const panelHeight = panel.offsetHeight;
-    const top = placeBelow ? rect.bottom + 6 : rect.top - panelHeight - 6;
+    const top = placeBelow ? rect.bottom + GAP : rect.top - panelHeight - GAP;
     panel.style.left = `${Math.max(leftEdge, Math.min(rect.left, leftEdge + width - panel.offsetWidth))}px`;
     panel.style.top = `${Math.max(topEdge, Math.min(top, topEdge + height - panelHeight))}px`;
     panel.dataset.placement = placeBelow ? 'below' : 'above';
@@ -126,15 +132,21 @@ export function openChoiceMenu(options: ChoiceMenuOptions): () => void {
     // Keep a later current project visible on reopening, without rendering the
     // full catalog. Search still reaches every option, not only this first page.
     if (!query && selected && !items.some(item => item.id === selected.id)) items[items.length - 1] = { ...selected };
+    // Groups only make sense over the full list, not search results.
+    const grouped = !query;
+    let open = false;
     list.innerHTML = items.map((item, index) => {
+      const heading = grouped && item.heading ? `${open ? '</div>' : ''}${index ? '<div class="choice-menu-separator" role="separator"></div>' : ''}<div class="choice-menu-group" role="group" aria-label="${escape(item.heading)}"><div class="choice-menu-heading" aria-hidden="true">${escape(item.heading)}</div>` : '';
+      if (heading) open = true;
+      const separator = grouped && !item.heading && item.separator && index ? '<div class="choice-menu-separator" role="separator"></div>' : '';
       const descriptionId = `${panel.id}-description-${index}`;
       // Rows stay one line: a short detail sits beside the label, a long one behind a mark.
       const brief = Boolean(item.description) && item.label.length + item.description!.length <= BRIEF_ROW;
       const detail = item.description ? brief
         ? `<span id="${descriptionId}" class="choice-menu-description">${escape(item.description)}</span>`
         : `<span id="${descriptionId}" class="sr-only">${escape(item.description)}</span>` : '';
-      return `<button type="button" class="choice-menu-option${item.danger ? ' is-danger' : ''}" role="${actions ? 'menuitem' : 'menuitemradio'}" ${actions ? '' : `aria-checked="${Boolean(item.selected)}"`} aria-label="${escape(item.label)}" ${item.description ? `aria-describedby="${descriptionId}"` : ''} data-choice-index="${index}" tabindex="-1" ${item.disabled ? 'disabled aria-disabled="true"' : ''}>${item.provider ? providerLogo(item.provider) : item.leading ? item.leading : item.icon ? icon(item.icon) : ''}<span class="choice-menu-copy"><span class="choice-menu-label">${escape(item.label)}</span>${detail}</span>${item.description && !brief ? infoMark(item.description) : ''}${!actions && item.selected ? icon('check') : ''}</button>`;
-    }).join('');
+      return `${heading}${separator}<button type="button" class="choice-menu-option${item.danger ? ' is-danger' : ''}" role="${actions ? 'menuitem' : 'menuitemradio'}" ${actions ? '' : `aria-checked="${Boolean(item.selected)}"`} aria-label="${escape(item.label)}" ${item.description ? `aria-describedby="${descriptionId}"` : ''} data-choice-index="${index}" tabindex="-1" ${item.disabled ? 'disabled aria-disabled="true"' : ''}>${item.provider ? providerLogo(item.provider) : item.leading ? item.leading : item.icon ? icon(item.icon) : ''}<span class="choice-menu-copy"><span class="choice-menu-label">${escape(item.label)}</span>${detail}</span>${item.description && !brief ? infoMark(item.description) : ''}${!actions && item.selected ? icon('check') : ''}</button>`;
+    }).join('') + (open ? '</div>' : '');
     buttons = [...list.querySelectorAll<HTMLButtonElement>('.choice-menu-option')];
     const current = items.findIndex(item => item.selected && !item.disabled);
     markActive(current >= 0 ? current : items.findIndex(item => !item.disabled));
