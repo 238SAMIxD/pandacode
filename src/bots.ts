@@ -283,13 +283,23 @@ export function mountBots(host: HTMLElement, options: BotsOptions): BotsView {
     return counts[id] ? `<span class="bots-count">${counts[id]}</span>` : '';
   }
 
-  function render(): void {
+  function render(resetForm = false): void {
     if (disposed) return;
     renderList();
     const confirm = confirming ? `<div class="bots-confirm" role="alertdialog" aria-label="${escape(confirming.title)}"><b>${escape(confirming.title)}</b><p>${escape(confirming.text)}</p><div class="dialog-footer"><button type="button" class="secondary-button" data-bots-action="confirm-cancel">Cancel</button><button type="button" class="primary-button danger" data-bots-action="confirm-run">${escape(confirming.button)}</button></div></div>` : '';
     const alert = error ? `<p class="bots-error" role="alert">${escape(error)}</p>` : '';
     if (loading) { pane.innerHTML = '<p class="dialog-loading" role="status">Loading bots…</p>'; return; }
     if (editing === 'new' || !detail) {
+      // Keep the draft and focus through refreshes; only New bot and template choices reset it.
+      const form = !single && !resetForm ? pane.querySelector<HTMLFormElement>(':scope > .bots-form') : null;
+      if (form) {
+        pane.querySelector(':scope > .bots-error')?.remove();
+        form.insertAdjacentHTML('beforebegin', alert);
+        const cancel = form.querySelector('[data-bots-action="cancel-edit"]');
+        if (!bots.length) cancel?.remove();
+        else if (!cancel) form.querySelector('.dialog-footer')!.insertAdjacentHTML('afterbegin', '<button type="button" class="secondary-button" data-bots-action="cancel-edit">Cancel</button>');
+        return;
+      }
       pane.innerHTML = alert + (single && !detail ? '<p class="bots-empty-note">This bot no longer exists.</p>' : renderForm(null));
       hydrateFormModels();
       return;
@@ -320,12 +330,12 @@ export function mountBots(host: HTMLElement, options: BotsOptions): BotsView {
     if (target.dataset.section) { section = target.dataset.section as Nav; confirming = null; render(); return; }
     if (target.dataset.template) {
       template = TEMPLATES.find(item => item.id === target.dataset.template) ?? TEMPLATES[0];
-      render(); pane.querySelector<HTMLInputElement>('input[name=name]')?.focus(); return;
+      render(true); pane.querySelector<HTMLInputElement>('input[name=name]')?.focus(); return;
     }
     const action = target.dataset.botsAction;
     const bot = detail?.bot;
     if (moreOpen && action !== 'more') moreOpen = false;
-    if (action === 'new') { editing = 'new'; template = TEMPLATES[0]; confirming = null; render(); pane.querySelector<HTMLInputElement>('input[name=name]')?.focus(); }
+    if (action === 'new') { editing = 'new'; template = TEMPLATES[0]; confirming = null; render(true); pane.querySelector<HTMLInputElement>('input[name=name]')?.focus(); }
     else if (action === 'cancel-edit') { editing = null; render(); }
     else if (action === 'more') { moreOpen = !moreOpen; render(); if (moreOpen) pane.querySelector<HTMLElement>('.bp-menu [role=menuitem]')?.focus(); }
     else if (action === 'soul-import') pane.querySelector<HTMLInputElement>('input[data-soul-file]')?.click();

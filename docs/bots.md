@@ -2,6 +2,8 @@
 
 A **bot** is a named, persistent agent that lives in PandaCode and keeps working when you are away. You talk to it from the desktop app, a local web page, Telegram, Slack, Discord or WhatsApp. It remembers what matters, runs on schedules, acts through the same harnesses, browser, terminal and tools PandaCode already has, and asks before anything risky.
 
+The **New bot** form keeps unsaved input through background updates, validation errors and failed creation attempts. Choosing a template replaces the draft; canceling or closing the form discards it.
+
 It combines the ideas behind xAI's Grok Bot, Meta's Muse and OpenAI's Dots, with one deliberate difference: **the bot runs on the user's own computer, not on a vendor's cloud machine.** Files, browser sessions, credentials and memory stay local.
 
 ## What each product contributes

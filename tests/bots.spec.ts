@@ -54,6 +54,115 @@ async function openSettings(page: Page, section?: string, name = 'Scout'): Promi
 }
 
 test.describe('bots', () => {
+  test('a new bot keeps its draft through background refreshes and validation', async ({ page }) => {
+    await openBots(page);
+    const form = bots(page).locator('.bots-form');
+    const instructions = form.getByRole('textbox', { name: 'Instructions' });
+    const soul = '# Personality\nKeep a dry wit.';
+    await form.getByRole('textbox', { name: 'Name' }).fill('kittisaurus');
+    await form.getByRole('textbox', { name: 'Role' }).fill('');
+    await instructions.fill('  Custom instructions\nwith two lines.  ');
+    await form.getByRole('textbox', { name: 'Standing goals' }).fill('Keep my draft');
+    await form.locator('input[data-soul-file]').setInputFiles({ name: 'soul.md', mimeType: 'text/markdown', buffer: Buffer.from(soul) });
+    await expect(form.getByRole('textbox', { name: 'Soul' })).toHaveValue(soul);
+    await form.locator('[data-avatar-choice="panda:3"]').click();
+    await form.getByRole('combobox', { name: 'Harness', exact: true }).selectOption('github-copilot');
+    await expect(form.getByRole('combobox', { name: 'Model', exact: true })).toHaveValue('default');
+    await form.getByRole('combobox', { name: 'Permissions' }).selectOption('plan');
+    await form.getByRole('combobox', { name: 'Check-ins' }).selectOption('60');
+    const draft = await form.evaluate(form => Object.fromEntries(new FormData(form as HTMLFormElement)));
+    await instructions.focus();
+    await instructions.evaluate(field => (field as HTMLTextAreaElement).setSelectionRange(5, 11));
+
+    // Preview bot changes emit the same bots-changed event as the native scheduler.
+    const backgroundBot = await page.evaluate(async () => {
+      const module = '/src/bridge.ts';
+      const { call } = await import(module);
+      return call('bot_create', { input: { name: 'Background bot', role: '', instructions: '', goals: '', soul: '', avatar: 'panda:0', provider: 'claude', model: 'default', mode: 'ask', heartbeatMinutes: 0 } });
+    });
+    const backgroundRow = bots(page).locator('.bots-row', { hasText: 'Background bot' });
+    await expect(backgroundRow).toBeVisible();
+    await expect(form.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible();
+    expect(await form.evaluate(form => Object.fromEntries(new FormData(form as HTMLFormElement)))).toEqual(draft);
+    await expect(instructions).toBeFocused();
+    expect(await instructions.evaluate(field => [(field as HTMLTextAreaElement).selectionStart, (field as HTMLTextAreaElement).selectionEnd])).toEqual([5, 11]);
+
+    await instructions.blur();
+    await page.evaluate(async botId => {
+      const module = '/src/bridge.ts';
+      const { call } = await import(module);
+      await call('bot_set_paused', { botId, paused: true });
+    }, backgroundBot.id);
+    await expect(backgroundRow).toContainText('Paused');
+    expect(await form.evaluate(form => Object.fromEntries(new FormData(form as HTMLFormElement)))).toEqual(draft);
+
+    await page.evaluate(async botId => {
+      const module = '/src/bridge.ts';
+      const { call } = await import(module);
+      await call('bot_delete', { botId });
+    }, backgroundBot.id);
+    await expect(backgroundRow).toHaveCount(0);
+    await expect(form.getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0);
+    expect(await form.evaluate(form => Object.fromEntries(new FormData(form as HTMLFormElement)))).toEqual(draft);
+
+    await form.getByRole('textbox', { name: 'Name' }).fill('');
+    await form.getByRole('button', { name: 'Create bot', exact: true }).click();
+    await expect(bots(page).getByRole('alert')).toHaveText('Give the bot a name.');
+    expect(await form.evaluate(form => Object.fromEntries(new FormData(form as HTMLFormElement)))).toEqual({ ...draft, name: '' });
+    await form.getByRole('textbox', { name: 'Name' }).fill('kittisaurus');
+    await form.getByRole('button', { name: 'Create bot', exact: true }).click();
+    await expect(bots(page)).toBeHidden();
+    await expect(crumb(page)).toContainText('kittisaurus');
+    await openSettings(page, undefined, 'kittisaurus');
+    const saved = await panel(page, 'kittisaurus').locator('.bots-form').evaluate(form => Object.fromEntries(new FormData(form as HTMLFormElement)));
+    expect(saved).toEqual({ ...draft, instructions: String(draft.instructions).trim() });
+  });
+
+  test('a new bot keeps its draft when creation fails and can be retried', async ({ page }) => {
+    await page.route('**/src/preview-bots.ts*', async route => {
+      const response = await route.fetch();
+      const source = await response.text();
+      await route.fulfill({ response, body: source.replace(/switch\s*\(command\)\s*\{/, `
+        if (command === 'bot_create' && !window.__allowBotCreate) throw new Error('Bot could not be created.');
+        switch (command) {
+      `) });
+    });
+    await openBots(page);
+    const form = bots(page).locator('.bots-form');
+    await form.getByRole('textbox', { name: 'Name' }).fill('Retry bot');
+    await form.getByRole('textbox', { name: 'Instructions' }).fill('Keep these instructions');
+    await form.getByRole('button', { name: 'Create bot', exact: true }).click();
+    await expect(bots(page).getByRole('alert')).toHaveText('Bot could not be created.');
+    await expect(form.getByRole('textbox', { name: 'Name' })).toHaveValue('Retry bot');
+    await expect(form.getByRole('textbox', { name: 'Instructions' })).toHaveValue('Keep these instructions');
+    await page.evaluate(() => { (window as any).__allowBotCreate = true; });
+    await form.getByRole('button', { name: 'Create bot', exact: true }).click();
+    await expect(bots(page)).toBeHidden();
+    await expect(crumb(page)).toContainText('Retry bot');
+  });
+
+  test('new bot templates and cancel deliberately discard the draft', async ({ page }) => {
+    await newBot(page);
+    await sidebar(page).getByRole('button', { name: 'Add bot', exact: true }).click();
+    const form = bots(page).locator('.bots-form');
+    await expect(form.getByRole('textbox', { name: 'Name' })).toHaveValue('Leo');
+    await form.getByRole('textbox', { name: 'Name' }).fill('Discard this draft');
+    await form.getByRole('textbox', { name: 'Instructions' }).fill('Custom instructions');
+    await bots(page).getByRole('button', { name: /Researcher/ }).click();
+    await expect(form.getByRole('textbox', { name: 'Name' })).toHaveValue('Researcher');
+    await expect(form.getByRole('textbox', { name: 'Instructions' })).toHaveValue('Research thoroughly using the web and local files. Cite sources with links. Lead with the answer, then the evidence.');
+    await bots(page).getByRole('button', { name: /Blank/ }).click();
+    await expect(form.getByRole('textbox', { name: 'Name' })).toHaveValue('');
+    await expect(form.getByRole('textbox', { name: 'Instructions' })).toHaveValue('');
+    await form.getByRole('textbox', { name: 'Name' }).fill('Another draft');
+    await form.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(bots(page).locator('.bp-name')).toHaveText('Scout');
+    await expect(form.getByRole('textbox', { name: 'Name' })).toHaveValue('Scout');
+    await bots(page).getByRole('button', { name: 'New bot', exact: true }).click();
+    await expect(form.getByRole('textbox', { name: 'Name' })).toHaveValue('Leo');
+    await expect(form.getByRole('textbox', { name: 'Role' })).toHaveValue('Chief of staff');
+  });
+
   test('the Bots bar switches the sidebar to the bots, each with its latest message', async ({ page }) => {
     await page.goto('/');
     await expect(page.locator('#navigation')).toBeVisible();
