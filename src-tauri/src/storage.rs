@@ -1842,6 +1842,12 @@ mod tests {
             .unwrap();
         store.resume("imported", "gamma").unwrap();
         assert_eq!(store.usage_links("imported").unwrap(), vec!["gamma"]);
+        // Ids written without resume() (imports, forks) still count through the current resume id.
+        store
+            .db
+            .execute("INSERT INTO sessions(id,project_id,title,provider,model,mode,status,created_at,updated_at,resume_id) VALUES ('forked',?1,'Forked','codex','gpt-5','auto',0,0,0,'direct-id')", [&session.project_id])
+            .unwrap();
+        assert_eq!(store.usage_links("forked").unwrap(), vec!["direct-id"]);
     }
 
     #[test]

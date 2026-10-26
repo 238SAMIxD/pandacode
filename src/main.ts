@@ -4702,8 +4702,10 @@ async function boot(): Promise<void> {
   // bridge.ts has no typed overload for this event yet.
   run((subscribe as (name: string, callback: () => void) => Promise<() => void>)('design-changed', () => void designPanel?.refresh()).then(() => undefined));
   run(subscribe('agent-event', (event: AgentEvent) => {
-    if (event.kind !== 'done' || event.sessionId !== state.sessionId) return;
+    if (event.kind !== 'done') return;
+    // A run can finish while another task is open; its totals refresh when next shown.
     taskUsage.delete(event.sessionId);
+    if (event.sessionId !== state.sessionId) return;
     ensureTaskUsage(event.sessionId);
     void designPanel?.refresh();
     if (document.hasFocus()) markTraySeen(event.sessionId);

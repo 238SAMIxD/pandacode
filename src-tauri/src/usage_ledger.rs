@@ -365,6 +365,7 @@ fn file_belongs_to(link: &str, agent: Agent, path: &Path) -> bool {
 /// only records from `since_hour` on. Pure so tests can build the cache by hand.
 fn task_usage_from_cache(cache: &Cache, links: &[String], since_hour: i64) -> TaskUsage {
     let mut usage = TaskUsage::default();
+    let mut replies = HashSet::new();
     for (path, entry) in &cache.files {
         let Some(agent) = entry.agent else { continue };
         if !links.iter().any(|link| file_belongs_to(link, agent, Path::new(path))) {
@@ -373,6 +374,12 @@ fn task_usage_from_cache(cache: &Cache, links: &[String], since_hour: i64) -> Ta
         for record in &entry.records {
             if record.hour < since_hour {
                 continue;
+            }
+            // Streaming rewrites a reply and resumed sessions copy earlier ones; count each reply once.
+            if let Some(key) = record.key {
+                if !replies.insert(key) {
+                    continue;
+                }
             }
             usage.input += record.input;
             usage.cache_read += record.cache_read;
