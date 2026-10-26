@@ -1,12 +1,14 @@
 // The iPhone Duo's sidebar (split.tsx), on the Inbox tab and in tasks: the PandaCode header, every
-// computer's tasks in one compact list (the open task highlighted), and a floating glass search
+// computer's tasks in one compact list (the open task highlighted), its bots after Unsent, and a floating glass search
 // field that filters it. Tasks open as the current task route in the pane beside it.
 import { Image } from 'expo-image';
 import { useGlobalSearchParams, usePathname } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { FlatList, KeyboardAvoidingView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { filterRows, type InboxRow as Row, type Section } from '../store/inbox.ts';
+import { filterBots, filterRows, type BotRow as BotItem, type InboxRow as Row, type Section } from '../store/inbox.ts';
+import { useConnect } from '../store/index.ts';
+import { BotRow } from './BotRow.tsx';
 import { Material, useWallpaperShown } from './Backdrop.tsx';
 import { Glass } from './Glass.tsx';
 import { Icon } from './Icon.tsx';
@@ -17,28 +19,31 @@ import { useInbox } from './useInbox.ts';
 const SHARE = 0.32;
 const MIN_WIDTH = 300;
 const SEARCH = 48;
-const ORDER: Section[] = ['needs', 'working', 'recent', 'unsent', 'settled', 'snoozed'];
+const ORDER: (Section | 'bots')[] = ['running', 'needs', 'recent', 'unsent', 'bots', 'settled', 'snoozed'];
 
 export const useSidebarWidth = () => Math.max(MIN_WIDTH, Math.round(useWindowDimensions().width * SHARE));
 
-type Item = { section: Section; row: Row };
+type Item = { section: Section; row: Row } | { section: 'bots'; row: BotItem };
 
 export function Sidebar() {
   const colors = useColors();
   const wallpaper = useWallpaperShown();
   const insets = useSafeAreaInsets();
   const width = useSidebarWidth();
-  const { hosts, inbox, minute, load } = useInbox();
+  const { hosts, inbox, bots, minute, load, updating } = useInbox();
   const [query, setQuery] = useState('');
   const pathname = usePathname();
   const { device, session } = useGlobalSearchParams<{ device?: string; session?: string }>();
   const inTask = pathname.startsWith('/task/');
   const selected = inTask ? `${device}/${session}` : '';
+  const selectedBot = useConnect(s => (inTask ? s.bots[device ?? '']?.find(b => b.desktopSession === session)?.id : undefined));
 
   // The client keeps lists fresh (presence, foreground, run ends, a timer); this covers a new host.
   useEffect(() => { void load(); }, [load]);
 
-  const items = useMemo(() => ORDER.flatMap(section => filterRows(inbox[section], query).map(row => ({ section, row }))), [inbox, query]);
+  const items = useMemo(() => ORDER.flatMap((section): Item[] => (section === 'bots'
+    ? filterBots(bots, query).map(row => ({ section, row }))
+    : filterRows(inbox[section], query).map(row => ({ section, row })))), [inbox, bots, query]);
   const empty = query.trim() ? 'No matching threads.' : !hosts.length ? 'Turn on remote access on a computer signed in to the same GitHub account to see its tasks here.' : 'No tasks yet.';
 
   return (
@@ -50,12 +55,14 @@ export function Sidebar() {
           <Image source={require('../../assets/images/icon.png')} style={styles.mark} />
           <Text style={[styles.brandText, { color: colors.text }]}>PandaCode</Text>
         </View>
+        {updating && <Text style={[styles.updating, { color: colors.secondary }]} accessibilityLiveRegion="polite">Updating…</Text>}
       </View>
       <FlatList
         data={items}
         keyExtractor={(item: Item) => `${item.section}/${item.row.key}`}
-        renderItem={({ item, index }) => (
-          <InboxRow row={item.row} snoozed={item.section === 'snoozed'} last={index === items.length - 1} minute={minute}
+        renderItem={({ item, index }) => (item.section === 'bots'
+          ? <BotRow row={item.row} last={index === items.length - 1} minute={minute} sidebar selected={item.row.deviceId === device && item.row.bot.id === selectedBot} replace={inTask} />
+          : <InboxRow row={item.row} snoozed={item.section === 'snoozed'} last={index === items.length - 1} minute={minute}
             sidebar selected={item.row.key === selected} replace={inTask} />
         )}
         contentContainerStyle={[styles.list, { paddingBottom: SEARCH + Math.max(insets.bottom, 12) + 16 }]}
@@ -79,6 +86,7 @@ const styles = StyleSheet.create({
   brand: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   mark: { width: 26, height: 26, borderRadius: 7 },
   brandText: { fontSize: 21, fontWeight: '700', letterSpacing: -0.4 },
+  updating: { fontSize: 13 },
   list: { gap: 2, paddingTop: 4 },
   empty: { fontSize: 15, textAlign: 'center', marginTop: 40, paddingHorizontal: 24 },
   search: { position: 'absolute', right: 12, height: SEARCH, borderRadius: SEARCH / 2, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16 },

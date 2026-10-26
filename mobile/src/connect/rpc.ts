@@ -2,7 +2,9 @@
 // mirrors src-tauri/src/remote/client.rs.
 import { randomBytes, uuid } from './crypto.ts';
 
-export const METHODS = ['subscribe', 'tasks.list', 'providers.list', 'providers.models', 'task.start', 'task.messages', 'task.send', 'task.stop', 'task.steer', 'task.configure', 'approval.respond', 'input.respond', 'projects.icons'] as const;
+export const METHODS = ['subscribe', 'tasks.list', 'providers.list', 'providers.models', 'task.start', 'task.messages', 'task.send', 'task.stop', 'task.steer', 'task.configure', 'approval.respond', 'input.respond', 'projects.icons',
+  'task.pull', 'task.pullDiff', 'task.pullMerge', 'task.pullDetect', 'task.changes', 'task.diff', 'bots.list', 'bot.thread', 'bot.message', 'bot.pause',
+  'task.attachment', 'task.workspaceImage', 'task.team', 'task.workerMessages'] as const;
 export type Method = (typeof METHODS)[number];
 
 export const TIMEOUT_MS = 20_000;
@@ -13,6 +15,9 @@ export const OFFLINE = 'That computer is offline.';
 export const RATE = 'Too many requests to that computer. Try again in a moment.';
 export const LOST = 'The connection to the relay was lost.';
 export const NOT_CONNECTED = 'Not connected to the relay.';
+/** An older desktop's answer to a method it doesn't have. */
+export const UNKNOWN_METHOD = 'Unknown method.';
+export const outdated = (computer: string) => `Update PandaCode on ${computer} to use this.`;
 
 export interface Request { type: 'req'; id: string; method: Method; params: unknown; ts: number; nonce: string }
 
@@ -85,4 +90,31 @@ export class Pending {
   }
 
   get size() { return this.calls.size; }
+}
+
+/**
+ * Background calls (prefetch, icons, attachments, glance subscribes, bots) take turns per host:
+ * the host answers one phone's requests in order, so at most one waits ahead of anything the
+ * user does. User calls skip this and go at once. FIFO; `turn` resolves with the release.
+ */
+export class BackgroundGate {
+  private readonly queues = new Map<string, (() => void)[]>();
+
+  turn(host: string): Promise<() => void> {
+    const release = () => {
+      const queue = this.queues.get(host) ?? [];
+      const next = queue.shift();
+      if (next) next();
+      else this.queues.delete(host);
+    };
+    const queue = this.queues.get(host);
+    if (!queue) {
+      this.queues.set(host, []);
+      return Promise.resolve(release);
+    }
+    return new Promise(resolve => queue.push(() => resolve(release)));
+  }
+
+  /** Background calls waiting (not the one in flight). */
+  waiting(host: string) { return this.queues.get(host)?.length ?? 0; }
 }

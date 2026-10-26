@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyEvent, fromList, fromSubscribe, idleLive, mergeMessages, staleLists, type Live } from '../src/store/reduce.ts';
+import { applyEvent, ended, fromList, fromSubscribe, idleLive, mergeMessages, staleLists, withHostActivity, type Live } from '../src/store/reduce.ts';
 import type { AgentEvent, Message } from '../src/connect/types.ts';
 
 const m = (id: number): Message => ({ id, role: 'assistant', content: `m${id}`, createdAt: id, turnDurationMs: null });
@@ -17,7 +17,8 @@ test('message pages merge incrementally and never twice', () => {
 });
 
 const ev = (kind: string, extra: Partial<AgentEvent> = {}): AgentEvent => ({ sessionId: 's', kind, text: '', ...extra });
-const run = (events: AgentEvent[], start: Live = idleLive()) => events.reduce(applyEvent, start);
+const T = 1_800_000_000_000;
+const run = (events: AgentEvent[], start: Live = idleLive(), now = T) => events.reduce((live, e) => applyEvent(live, e, now), start);
 
 test('live state follows text, tools, approvals and done', () => {
   let live = run([ev('text', { text: 'Hel' }), ev('text', { text: 'lo' })]);
@@ -26,7 +27,7 @@ test('live state follows text, tools, approvals and done', () => {
   const tool = { id: 't1', name: 'Bash', status: 'running' as const, input: 'ls', output: '' };
   live = run([ev('tool', { tool }), ev('tool', { tool: { ...tool, status: 'completed' } }), ev('message_start'), ev('text', { text: 'Done' })], live);
   assert.equal(live.items.length, 3);
-  assert.deepEqual(live.items[1], { kind: 'tool', tool: { ...tool, status: 'completed' } });
+  assert.deepEqual(live.items[1], { kind: 'tool', tool: { ...tool, status: 'completed' }, startedAt: T, endedAt: T });
   assert.deepEqual(live.items[2], { kind: 'text', text: 'Done' });
 
   live = run([ev('approval', { requestId: 'a1', text: 'Run rm?' }), ev('approval', { requestId: 'a1', text: 'dup' })], live);
@@ -39,13 +40,14 @@ test('live state follows text, tools, approvals and done', () => {
   live = applyEvent(live, ev('input_request', { requestId: 'q1', data: { kind: 'questions', questions: [] } }));
   assert.equal(live.status, 'waiting');
   live = applyEvent(live, ev('subagent'));
-  assert.equal(live.status, 'waiting'); // ignored kinds change nothing
+  assert.equal(live.status, 'waiting'); // a malformed subagent changes nothing
 });
 
 test('the host\'s raw done keeps the live reply until run.finished copies the messages', () => {
   const live = run([ev('text', { text: 'Final answer' })]);
   const after = applyEvent(live, ev('done', { text: 'Turn complete' }));
-  assert.equal(after, live); // unchanged: no flicker before the final message arrives
+  assert.equal(after.items, live.items); // unchanged: no flicker before the final message arrives
+  assert.equal(after.status, 'running');
   assert.deepEqual(after.items, [{ kind: 'text', text: 'Final answer' }]);
 });
 
@@ -87,4 +89,61 @@ test('task lists refresh only when missing or old enough', () => {
   assert.deepEqual(staleLists(['a', 'b', 'c'], { a: 1000, b: 9000 }, 10_000, 5000), ['a', 'c']);
   assert.deepEqual(staleLists(['a'], { a: 10_000 }, 10_000, 0), ['a']);
   assert.deepEqual(staleLists([], {}, 10_000, 0), []);
+});
+
+const agent = (id: string, status: string, updatedAt: number, extra: object = {}) => ({ id, name: 'Explore', prompt: 'Find the upload retry', status, response: '', tools: [], startedAt: 10, updatedAt, ...extra });
+
+test('tools keep when they started and ended, for their duration', () => {
+  const tool = { id: 't', name: 'Bash', status: 'running' as const, input: 'ls', output: '' };
+  let live = run([ev('tool', { tool })], idleLive(), 1000);
+  live = run([ev('tool', { tool: { ...tool, output: 'a' } })], live, 2000);
+  live = run([ev('tool', { tool: { ...tool, status: 'completed' } })], live, 5000);
+  live = run([ev('tool', { tool: { ...tool, status: 'completed', output: 'b' } })], live, 9000);
+  assert.deepEqual(live.items.map(i => i.kind === 'tool' && [i.startedAt, i.endedAt]), [[1000, 5000]]);
+  assert.equal(live.startedAt, 1000);
+  assert.equal(live.lastEventAt, 9000);
+});
+
+test('subagents upsert by id, newer snapshots win, malformed ones are dropped', () => {
+  let live = run([ev('subagent', { data: agent('a', 'running', 1, { tools: [{ id: 'x', name: 'Read', status: 'running', input: 'f' }, { bad: true }] }) })]);
+  assert.equal(live.status, 'idle'); // a subagent alone doesn't start a run, as on the desktop
+  assert.deepEqual(live.subagents?.map(a => [a.id, a.status, a.tools.length]), [['a', 'running', 1]]);
+  live = run([ev('subagent', { data: agent('b', 'running', 2) }), ev('subagent', { data: agent('a', 'completed', 3) }), ev('subagent', { data: agent('a', 'running', 2) })], live);
+  assert.deepEqual(live.subagents?.map(a => [a.id, a.status]), [['a', 'completed'], ['b', 'running']]);
+  assert.equal(run([ev('subagent', { data: { id: 'c', status: 'bogus' } })], live).subagents, live.subagents);
+});
+
+test('a todo tool becomes the run\'s checklist; thinking shows until text or a tool', () => {
+  const todos = { id: 'p', name: 'TodoWrite', status: 'completed' as const, output: '', input: JSON.stringify({ todos: [{ content: 'Read the test', status: 'completed' }, { content: 'Fix it', status: 'in_progress' }] }) };
+  let live = run([ev('status', { text: 'Thinking' })]);
+  assert.equal(live.thinking, 'Thinking');
+  live = run([ev('tool', { tool: todos })], live);
+  assert.equal(live.thinking, undefined);
+  assert.deepEqual(live.todos, [{ text: 'Read the test', status: 'completed' }, { text: 'Fix it', status: 'in_progress' }]);
+  // Codex's update_plan replaces it in place; another tool keeps it.
+  live = run([ev('tool', { tool: { ...todos, id: 'p2', name: 'update_plan', input: JSON.stringify({ plan: [{ step: 'Ship', status: 'pending' }] }) } }), ev('tool', { tool: { ...todos, id: 'z', name: 'Bash', input: 'ls' } })], live);
+  assert.deepEqual(live.todos, [{ text: 'Ship', status: 'pending' }]);
+});
+
+test('a limit outlives its run end and clears when the next run starts', () => {
+  const limited = run([ev('text', { text: 'x' }), ev('limited', { text: 'Limit reached', data: { resetsAt: 99 } })]);
+  const after = ended(limited, 'failed');
+  assert.deepEqual([after.status, after.limited, after.items.length], ['failed', { text: 'Limit reached', resetsAt: 99 }, 0]);
+  assert.equal(fromSubscribe(limited, 'idle').limited?.resetsAt, 99);
+  assert.equal(run([ev('text', { text: 'again' })], after).limited, undefined);
+});
+
+test('host activity fields fill in times and subagents; older hosts change nothing', () => {
+  const live = { ...idleLive(), status: 'running', lastEventAt: 500 };
+  assert.equal(withHostActivity(live, {}), live);
+  assert.equal(withHostActivity(live, undefined), live);
+  const merged = withHostActivity(live, { lastEventAt: 2_000_000_000_000, runStartedAt: 1_700_000_000, subagents: [agent('a', 'running', 1), 'junk'] });
+  assert.equal(merged.lastEventAt, 2_000_000_000_000);
+  assert.equal(merged.startedAt, 1_700_000_000_000); // seconds scaled to ms
+  assert.deepEqual(merged.subagents?.map(a => a.id), ['a']);
+  assert.equal(withHostActivity(merged, { lastEventAt: 1 }).lastEventAt, 2_000_000_000_000); // never goes back
+  // tasks.list seeds a running task the phone hasn't seen only when the host says something about it.
+  assert.equal(fromList(undefined, 'running'), undefined);
+  assert.equal(fromList(undefined, 'running', [], { runStartedAt: 1_800_000_000_000 })?.startedAt, 1_800_000_000_000);
+  assert.equal(fromSubscribe(idleLive(), 'running', undefined, { subagents: [agent('b', 'waiting', 1)] }).subagents?.[0].id, 'b');
 });

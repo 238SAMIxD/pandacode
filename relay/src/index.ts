@@ -4,6 +4,7 @@ import { configured } from "./config.ts";
 import { type Env, fail, json } from "./env.ts";
 import { githubUser } from "./github.ts";
 import { MAX_FRAME_BYTES } from "./limits.ts";
+import { isKnownRoute } from "./routes.ts";
 import { signToken, verifyToken } from "./token.ts";
 import { parseDevice } from "./validate.ts";
 
@@ -39,8 +40,7 @@ export default {
     if (!configured(env, path === "/v1/auth/github")) return fail(500, "server error");
     if (path === "/v1/auth/github") return request.method === "POST" ? authGithub(request, env) : fail(405, "method not allowed");
 
-    const known = path === "/v1/connect" || path === "/v1/devices" || path === "/v1/token" || path.startsWith("/v1/devices/");
-    if (!known) return fail(404, "not found");
+    if (!isKnownRoute(path)) return fail(404, "not found");
     const bearer = /^Bearer (\S+)$/.exec(request.headers.get("authorization") ?? "")?.[1];
     const claims = bearer ? await verifyToken(env.SESSION_SECRET, bearer, Math.floor(Date.now() / 1000)) : null;
     if (!claims) return fail(401, "invalid or expired token");

@@ -7,12 +7,18 @@ import { byteLength, parseClientFrame, undeliverableFrame } from "../src/frames.
 import { githubUser } from "../src/github.ts";
 import { MAX_FRAME_BYTES, STALE_MS, TOKEN_TTL_SECONDS } from "../src/limits.ts";
 import { hostChanged, isStale, issuedAfterRegistration, keyChanged, tokenCurrent } from "../src/policy.ts";
+import { isKnownRoute } from "../src/routes.ts";
 import { signToken, verifyToken } from "../src/token.ts";
 import { parseDevice } from "../src/validate.ts";
 
 const ID = "3f2b8c1e-9a4d-4e0b-8c55-0a1b2c3d4e5f";
 const KEY = btoa(String.fromCharCode(...new Uint8Array(32).fill(7)));
 const device = { id: ID, name: "Mac", platform: "macos", publicKey: KEY };
+
+test("account deletion is included in the authenticated route set", () => {
+  assert.equal(isKnownRoute("/v1/account"), true);
+  assert.equal(isKnownRoute("/v1/account/extra"), false);
+});
 
 test("token round trip, expiry, tampering, wrong secret", async () => {
   const t = await signToken("s3cret", "gh:1", ID, 1000);

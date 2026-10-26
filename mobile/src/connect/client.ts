@@ -4,26 +4,52 @@
 import './polyfill.ts';
 import { initialState, taskKey, useConnect, type ConnectState } from '../store/index.ts';
 import { chunks, dueIcons, mergeIcons } from '../store/icon-cache.ts';
-import { loadIcons, saveIcons, useIcons } from '../store/icons.ts';
-import { applyEvent, fromList, fromSubscribe, idleLive, lastId, mergeMessages, staleLists } from '../store/reduce.ts';
+import { clearIcons, loadIcons, resetIcons, saveIcons, useIcons } from '../store/icons.ts';
+import { File, Paths } from 'expo-file-system';
+import { BUILD_DEMO, DEMO_FILE, demoAtStart } from '../demo.ts';
+import { demoCall, type DemoHost } from '../demo-host.ts';
+import { delivering, settled, unmatched, type Sent } from '../store/sent.ts';
+import { applyTeamEvent, decodeTeam, decodeTeamRun, teamBusy, teamRun, type Team } from '../store/team.ts';
+import { applyEvent, ended, fromList, fromSubscribe, idleLive, lastId, mergeMessages, prependMessages, staleLists, withTeamRun } from '../store/reduce.ts';
+import { cachedLastId, clearThreads, readThread, saveThread } from '../store/threads.ts';
+import { PrefetchQueue, prefetchOrder } from '../store/prefetch.ts';
+import { clearBlobs } from '../store/attachment-files.ts';
+import type { Variant } from '../store/attachments.ts';
+import { fetchAttachment, type AttachmentDeps, type Source } from './attachments.ts';
 import * as auth from './auth.ts';
+import { deleteAccount as deleteAccountSteps } from './delete-account.ts';
 import { build, NOT_CONFIGURED } from './config.ts';
-import { open, pairKey, seal } from './crypto.ts';
-import { LOST, NOT_CONNECTED, OFFLINE, Pending, RATE, Replay, request, STALE, START_TIMEOUT_MS, TIMEOUT_MS, type Method } from './rpc.ts';
+import { open, pairKey, seal, uuid } from './crypto.ts';
+import { BackgroundGate, LOST, NOT_CONNECTED, OFFLINE, outdated, Pending, RATE, Replay, request, STALE, START_TIMEOUT_MS, TIMEOUT_MS, UNKNOWN_METHOD, type Method } from './rpc.ts';
 import * as secrets from './secrets.ts';
 import { AppState } from 'react-native';
 import { RelaySocket } from './socket.ts';
-import type { AgentEvent, ConfigureParams, Device, MessagePage, Provider, ProviderModel, RunFinished, StartParams, SubscribedTask, TasksList } from './types.ts';
+import { markCurrent, markStartup } from './perf.ts';
+import { clearInbox, readInbox, saveInboxSoon } from './inbox-file.ts';
+import { decodeInbox, encodeInbox, type RestoredInbox } from '../store/inbox-cache.ts';
+import { attempt, configured, stopping, unanswered, unconfigured, unpaused, unstopping } from './optimistic.ts';
+import { newestPage, olderByAfterId, pageMessages, type Fetch } from './paging.ts';
+import type { Live } from '../store/reduce.ts';
+import type { AgentEvent, Bot, Changes, ConfigureParams, Device, Diff, MergeMethod, Message, MessagePage, Provider, ProviderModel, PullDetail, RunFinished, StartParams, SubscribedTask, TaskSummary, TasksList } from './types.ts';
 
 const RENEW_MS = 9 * 60_000;
 const REFRESH_MS = 12 * 3600_000;
 const MAX_FRAME = 256 * 1024;
 const MAX_PAGES = 50;
+/** Messages asked for when a thread opens with nothing held, and per older page on scroll. */
+const TAIL = 60;
+const OLDER = 60;
+/** afterId pages a background prefetch may copy. */
+const PREFETCH_PAGES = 2;
 /** Task lists refresh this often while the app is open (faster while a task runs). */
 const LIST_IDLE_MS = 60_000;
 const LIST_ACTIVE_MS = 15_000;
 /** Presence frames come in bursts; a list younger than this is fresh enough. */
 const LIST_FRESH_MS = 5_000;
+/** A merge waits on GitHub and the host's git. */
+const MERGE_TIMEOUT_MS = 60_000;
+/** Calls made while the socket connects (a tap at launch, after foregrounding) wait this long for presence before failing. */
+const CONNECT_WAIT_MS = 5_000;
 
 let token: string | null = null;
 let secret: Uint8Array | null = null;
@@ -33,12 +59,30 @@ let timers: ReturnType<typeof setInterval>[] = [];
 /** Per module instance: Fast Refresh re-runs this file with fresh state while the store says ready. */
 let initialized = false;
 const pending = new Pending();
+const gate = new BackgroundGate();
+/** Settles when init has read the secrets: calls wait for it (the socket starts as soon as the token is read). */
+let booted: Promise<void> = Promise.resolve();
+/** Calls waiting for the socket's presence frame (see whenConnected). */
+let connectWaiters: (() => void)[] = [];
 const inbound = new Replay();
 /** Pair keys by device id, with the public key they were derived from. */
 const keys = new Map<string, { publicKey: string; key: Uint8Array }>();
 /** Tasks the UI has open, per host; subscribed, renewed, and re-subscribed on presence. */
 const watched = new Map<string, Set<string>>();
-const loads = new Map<string, Promise<void>>();
+/** Running tasks per host, subscribed too so the inbox can show what each is doing (at most GLANCE_MAX). */
+const glanced = new Map<string, Set<string>>();
+const GLANCE_MAX = 20;
+/** Every subscribed task of a host: open ones and running ones. */
+const subscribed = (host: string) => new Set([...(watched.get(host) ?? []), ...(glanced.get(host) ?? [])]);
+/** Per taskKey: the message calls in order (one at a time), and the newest copy (it owns `history`). */
+const queues = new Map<string, Promise<unknown>>();
+const copies = new Map<string, Promise<unknown>>();
+/** Cache reads per taskKey this launch (single flight; the first one fills the store). */
+const warming = new Map<string, Promise<void>>();
+/** When each thread was last copied in full (prefetch skips fresh ones). */
+const copiedAt = new Map<string, number>();
+/** Hosts whose task.messages has no tail/beforeId (replies without hasOlder): afterId paging only. */
+const legacy = new Set<string>();
 
 const state = () => useConnect.getState();
 const patch = (update: Partial<ConnectState> | ((s: ConnectState) => Partial<ConnectState>)) => useConnect.setState(update);
@@ -47,6 +91,7 @@ const socket = new RelaySocket({
   token: () => token,
   url: () => `${build!.relay.replace(/^https:/, 'wss:')}/v1/connect?host=0`,
   onOpen: () => {
+    markStartup('socket');
     patch({ connected: true, error: null });
     void refreshIfDue();
     timers = [setInterval(() => void subscribeAll(), RENEW_MS), setInterval(() => void refreshIfDue(), REFRESH_MS), setInterval(pollLists, LIST_ACTIVE_MS)];
@@ -54,6 +99,7 @@ const socket = new RelaySocket({
   onClose: () => {
     timers.forEach(clearInterval);
     timers = [];
+    presence = false;
     pending.failAll(LOST);
     patch({ connected: false });
   },
@@ -73,19 +119,53 @@ const instances = globalThis as { __pandacodeSocket?: RelaySocket };
 instances.__pandacodeSocket?.dispose();
 instances.__pandacodeSocket = socket;
 
-/** Reads secrets and connects when signed in. Call once at app start. */
+/** The build-time demo applies until the user leaves it once this launch. */
+let buildDemo = BUILD_DEMO;
+
+/**
+ * Reads secrets and connects when signed in, or enters demo mode. Call once at app start.
+ * Everything is read at once; the socket starts as soon as the token is read, and the inbox cache
+ * is drawn with the first frame (ready), before the socket opens.
+ */
 async function init(): Promise<void> {
   if (initialized) return;
   initialized = true;
-  const [saved, account, deviceId] = await Promise.all([secrets.getToken(), secrets.getAccount(), secrets.getDeviceId()]);
-  secret = await secrets.getSecret();
-  // A newer instance took over while this one read secrets: two sockets would replace each other.
-  if (instances.__pandacodeSocket !== socket) return;
-  token = saved && !auth.expired(saved) && build ? saved : null;
-  patch({ ready: true, deviceId, signedIn: !!token, account: token ? account : null });
-  if (token) socket.start();
+  if (demoAtStart(buildDemo, buildDemo ? null : await readDemo())) return seedDemo();
+  const saved = secrets.getToken().then(value => {
+    // A newer instance took over while this one read secrets: two sockets would replace each other.
+    if (!current()) return value;
+    token = value && !auth.expired(value) && build ? value : null;
+    if (token) socket.start();
+    return value;
+  });
+  const read = Promise.all([saved, secrets.getAccount(), secrets.getDeviceId(), secrets.getSecret(), readInbox()]);
+  booted = read.then(() => undefined, () => undefined);
+  void loadIcons();
+  const [, account, deviceId, key, cached] = await read;
+  if (!current()) return;
+  secret = key;
+  const restored = token && account ? decodeInbox(cached, account.id) : null;
+  patch(s => ({ ready: true, deviceId, signedIn: !!token, account: token ? account : null, ...(restored ? withCached(s, restored) : {}) }));
+  markStartup('ready');
   void secrets.forgetPins();
 }
+
+/** The cached inbox under whatever live data already arrived (presence can beat the file). */
+function withCached(s: ConnectState, cached: RestoredInbox): Partial<ConnectState> {
+  return { devices: s.devices.length ? s.devices : cached.devices, tasks: { ...cached.tasks, ...s.tasks }, bots: { ...cached.bots, ...s.bots } };
+}
+
+// The inbox cache follows the store: devices, lists and bots, saved shortly after they change.
+useConnect.subscribe((s, prev) => {
+  if (s.tasks === prev.tasks && s.devices === prev.devices && s.bots === prev.bots) return;
+  if (!current() || s.demo || !token || !s.account) return;
+  saveInboxSoon(() => {
+    const now = state();
+    return current() && !now.demo && token && now.account ? encodeInbox(now.account.id, now.devices, now.tasks, now.bots) : null;
+  });
+});
+/** False in a module instance Fast Refresh replaced. */
+function current() { return instances.__pandacodeSocket === socket; }
 
 async function signInStart(): Promise<auth.SignInCode> {
   if (!build) throw new Error(NOT_CONFIGURED);
@@ -111,12 +191,53 @@ function signInCancel() {
   signInAbort = null;
 }
 
+// ---- Demo mode (src/demo.ts) ----
+
+const demoFile = () => new File(Paths.document, DEMO_FILE);
+const readDemo = async () => {
+  try {
+    const f = demoFile();
+    return f.exists ? await f.text() : null;
+  } catch { return null; }
+};
+
+async function seedDemo() {
+  const data = await import('../demo-data.ts');
+  data.seedDemo();
+  patch({ demo: true, error: null });
+}
+
+/** From sign-in: fake computers and tasks, no network, kept across launches. */
+async function enterDemo(): Promise<void> {
+  signInCancel();
+  const f = demoFile();
+  if (!f.exists) f.create();
+  await f.write('1');
+  await seedDemo();
+}
+
+/** Back to sign-in with nothing of the demo left. */
+async function leaveDemo(): Promise<void> {
+  buildDemo = false;
+  const f = demoFile();
+  if (f.exists) f.delete();
+  resetIcons();
+  useConnect.setState({ ...initialState(), ready: true }, true);
+  initialized = false;
+  await init();
+}
+
+const demoHost: DemoHost = { get: () => state(), set: patch, later: (run, ms) => { setTimeout(run, ms); }, now: Date.now };
+
 async function signOut(): Promise<void> {
+  if (state().demo) return leaveDemo();
   socket.stop();
   pending.failAll('Signed out.');
   token = null;
   keys.clear();
   watched.clear();
+  glanced.clear();
+  forgetThreads();
   presence = false;
   await secrets.clearSession();
   const { deviceId, ready } = state();
@@ -151,7 +272,7 @@ const validDevice = (d: any): d is Device =>
 function applyDevices(list: unknown[]) {
   const devices = list.filter(validDevice).slice(0, 64);
   for (const id of keys.keys()) if (!devices.some(d => d.id === id && d.publicKey === keys.get(id)!.publicKey)) keys.delete(id);
-  for (const id of watched.keys()) if (!devices.some(d => d.id === id)) watched.delete(id);
+  for (const map of [watched, glanced]) for (const id of map.keys()) if (!devices.some(d => d.id === id)) map.delete(id);
   patch({ devices });
 }
 
@@ -169,6 +290,10 @@ async function refreshDevices(): Promise<void> {
 }
 
 async function revokeDevice(deviceId: string): Promise<void> {
+  if (state().demo) {
+    if (deviceId === state().deviceId) return leaveDemo();
+    return patch(s => ({ devices: s.devices.filter(d => d.id !== deviceId) }));
+  }
   if (!token) throw new Error(NOT_SIGNED_IN);
   const used = token;
   await auth.revokeDevice(used, deviceId).catch(error => {
@@ -176,6 +301,29 @@ async function revokeDevice(deviceId: string): Promise<void> {
     throw error;
   });
   if (deviceId === state().deviceId) return signOut();
+}
+
+/** Deletes the account and every device from the relay, then wipes this phone's secrets and caches and signs out. */
+async function deleteAccount(): Promise<void> {
+  if (!token) throw new Error(NOT_SIGNED_IN);
+  const used = token;
+  await deleteAccountSteps({
+    remove: () => auth.deleteAccount(used).catch(error => {
+      if (error instanceof auth.SignedOut) signOutIf(error.token);
+      throw error;
+    }),
+    wipe: async () => {
+      await secrets.wipe();
+      await clearIcons();
+      forgetThreads();
+    },
+    signOut: async () => {
+      await signOut();
+      // A fresh key and device id for the next sign-in.
+      secret = await secrets.getSecret();
+      patch({ deviceId: await secrets.getDeviceId() });
+    },
+  });
 }
 
 // ---- Calls ----
@@ -201,7 +349,38 @@ function pairFor(device: Device): Uint8Array {
   return key;
 }
 
-async function call<T>(deviceId: string, method: Method, params: unknown, timeoutMs = TIMEOUT_MS): Promise<T> {
+/** Resolves once presence arrived on an open socket, or after `ms` (the call then fails as before). */
+function whenConnected(ms = CONNECT_WAIT_MS): Promise<void> {
+  if ((presence && socket.open) || !token || !(socket.open || socket.connecting)) return Promise.resolve();
+  return new Promise(resolve => {
+    const done = () => {
+      clearTimeout(timer);
+      connectWaiters = connectWaiters.filter(w => w !== done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    connectWaiters.push(done);
+  });
+}
+
+/**
+ * One request to a host. `background` work (prefetch, icons, attachments, glance subscribes, bots)
+ * waits its turn: at most one per host in flight, so a tap never queues behind a pile of it.
+ */
+async function call<T>(deviceId: string, method: Method, params: unknown, timeoutMs = TIMEOUT_MS, background = false): Promise<T> {
+  await booted;
+  if (state().demo) return demoCall(demoHost, deviceId, method, params) as Promise<T>;
+  await whenConnected();
+  if (!background) return send<T>(deviceId, method, params, timeoutMs);
+  const release = await gate.turn(deviceId);
+  try {
+    return await send<T>(deviceId, method, params, timeoutMs);
+  } finally {
+    release();
+  }
+}
+
+function send<T>(deviceId: string, method: Method, params: unknown, timeoutMs: number): Promise<T> {
   const device = callable(deviceId);
   const message = request(method, params);
   const body = seal(pairFor(device), state().deviceId, device.id, JSON.stringify(message));
@@ -221,9 +400,12 @@ function frame(text: string) {
     case 'presence':
       if (!Array.isArray(value.devices)) return;
       presence = true;
+      markStartup('presence');
       applyDevices(value.devices);
-      void subscribeAll();
+      // Lists first: every online host is asked at once (cached lists count as stale).
       void refreshLists(LIST_FRESH_MS);
+      void subscribeAll();
+      connectWaiters.forEach(wake => wake());
       return;
     case 'undeliverable':
       if (typeof value.to === 'string') pending.fail(value.to, typeof value.ref === 'string' ? value.ref : undefined, value.reason === 'rate' ? RATE : OFFLINE);
@@ -250,18 +432,40 @@ function frame(text: string) {
   else if (message?.type === 'event' && message.name === 'run.finished') void finished(from, message.data);
 }
 
+const active = (status?: string) => status === 'running' || status === 'waiting';
+
 function events(host: string, list: unknown) {
-  const ids = watched.get(host);
-  if (!ids || !Array.isArray(list)) return;
+  const ids = subscribed(host);
+  if (!ids.size || !Array.isArray(list)) return;
+  const started = new Set<string>();
   patch(s => {
     const live = { ...s.live };
     for (const event of list as AgentEvent[]) {
       if (typeof event?.sessionId !== 'string' || typeof event.kind !== 'string' || !ids.has(event.sessionId)) continue;
       const key = taskKey(host, event.sessionId);
+      const before = live[key]?.status;
       live[key] = applyEvent(live[key] ?? idleLive(), { ...event, text: typeof event.text === 'string' ? event.text : '' });
+      if (!active(before) && active(live[key].status)) started.add(event.sessionId);
     }
-    return { live, tasks: withStatuses(s, host, live) };
+    let teams = s.teams;
+    for (const event of list as AgentEvent[]) {
+      if (event?.kind !== 'team' || typeof event.sessionId !== 'string' || !ids.has(event.sessionId)) continue;
+      const key = taskKey(host, event.sessionId);
+      const team = teams[key] === 'outdated' ? undefined : teams[key];
+      const next = applyTeamEvent(team, event.data);
+      if (next === team || next === undefined) continue;
+      teams = { ...teams, [key]: next };
+      // Older hosts send no team-settled event: a loaded team's workers say when a held task is done.
+      const run = team ? teamRun(next) : undefined;
+      if (run && live[key]?.held) live[key] = withTeamRun(live[key], run);
+    }
+    let sent = s.sent;
+    for (const id of started) if (sent[taskKey(host, id)]) sent = { ...sent, [taskKey(host, id)]: delivering(sent[taskKey(host, id)]) };
+    return { live, sent, teams, tasks: withStatuses(s, host, live) };
   });
+  // A turn that starts on its own (the host delivering a queued prompt after the last run's
+  // copy) saved its prompt before its first event: copy it now, not only at this run's end.
+  for (const id of started) if (watched.get(host)?.has(id)) void loadMessages(host, id).catch(() => undefined);
 }
 
 /** Mirrors live statuses into the host's task list. */
@@ -282,13 +486,25 @@ function withStatuses(s: ConnectState, host: string, live: ConnectState['live'])
 async function finished(host: string, data: RunFinished) {
   if (typeof data?.sessionId !== 'string') return;
   void listTasks(host).catch(() => undefined); // titles, statuses and order
-  if (!watched.get(host)?.has(data.sessionId)) return;
-  await loadMessages(host, data.sessionId).catch(() => undefined); // the next subscribe retries
   const key = taskKey(host, data.sessionId);
-  const status = data.stopped ? 'stopped' : data.successful ? 'idle' : 'failed';
+  if (watched.get(host)?.has(data.sessionId)) {
+    await loadMessages(host, data.sessionId).catch(() => undefined); // the next subscribe retries
+    // The turn may have opened a pull request (or changed the linked one).
+    if (key in state().pulls) void loadPull(host, data.sessionId, true).catch(() => undefined);
+  } else if (!state().live[key]) return;
+  // A glanced task (no open thread) ends now too: a newer host keeps listing an architect with a
+  // busy team as running, so its list row alone would not settle the finished turn's activity.
+  // Newer hosts send the row's status: 'running' while the team works (hold), the final one when
+  // it settles (`teamSettled`, possibly after an ordinary run.finished: ending twice is harmless).
+  const hold = active(data.status);
+  const status = data.teamSettled === true && typeof data.status === 'string' && data.status && !hold ? data.status : data.stopped ? 'stopped' : data.successful ? 'idle' : 'failed';
   patch(s => {
-    const live = { ...s.live, [key]: { ...idleLive(), status } };
-    return { live, tasks: withStatuses(s, host, live) };
+    // A team still working (newer hosts say so; else the loaded team) keeps the task working.
+    const listed = data.team !== undefined ? decodeTeamRun(data.team) : teamRun(s.teams[key]);
+    const team = hold && !teamBusy(listed) ? { status: 'running', activeWorkers: listed?.activeWorkers ?? 0 } : listed;
+    // The host's run ends with its process, background subagents included: only the team holds.
+    const live = { ...s.live, [key]: ended(s.live[key], status, team, []) };
+    return { live, sent: editSent(s.sent, key, settled), tasks: withStatuses(s, host, live) };
   });
 }
 
@@ -300,65 +516,230 @@ function watch(deviceId: string, sessionIds: string[]) {
   const before = ids.size;
   sessionIds.forEach(id => ids.add(id));
   watched.set(deviceId, ids);
+  prefetch.hold('thread');
   if (ids.size !== before) void subscribeHost(deviceId);
+}
+
+/** Follows a host's running tasks (from its list) so their activity shows in the inbox. */
+function glance(deviceId: string, sessionIds: string[]) {
+  const before = glanced.get(deviceId) ?? new Set<string>();
+  const next = new Set(sessionIds.slice(0, GLANCE_MAX));
+  if (next.size) glanced.set(deviceId, next);
+  else glanced.delete(deviceId);
+  if ([...next].some(id => !before.has(id) && !watched.get(deviceId)?.has(id))) void subscribeHost(deviceId);
 }
 
 function unwatch(deviceId: string, sessionIds: string[]) {
   const ids = watched.get(deviceId);
   sessionIds.forEach(id => ids?.delete(id));
   if (ids && !ids.size) watched.delete(deviceId);
+  if (!watched.size) prefetch.release('thread');
 }
 
 async function subscribeAll() {
-  await Promise.all([...watched.keys()].map(subscribeHost));
+  await Promise.all([...new Set([...watched.keys(), ...glanced.keys()])].map(subscribeHost));
+}
+
+/** Per host: the subscribe in flight, and whether the set changed since it was sent. */
+const subscribing = new Map<string, Promise<void>>();
+const resubscribe = new Set<string>();
+
+/** One subscribe call per host at a time: calls in the same tick share it, and changes made while
+ * it is in flight go out in one more call after it. */
+function subscribeHost(deviceId: string): Promise<void> {
+  const running = subscribing.get(deviceId);
+  if (running) {
+    resubscribe.add(deviceId);
+    return running;
+  }
+  const run = (async () => {
+    await Promise.resolve(); // the rest of this tick joins in
+    do {
+      resubscribe.delete(deviceId);
+      await subscribeOnce(deviceId);
+    } while (resubscribe.has(deviceId));
+  })().finally(() => subscribing.delete(deviceId));
+  subscribing.set(deviceId, run);
+  return run;
 }
 
 /** Subscribe replies catch up on missed status changes, pending requests and messages. */
-async function subscribeHost(deviceId: string): Promise<void> {
-  const ids = [...(watched.get(deviceId) ?? [])].slice(0, 500);
+async function subscribeOnce(deviceId: string): Promise<void> {
+  const ids = [...subscribed(deviceId)].slice(0, 500);
   if (!ids.length || !socket.open) return;
   let reply: { tasks: SubscribedTask[] };
   try {
-    reply = await call(deviceId, 'subscribe', { sessionIds: ids });
+    // Only glanced tasks (no open thread on this host): background work.
+    reply = await call(deviceId, 'subscribe', { sessionIds: ids }, TIMEOUT_MS, !watched.get(deviceId)?.size);
   } catch {
     return; // offline; the next presence frame or renewal retries
   }
   const tasks = Array.isArray(reply?.tasks) ? reply.tasks : [];
   patch(s => {
     const live = { ...s.live };
-    for (const t of tasks) live[taskKey(deviceId, t.sessionId)] = fromSubscribe(live[taskKey(deviceId, t.sessionId)] ?? idleLive(), t.status, t.pending);
+    for (const t of tasks) {
+      const key = taskKey(deviceId, t.sessionId);
+      live[key] = fromSubscribe(live[key] ?? idleLive(), t.status, t.pending, t, teamRun(s.teams[key]));
+    }
     return { live, tasks: withStatuses(s, deviceId, live) };
   });
-  for (const t of tasks) if (t.lastId > lastId(state().messages[taskKey(deviceId, t.sessionId)])) void loadMessages(deviceId, t.sessionId).catch(() => undefined);
+  for (const t of tasks) if (watched.get(deviceId)?.has(t.sessionId) && t.lastId > lastId(state().messages[taskKey(deviceId, t.sessionId)])) void loadMessages(deviceId, t.sessionId).catch(() => undefined);
 }
 
-/** Copies messages newer than the last stored one, following hasMore. Calls run one at a time per task. */
-function loadMessages(deviceId: string, sessionId: string): Promise<void> {
+/** One task's task.messages call with these params; a background copy (prefetch) turns foreground once the thread is open. */
+const fetchFor = (deviceId: string, sessionId: string, background = false): Fetch => params =>
+  call<MessagePage>(deviceId, 'task.messages', { sessionId, ...params }, TIMEOUT_MS, background && !watched.get(deviceId)?.has(sessionId));
+
+/** Stores a page: after the newest message, before the oldest, or in place of the window (a tail).
+ * Prepend and replace also record whether older messages remain. Saved to disk shortly after. */
+function store(deviceId: string, sessionId: string, page: Message[], mode: 'append' | 'prepend' | 'replace', reply?: Partial<MessagePage> | null) {
   const key = taskKey(deviceId, sessionId);
-  const run = async () => {
-    for (let page = 0; page < MAX_PAGES; page++) {
-      const afterId = lastId(state().messages[key]);
-      const reply = await call<MessagePage>(deviceId, 'task.messages', { sessionId, afterId });
-      const messages = Array.isArray(reply?.messages) ? reply.messages : [];
-      patch(s => ({ messages: { ...s.messages, [key]: mergeMessages(s.messages[key] ?? [], messages) }, tasks: withTitle(s, deviceId, sessionId, reply?.title) }));
-      if (!reply?.hasMore || !messages.length) return;
+  patch(s => {
+    const held = s.messages[key] ?? [];
+    const merged = mode === 'replace' ? page : mode === 'prepend' ? prependMessages(held, page) : mergeMessages(held, page);
+    const { [key]: _, ...rest } = s.older;
+    const older = mode === 'append' ? s.older : reply?.hasOlder ? { ...rest, [key]: 'more' as const } : rest;
+    return { messages: { ...s.messages, [key]: merged }, older, sent: editSent(s.sent, key, sent => unmatched(sent, merged)), tasks: withTitle(s, deviceId, sessionId, reply?.title) };
+  });
+  saveThread(key, () => ({ messages: state().messages[key], hasOlder: state().older[key] !== undefined }));
+}
+
+/** Runs a task's message calls one at a time, in order. */
+function serial<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const next = (queues.get(key) ?? Promise.resolve()).catch(() => undefined).then(run);
+  queues.set(key, next);
+  const done = () => { if (queues.get(key) === next) queues.delete(key); };
+  next.then(done, done);
+  return next;
+}
+
+/** Draws the thread from the disk cache when the store holds none of it (press-in, open, prefetch). */
+function peek(deviceId: string, sessionId: string): Promise<void> {
+  const key = taskKey(deviceId, sessionId);
+  if (state().demo || key in state().messages) return Promise.resolve();
+  let read = warming.get(key);
+  if (!read) {
+    read = readThread(key).then(cached => {
+      if (!cached || key in state().messages) return;
+      patch(s => ({ messages: { ...s.messages, [key]: cached.messages }, older: cached.hasOlder ? { ...s.older, [key]: 'more' } : s.older }));
+    }, () => undefined);
+    warming.set(key, read);
+  }
+  return read;
+}
+
+/**
+ * Brings a thread up to date. With nothing held (in memory or on disk) the newest page comes
+ * first (tail); then the messages after the newest one held, following hasMore. A held window
+ * far behind (its first afterId page has more after it) is replaced by the tail. Hosts without
+ * tail/beforeId page by afterId from the start, as before. Runs one call at a time per task.
+ */
+function loadMessages(deviceId: string, sessionId: string, pages = MAX_PAGES, background = false): Promise<void> {
+  const key = taskKey(deviceId, sessionId);
+  const run = async (): Promise<string> => {
+    await peek(deviceId, sessionId);
+    const fetch = fetchFor(deviceId, sessionId, background);
+    const tail = () => newestPage(fetch, deviceId, legacy, { tail: true, limit: TAIL });
+    const held = !!state().messages[key]?.length;
+    if (!held) {
+      // An older host answers as for afterId 0 (the first page) or refuses (then the loop starts at 0).
+      const { page, legacy: old } = await tail();
+      // A prefetch learning the host is older stops: its first page is the oldest, not the newest.
+      if (old && pages < MAX_PAGES) return 'afterId';
+      if (page) store(deviceId, sessionId, pageMessages(page), old ? 'append' : 'replace', page);
+      if (page && !page.hasMore) return old ? 'afterId' : 'tail';
     }
+    for (let n = 0; n < pages; n++) {
+      const reply = await fetch({ afterId: lastId(state().messages[key]) });
+      if (n === 0 && held && reply?.hasMore) {
+        const { page, legacy: old } = await tail();
+        if (!old && page) {
+          store(deviceId, sessionId, pageMessages(page), 'replace', page);
+          if (!page.hasMore) return 'tail';
+          continue;
+        }
+      }
+      const messages = pageMessages(reply);
+      store(deviceId, sessionId, messages, 'append', reply);
+      if (!reply?.hasMore || !messages.length) return 'afterId';
+    }
+    return 'afterId';
   };
-  const next = (loads.get(key) ?? Promise.resolve()).catch(() => undefined).then(run);
-  loads.set(key, next);
+  const copy = serial(key, run);
+  copies.set(key, copy);
   const settle = (error: string | null) => {
-    if (loads.get(key) !== next) return; // a later copy owns the state now
-    loads.delete(key);
+    if (copies.get(key) !== copy) return; // a later copy owns the state now
+    copies.delete(key);
     patch(s => {
       const { [key]: _, ...history } = s.history;
       return { history: error === null ? history : { ...history, [key]: error } };
     });
   };
   patch(s => ({ history: { ...s.history, [key]: null } }));
-  return next.then(() => settle(null), (error: Error) => {
+  return copy.then(how => {
+    copiedAt.set(key, Date.now());
+    settle(null);
+    markCurrent(key, how);
+  }, (error: Error) => {
     settle(error?.message || 'Could not load this task.');
     throw error;
   });
+}
+
+/** The page before the oldest message held, when the user scrolls near it. Hosts without
+ * beforeId page forward from the start up to it. A failure leaves it to the next scroll. */
+function loadOlder(deviceId: string, sessionId: string): Promise<void> {
+  const key = taskKey(deviceId, sessionId);
+  if (state().older[key] !== 'more') return Promise.resolve();
+  const setOlder = (value?: 'more' | 'loading') => patch(s => {
+    const { [key]: _, ...rest } = s.older;
+    return { older: value ? { ...rest, [key]: value } : rest };
+  });
+  setOlder('loading');
+  return serial(key, async () => {
+    const first = state().messages[key]?.[0]?.id;
+    if (!first) return setOlder();
+    const fetch = fetchFor(deviceId, sessionId);
+    const { page, legacy: old } = await newestPage(fetch, deviceId, legacy, { beforeId: first, limit: OLDER });
+    if (!old && page) return store(deviceId, sessionId, pageMessages(page), 'prepend', page);
+    store(deviceId, sessionId, await olderByAfterId(fetch, first, page, MAX_PAGES), 'prepend', { hasOlder: false });
+  }).catch(() => setOlder('more'));
+}
+
+/** Copies threads ahead in the background, one call at a time, held while a thread is open or a prompt sends. */
+const prefetch = new PrefetchQueue(async key => {
+  const at = key.indexOf('/');
+  const [deviceId, sessionId] = [key.slice(0, at), key.slice(at + 1)];
+  if (legacy.has(deviceId) && !(key in state().messages) && cachedLastId(key) === undefined) return;
+  await loadMessages(deviceId, sessionId, PREFETCH_PAGES, true);
+});
+
+/** Queues the threads worth copying ahead from every online host's list: running, waiting, then the most recent. */
+function schedulePrefetch() {
+  const s = state();
+  if (s.demo) return;
+  const known = (key: string) => {
+    const id = Math.max(lastId(s.messages[key]), cachedLastId(key) ?? 0);
+    const at = copiedAt.get(key);
+    return id || at ? { lastId: id, at: at ?? 0 } : undefined;
+  };
+  const open = new Set([...watched].flatMap(([host, ids]) => [...ids].map(id => taskKey(host, id))));
+  const lists = Object.entries(s.tasks)
+    .filter(([deviceId]) => s.devices.some(d => d.id === deviceId && d.online))
+    // Without tail pages a first copy starts at the oldest messages: only cached threads catch up.
+    .map(([deviceId, list]) => ({ deviceId, tasks: list.tasks.filter(t => !legacy.has(deviceId) || known(taskKey(deviceId, t.sessionId))) }));
+  prefetch.replace(prefetchOrder(lists, known, Date.now()).filter(key => !open.has(key)));
+}
+
+/** Sign-out and account deletion: nothing of any thread stays in memory or on disk. */
+function forgetThreads() {
+  prefetch.replace([]);
+  warming.clear();
+  copiedAt.clear();
+  legacy.clear();
+  clearThreads();
+  clearBlobs();
+  clearInbox();
 }
 
 function withTitle(s: ConnectState, host: string, sessionId: string, title: unknown): ConnectState['tasks'] {
@@ -369,8 +750,22 @@ function withTitle(s: ConnectState, host: string, sessionId: string, title: unkn
 
 // ---- Typed methods ----
 
-async function listTasks(deviceId: string, limit?: number): Promise<TasksList> {
+/** Full lists in flight per host: presence, focus and pull to refresh share one call. */
+const listing = new Map<string, Promise<TasksList>>();
+
+function listTasks(deviceId: string, limit?: number): Promise<TasksList> {
+  if (limit !== undefined) return fetchList(deviceId, limit);
+  const running = listing.get(deviceId);
+  if (running) return running;
+  const next = fetchList(deviceId).finally(() => listing.delete(deviceId));
+  listing.set(deviceId, next);
+  return next;
+}
+
+/** A host's list; then (never before it) glances, icons, bots and prefetch, all background. */
+async function fetchList(deviceId: string, limit?: number): Promise<TasksList> {
   const reply = await call<TasksList>(deviceId, 'tasks.list', limit === undefined ? {} : { limit });
+  markStartup('list');
   const list = { tasks: Array.isArray(reply?.tasks) ? reply.tasks : [], projects: Array.isArray(reply?.projects) ? reply.projects : [] };
   patch(s => {
     // A task already waiting can be answered as soon as it opens; a run that ended while the
@@ -378,12 +773,15 @@ async function listTasks(deviceId: string, limit?: number): Promise<TasksList> {
     const live = { ...s.live };
     for (const t of list.tasks) {
       const key = taskKey(deviceId, t.sessionId);
-      const next = fromList(live[key], t.status, Array.isArray(t.pending) ? t.pending : undefined);
+      const next = fromList(live[key], t.status, Array.isArray(t.pending) ? t.pending : undefined, t, teamRun(s.teams[key]));
       if (next) live[key] = next;
     }
     return { live, tasks: { ...s.tasks, [deviceId]: { ...list, loadedAt: Date.now() } } };
   });
+  glance(deviceId, list.tasks.filter(t => active(t.status)).map(t => t.sessionId));
   void projectIcons(deviceId, list.tasks.map(t => t.projectId));
+  if (!state().outdated[deviceId]) void listBots(deviceId).catch(() => undefined);
+  schedulePrefetch();
   return list;
 }
 
@@ -423,7 +821,7 @@ async function projectIcons(deviceId: string, projectIds: string[]): Promise<voi
   due.forEach(id => iconsAsking.add(`${deviceId}/${id}`));
   try {
     for (const batch of chunks(due)) {
-      const reply = await call<{ icons?: unknown }>(deviceId, 'projects.icons', { projectIds: batch });
+      const reply = await call<{ icons?: unknown }>(deviceId, 'projects.icons', { projectIds: batch }, TIMEOUT_MS, true);
       useIcons.setState(s => ({ cache: mergeIcons(s.cache, deviceId, batch, reply?.icons, Date.now()) }));
     }
   } catch (error) {
@@ -455,25 +853,247 @@ async function startTask(deviceId: string, params: StartParams): Promise<string>
   return sessionId;
 }
 
-const sendMessage = (deviceId: string, sessionId: string, text: string) => call<{ queued: boolean }>(deviceId, 'task.send', { sessionId, text });
-const stopTask = (deviceId: string, sessionId: string) => call<object>(deviceId, 'task.stop', { sessionId });
-const steerTask = (deviceId: string, sessionId: string, text: string) => call<object>(deviceId, 'task.steer', { sessionId, text });
-const configureTask = (deviceId: string, params: ConfigureParams) => call<object>(deviceId, 'task.configure', params);
-/** An answered request leaves the live view at once, as on the desktop. */
-async function answered(deviceId: string, sessionId: string, requestId: string, kind: 'approval_cancelled' | 'input_cancelled', reply: Promise<object>) {
-  await reply;
-  events(deviceId, [{ sessionId, kind, text: '', requestId }]);
-  return {};
+/** Applies `edit` to one task's sent list; unchanged → same object, an empty list is dropped. */
+function editSent(all: ConnectState['sent'], key: string, edit: (sent: Sent[]) => Sent[]): ConnectState['sent'] {
+  const list = all[key];
+  if (!list) return all;
+  const next = edit(list);
+  if (next === list) return all;
+  const { [key]: _, ...rest } = all;
+  return next.length ? { ...rest, [key]: next } : rest;
+}
+
+/** Shows `text` in the transcript at once while `send` runs: kept (as queued if the host queued
+ * it) until the stored copy replaces it, dropped if the send fails. */
+async function optimistic<T>(deviceId: string, sessionId: string, text: string, initial: Sent['state'], send: () => Promise<T>, queued?: (reply: T) => boolean): Promise<T> {
+  const key = taskKey(deviceId, sessionId);
+  const entry: Sent = { id: uuid(), text, state: initial, after: lastId(state().messages[key]) };
+  patch(s => ({ sent: { ...s.sent, [key]: [...(s.sent[key] ?? []), entry] } }));
+  prefetch.hold(`send:${entry.id}`);
+  const edit = (change: (e: Sent) => Sent | null) =>
+    patch(s => ({ sent: editSent(s.sent, key, list => list.flatMap(e => (e.id === entry.id ? change(e) ?? [] : [e]))) }));
+  try {
+    const reply = await send();
+    if (queued?.(reply)) edit(e => ({ ...e, state: 'queued' }));
+    return reply;
+  } catch (error) {
+    edit(() => null);
+    throw error;
+  } finally {
+    prefetch.release(`send:${entry.id}`);
+  }
+}
+
+const sendMessage = (deviceId: string, sessionId: string, text: string) =>
+  optimistic(deviceId, sessionId, text, 'sending', () => call<{ queued: boolean }>(deviceId, 'task.send', { sessionId, text }), reply => !!reply?.queued);
+/** Edits one task's live view (and the list's status with it); returns the view before. */
+function editLive(deviceId: string, sessionId: string, edit: (live: Live) => Live): Live {
+  const key = taskKey(deviceId, sessionId);
+  const before = state().live[key] ?? idleLive();
+  patch(s => {
+    const live = { ...s.live, [key]: edit(s.live[key] ?? idleLive()) };
+    return { live, tasks: withStatuses(s, deviceId, live) };
+  });
+  return before;
+}
+
+/** Shows "Stopping…" at once; a refused stop puts the activity back. */
+const stopTask = (deviceId: string, sessionId: string) => attempt(() => {
+  const before = editLive(deviceId, sessionId, stopping);
+  return () => editLive(deviceId, sessionId, live => unstopping(live, before.activity));
+}, () => call<object>(deviceId, 'task.stop', { sessionId }));
+/** The host saves a steer when the agent accepts it, before it answers. */
+async function steerTask(deviceId: string, sessionId: string, text: string) {
+  const reply = await optimistic(deviceId, sessionId, text, 'steering', () => call<object>(deviceId, 'task.steer', { sessionId, text }));
+  void loadMessages(deviceId, sessionId).catch(() => undefined);
+  return reply;
+}
+/** The list shows the new settings at once; a refused change puts back what it set. */
+function configureTask(deviceId: string, params: ConfigureParams) {
+  const { sessionId, ...change } = params;
+  const editTasks = (edit: (tasks: TaskSummary[]) => TaskSummary[]) => patch(s => {
+    const list = s.tasks[deviceId];
+    return list ? { tasks: { ...s.tasks, [deviceId]: { ...list, tasks: edit(list.tasks) } } } : {};
+  });
+  return attempt(() => {
+    const task = state().tasks[deviceId]?.tasks.find(t => t.sessionId === sessionId);
+    editTasks(tasks => configured(tasks, sessionId, change));
+    const before = task ? { provider: task.provider, model: task.model, effort: task.effort, mode: task.mode } : null;
+    return () => { if (before) editTasks(tasks => unconfigured(tasks, sessionId, change, before)); };
+  }, () => call<object>(deviceId, 'task.configure', params));
+}
+
+/** An answered request leaves the live view at once (the card collapses), as on the desktop; a
+ * refused answer brings it back. */
+function answered(deviceId: string, sessionId: string, requestId: string, kind: 'approval_cancelled' | 'input_cancelled', send: () => Promise<object>) {
+  return attempt(() => {
+    const before = state().live[taskKey(deviceId, sessionId)];
+    const request = before && [...before.approvals, ...before.inputs].find(r => r.requestId === requestId);
+    editLive(deviceId, sessionId, live => applyEvent(live, { sessionId, kind, text: '', requestId }));
+    return () => { if (before && request) editLive(deviceId, sessionId, live => unanswered(live, request, before)); };
+  }, async () => {
+    await send();
+    return {};
+  });
 }
 const respondApproval = (deviceId: string, sessionId: string, requestId: string, approve: boolean) =>
-  answered(deviceId, sessionId, requestId, 'approval_cancelled', call(deviceId, 'approval.respond', { sessionId, requestId, approve }));
+  answered(deviceId, sessionId, requestId, 'approval_cancelled', () => call(deviceId, 'approval.respond', { sessionId, requestId, approve }));
 const respondInput = (deviceId: string, sessionId: string, requestId: string, response: unknown) =>
-  answered(deviceId, sessionId, requestId, 'input_cancelled', call(deviceId, 'input.respond', { sessionId, requestId, response }));
+  answered(deviceId, sessionId, requestId, 'input_cancelled', () => call(deviceId, 'input.respond', { sessionId, requestId, response }));
+
+// ---- Pull requests, changes and bots (newer hosts) ----
+
+/** A call to a method older desktops lack: their 'Unknown method.' becomes an update note, and the host is remembered as outdated. */
+async function newer<T>(deviceId: string, method: Method, params: unknown, timeoutMs?: number, background = false): Promise<T> {
+  try {
+    return await call<T>(deviceId, method, params, timeoutMs, background);
+  } catch (error) {
+    if ((error as Error).message !== UNKNOWN_METHOD) throw error;
+    patch(s => ({ outdated: { ...s.outdated, [deviceId]: true } }));
+    throw new Error(outdated(state().devices.find(d => d.id === deviceId)?.name ?? 'that computer'));
+  }
+}
+
+const pullOf = (reply: { pull?: unknown } | undefined) => (reply?.pull && typeof reply.pull === 'object' ? reply.pull as PullDetail : null);
+const setPull = (key: string, pull: PullDetail | null) => patch(s => ({ pulls: { ...s.pulls, [key]: pull } }));
+const checking = new Map<string, Promise<PullDetail | null>>();
+
+/** The task's linked pull request, else one its turns opened (task.pullDetect links it). Cached per task unless `force`. */
+function loadPull(deviceId: string, sessionId: string, force = false): Promise<PullDetail | null> {
+  const key = taskKey(deviceId, sessionId);
+  if (!force && key in state().pulls) return Promise.resolve(state().pulls[key]);
+  if (state().outdated[deviceId]) return Promise.resolve(null);
+  const run = checking.get(key) ?? (async () => {
+    try {
+      const pull = pullOf(await newer(deviceId, 'task.pull', { sessionId })) ?? pullOf(await newer(deviceId, 'task.pullDetect', { sessionId }));
+      setPull(key, pull);
+      return pull;
+    } finally {
+      checking.delete(key);
+    }
+  })();
+  checking.set(key, run);
+  return run;
+}
+
+async function pullDiff(deviceId: string, sessionId: string, path: string): Promise<Diff> {
+  const reply = await newer<{ patch?: string; truncated?: boolean }>(deviceId, 'task.pullDiff', { sessionId, path });
+  return { text: typeof reply?.patch === 'string' ? reply.patch : '', truncated: !!reply?.truncated };
+}
+async function mergePull(deviceId: string, sessionId: string, method: MergeMethod): Promise<void> {
+  await newer(deviceId, 'task.pullMerge', { sessionId, method }, MERGE_TIMEOUT_MS);
+  await loadPull(deviceId, sessionId, true);
+}
+
+async function taskChanges(deviceId: string, sessionId: string): Promise<Changes> {
+  const reply = await newer<Partial<Changes>>(deviceId, 'task.changes', { sessionId });
+  return { branch: reply?.branch ?? '', ahead: reply?.ahead ?? 0, behind: reply?.behind ?? 0, files: Array.isArray(reply?.files) ? reply.files : [] };
+}
+async function taskDiff(deviceId: string, sessionId: string, path?: string, staged = false): Promise<Diff> {
+  const reply = await newer<{ diff?: string; truncated?: boolean }>(deviceId, 'task.diff', { sessionId, ...(path ? { path } : {}), staged });
+  return { text: typeof reply?.diff === 'string' ? reply.diff : '', truncated: !!reply?.truncated };
+}
+
+/** One host's bots; an older host has none (and isn't asked again). */
+async function listBots(deviceId: string): Promise<Bot[]> {
+  let bots: Bot[];
+  try {
+    const reply = await newer<{ bots?: Bot[] }>(deviceId, 'bots.list', {}, TIMEOUT_MS, true);
+    bots = Array.isArray(reply?.bots) ? reply.bots.filter(b => typeof b?.id === 'string') : [];
+  } catch (error) {
+    if (!state().outdated[deviceId]) throw error;
+    bots = [];
+  }
+  patch(s => ({ bots: { ...s.bots, [deviceId]: bots } }));
+  return bots;
+}
+
+const editBot = (deviceId: string, botId: string, change: Partial<Bot>) =>
+  patch(s => ({ bots: { ...s.bots, [deviceId]: (s.bots[deviceId] ?? []).map(b => (b.id === botId ? { ...b, ...change } : b)) } }));
+
+/** The bot's desktop conversation (created on first use) → sessionId. */
+async function botThread(deviceId: string, botId: string): Promise<string> {
+  const known = state().bots[deviceId]?.find(b => b.id === botId)?.desktopSession;
+  if (known) return known;
+  const { sessionId } = await newer<{ sessionId: string }>(deviceId, 'bot.thread', { botId });
+  editBot(deviceId, botId, { desktopSession: sessionId });
+  void listTasks(deviceId).catch(() => undefined);
+  return sessionId;
+}
+
+/** Sends through the bot (its brief and memories apply), shown at once in its conversation. */
+const botMessage = (deviceId: string, botId: string, sessionId: string, text: string) =>
+  optimistic(deviceId, sessionId, text, 'sending', () => newer<{ sessionId: string }>(deviceId, 'bot.message', { botId, text }));
+
+/** Shows paused/resumed at once; a refusal puts the bot back. */
+async function pauseBot(deviceId: string, botId: string, paused: boolean): Promise<void> {
+  await attempt(() => {
+    const bot = state().bots[deviceId]?.find(b => b.id === botId);
+    editBot(deviceId, botId, { paused, state: paused ? 'paused' : 'ready' });
+    return () => { if (bot) patch(s => ({ bots: { ...s.bots, [deviceId]: unpaused(s.bots[deviceId] ?? [], botId, paused, bot) } })); };
+  }, () => newer(deviceId, 'bot.pause', { botId, paused }));
+  void listBots(deviceId).catch(() => undefined);
+}
+
+// ---- Teams (newer hosts) ----
+
+/** Hosts without task.team, so one 'Unknown method.' doesn't mark pulls and bots outdated too. */
+const teamless = new Set<string>();
+
+/** The task's team (null: not an architect task), stored per task; 'outdated' on hosts without task.team. */
+async function loadTeam(deviceId: string, sessionId: string): Promise<Team | null | 'outdated'> {
+  const key = taskKey(deviceId, sessionId);
+  if (teamless.has(deviceId)) return 'outdated';
+  try {
+    const team = decodeTeam(await call(deviceId, 'task.team', { sessionId }, TIMEOUT_MS, true));
+    patch(s => ({ teams: { ...s.teams, [key]: team } }));
+    return team;
+  } catch (error) {
+    if ((error as Error).message !== UNKNOWN_METHOD) throw error;
+    teamless.add(deviceId);
+    patch(s => ({ teams: { ...s.teams, [key]: 'outdated' } }));
+    return 'outdated';
+  }
+}
+
+/** A team worker's transcript, oldest first (afterId pages until the host has no more). */
+async function workerMessages(deviceId: string, sessionId: string, workerId: string, afterId = 0): Promise<Message[]> {
+  let all: Message[] = [];
+  let cursor = afterId;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const reply = await call<Partial<MessagePage>>(deviceId, 'task.workerMessages', { sessionId, workerId, ...(cursor ? { afterId: cursor } : {}) });
+    const fresh = (Array.isArray(reply?.messages) ? reply.messages : []).filter(m => typeof m?.id === 'number' && m.id > cursor);
+    all = [...all, ...fresh];
+    if (!reply?.hasMore || !fresh.length) return all;
+    cursor = fresh[fresh.length - 1].id;
+  }
+  return all;
+}
+
+// ---- Attachments ----
+
+const attachmentDeps: AttachmentDeps = {
+  call: (deviceId, method, params) => call(deviceId, method, params, TIMEOUT_MS, true),
+  // Below the thread's own message calls: wait for whatever is queued for it now.
+  after: (deviceId, sessionId) => (queues.get(taskKey(deviceId, sessionId)) ?? Promise.resolve()).catch(() => undefined),
+  // Above prefetch: it holds while any download waits.
+  hold: () => prefetch.hold('attachments'),
+  release: () => prefetch.release('attachments'),
+  demo: id => (state().demo ? import('../demo-images.ts').then(m => m.demoImage(id)) : undefined),
+};
+
+/** A message attachment or workspace image as a file:// URI (see ./attachments.ts). */
+const attachment = (deviceId: string, sessionId: string, source: Source, variant: Variant) =>
+  fetchAttachment(attachmentDeps, deviceId, sessionId, source, variant);
 
 export const connect = {
   init, signInStart, signInFinish, signInCancel, signOut,
+  enterDemo, leaveDemo, deleteAccount,
   refreshDevices, revokeDevice,
-  watch, unwatch, loadMessages,
+  watch, unwatch, loadMessages, loadOlder, peek,
   listTasks, refreshLists, listProviders, listModels, startTask, projectIcons,
   sendMessage, stopTask, steerTask, configureTask, respondApproval, respondInput,
+  loadPull, pullDiff, mergePull, taskChanges, taskDiff, listBots, botThread, botMessage, pauseBot,
+  loadTeam, workerMessages,
+  attachment,
 };

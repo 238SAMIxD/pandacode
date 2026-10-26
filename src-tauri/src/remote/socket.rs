@@ -2,9 +2,11 @@
 //! and seals and opens every frame between this computer and the others.
 use super::{auth, config, crypto, emit_presence, emit_status, host, mirror, remote, sign_out_local, Device, Inner};
 use crate::Result;
+use futures_util::future::BoxFuture;
+use futures_util::stream::FuturesUnordered;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::{self, client::IntoClientRequest, Message};
@@ -23,6 +25,8 @@ const STABLE: Duration = Duration::from_secs(30);
 const MAX_FRAME: usize = 256 * 1024;
 const PEER_QUEUE: usize = 64;
 const MAX_PEERS: usize = 64;
+const MAX_STARTS: usize = 4;
+static STARTS: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
 /// Relay close codes: another socket replaced this one, or the device was revoked.
 const REPLACED: u16 = 4000;
 const REVOKED: u16 = 4001;
@@ -204,8 +208,61 @@ async fn refresh_token(app: tauri::AppHandle, old: String) {
     }
 }
 
-/// An opened request and the pair key to answer with.
-type Request = (Value, crypto::Key);
+/// An opened request, its pair key, and when it entered this peer's bounded queue.
+struct Request {
+    message: Value,
+    key: crypto::Key,
+    queued_at: Instant,
+}
+
+impl Request {
+    fn new(message: Value, key: crypto::Key) -> Self {
+        Self { message, key, queued_at: Instant::now() }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Lane {
+    Read,
+    Ordered,
+}
+
+#[derive(Default)]
+struct PendingRequests {
+    reads: VecDeque<Request>,
+    ordered: VecDeque<Request>,
+}
+
+impl PendingRequests {
+    fn len(&self) -> usize {
+        self.reads.len() + self.ordered.len()
+    }
+
+    fn push(&mut self, request: Request) {
+        let method = request.message["method"].as_str().unwrap_or_default();
+        if method == "batch" || host::is_read_only_method(method) {
+            self.reads.push_back(request);
+        } else {
+            self.ordered.push_back(request);
+        }
+    }
+
+    fn next_ordered(&mut self, active: &mut bool) -> Option<Request> {
+        if *active {
+            return None;
+        }
+        let request = self.ordered.pop_front()?;
+        *active = true;
+        Some(request)
+    }
+}
+
+struct SendStats {
+    payload_bytes: usize,
+    frame_bytes: usize,
+    json_micros: u128,
+    seal_micros: u128,
+}
 
 /// One relay frame: presence, delivery failures and errors, or an encrypted message.
 /// Responses and events are handled at once; only requests wait in their peer's queue.
@@ -269,27 +326,8 @@ fn fresh(app: &tauri::AppHandle, from: &str, message: &Value) -> bool {
     checked.is_ok()
 }
 
-/// `task.start` runs beside the peer's queue, so a slow clone never holds up its other
-/// requests (which stay in order); at most [`MAX_STARTS`] at once, then it queues too.
-fn runs_apart(message: &Value) -> bool {
-    message["method"] == "task.start"
-}
-
-const MAX_STARTS: usize = 4;
-static STARTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
-fn queue(app: &tauri::AppHandle, from: &str, request: Request, peers: &mut HashMap<String, mpsc::Sender<Request>>) {
-    use std::sync::atomic::Ordering;
-    if runs_apart(&request.0) && STARTS.fetch_add(1, Ordering::AcqRel) < MAX_STARTS {
-        let (app, from) = (app.clone(), from.to_owned());
-        tauri::async_runtime::spawn(async move {
-            answer(&app, &from, request).await;
-            STARTS.fetch_sub(1, Ordering::AcqRel);
-        });
-        return;
-    } else if runs_apart(&request.0) {
-        STARTS.fetch_sub(1, Ordering::AcqRel);
-    }
+fn queue(app: &tauri::AppHandle, from: &str, (message, key): (Value, crypto::Key), peers: &mut HashMap<String, mpsc::Sender<Request>>) {
+    let request = Request::new(message, key);
     if !peers.contains_key(from) {
         if peers.len() >= MAX_PEERS {
             return busy(app, from, request);
@@ -304,24 +342,94 @@ fn queue(app: &tauri::AppHandle, from: &str, request: Request, peers: &mut HashM
 }
 
 /// Refuses a request at once instead of dropping it, so the caller doesn't wait for its timeout.
-fn busy(app: &tauri::AppHandle, from: &str, (message, key): Request) {
-    let failure = json!({"type": "res", "id": message["id"], "ok": false, "error": "This computer is busy. Try again in a moment."});
-    let _ = send_sealed(app, from, &key, &failure);
+fn busy(app: &tauri::AppHandle, from: &str, request: Request) {
+    let failure = json!({"type": "res", "id": request.message["id"], "ok": false, "error": "This computer is busy. Try again in a moment."});
+    let _ = send_sealed(app, from, &request.key, &failure);
 }
 
-/// Answers one peer's requests strictly in arrival order.
+const READS_PER_PEER: usize = 4;
+
+/// Read-only requests overlap up to a small bound. State-changing requests share one FIFO
+/// lane, including `task.start`; response ids let reads return in any order.
 async fn peer(app: tauri::AppHandle, from: String, mut requests: mpsc::Receiver<Request>) {
-    while let Some(request) = requests.recv().await {
-        answer(&app, &from, request).await;
+    let mut pending = PendingRequests::default();
+    let mut in_flight = FuturesUnordered::<BoxFuture<'static, Lane>>::new();
+    let mut active_reads = 0usize;
+    let mut ordered_active = false;
+    let mut input_open = true;
+
+    loop {
+        while active_reads < READS_PER_PEER {
+            let Some(request) = pending.reads.pop_front() else { break };
+            active_reads += 1;
+            let (app, from) = (app.clone(), from.clone());
+            in_flight.push(Box::pin(async move {
+                answer(&app, &from, request).await;
+                Lane::Read
+            }));
+        }
+        if let Some(request) = pending.next_ordered(&mut ordered_active) {
+            let (app, from) = (app.clone(), from.clone());
+            in_flight.push(Box::pin(async move {
+                answer(&app, &from, request).await;
+                Lane::Ordered
+            }));
+        }
+        if !input_open && pending.reads.is_empty() && pending.ordered.is_empty() && active_reads == 0 && !ordered_active {
+            break;
+        }
+
+        tokio::select! {
+            request = requests.recv(), if input_open => match request {
+                Some(request) if pending.len() + active_reads + usize::from(ordered_active) < PEER_QUEUE => pending.push(request),
+                Some(request) => busy(&app, &from, request),
+                None => input_open = false,
+            },
+            completed = in_flight.next(), if !in_flight.is_empty() => match completed {
+                Some(Lane::Read) => active_reads -= 1,
+                Some(Lane::Ordered) => ordered_active = false,
+                None => {}
+            },
+        }
     }
 }
 
-async fn answer(app: &tauri::AppHandle, from: &str, (message, key): Request) {
-    if let Some(response) = host::handle(app, from, &message).await {
-        if let Err(error) = send_sealed(app, from, &key, &response) {
-            let failure = json!({"type": "res", "id": response["id"], "ok": false, "error": error});
-            let _ = send_sealed(app, from, &key, &failure);
+async fn answer(app: &tauri::AppHandle, from: &str, request: Request) {
+    let Request { message, key, queued_at } = request;
+    let method = message["method"].as_str().unwrap_or("unknown");
+    let queue_wait = queued_at.elapsed();
+    let start_waiting = Instant::now();
+    let _start_permit = if method == "task.start" {
+        Some(STARTS.get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_STARTS))).clone().acquire_owned().await.ok())
+    } else {
+        None
+    };
+    let start_slot_wait = if method == "task.start" { start_waiting.elapsed() } else { Duration::ZERO };
+    let handling = Instant::now();
+    let response = host::handle(app, from, &message).await;
+    let handle_time = handling.elapsed();
+    let mut send_stats = None;
+    if let Some(response) = response {
+        match send_sealed(app, from, &key, &response) {
+            Ok(stats) => send_stats = Some(stats),
+            Err(error) => {
+                let failure = json!({"type": "res", "id": response["id"], "ok": false, "error": error});
+                send_stats = send_sealed(app, from, &key, &failure).ok();
+            }
         }
+    }
+    if std::env::var_os("PANDACODE_CONNECT_TIMING").is_some() {
+        let stats = send_stats;
+        eprintln!(
+            "PandaCode Connect timing method={method} queue_wait_ms={} start_slot_wait_ms={} handle_ms={} json_ms={} seal_ms={} payload_bytes={} frame_bytes={}",
+            queue_wait.as_secs_f64() * 1000.0,
+            start_slot_wait.as_secs_f64() * 1000.0,
+            handle_time.as_secs_f64() * 1000.0,
+            stats.as_ref().map(|stats| stats.json_micros as f64 / 1000.0).unwrap_or_default(),
+            stats.as_ref().map(|stats| stats.seal_micros as f64 / 1000.0).unwrap_or_default(),
+            stats.as_ref().map(|stats| stats.payload_bytes).unwrap_or_default(),
+            stats.as_ref().map(|stats| stats.frame_bytes).unwrap_or_default(),
+        );
     }
 }
 
@@ -414,28 +522,39 @@ fn stamp(message: &Value, now_ms: i64) -> Value {
 }
 
 /// Seals a stamped message with a known key and queues it on the socket as `{to, body, ref}`.
-fn send_sealed(app: &tauri::AppHandle, to: &str, key: &crypto::Key, message: &Value) -> Result<()> {
+/// Replies go straight to the socket outbox; only mirrored event frames use the 100 ms flush.
+fn send_sealed(app: &tauri::AppHandle, to: &str, key: &crypto::Key, message: &Value) -> Result<SendStats> {
     let me = remote(app).device_id();
-    let body = crypto::seal(key, &me, to, stamp(message, chrono::Utc::now().timestamp_millis()).to_string().as_bytes())?;
+    let json_started = Instant::now();
+    let plain = stamp(message, chrono::Utc::now().timestamp_millis()).to_string();
+    let payload_bytes = plain.len();
+    let mut json_micros = json_started.elapsed().as_micros();
+    let seal_started = Instant::now();
+    let body = crypto::seal(key, &me, to, plain.as_bytes())?;
+    let seal_micros = seal_started.elapsed().as_micros();
     let mut frame = json!({"to": to, "body": body});
     if let Some(id) = message["id"].as_str() {
         frame["ref"] = json!(id);
     }
+    let json_started = Instant::now();
     let frame = frame.to_string();
+    json_micros += json_started.elapsed().as_micros();
     if frame.len() > MAX_FRAME {
         return Err("That reply is too large to send to another computer.".into());
     }
+    let frame_bytes = frame.len();
     let state = remote(app);
     let inner = state.lock();
     let outbox = inner.outbox.as_ref().ok_or("Not connected to the relay.")?;
-    outbox.send(frame).map_err(|_| "Not connected to the relay.".into())
+    outbox.send(frame).map_err(|_| "Not connected to the relay.")?;
+    Ok(SendStats { payload_bytes, frame_bytes, json_micros, seal_micros })
 }
 
 /// Seals a request or event to the device's current key from presence.
 pub(crate) fn send_to_device(app: &tauri::AppHandle, to: &str, message: &Value) -> Result<()> {
     remote(app).lock().callable(to)?;
     let key = peer_key(app, to)?;
-    send_sealed(app, to, &key, message)
+    send_sealed(app, to, &key, message).map(|_| ())
 }
 
 #[cfg(test)]
@@ -443,11 +562,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_starts_run_beside_the_queue() {
-        assert!(runs_apart(&json!({"method": "task.start"})));
-        for method in ["subscribe", "task.send", "task.messages", "task.stop"] {
-            assert!(!runs_apart(&json!({"method": method})), "{method}");
+    fn state_changing_requests_keep_arrival_order_while_reads_use_a_separate_lane() {
+        let mut pending = PendingRequests::default();
+        for method in ["task.send", "task.messages", "task.stop", "task.start", "task.diff"] {
+            pending.push(Request { message: json!({"method": method}), key: [0; 32], queued_at: Instant::now() });
         }
+        let ordered = pending.ordered.iter().map(|request| request.message["method"].as_str().unwrap()).collect::<Vec<_>>();
+        let reads = pending.reads.iter().map(|request| request.message["method"].as_str().unwrap()).collect::<Vec<_>>();
+        assert_eq!(ordered, ["task.send", "task.stop", "task.start"]);
+        assert_eq!(reads, ["task.messages", "task.diff"]);
+        let mut active = false;
+        assert_eq!(pending.next_ordered(&mut active).unwrap().message["method"], "task.send");
+        assert!(pending.next_ordered(&mut active).is_none(), "ordered calls never overlap");
+        active = false;
+        assert_eq!(pending.next_ordered(&mut active).unwrap().message["method"], "task.stop");
+        active = false;
+        assert_eq!(pending.next_ordered(&mut active).unwrap().message["method"], "task.start");
+        pending.push(Request { message: json!({"method": "batch"}), key: [0; 32], queued_at: Instant::now() });
+        assert_eq!(pending.reads.back().unwrap().message["method"], "batch");
     }
 
     #[test]

@@ -160,7 +160,7 @@ pub struct Store {
 type Result<T> = std::result::Result<T, String>;
 /// The newest `PRAGMA user_version`. Every migration step below must run for any
 /// database older than this, so the guard reads this constant, never a literal.
-pub const SCHEMA_VERSION: i64 = 29;
+pub const SCHEMA_VERSION: i64 = 30;
 
 const SIDEBAR_ORDER: &str = "pinned DESC,sidebar_order IS NULL,sidebar_order,COALESCE(MAX(last_response_at,last_prompt_at),last_response_at,last_prompt_at,created_at) DESC,id";
 
@@ -441,6 +441,29 @@ impl Store {
                 // Bots: skill and MCP references, and the bot a project task was started with (docs/bots.md).
                 crate::bots::migrate_capabilities(&migration)?;
                 migration.execute_batch("PRAGMA user_version=29;").map_err(|e| e.to_string())?;
+            }
+            if version < 30 {
+                // Durable links let Connect load only attachments belonging to a saved message.
+                migration.execute_batch("CREATE TABLE IF NOT EXISTS message_attachments(
+                    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                    id TEXT NOT NULL,
+                    kind TEXT NOT NULL CHECK(kind='image'),
+                    name TEXT NOT NULL,
+                    mime TEXT NOT NULL,
+                    width INTEGER,
+                    height INTEGER,
+                    bytes INTEGER NOT NULL CHECK(bytes>=0),
+                    file TEXT,
+                    source TEXT NOT NULL CHECK(source IN ('file','moodboard')),
+                    moodboard_id TEXT REFERENCES moodboards(id) ON DELETE CASCADE,
+                    moodboard_image_id TEXT REFERENCES moodboard_images(id) ON DELETE CASCADE,
+                    PRIMARY KEY(session_id,id),
+                    CHECK((source='file' AND file IS NOT NULL AND moodboard_id IS NULL AND moodboard_image_id IS NULL) OR (source='moodboard' AND file IS NULL AND moodboard_id IS NOT NULL AND moodboard_image_id IS NOT NULL))
+                  );
+                  CREATE INDEX IF NOT EXISTS message_attachments_session_id ON message_attachments(session_id,id,message_id);
+                  CREATE INDEX IF NOT EXISTS message_attachments_message ON message_attachments(message_id,session_id);
+                  PRAGMA user_version=30;").map_err(|e|e.to_string())?;
             }
             migration.commit().map_err(|e| e.to_string())?;
         }
@@ -2977,6 +3000,16 @@ mod tests {
             .max()
             .unwrap();
         assert_eq!(newest, SCHEMA_VERSION, "bump SCHEMA_VERSION with every new migration step");
+    }
+
+    #[test]
+    fn migration_30_creates_message_attachments_index() {
+        let (store, _) = empty_session();
+        let version: i64 = store.db.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
+        assert_eq!(version, 30);
+        let table: bool = store.db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_attachments')", [], |row| row.get(0)).unwrap();
+        let index: bool = store.db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='message_attachments_session_id')", [], |row| row.get(0)).unwrap();
+        assert!(table && index);
     }
 
     #[test]

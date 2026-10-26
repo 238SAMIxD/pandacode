@@ -1,5 +1,5 @@
-// Where PandaCode lives. Builds are published on GitHub Releases; update the notes
-// below once release builds are signed (Apple notarization, Authenticode).
+// Where PandaCode lives. Builds are published on GitHub Releases. macOS builds are signed with
+// a Developer ID and notarized by Apple; update the Windows note once Authenticode signing lands.
 const repoUrl = 'https://github.com/aicodeking/pandacode';
 
 export const project = {
@@ -24,9 +24,7 @@ export const platformDownloads = [
 
 export const distribution = {
   platforms: 'macOS · Windows · Linux',
-  isUnsignedPreview: true,
+  hasNote: true,
   requirements: 'Apple silicon or Intel · macOS 12+',
-  previewNotice: 'Not notarized by Apple. macOS blocks the first launch.',
-  unblockCommand: 'xattr -dr com.apple.quarantine /Applications/PandaCode.app',
-  appleSupportUrl: 'https://support.apple.com/en-us/102445',
+  signingNotice: 'Signed and notarized by Apple.',
 };

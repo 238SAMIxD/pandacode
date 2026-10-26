@@ -2,12 +2,15 @@
 // branch chip, the harness (opens the model picker) and a round send button. Send queues while
 // running (like the desktop's Enter) and a long press steers; "Steer instead of queue" swaps
 // them. An empty field while running shows Stop. Unreachable computers keep the message in the outbox.
+// In a bot's conversation (`bot`) a send goes through the bot (bot.message), so its brief applies.
 import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
 import { frame } from '@expo/ui/swift-ui/modifiers';
-import { useState } from 'react';
+import { useEffect, useRef, useState, type ComponentRef } from 'react';
 import { Alert, Pressable, StyleSheet, Text, TextInput, View, type ColorValue } from 'react-native';
 import { connect } from '../connect/client.ts';
+import type { Bot } from '../connect/types.ts';
+import { draftKey, setDraft, useDrafts } from '../store/draft.ts';
 import { useConnect } from '../store/index.ts';
 import { markSteered, sendOrQueue } from '../store/local.ts';
 import { Glass } from './Glass.tsx';
@@ -19,9 +22,16 @@ import { useColors } from './theme.ts';
 
 export const SIZE = 36;
 
-export function Composer({ deviceId, sessionId, running }: { deviceId: string; sessionId: string; running: boolean }) {
+export function Composer({ deviceId, sessionId, running, bot }: { deviceId: string; sessionId: string; running: boolean; bot?: Pick<Bot, 'id' | 'name'> }) {
+  const botId = bot?.id;
   const colors = useColors();
-  const [text, setText] = useState('');
+  // The text lives in the draft store, so generative UI can fill it (fillDraft) and it survives leaving the task.
+  const key = draftKey(deviceId, sessionId);
+  const text = useDrafts(s => s.text[key] ?? '');
+  const setText = (t: string) => setDraft(key, t);
+  const focus = useDrafts(s => s.focus[key] ?? 0);
+  const input = useRef<ComponentRef<typeof TextInput>>(null);
+  useEffect(() => { if (focus) input.current?.focus(); }, [focus]);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [steer, setSteer] = useState(false);
@@ -35,6 +45,10 @@ export function Composer({ deviceId, sessionId, running }: { deviceId: string; s
       if (kind === 'stop') {
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
         await connect.stopTask(deviceId, sessionId);
+      } else if (botId) {
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        await connect.botMessage(deviceId, botId, sessionId, prompt);
+        setText('');
       } else if (running && kind === 'steer') {
         void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         await connect.steerTask(deviceId, sessionId, prompt);
@@ -56,14 +70,15 @@ export function Composer({ deviceId, sessionId, running }: { deviceId: string; s
   const settings = (focus: string) => () => router.push({ pathname: '/task-settings', params: { device: deviceId, session: sessionId, focus } });
   const hasText = !!text.trim();
   // While running, a tap does the preferred action and a long press the other one.
-  const tap = running && steer ? 'steer' : 'send';
-  const hold = running ? (steer ? 'send' : 'steer') : undefined;
+  const tap = running && steer && !botId ? 'steer' : 'send';
+  const hold = running && !botId ? (steer ? 'send' : 'steer') : undefined;
   return (
     <Glass style={styles.bar}>
       <TextInput
+        ref={input}
         value={text}
         onChangeText={t => { setText(t); if (note) setNote(''); }}
-        placeholder={note || (running && steer ? 'Steer the agent…' : 'Ask the agent…')}
+        placeholder={note || (bot ? `Message ${bot.name}…` : running && steer ? 'Steer the agent…' : 'Ask the agent…')}
         placeholderTextColor={colors.tertiary as string}
         multiline
         style={[styles.input, { color: colors.text }]}
@@ -71,7 +86,7 @@ export function Composer({ deviceId, sessionId, running }: { deviceId: string; s
       />
       <View style={styles.row}>
         <Menu ios="plus" android="add" color={colors.text} label="More options" modifiers={nativeGlass ? [frame({ width: SIZE, height: SIZE }), interactiveGlass('circle')] : undefined} items={[
-          { label: 'Steer instead of queue', ios: 'arrow.uturn.right', android: 'alt_route', checked: steer, onPress: () => setSteer(s => !s) },
+          ...(botId ? [] : [{ label: 'Steer instead of queue', ios: 'arrow.uturn.right', android: 'alt_route', checked: steer, onPress: () => setSteer(s => !s) } as const]),
           { label: 'Model…', ios: 'cpu', android: 'memory', onPress: settings('model') },
           { label: 'Permissions…', ios: 'lock.shield', android: 'shield', onPress: settings('mode') },
           { label: 'Effort…', ios: 'gauge.with.dots.needle.67percent', android: 'speed', onPress: settings('effort') },

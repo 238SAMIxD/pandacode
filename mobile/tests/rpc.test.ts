@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { Pending, Replay, request } from '../src/connect/rpc.ts';
+import { METHODS, outdated, Pending, Replay, request } from '../src/connect/rpc.ts';
 
 test('requests carry id, ts and a fresh printable nonce', () => {
   const a = request('task.send', { sessionId: 's', text: 'hi' }, 1000);
@@ -41,6 +41,14 @@ test('responses settle only from the device asked; undeliverable fails by ref or
 
   await assert.rejects(pending.wait('host', 't', 5), /did not answer in time/);
   assert.equal(pending.size, 0);
+});
+
+test('the pull request, changes and bot methods are callable; older hosts get an update note', () => {
+  for (const method of ['task.pull', 'task.pullDiff', 'task.pullMerge', 'task.pullDetect', 'task.changes', 'task.diff', 'bots.list', 'bot.thread', 'bot.message', 'bot.pause'] as const) {
+    assert.ok(METHODS.includes(method));
+    assert.equal(request(method, {}).method, method);
+  }
+  assert.equal(outdated('Mac Studio'), 'Update PandaCode on Mac Studio to use this.');
 });
 
 test('replies and events are accepted once, inside the window, only with ts and nonce', () => {

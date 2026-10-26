@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { deleteAccountState } from "./account-delete.ts";
 import { type Bucket, fullBucket, take } from "./bucket.ts";
 import { type Env, fail, json } from "./env.ts";
 import { type DeviceView, errorFrame, forwardFrame, parseClientFrame, presenceFrame, undeliverableFrame } from "./frames.ts";
@@ -76,6 +77,7 @@ export class Account extends DurableObject<Env> {
       return fail(401, "token was issued before the device registered");
     }
 
+    if (pathname === "/v1/account") return request.method === "DELETE" ? this.deleteAccount() : fail(405, "method not allowed");
     if (pathname === "/v1/connect") return this.join(request, device);
     // The Worker signs the fresh token after this 200; reaching here means the device is still registered.
     if (pathname === "/v1/token") return request.method === "POST" ? json({ ok: true, gen: row.gen }) : fail(405, "method not allowed");
@@ -113,6 +115,11 @@ export class Account extends DurableObject<Env> {
     this.buckets.delete(id);
     for (const ws of this.ctx.getWebSockets(id)) this.close(ws, 4001, "revoked");
     this.broadcastPresence();
+    return json({ ok: true });
+  }
+
+  private async deleteAccount(): Promise<Response> {
+    await deleteAccountState(this.ctx, (ws, code, reason) => this.close(ws, code, reason));
     return json({ ok: true });
   }
 

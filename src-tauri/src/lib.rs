@@ -42,6 +42,7 @@ mod local_servers;
 mod local_signing;
 mod message_queue;
 mod moodboards;
+mod attachments;
 mod prompt_attachments;
 mod overlay;
 mod provider_settings;
@@ -559,6 +560,35 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'sta
     tauri::async_runtime::spawn_blocking(f)
         .await
         .map_err(|e| e.to_string())?
+}
+
+#[tauri::command(rename = "delete_session")]
+async fn delete_session_with_attachment_cleanup(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    session_id: String,
+) -> Result<task_deletion::DeletedSessions> {
+    let deleted = task_deletion::delete_session(app.clone(), window, session_id).await?;
+    match app.path().app_data_dir() {
+        Ok(data_dir) => {
+            let sessions = deleted.deleted_session_ids.clone();
+            if let Err(error) = crate::blocking(move || {
+                for sid in sessions {
+                    let path = data_dir.join("attachments").join(sid);
+                    if let Err(error) = std::fs::remove_dir_all(path) {
+                        if error.kind() != std::io::ErrorKind::NotFound {
+                            eprintln!("PandaCode: could not remove deleted task attachments: {error}");
+                        }
+                    }
+                }
+                Ok(())
+            }).await {
+                eprintln!("PandaCode: could not clean up deleted task attachments: {error}");
+            }
+        }
+        Err(error) => eprintln!("PandaCode: could not locate deleted task attachments: {error}"),
+    }
+    Ok(deleted)
 }
 
 #[tauri::command]
@@ -1677,6 +1707,8 @@ async fn launch_operation_admitted(
     let goal_request = goal.as_ref().map(|g| g.request.clone());
     let goal_reply = Arc::new(Mutex::new(goal.map(|g| g.reply)));
     let image_ids = image_ids.unwrap_or_default();
+    let attachment_ids = image_ids.clone();
+    let attachment_text = text.clone().unwrap_or_default();
     if image_ids.len() > 4 {
         return Err("Attach up to four screenshots per message.".into());
     }
@@ -1732,6 +1764,25 @@ async fn launch_operation_admitted(
             cloud_attach,
         },
     )?;
+    if !cloud_attach && turn_message_id > 0 && (!attachment_ids.is_empty() || attachment_text.contains("(moodboard ID: ")) {
+        match app.path().app_data_dir() {
+            Ok(app_data_dir) => {
+                let store = state.store.clone();
+                let sid = session_id.clone();
+                let content = attachment_text;
+                let captures = capture_dir.clone();
+                if let Err(error) = crate::blocking(move || {
+                    let store = store.lock().map_err(|error| error.to_string())?;
+                    crate::attachments::link_message_attachments(
+                        &store, &sid, turn_message_id, &content, &attachment_ids, &captures, &app_data_dir,
+                    ).map(|_| ())
+                }).await {
+                    eprintln!("PandaCode: could not persist task attachments: {error}");
+                }
+            }
+            Err(error) => eprintln!("PandaCode: could not find attachment storage: {error}"),
+        }
+    }
     // A cloud task's agent runs on its machine (cloud_agents::transport). Quitting must
     // leave that run alone, so this run neither stops it nor records an end while closing.
     let cloud = cloud_agents::transport::is_cloud(&session_id);
@@ -3571,7 +3622,7 @@ pub fn run() {
                 configure_session,
                 set_reasoning_effort,
                 update_session,
-                task_deletion::delete_session,
+                delete_session_with_attachment_cleanup,
                 chats::chat_create,
                 chats::chat_cleanup,
                 get_messages,

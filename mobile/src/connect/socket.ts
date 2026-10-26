@@ -9,6 +9,8 @@ const STABLE_MS = 30_000;
 const MAX_BACKOFF_MS = 60_000;
 /** Background longer than this closes the socket; foreground reconnects. */
 const BACKGROUND_MS = 30_000;
+/** A socket kept through a short background must answer a ping this fast, else it reconnects (iOS may have dropped it). */
+const PROBE_MS = 4_000;
 const REPLACED = 4000;
 const REVOKED = 4001;
 
@@ -45,6 +47,8 @@ export class RelaySocket {
   constructor(private readonly handlers: SocketHandlers) {}
 
   get open() { return this.ws?.readyState === WebSocket.OPEN; }
+  /** Opening now (not waiting out a backoff). */
+  get connecting() { return this.ws?.readyState === WebSocket.CONNECTING; }
 
   start() {
     this.running = true;
@@ -138,6 +142,17 @@ export class RelaySocket {
     // Timers may not have run while suspended: a long absence means the socket is likely dead.
     const away = this.backgroundAt ? Date.now() - this.backgroundAt : 0;
     this.backgroundAt = 0;
-    if (!this.ws || away >= BACKGROUND_MS) this.reconnectNow();
+    // No backoff here: the first try after foregrounding goes at once.
+    if (!this.ws || away >= BACKGROUND_MS) return this.reconnectNow();
+    if (away > 0 && this.open) this.probe();
+  }
+
+  /** Pings a socket kept through a short background; no frame within PROBE_MS → reconnect now
+   * instead of waiting SILENT_MS for the keepalive to notice. */
+  private probe() {
+    const ws = this.ws!;
+    const sent = Date.now();
+    ws.send('ping');
+    setTimeout(() => { if (this.ws === ws && this.heard < sent) this.reconnectNow(); }, PROBE_MS);
   }
 }
