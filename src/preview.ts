@@ -5,6 +5,7 @@ import { historicalProvider } from './provider-handoff';
 import { isPreviewableFile } from './file-links';
 import type { CommandPanel, GoalState } from './command-center';
 import { createPreviewArchitect } from './preview-architect';
+import { namedTeamSetup } from './team-mode';
 import { createPreviewCloud, createPreviewVm } from './preview-vm';
 import { createPreviewTurnChanges } from './preview-turn-changes';
 // Bundled with the preview, not lazily imported: a late module load during a paused test clock stalled startup.
@@ -707,6 +708,14 @@ function resolveSlash(provider: ProviderId, text: string): { action: string | nu
   return { action: command.action ?? null, arguments: match[2] ?? '' };
 }
 
+// `?teams` seeds two named agent teams for the model picker.
+if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('teams') && !localStorage.getItem('pandacode.preview.architect-library')) {
+  const team = (id: string, name: string, models: [ProviderId, string, string, string][]) => ({ id, name, updatedAt: now, setup: namedTeamSetup(name, { provider: models[0][0], harness: models[0][1], model: models[0][2], name: models[0][3] }, models.map(([provider, harness, model, label]) => ({ provider, harness, model, name: label }))) });
+  localStorage.setItem('pandacode.preview.architect-library', JSON.stringify({ enabled: false, lastSetup: null, activeProfileId: null, profiles: [
+    team('preview-ship-crew', 'Ship crew', [['claude', 'Claude Code', 'opus', 'Claude Opus 5'], ['codex', 'Codex', 'gpt-6-astra', 'GPT-6-Astra'], ['kimi', 'Kimi Code', 'kimi-code/k3', 'K3']]),
+    team('preview-budget-trio', 'Budget trio', [['deepseek', 'DeepSeek', 'deepseek-v4-pro', 'DeepSeek V4 Pro'], ['glm', 'GLM Coding Plan', 'default', 'GLM-5.3'], ['mimo', 'MiMo Token Plan', 'default', 'MiMo-V2.6-Pro']]),
+  ] }));
+}
 const architect = createPreviewArchitect({
   parent: session,
   assertIdle,

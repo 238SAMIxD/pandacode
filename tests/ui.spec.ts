@@ -94,8 +94,10 @@ const draftTaskId = async (page: Page): Promise<string> => {
 const openTaskProject = (page: Page) => page.locator('#composer-area').getByRole('button', { name: 'Change task project', exact: true }).or(page.locator('.task-item.selected .task-project'));
 const modelTrigger = (page: Page) => page.getByRole('button', { name: 'Choose harness and model', exact: true });
 const modelPicker = (page: Page) => page.getByRole('dialog', { name: 'Harness and model', exact: true });
-const reasoningSlider = (page: Page) => modelPicker(page).getByRole('slider', { name: 'Reasoning effort', exact: true });
-const reasoningLabel = (page: Page) => modelPicker(page).locator('.effort-label');
+const reasoningGroup = (page: Page) => modelPicker(page).getByRole('radiogroup', { name: 'Effort', exact: true });
+const effortRadio = (page: Page, name: string) => reasoningGroup(page).getByRole('radio', { name, exact: true });
+/** The checked effort segment. */
+const reasoningLabel = (page: Page) => reasoningGroup(page).locator('[aria-checked="true"]');
 const savedEffort = (page: Page, sessionId?: string) => page.evaluate(async sessionId => {
   const { invoke } = await import((window as any).__pandacodePreviewUrl);
   const id = sessionId ?? document.querySelector<HTMLElement>('#prompt')?.dataset.sessionId ?? document.querySelector<HTMLElement>('.task-item.selected')?.dataset.id;
@@ -133,9 +135,9 @@ async function installReasoningPreview(page: Page): Promise<void> {
 
 async function captureEffortPresentation(page: Page): Promise<void> {
   await expect(modelPicker(page)).toHaveAttribute('data-popover-state', 'open');
-  await reasoningSlider(page).focus();
+  await reasoningLabel(page).focus();
   await page.evaluate(() => {
-    const selectors = ['.model-menu', '.model-menu-list', '.model-menu-option[aria-current="true"]', '.model-menu-settings', '.effort-range', '.effort-label', '.effort-particles', '#prompt', '#model-picker-trigger', '#breadcrumb button'];
+    const selectors = ['.model-menu', '.model-menu-list', '.model-menu-option[aria-current="true"]', '.model-menu-settings', '.model-menu-effort', '.model-menu-rail', '#prompt', '#model-picker-trigger', '#breadcrumb button'];
     const nodes = selectors.map(selector => document.querySelector<HTMLElement>(selector)!);
     const list = document.querySelector<HTMLElement>('.model-menu-list')!;
     list.scrollTop = Math.min(40, list.scrollHeight - list.clientHeight);
@@ -144,8 +146,6 @@ async function captureEffortPresentation(page: Page): Promise<void> {
       selectors, nodes, rows: [...list.querySelectorAll('.model-menu-option')],
       rects: [rect(nodes[0]), rect(nodes[4])], scrollTop: list.scrollTop,
       opacity: nodes.map(node => getComputedStyle(node).opacity),
-      particles: [...document.querySelectorAll('.effort-particles i')],
-      animations: [...document.querySelectorAll('.effort-particles i')].map(particle => particle.getAnimations()[0]),
     };
   });
 }
@@ -155,7 +155,6 @@ async function expectEffortPresentationUnchanged(page: Page): Promise<void> {
     const saved = (window as any).__effortPresentation;
     const nodes = saved.selectors.map((selector: string) => document.querySelector<HTMLElement>(selector)!);
     const rows = [...document.querySelectorAll('.model-menu-list .model-menu-option')];
-    const particles = [...document.querySelectorAll('.effort-particles i')];
     const rect = (element: Element) => { const { x, y, width, height } = element.getBoundingClientRect(); return [x, y, width, height]; };
     const shifts = [rect(nodes[0]), rect(nodes[4])].map((values, i) => Math.max(...values.map((value, j) => Math.abs(value - saved.rects[i][j]))));
     return {
@@ -164,11 +163,10 @@ async function expectEffortPresentationUnchanged(page: Page): Promise<void> {
       shiftedBounds: shifts.map(shift => shift > 0.5),
       scrolled: Math.abs(nodes[1].scrollTop - saved.scrollTop) > 0.5,
       changedOpacity: saved.selectors.filter((_: string, index: number) => getComputedStyle(nodes[index]).opacity !== saved.opacity[index]),
-      sameParticles: particles.length === saved.particles.length && particles.every((node, index) => node === saved.particles[index] && node.getAnimations()[0] === saved.animations[index]),
       reentering: nodes[0].dataset.popoverState !== 'open' || nodes[0].getAnimations().length > 0,
     };
   });
-  expect.soft(presentation).toEqual({ replacedNodes: [], replacedRows: false, shiftedBounds: [false, false], scrolled: false, changedOpacity: [], sameParticles: true, reentering: false });
+  expect.soft(presentation).toEqual({ replacedNodes: [], replacedRows: false, shiftedBounds: [false, false], scrolled: false, changedOpacity: [], reentering: false });
 }
 
 test.beforeEach(async ({ page }) => {
@@ -398,7 +396,7 @@ test('defaults to dark mode and remembers explicit light and dark preferences af
   await expect(page.locator('.provider-logo[data-provider="codex"]').first()).toHaveCSS('filter', 'invert(1)');
   await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
   const menu = page.getByRole('dialog', { name: 'Harness and model', exact: true });
-  await expect(menu.getByRole('searchbox', { name: 'Search harnesses and models', exact: true })).toBeFocused();
+  await expect(menu.getByRole('combobox', { name: 'Search harnesses and models', exact: true })).toBeFocused();
   await page.screenshot({ path: '/private/tmp/pandacode-dark-models.png', animations: 'disabled' });
   await page.keyboard.press('Escape');
   await toggle.focus();
@@ -502,13 +500,13 @@ test('loads full model names, searches names or IDs, and saves the harness invoc
   const trigger = page.getByRole('button', { name: 'Choose harness and model', exact: true });
   await trigger.click();
   const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
-  const search = picker.getByRole('searchbox', { name: 'Search harnesses and models', exact: true });
-  await expect(picker.getByRole('button', { name: 'Claude Code · Claude Sonnet 5', exact: true })).toHaveAttribute('data-model', 'sonnet');
+  const search = picker.getByRole('combobox', { name: 'Search harnesses and models', exact: true });
+  await expect(picker.getByRole('option', { name: 'Claude Code · Claude Sonnet 5', exact: true })).toHaveAttribute('data-model', 'sonnet');
   await expect(trigger).toHaveText('Claude Sonnet 5');
   expect(await page.evaluate(() => (window as any).__catalogPrompt === document.querySelector('#prompt'))).toBe(true);
   await expect(prompt(page)).toHaveValue('Keep the draft while loading model names');
   await search.fill('Claude Opus 5');
-  const opus = picker.getByRole('button', { name: 'Claude Code · Claude Opus 5', exact: true });
+  const opus = picker.getByRole('option', { name: 'Claude Code · Claude Opus 5', exact: true });
   await expect(opus).toBeVisible();
   await search.fill('opus');
   await expect(opus).toBeVisible();
@@ -527,91 +525,42 @@ test('offers only reported reasoning efforts and remembers the selected effort f
   await modelTrigger(page).click();
   const settings = modelPicker(page).locator('.model-menu-settings');
   await expect(settings).toBeVisible();
-  const slider = reasoningSlider(page);
-  // The bar, thumb and label follow the theme accent (which can change with the wallpaper) at every level.
-  const accent = () => settings.evaluate(element => { const probe = document.createElement('span'); probe.style.color = 'var(--accent)'; element.append(probe); const color = getComputedStyle(probe).color; probe.remove(); return color; });
-  const expectColor = async (_level: string) => {
-    await expect.poll(async () => [await settings.locator('.effort-fill').evaluate(element => getComputedStyle(element).backgroundColor), await slider.evaluate(element => getComputedStyle(element).color), await reasoningLabel(page).evaluate(element => getComputedStyle(element).color)]).toEqual(Array(3).fill(await accent()));
-  };
-  const lowColor = 'low', highColor = 'high';
-  await expect(slider).toHaveAttribute('aria-valuetext', 'Default');
-  await expect(slider).toHaveAttribute('min', '0');
-  await expect(slider).toHaveAttribute('max', '1');
-  await expect(slider).toHaveAttribute('step', '1');
-  await expect(slider).toHaveValue('0');
-  await expectColor(lowColor);
+  await expect(reasoningGroup(page).getByRole('radio')).toHaveText(['Default', 'Low', 'High']);
   await expect(reasoningLabel(page)).toHaveText('Default');
+  // A dot marks the model's reported default; the hint line explains the level.
+  await expect(reasoningGroup(page).locator('[data-model-default]')).toHaveText('Low');
+  await expect(settings.locator('.model-menu-effort-hint')).toHaveText("Use the harness's saved setting. Reported model default: Low.");
   await expect(modelPicker(page).getByRole('button', { name: 'Reset reasoning effort', exact: true })).toHaveCount(0);
   await expect(settings).not.toContainText('Claude Sonnet');
-  // The context window is shown under the composer, not in this menu.
+  // The context window is shown under the composer and beside each model, not in the footer.
   await expect(settings).not.toContainText(/context/i);
-  await expect(modelPicker(page).getByRole('button', { name: 'Claude Code · Claude Opus 5', exact: true })).toContainText(/1M/i);
-  await page.screenshot({ path: '/private/tmp/pandacode-reasoning-settings.png', animations: 'disabled' });
+  await expect(modelPicker(page).getByRole('option', { name: 'Claude Code · Claude Opus 5', exact: true })).toContainText(/1M/i);
   await page.setViewportSize({ width: 860, height: 600 });
-  await expect(slider).toBeInViewport();
+  await expect(effortRadio(page, 'High')).toBeInViewport();
   const compactBounds = (await modelPicker(page).boundingBox())!;
   expect(compactBounds.x).toBeGreaterThanOrEqual(12);
   expect(compactBounds.y).toBeGreaterThanOrEqual(12);
   expect(compactBounds.x + compactBounds.width).toBeLessThanOrEqual(848);
   expect(compactBounds.y + compactBounds.height).toBeLessThanOrEqual(588);
-  await expect(modelPicker(page)).toHaveAttribute('data-popover-state', 'open');
-  await page.screenshot({ path: '/private/tmp/pandacode-reasoning-compact.png', animations: 'allow' });
   await page.setViewportSize({ width: 1440, height: 940 });
-  await expect(modelPicker(page)).toHaveCSS('max-height', '916px');
-  // Resizing also repositions the anchored menu on an animation frame. Wait
-  // for stable hit-test geometry before taking coordinates for a real drag.
-  await slider.click({ trial: true });
-  const sliderBounds = (await slider.boundingBox())!;
-  await page.mouse.move(sliderBounds.x + 16, sliderBounds.y + sliderBounds.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(sliderBounds.x + sliderBounds.width - 16, sliderBounds.y + sliderBounds.height / 2, { steps: 8 });
-  await expect(slider).toHaveAttribute('aria-valuetext', 'High');
-  await expect(reasoningLabel(page)).toHaveText('High');
-  await expect(settings).not.toContainText('Claude Sonnet');
-  await expectColor(highColor);
-  expect(await savedEffort(page)).toBeNull();
-  await page.mouse.up();
+  await expect(modelPicker(page)).toHaveCSS('max-height', '440px');
+  await effortRadio(page, 'High').click();
   await expect.poll(() => savedEffort(page)).toBe('high');
+  await expect(reasoningLabel(page)).toHaveText('High');
   await expect(modelPicker(page)).toBeVisible();
-  await expect(slider).toBeEnabled();
+  await expect(effortRadio(page, 'High')).toBeEnabled();
   await expect(modelTrigger(page)).toContainText('High');
   await expect(prompt(page)).toHaveValue('Keep this draft while choosing reasoning effort');
-  const reverseBounds = (await slider.boundingBox())!;
-  await page.mouse.move(reverseBounds.x + reverseBounds.width - 8, reverseBounds.y + reverseBounds.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(reverseBounds.x - 40, reverseBounds.y + reverseBounds.height / 2, { steps: 8 });
-  await expect(slider).toHaveAttribute('aria-valuetext', 'Low');
-  await expect(reasoningLabel(page)).toHaveText('Low');
-  await expectColor(lowColor);
-  expect(await savedEffort(page)).toBe('high');
-  await page.mouse.up();
+  await effortRadio(page, 'High').press('ArrowLeft');
   await expect.poll(() => savedEffort(page)).toBe('low');
-  await expect(modelPicker(page)).toBeVisible();
-  await slider.press('End');
+  await expect(effortRadio(page, 'Low')).toBeFocused();
+  await expect(modelPicker(page).locator('.model-menu-option:focus')).toHaveCount(0);
+  await effortRadio(page, 'Low').press('End');
   await expect.poll(() => savedEffort(page)).toBe('high');
-  await expectColor(highColor);
-  const particles = settings.locator('.effort-particles i');
-  await expect(particles).toHaveCount(12);
-  const particle = particles.nth(4);
-  const position = await particle.evaluate(element => getComputedStyle(element).transform);
-  await expect.poll(() => particle.evaluate(element => getComputedStyle(element).transform)).not.toBe(position);
-  await page.screenshot({ path: '/private/tmp/pandacode-effort-slider-dark.png', animations: 'allow' });
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  await expect(particle).toHaveCSS('animation-name', 'none');
-  await expect(particle).toHaveCSS('opacity', '0.55');
-  await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.keyboard.press('Escape');
-  await expect(page.locator('.effort-particles i')).toHaveCount(0);
   await page.getByRole('button', { name: 'Dark mode', exact: true }).click();
   await modelTrigger(page).click();
-  await expect(slider).toHaveAttribute('aria-valuetext', 'High');
-  await expect(modelPicker(page)).toHaveAttribute('data-popover-state', 'open');
-  await expectColor(highColor);
-  await page.screenshot({ path: '/private/tmp/pandacode-effort-slider-light.png', animations: 'allow' });
-  await slider.focus();
-  await slider.press('ArrowUp');
-  await expect(slider).toBeFocused();
-  await expect(modelPicker(page).locator('.model-menu-option:focus')).toHaveCount(0);
+  await expect(reasoningLabel(page)).toHaveText('High');
   await page.keyboard.press('Escape');
   await page.locator('.task-item[data-id="session-2"]').click();
   await expect.poll(() => savedEffort(page)).toBeNull();
@@ -620,27 +569,17 @@ test('offers only reported reasoning efforts and remembers the selected effort f
   await expect(modelTrigger(page)).toContainText('High');
   await modelTrigger(page).click();
   await expect(reasoningLabel(page)).toHaveText('High');
-  await slider.press('Home');
-  await expect.poll(() => savedEffort(page)).toBe('low');
-  await expect(slider).toHaveAttribute('aria-valuetext', 'Low');
-  await expect(slider).toHaveValue('0');
-  await expectColor(lowColor);
-  await expect(reasoningLabel(page)).toHaveText('Low');
+  await reasoningLabel(page).press('Home');
+  await expect.poll(() => savedEffort(page)).toBeNull();
+  await expect(reasoningLabel(page)).toHaveText('Default');
   await expect(modelPicker(page)).toBeVisible();
   await expect(modelTrigger(page)).not.toContainText('High');
   await expect(prompt(page)).toHaveValue('Keep this draft while choosing reasoning effort');
 });
 
-test('keeps the reasoning bar in the theme accent at every level while dragging, without saving the preview', async ({ page }) => {
-  await page.clock.install();
+test('the effort thumb sits under the chosen segment in the selected fill', async ({ page }) => {
   await page.evaluate(async () => {
     const { openModelPicker } = await import('/src/model-picker.ts');
-    const originalMatchMedia = window.matchMedia;
-    window.matchMedia = query => {
-      const media = originalMatchMedia.call(window, query);
-      if (query === '(prefers-reduced-motion: reduce)') (window as any).__colorEffortMedia ??= media;
-      return media;
-    };
     (window as any).__colorEffortSaves = [];
     (window as any).__closeColorEffortPicker = openModelPicker({
       anchor: document.querySelector<HTMLElement>('#model-picker-trigger')!,
@@ -648,30 +587,19 @@ test('keeps the reasoning bar in the theme accent at every level while dragging,
       current: { provider: 'claude', model: 'sonnet', reasoningEffort: null }, canSwitchProvider: false,
       onSelect: async () => {}, onEffortSelect: async effort => { (window as any).__colorEffortSaves.push(effort); },
     });
-    window.matchMedia = originalMatchMedia;
   });
-  const slider = reasoningSlider(page);
-  const fill = modelPicker(page).locator('.effort-fill');
-  const label = reasoningLabel(page);
-  const accent = await fill.evaluate(element => { const probe = document.createElement('span'); probe.style.color = 'var(--accent)'; element.append(probe); const color = getComputedStyle(probe).color; probe.remove(); return color; });
-  const expectAccent = async () => {
-    await expect(fill).toHaveCSS('background-color', accent);
-    await expect(slider).toHaveCSS('color', accent);
-    await expect(label).toHaveCSS('color', accent);
-  };
-  await expect(label).toHaveText('Default');
-  await expectAccent();
-  const bounds = (await slider.boundingBox())!;
-  await page.mouse.move(bounds.x + 9, bounds.y + bounds.height / 2);
-  await page.mouse.down();
-  for (const [index, name] of ['Medium', 'High', 'Max'].entries()) {
-    await page.mouse.move(bounds.x + 9 + (bounds.width - 18) * (index + 1) / 3, bounds.y + bounds.height / 2);
-    await expect(slider).toHaveAttribute('aria-valuetext', name);
-    await expectAccent();
-    expect(await page.evaluate(() => (window as any).__colorEffortSaves)).toEqual([]);
+  const thumb = reasoningGroup(page).locator('.segment-thumb');
+  const fill = await thumb.evaluate(element => { const probe = document.createElement('span'); probe.style.backgroundColor = 'var(--fill-selected)'; element.append(probe); const color = getComputedStyle(probe).backgroundColor; probe.remove(); return color; });
+  await expect(thumb).toHaveCSS('background-color', fill);
+  for (const name of ['Medium', 'Max']) {
+    await effortRadio(page, name).click();
+    await expect(reasoningLabel(page)).toHaveText(name);
+    await expect.poll(async () => {
+      const [a, b] = [await thumb.boundingBox(), await effortRadio(page, name).boundingBox()];
+      return Math.round(Math.abs(a!.x - b!.x) + Math.abs(a!.width - b!.width));
+    }).toBeLessThanOrEqual(1);
   }
-  await page.mouse.up();
-  await expect.poll(() => page.evaluate(() => (window as any).__colorEffortSaves)).toEqual(['max']);
+  expect(await page.evaluate(() => (window as any).__colorEffortSaves)).toEqual(['medium', 'max']);
   await page.evaluate(() => (window as any).__closeColorEffortPicker());
 });
 
@@ -680,25 +608,24 @@ test('keeps the reasoning menu stationary during delayed effort saves', async ({
   await installReasoningPreview(page);
   await prompt(page).fill('Keep this draft while adjusting effort');
   await modelTrigger(page).click();
-  await expect(modelPicker(page).getByRole('button', { name: 'Claude Code · Claude Sonnet 5', exact: true })).toBeVisible();
+  await expect(modelPicker(page).getByRole('option', { name: 'Claude Code · Claude Sonnet 5', exact: true })).toBeVisible();
   await captureEffortPresentation(page);
-  expect(await page.evaluate(() => (window as any).__effortPresentation.scrollTop)).toBeGreaterThan(0);
-  for (const [effort, name, key] of [['high', 'High', 'End'], ['low', 'Low', 'Home']]) {
+  for (const [effort, name, key] of [['high', 'High', 'End'], [null, 'Default', 'Home']] as const) {
     await page.evaluate(() => {
       (window as any).__pandacodeHoldEffort = true;
       delete (window as any).__pandacodeReleaseEffort;
     });
-    await reasoningSlider(page).press(key);
+    await reasoningLabel(page).press(key);
     await expect.poll(() => page.evaluate(() => typeof (window as any).__pandacodeReleaseEffort)).toBe('function');
-    await expect(reasoningSlider(page)).toBeDisabled();
+    await expect(reasoningLabel(page)).toBeDisabled();
     await expect(reasoningLabel(page)).toHaveText(name);
     await expect(modelPicker(page).locator('.model-menu-option:not(:disabled)')).toHaveCount(0);
     await expectEffortPresentationUnchanged(page);
     await page.evaluate(() => { (window as any).__pandacodeHoldEffort = false; (window as any).__pandacodeReleaseEffort(); });
     await expect.poll(() => savedEffort(page)).toBe(effort);
-    await expect(reasoningSlider(page)).toBeEnabled();
-    await expect(reasoningSlider(page)).toHaveAttribute('aria-valuetext', name);
+    await expect(reasoningLabel(page)).toBeEnabled();
     await expect(reasoningLabel(page)).toHaveText(name);
+    await expect(reasoningLabel(page)).toBeFocused();
     await expectEffortPresentationUnchanged(page);
   }
   await expect(prompt(page)).toHaveValue('Keep this draft while adjusting effort');
@@ -733,9 +660,10 @@ test('preserves reasoning effort when changing projects and resets it when chang
   await expect(newTaskHeading(page)).toBeVisible();
   const sessionId = await draftTaskId(page);
   await modelTrigger(page).click();
-  await modelPicker(page).getByRole('button', { name: 'Claude Code · Claude Sonnet 5', exact: true }).click();
+  await modelPicker(page).getByRole('tab', { name: 'Claude Code', exact: true }).click();
+  await modelPicker(page).getByRole('option', { name: 'Claude Code · Claude Sonnet 5', exact: true }).click();
   await modelTrigger(page).click();
-  await reasoningSlider(page).press('End');
+  await effortRadio(page, 'High').click();
   await expect.poll(() => savedEffort(page)).toBe('high');
   await page.keyboard.press('Escape');
   await prompt(page).fill('Use this repository with the same reasoning preference');
@@ -745,31 +673,28 @@ test('preserves reasoning effort when changing projects and resets it when chang
   await expect.poll(() => savedEffort(page)).toBe('high');
   await expect(modelTrigger(page)).toContainText('High');
   await modelTrigger(page).click();
-  await modelPicker(page).getByRole('button', { name: 'Claude Code · Claude Opus 5', exact: true }).click();
+  await modelPicker(page).getByRole('option', { name: 'Claude Code · Claude Opus 5', exact: true }).click();
   await expect.poll(() => savedEffort(page)).toBeNull();
   await modelTrigger(page).click();
-  await expect(reasoningSlider(page)).toHaveAttribute('aria-valuetext', 'Default');
   await expect(reasoningLabel(page)).toHaveText('Default');
-  await expect(reasoningSlider(page)).toHaveAttribute('max', '1');
-  await reasoningSlider(page).press('End');
+  await expect(reasoningGroup(page).getByRole('radio')).toHaveText(['Default', 'High', 'Max']);
+  await reasoningLabel(page).press('End');
   await expect.poll(() => savedEffort(page)).toBe('max');
-  await modelPicker(page).getByRole('button', { name: 'Codex · GPT-6-Astra', exact: true }).click();
+  await modelPicker(page).getByRole('tab', { name: 'Codex', exact: true }).click();
+  await modelPicker(page).getByRole('option', { name: 'Codex · GPT-6-Astra', exact: true }).click();
   await expect.poll(() => savedEffort(page)).toBeNull();
   await expect(modelTrigger(page)).toContainText('GPT-6-Astra');
   await expect(modelTrigger(page)).not.toContainText('Max');
   await expect(prompt(page)).toHaveValue('Use this repository with the same reasoning preference');
   await modelTrigger(page).click();
-  await expect(reasoningSlider(page)).toHaveValue('1');
-  await expect(reasoningSlider(page)).toHaveAttribute('aria-valuetext', 'Default');
   await expect(reasoningLabel(page)).toHaveText('Default');
-  await expect(reasoningSlider(page)).toHaveAttribute('max', '2');
-  await reasoningSlider(page).press('ArrowRight');
+  await expect(reasoningGroup(page).getByRole('radio')).toHaveText(['Default', 'Low', 'Medium', 'High']);
+  await effortRadio(page, 'High').click();
   await expect.poll(() => savedEffort(page)).toBe('high');
-  await expect(reasoningSlider(page)).toBeFocused();
-  await reasoningSlider(page).press('ArrowLeft');
+  await effortRadio(page, 'High').press('ArrowLeft');
   await expect.poll(() => savedEffort(page)).toBe('medium');
   await expect(reasoningLabel(page)).toHaveText('Medium');
-  await expect(reasoningSlider(page)).toHaveValue('1');
+  await expect(effortRadio(page, 'Medium')).toBeFocused();
 });
 
 test('keeps task selection and drafts intact when a reasoning save finishes after navigation', async ({ page }) => {
@@ -777,9 +702,9 @@ test('keeps task selection and drafts intact when a reasoning save finishes afte
   await prompt(page).fill('Original task draft');
   await page.evaluate(() => { (window as any).__pandacodeHoldEffort = true; });
   await modelTrigger(page).click();
-  await reasoningSlider(page).press('End');
+  await reasoningLabel(page).press('End');
   await expect.poll(() => page.evaluate(() => typeof (window as any).__pandacodeReleaseEffort)).toBe('function');
-  await expect(reasoningSlider(page)).toBeDisabled();
+  await expect(reasoningLabel(page)).toBeDisabled();
   await expect(reasoningLabel(page)).toHaveText('High');
   await page.locator('.task-item[data-id="session-2"]').click();
   await expect(page.locator('.task-item.selected')).toHaveAttribute('data-id', 'session-2');
@@ -798,7 +723,7 @@ test('preserves composer focus and selection when a reasoning save finishes afte
   await installReasoningPreview(page);
   await page.evaluate(() => { (window as any).__pandacodeHoldEffort = true; });
   await modelTrigger(page).click();
-  await reasoningSlider(page).press('End');
+  await reasoningLabel(page).press('End');
   await expect.poll(() => page.evaluate(() => typeof (window as any).__pandacodeReleaseEffort)).toBe('function');
   await page.locator('.task-item[data-id="session-2"]').click();
   await page.locator('.task-item[data-id="session-1"]').click();
@@ -815,38 +740,37 @@ test('preserves composer focus and selection when a reasoning save finishes afte
 test('keeps the previous reasoning choice when saving a new effort fails', async ({ page }) => {
   await installReasoningPreview(page);
   await modelTrigger(page).click();
-  await reasoningSlider(page).press('End');
+  await reasoningLabel(page).press('End');
   await expect.poll(() => savedEffort(page)).toBe('high');
   await page.evaluate(() => { (window as any).__pandacodeFailEffort = true; });
-  await reasoningSlider(page).press('Home');
+  await reasoningLabel(page).press('Home');
   await expect(modelPicker(page).getByRole('alert')).toContainText('could not save reasoning effort');
-  await expect(reasoningSlider(page)).toHaveAttribute('aria-valuetext', 'High');
   await expect(reasoningLabel(page)).toHaveText('High');
-  await expect(reasoningSlider(page)).toHaveValue('1');
-  await expect(reasoningSlider(page)).toBeEnabled();
+  await expect(reasoningLabel(page)).toBeEnabled();
   await expect.poll(() => savedEffort(page)).toBe('high');
   await expect(modelTrigger(page)).toContainText('High');
   await page.keyboard.press('Escape');
   await modelTrigger(page).click();
-  await expect(reasoningSlider(page)).toHaveAttribute('aria-valuetext', 'High');
+  await expect(reasoningLabel(page)).toHaveText('High');
 });
 
 test('hides unsupported reasoning and context metadata without inventing values', async ({ page }) => {
   await installReasoningPreview(page);
   await page.locator('.task-item[data-id="session-3"]').click();
   await modelTrigger(page).click();
-  await modelPicker(page).getByRole('button', { name: 'Kimi Code · K3', exact: true }).click();
+  await modelPicker(page).getByRole('combobox').fill('K3');
+  await modelPicker(page).getByRole('option', { name: 'Kimi Code · K3', exact: true }).click();
   await modelTrigger(page).click();
-  await expect(reasoningSlider(page)).toHaveCount(0);
+  await expect(reasoningGroup(page)).toHaveCount(0);
   await expect(modelPicker(page).locator('.model-menu-settings')).toBeHidden();
   await expect(page.locator('.context-indicator')).toBeHidden();
   await page.keyboard.press('Escape');
   await page.locator('.task-item[data-id="session-1"]').click();
   await modelTrigger(page).click();
-  await modelPicker(page).getByRole('searchbox').fill('custom-without-metadata');
-  await modelPicker(page).getByRole('button', { name: 'Use "custom-without-metadata" with Claude Code', exact: true }).click();
+  await modelPicker(page).getByRole('combobox').fill('custom-without-metadata');
+  await modelPicker(page).getByRole('option', { name: 'Use "custom-without-metadata" with Claude Code', exact: true }).click();
   await modelTrigger(page).click();
-  await expect(reasoningSlider(page)).toHaveCount(0);
+  await expect(reasoningGroup(page)).toHaveCount(0);
   await expect(modelPicker(page).locator('.model-menu-settings')).toBeHidden();
   await expect(page.locator('.context-indicator')).toBeHidden();
   await page.keyboard.press('Escape');
@@ -861,8 +785,10 @@ test('hides unsupported reasoning and context metadata without inventing values'
       onEffortSelect: async effort => { (window as any).__unsupportedEffortSaves.push(effort); },
     });
   });
-  await expect(reasoningSlider(page)).toHaveCount(0);
+  // A saved level the catalog no longer reports stays visible as chosen; nothing is invented beside it.
+  await expect(reasoningGroup(page).getByRole('radio')).toHaveText(['Default', 'retired-effort']);
   await expect(reasoningLabel(page)).toHaveText('retired-effort');
+  await reasoningLabel(page).click();
   await expect(modelPicker(page).getByRole('button', { name: 'Reset reasoning effort', exact: true })).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).__unsupportedEffortSaves)).toEqual([]);
   await expect(modelPicker(page)).toBeVisible();
@@ -883,18 +809,18 @@ test('retries unavailable model metadata and keeps custom model IDs usable', asy
   await trigger.click();
   const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
   await expect(picker.locator('.model-menu-catalog-error')).toBeVisible();
-  await expect(picker.getByRole('button', { name: 'Claude Code · Claude Sonnet', exact: true })).toBeVisible();
-  await picker.getByRole('searchbox').fill('my-proxy/model_42');
-  await picker.getByRole('button', { name: 'Use "my-proxy/model_42" with Claude Code', exact: true }).click();
+  await expect(picker.getByRole('option', { name: 'Claude Code · Claude Sonnet', exact: true })).toBeVisible();
+  await picker.getByRole('combobox').fill('my-proxy/model_42');
+  await picker.getByRole('option', { name: 'Use "my-proxy/model_42" with Claude Code', exact: true }).click();
   await expect.poll(() => savedSelection(page)).toEqual({ provider: 'claude', model: 'my-proxy/model_42' });
   await page.evaluate(() => { (window as any).__catalogAvailable = true; });
   await trigger.click();
-  await expect(picker.getByRole('button', { name: 'Claude Code · Claude Sonnet 5', exact: true })).toBeVisible();
-  await expect(picker.getByRole('button', { name: 'Claude Code · my-proxy/model_42', exact: true })).toHaveAttribute('aria-current', 'true');
+  await expect(picker.getByRole('option', { name: 'Claude Code · Claude Sonnet 5', exact: true })).toBeVisible();
+  await expect(picker.getByRole('option', { name: 'Claude Code · my-proxy/model_42', exact: true })).toHaveAttribute('aria-current', 'true');
   await expect(picker.locator('.model-menu-catalog-error')).toBeHidden();
 });
 
-test('keeps keyboard focus in the model picker when refreshed metadata removes the focused model', async ({ page }) => {
+test('keeps the active option and search focus when refreshed metadata removes the active model', async ({ page }) => {
   await page.evaluate(async () => {
     const { openModelPicker } = await import('/src/model-picker.ts');
     (window as any).__closeFocusPicker = openModelPicker({
@@ -906,12 +832,16 @@ test('keeps keyboard focus in the model picker when refreshed metadata removes t
     });
   });
   const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
-  const legacy = picker.getByRole('button', { name: 'Claude Code · Legacy model', exact: true });
-  await legacy.focus();
-  await expect(legacy).toBeFocused();
+  const search = picker.getByRole('combobox');
+  await expect(search).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  const legacy = picker.getByRole('option', { name: 'Claude Code · Legacy model', exact: true });
+  await expect(legacy).toHaveAttribute('aria-selected', 'true');
+  await expect(search).toHaveAttribute('aria-activedescendant', (await legacy.getAttribute('id'))!);
   await page.evaluate(() => (window as any).__resolveFocusCatalog([]));
   await expect(legacy).toHaveCount(0);
-  await expect(picker.getByRole('button', { name: 'Claude Code · Default', exact: true })).toBeFocused();
+  await expect(picker.getByRole('option', { name: 'Claude Code · Default', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(search).toBeFocused();
   await page.evaluate(() => (window as any).__closeFocusPicker());
 });
 
@@ -926,55 +856,12 @@ test('restores search focus when refreshed metadata removes the focused reasonin
       loadModels: () => new Promise(resolve => { (window as any).__resolveEffortFocusCatalog = resolve; }),
     });
   });
-  await reasoningSlider(page).focus();
-  await expect(reasoningSlider(page)).toBeFocused();
+  await reasoningLabel(page).focus();
+  await expect(reasoningLabel(page)).toBeFocused();
   await page.evaluate(() => (window as any).__resolveEffortFocusCatalog([{ id: 'sonnet', name: 'Claude Sonnet', description: '' }]));
-  await expect(reasoningSlider(page)).toHaveCount(0);
-  await expect(modelPicker(page).getByRole('searchbox')).toBeFocused();
+  await expect(reasoningGroup(page)).toHaveCount(0);
+  await expect(modelPicker(page).getByRole('combobox')).toBeFocused();
   await page.evaluate(() => (window as any).__closeEffortFocusPicker());
-});
-
-test('commits a Default thumb tap and rejects an effort removed from the catalog during a drag', async ({ page }) => {
-  await page.evaluate(async () => {
-    const { openModelPicker } = await import('/src/model-picker.ts');
-    (window as any).__dragEffortSaves = [];
-    (window as any).__closeDragEffortPicker = openModelPicker({
-      anchor: document.querySelector<HTMLElement>('#model-picker-trigger')!,
-      providers: [{ id: 'claude', name: 'Claude Code', installed: true, path: '/sample/bin/claude', version: 'Sample', models: [{ id: 'sonnet', name: 'Claude Sonnet', description: '', defaultReasoningEffort: 'low', reasoningEfforts: [{ id: 'low', name: 'Low', description: '' }, { id: 'high', name: 'High', description: '' }] }] }],
-      current: { provider: 'claude', model: 'sonnet', reasoningEffort: null }, canSwitchProvider: false,
-      onSelect: async () => {},
-      onEffortSelect: async effort => { (window as any).__dragEffortSaves.push(effort); },
-      loadModels: () => new Promise(resolve => { (window as any).__resolveDragEffortCatalog = resolve; }),
-    });
-  });
-  const slider = reasoningSlider(page);
-  await expect(slider).toHaveAttribute('aria-valuetext', 'Default');
-  await expect(reasoningLabel(page)).toHaveText('Default');
-  await slider.click({ button: 'right', position: { x: 17, y: 17 } });
-  expect(await page.evaluate(() => (window as any).__dragEffortSaves)).toEqual([]);
-  await expect(slider).toHaveAttribute('aria-valuetext', 'Default');
-  await slider.click({ position: { x: 17, y: 17 } });
-  await expect(slider).toHaveAttribute('aria-valuetext', 'Low');
-  await expect(reasoningLabel(page)).toHaveText('Low');
-  expect(await page.evaluate(() => (window as any).__dragEffortSaves)).toEqual(['low']);
-  const bounds = (await slider.boundingBox())!;
-  await page.mouse.move(bounds.x + 17, bounds.y + bounds.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(bounds.x + bounds.width - 17, bounds.y + bounds.height / 2, { steps: 8 });
-  await expect(slider).toHaveAttribute('aria-valuetext', 'High');
-  await page.evaluate(() => (window as any).__resolveDragEffortCatalog([{ id: 'sonnet', name: 'Updated Claude Sonnet', description: '', defaultReasoningEffort: 'low', reasoningEfforts: [{ id: 'low', name: 'Low', description: '' }] }]));
-  await expect(modelPicker(page).getByRole('button', { name: 'Claude Code · Updated Claude Sonnet', exact: true })).toBeVisible();
-  await expect(slider).toHaveAttribute('aria-valuetext', 'High');
-  await expect(reasoningLabel(page)).toHaveText('High');
-  expect(await page.evaluate(() => (window as any).__dragEffortSaves)).toEqual(['low']);
-  await page.mouse.up();
-  await expect(modelPicker(page).getByRole('alert')).toHaveText('This reasoning effort is no longer available. Choose another level.');
-  await expect(slider).toHaveAttribute('max', '0');
-  await expect(slider).toHaveAttribute('aria-valuetext', 'Low');
-  await expect(reasoningLabel(page)).toHaveText('Low');
-  await expect(modelPicker(page)).toBeVisible();
-  expect(await page.evaluate(() => (window as any).__dragEffortSaves)).toEqual(['low']);
-  await page.evaluate(() => (window as any).__closeDragEffortPicker());
 });
 
 for (const outcome of ['resolve', 'reject'] as const) {
@@ -1022,8 +909,8 @@ for (const outcome of ['resolve', 'reject'] as const) {
       await page.evaluate(() => (window as any).__catalogRace.requests[1].resolve([{ id: 'sonnet', name: 'Current harness model', description: '' }]));
     }
     await expect(trigger).toHaveText('Current harness model');
-    await expect(picker.getByRole('button', { name: 'Claude Code · Current harness model', exact: true })).toBeVisible();
-    await expect(picker.getByRole('button', { name: 'Claude Code · Stale harness model', exact: true })).toHaveCount(0);
+    await expect(picker.getByRole('option', { name: 'Claude Code · Current harness model', exact: true })).toBeVisible();
+    await expect(picker.getByRole('option', { name: 'Claude Code · Stale harness model', exact: true })).toHaveCount(0);
     await expect(picker.locator('.model-menu-catalog-error')).toBeHidden();
     expect(await requestCount()).toBe(2);
   });
@@ -1199,13 +1086,13 @@ test('finds and selects projects beyond the first hundred filter options', async
 test('menus open and close instantly and stay usable', async ({ page }) => {
   await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
   const menu = page.getByRole('dialog', { name: 'Harness and model', exact: true });
-  const search = menu.getByRole('searchbox', { name: 'Search harnesses and models', exact: true });
+  const search = menu.getByRole('combobox', { name: 'Search harnesses and models', exact: true });
   await expect(menu).toHaveAttribute('data-popover-state', 'open');
   expect(await menu.evaluate(element => element.getAnimations().length)).toBe(0);
   await expect(search).toBeFocused();
   await page.keyboard.type('animation-ready-model');
   await expect(search).toHaveValue('animation-ready-model');
-  await expect(menu.getByRole('button', { name: 'Use "animation-ready-model" with Claude Code', exact: true })).toBeEnabled();
+  await expect(menu.getByRole('option', { name: 'Use \"animation-ready-model" with Claude Code', exact: true })).toBeEnabled();
   await page.keyboard.press('Enter');
   await expect(menu).toHaveCount(0);
   await expect(prompt(page)).toBeFocused();
@@ -1218,7 +1105,7 @@ test('rapidly reopens menus without leaving interactive or retained closing pane
   for (let i = 0; i < 5; i++) {
     await trigger.click();
     await expect(menu).toHaveCount(1);
-    await expect(menu.getByRole('searchbox', { name: 'Search harnesses and models', exact: true })).toBeFocused();
+    await expect(menu.getByRole('combobox', { name: 'Search harnesses and models', exact: true })).toBeFocused();
     await page.keyboard.press('Escape');
     await expect(menu).toHaveCount(0);
     await expect(trigger).toBeFocused();
@@ -1381,8 +1268,8 @@ test('starts new tasks with Full access and preserves deliberate permissions acr
       await menu.getByRole('menuitemradio', { name: selection.mode === 'plan' ? 'Read only' : 'Standard', exact: true }).click();
     }
     await modelTrigger(page).click();
-    await modelPicker(page).getByRole('searchbox', { name: 'Search harnesses and models', exact: true }).fill('approval-preserved-model');
-    await modelPicker(page).getByRole('button', { name: `Use "approval-preserved-model" with ${selection.provider}`, exact: true }).click();
+    await modelPicker(page).getByRole('combobox', { name: 'Search harnesses and models', exact: true }).fill('approval-preserved-model');
+    await modelPicker(page).getByRole('option', { name: `Use "approval-preserved-model" with ${selection.provider}`, exact: true }).click();
     await expect.poll(() => savedSelection(page)).toEqual({ provider: selection.id, model: 'approval-preserved-model' });
     await expect(trigger).toHaveText(selection.label);
     await expect.poll(() => savedPermission(page)).toBe(selection.mode);
@@ -1546,7 +1433,7 @@ test('coalesces appearance preferences without restoring stale glass or losing t
   await prompt(page).fill('Keep my draft as the system appearance changes');
   await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
   const menu = page.getByRole('dialog', { name: 'Harness and model', exact: true });
-  const search = menu.getByRole('searchbox', { name: 'Search harnesses and models', exact: true });
+  const search = menu.getByRole('combobox', { name: 'Search harnesses and models', exact: true });
   await search.fill('opus');
   await page.evaluate(async () => {
     const { initializeNativeAppearance } = await import('/src/appearance.ts');
@@ -2154,7 +2041,7 @@ test('shows reported context usage while running and keeps late usage from creat
   await expect(page.getByRole('button', { name: 'Stop task', exact: true })).toHaveCount(0);
   await expect(prompt(page)).toBeEnabled();
   await modelTrigger(page).click();
-  await modelPicker(page).getByRole('button', { name: 'Claude Code · Claude Opus 5', exact: true }).click();
+  await modelPicker(page).getByRole('option', { name: 'Claude Code · Claude Opus 5', exact: true }).click();
   await expect(indicator).not.toContainText('25K');
   expect(await page.evaluate(async sessionId => {
     const { invoke } = await import((window as any).__pandacodePreviewUrl);
@@ -2469,8 +2356,8 @@ test('renaming and changing a model do not make an old response active', async (
   await expect(taskRow(page, 'session-4', 'inactive').locator('.task-title')).toHaveText('Renamed older conversation');
   await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
   const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
-  await picker.getByRole('searchbox', { name: 'Search harnesses and models', exact: true }).fill('review-old-response');
-  await picker.getByRole('button', { name: 'Use "review-old-response" with Codex', exact: true }).click();
+  await picker.getByRole('combobox', { name: 'Search harnesses and models', exact: true }).fill('review-old-response');
+  await picker.getByRole('option', { name: 'Use "review-old-response" with Codex', exact: true }).click();
   await expect(picker).not.toBeVisible();
   await expect(page.getByRole('button', { name: 'Choose harness and model', exact: true })).toHaveText('review-old-response');
   await expect(taskRow(page, 'session-4', 'inactive')).toBeVisible();
@@ -2565,7 +2452,7 @@ test('renders provider logos in task rows, composer, picker, and settings', asyn
   const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
   for (const provider of ['claude', 'codex', 'kimi', 'github-copilot']) {
     await expect(picker.locator(`.provider-logo[data-provider="${provider}"]`).first()).toBeVisible();
-    await expect(picker.locator(`.model-menu-option .provider-logo[data-provider="${provider}"]`).first()).toBeVisible();
+    await expect(picker.getByRole('tab').locator(`.provider-logo[data-provider="${provider}"]`).first()).toBeVisible();
   }
   await page.keyboard.press('Escape');
   const settings = await openSettings(page, 'Agents');
@@ -2638,9 +2525,11 @@ test('opens a new conversation in the active project without listing it', async 
   await page.screenshot({ path: '/private/tmp/pandacode-new-task.png' });
   await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
   const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
-  await expect(picker.getByRole('button', { name: 'Claude Code · Default', exact: true })).toBeVisible();
-  await expect(picker.getByRole('button', { name: 'Codex · Default', exact: true })).toBeVisible();
-  await expect(picker.getByRole('button', { name: 'Kimi Code · Default', exact: true })).toBeVisible();
+  await expect(picker.getByRole('option', { name: 'Claude Code · Default', exact: true })).toBeVisible();
+  for (const harness of ['Codex', 'Kimi Code']) {
+    await picker.getByRole('tab', { name: harness, exact: true }).click();
+    await expect(picker.getByRole('option', { name: `${harness} · Default`, exact: true })).toBeVisible();
+  }
   await page.screenshot({ path: '/private/tmp/pandacode-brand-picker.png' });
 });
 
@@ -2660,8 +2549,8 @@ test('changes the empty task project while keeping its draft, harness, model, an
   await prompt(page).fill('Keep this plan while I choose the right repository');
   await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
   const modelPicker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
-  await modelPicker.getByRole('searchbox', { name: 'Search harnesses and models', exact: true }).fill('project-switch-model');
-  await modelPicker.getByRole('button', { name: 'Use "project-switch-model" with Kimi Code', exact: true }).click();
+  await modelPicker.getByRole('combobox', { name: 'Search harnesses and models', exact: true }).fill('project-switch-model');
+  await modelPicker.getByRole('option', { name: 'Use \"project-switch-model" with Kimi Code', exact: true }).click();
   await expect.poll(() => savedSelection(page)).toEqual({ provider: 'kimi', model: 'project-switch-model' });
   await expect(page.getByRole('complementary', { name: 'Project inspector' })).toBeVisible();
   await page.locator('.inspector-tabs [data-action="tab-changes"]').click();
@@ -2920,8 +2809,8 @@ test('chooses a harness and custom model inline without losing the draft, stream
   await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
   const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
   await expect(picker).toBeVisible();
-  await picker.getByRole('searchbox', { name: 'Search harnesses and models', exact: true }).fill('kimi-test-model');
-  await picker.getByRole('button', { name: 'Use "kimi-test-model" with Kimi Code', exact: true }).click();
+  await picker.getByRole('combobox', { name: 'Search harnesses and models', exact: true }).fill('kimi-test-model');
+  await picker.getByRole('option', { name: 'Use "kimi-test-model" with Kimi Code', exact: true }).click();
   await expect(picker).not.toBeVisible();
   await expect(page.locator('#composer .provider-logo[data-provider="kimi"]')).toBeVisible();
   await expect(page.locator('#composer')).toContainText('kimi-test-model');
@@ -2964,8 +2853,8 @@ test('retains a completed conversation and model when switching fixture tasks', 
   await prompt(page).fill('Remember this completed preview message');
   await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
   const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
-  await picker.getByRole('searchbox', { name: 'Search harnesses and models', exact: true }).fill('review-model');
-  await picker.getByRole('searchbox', { name: 'Search harnesses and models', exact: true }).press('Enter');
+  await picker.getByRole('combobox', { name: 'Search harnesses and models', exact: true }).fill('review-model');
+  await picker.getByRole('combobox', { name: 'Search harnesses and models', exact: true }).press('Enter');
   await expect(picker).not.toBeVisible();
   await expect(prompt(page)).toBeFocused();
   await expect(page.getByRole('button', { name: 'Choose harness and model', exact: true })).toHaveText('review-model');
@@ -3002,8 +2891,10 @@ test('switches harness after the first message while preserving conversation and
   await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
   const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
   await expect(picker.getByText('Start a new task to switch harnesses.', { exact: true })).toHaveCount(0);
-  await expect(picker.getByRole('button', { name: 'Kimi Code · Default', exact: true })).toBeEnabled();
-  await picker.getByRole('button', { name: 'Codex · Default', exact: true }).click();
+  await picker.getByRole('tab', { name: 'Kimi Code', exact: true }).click();
+  await expect(picker.getByRole('option', { name: 'Kimi Code · Default', exact: true })).toBeEnabled();
+  await picker.getByRole('tab', { name: 'Codex', exact: true }).click();
+  await picker.getByRole('option', { name: 'Codex · Default', exact: true }).click();
   await expect(picker).not.toBeVisible();
   await expect(page.locator('#composer .provider-logo[data-provider="codex"]')).toBeVisible();
   await expect(page.locator('.provider-handoff')).toContainText('Conversation carried forward');
