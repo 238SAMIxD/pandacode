@@ -811,7 +811,7 @@ html[data-theme="dark"]:is([data-native-material="liquidGlass"],[data-native-mat
 @media(prefers-contrast:more){.project-board::before,.browser-home::before{display:none}}
 
 
-.provider-handoff{margin:16px 0 16px 34px;color:var(--muted);font-size:.8rem;max-width:70ch}.provider-handoff summary{display:flex;align-items:center;gap:7px;cursor:pointer;list-style:none}.provider-handoff summary::-webkit-details-marker{display:none}.provider-handoff summary :is(.icon,.provider-logo){width:16px;height:16px;flex-shrink:0}.provider-handoff p{margin:8px 0;line-height:1.6}.provider-handoff summary:focus-visible{outline:2px solid var(--focus);outline-offset:4px;border-radius:2px}
+.provider-handoff{margin-top:16px;margin-bottom:16px;color:var(--muted);font-size:.8rem}.provider-handoff summary{display:flex;align-items:center;justify-content:center;gap:7px;width:fit-content;max-width:100%;margin:0 auto;cursor:pointer;list-style:none}.provider-handoff summary>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.provider-handoff summary::-webkit-details-marker{display:none}.provider-handoff summary :is(.icon,.provider-logo){width:16px;height:16px;flex-shrink:0}.provider-handoff p{max-width:70ch;margin:8px auto;line-height:1.6}.provider-handoff summary:focus-visible{outline:2px solid var(--focus);outline-offset:4px;border-radius:2px}
 
 /* A bot's conversations are ordinary task threads. The header names the bot and its state,
    with pause and settings beside it; bots own their workspace, so the project bar is hidden. */
