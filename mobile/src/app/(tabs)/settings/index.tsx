@@ -1,10 +1,11 @@
 import Constants from 'expo-constants';
 import { Image } from 'expo-image';
 import * as WebBrowser from 'expo-web-browser';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { connect } from '../../../connect/client.ts';
+import { enableNotifications, notificationsGranted } from '../../../ui/push.ts';
 import { useStatus } from '../../../store/index.ts';
 import { clearLocal } from '../../../store/local.ts';
 import { APPEARANCES, setAppearance, useAppearance } from '../../../ui/appearance.ts';
@@ -22,6 +23,15 @@ export default function Settings() {
   const status = useStatus();
   const insets = useSafeAreaInsets();
   const appearance = useAppearance(s => s.choice);
+  const [pushOn, setPushOn] = useState<boolean | null>(null);
+  useEffect(() => { void notificationsGranted().then(setPushOn).catch(() => undefined); }, []);
+  const enable = () => { void (async () => {
+    try {
+      const ok = await enableNotifications();
+      setPushOn(ok);
+      if (!ok) Alert.alert('Notifications are off', 'Allow them in iOS Settings to hear when a task needs you.');
+    } catch { setPushOn(false); }
+  })(); };
   const [deleting, setDeleting] = useState(false);
   const signOut = () => Alert.alert('Sign out?', 'This phone stops seeing your computers until you sign in again.', [
     { text: 'Cancel', style: 'cancel' },
@@ -69,6 +79,14 @@ export default function Settings() {
         )}
       </Section>
       )}
+      <Section title="Notifications" footer="Wake this phone when a task needs approval or finishes. The relay learns that something happened, never what.">
+        <Pressable onPress={enable} accessibilityRole="button">
+          <View style={styles.row}>
+            <Text style={[styles.value, { color: colors.text, flex: 1 }]}>{pushOn ? 'Enabled' : 'Enable notifications'}</Text>
+            {!pushOn && <Text style={[styles.badge, { color: colors.tint }]}>Enable</Text>}
+          </View>
+        </Pressable>
+      </Section>
       <Section title="Appearance" footer="Applies to this app only. System follows the phone's light or dark setting.">
         <View style={styles.chips} accessibilityRole="radiogroup">
           {APPEARANCES.map(a => {
