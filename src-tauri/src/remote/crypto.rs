@@ -33,9 +33,9 @@ fn decode_public(text: &str) -> Option<[u8; 32]> {
     STANDARD.decode(text.trim()).ok()?.try_into().ok()
 }
 
-/// First 8 bytes of SHA-256 of the raw public key, hex.
+/// First 16 bytes (128 bits) of SHA-256 of the raw public key, hex.
 pub(crate) fn fingerprint(public: &str) -> String {
-    decode_public(public).map(|raw| Sha256::digest(raw)[..8].iter().map(|b| format!("{b:02x}")).collect()).unwrap_or_default()
+    decode_public(public).map(|raw| Sha256::digest(raw)[..16].iter().map(|b| format!("{b:02x}")).collect()).unwrap_or_default()
 }
 
 /// HKDF-SHA256 over the X25519 secret, salted with the sorted device ids.
@@ -74,6 +74,19 @@ pub(crate) fn open(key: &Key, from: &str, to: &str, body: &str) -> crate::Result
     XChaCha20Poly1305::new(key.into()).decrypt(XNonce::from_slice(nonce), Payload { msg: sealed, aad: &aad(from, to) }).map_err(|_| "A frame failed to decrypt.".into())
 }
 
+/// 32 random bytes, base64 (44 characters): route keys and handshake nonces.
+pub(crate) fn random_token() -> String {
+    use chacha20poly1305::aead::rand_core::RngCore;
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    STANDARD.encode(bytes)
+}
+
+/// Compares secrets without stopping at the first differing byte.
+pub(crate) fn same(a: &str, b: &str) -> bool {
+    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |diff, (x, y)| diff | (x ^ y)) == 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,9 +123,18 @@ mod tests {
         let restored = decode_secret(&encode_secret(&secret)).unwrap();
         assert_eq!(public_key(&restored), public_key(&secret));
         let print = fingerprint(&public_key(&secret));
-        assert_eq!(print.len(), 16);
+        assert_eq!(print.len(), 32);
         assert!(print.chars().all(|c| c.is_ascii_hexdigit()));
         assert_eq!(fingerprint("nope"), "");
         assert!(pair_key(&secret, "a", &STANDARD.encode([0u8; 32]), "b").is_err());
+    }
+
+    #[test]
+    fn random_tokens_are_long_and_distinct_and_compare_exactly() {
+        let (a, b) = (random_token(), random_token());
+        assert_eq!(a.len(), 44);
+        assert_ne!(a, b);
+        assert!(same(&a, &a.clone()));
+        assert!(!same(&a, &b) && !same(&a, &a[1..]) && !same("", "x"));
     }
 }

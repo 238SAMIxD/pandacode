@@ -9,7 +9,7 @@ import { createPreviewCloud, createPreviewVm } from './preview-vm';
 import { createPreviewTurnChanges } from './preview-turn-changes';
 // Bundled with the preview, not lazily imported: a late module load during a paused test clock stalled startup.
 import { invokeBots } from './preview-bots';
-import { invokeRemote } from './preview-remote';
+import { invokeRemote, previewRemoteStart } from './preview-remote';
 import { createPreviewDesign } from './preview-design';
 import { BRIEF_ID, GALLERY_ID, briefAnswer, briefMessages, briefTimings, briefTools, galleryMessages } from './preview-traces';
 import { createPreviewSkills } from './preview-skills';
@@ -18,7 +18,7 @@ import { recipesCommand } from './preview-recipes';
 import { openCodePreviewKey, openCodePreviewModels, previewOpenCodeChoices, previewOpenCodeSelection } from './preview-opencode';
 const turnChanges = createPreviewTurnChanges();
 const now = Date.now();
-const sampleReadme = '# Orbit\n\nA tiny search index for the browser preview.\n\n## Usage\n\n- Build the index with `createSearchIndex`.\n- Call `search(query)`.\n\n> Results are case-insensitive.\n';
+const sampleReadme = '<div align="center">\n\n<img src="docs/banner.png" alt="Orbit banner" width="100%" onerror="alert(1)"/>\n\n[![Build](https://img.shields.io/badge/build-passing-green)](https://example.com/ci)\n\n<script>alert(1)</script>\n\n<a href="https://example.com/x" download class="toast">Get</a>\n\n</div>\n\n# Orbit\n\nA tiny search index for the browser preview.\n\n## Usage\n\n- Build the index with `createSearchIndex`.\n- Call `search(query)`.\n\n> Results are case-insensitive.\n';
 const sampleSource = '// Browser preview — sample source\nexport function createSearchIndex(items) {\n  return {\n    search(query) {\n      return items.filter(item =>\n        item.title.toLowerCase().includes(query.toLowerCase())\n      );\n    }\n  };\n}\n';
 const previewWorkspaceFiles = ['index.html', '.gitignore', 'README.md', 'package.json', 'tsconfig.json', 'src/main.ts', 'src/style.css', 'src/components/search.ts', 'src/components/search.test.ts', 'src/lib/search-index.ts', 'public/favicon.svg', 'docs/design notes.md'];
 const sampleTestOutput = 'PASS src/components/search.test.ts\n  ✓ filters results as the query changes\n  ✓ preserves keyboard selection\n\nTests: 12 passed, 12 total\nTime: 0.8s\nSample output — no command was executed.';
@@ -74,6 +74,21 @@ for (const s of sessions) {
 loadThreadOrder();
 // One sample task already tracks a GitHub issue so chips have something to show.
 sessions[2].issue = { kind: 'issue', number: 131, url: 'https://github.com/orbit-labs/orbit/issues/131', title: 'Keyboard shortcut cheat sheet', state: 'open', checkedAt: now };
+// Sidebar sections showcase: opt in with ?sections so default session counts stay unchanged.
+if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('sections')) {
+  const sample = (id: string, projectId: string, title: string, extra: Partial<Session>): Session => ({ id, projectId, title, provider: 'claude', model: 'sonnet', mode: 'ask', status: 'idle', createdAt: now - 7200000, updatedAt: now - 60000, archived: false, worktreePath: null, resumeId: null, lastResponseAt: null, pinned: false, sidebarOrder: null, taskStage: 'review', taskDescription: '', completedAt: null, ...extra });
+  sessions.push(
+    sample('sections-running', 'project-1', 'Speed up the search index', { status: 'running', taskStage: 'in_progress', lastPromptAt: now - 95000 }),
+    sample('sections-approval', 'project-2', 'Migrate settings storage', { provider: 'codex', model: '', status: 'waiting_approval', taskStage: 'in_progress', lastPromptAt: now - 240000 }),
+    sample('sections-review-1', 'project-1', 'Fix the flaky filter test', { lastPromptAt: now - 1500000, lastResponseAt: now - 1200000 }),
+    sample('sections-review-2', 'project-2', 'Write the release notes', { provider: 'codex', model: '', lastPromptAt: now - 11000000, lastResponseAt: now - 10800000 }),
+    sample('sections-done-1', 'project-1', 'Add dark mode tokens', { taskStage: 'completed', lastResponseAt: now - 90000000, completedAt: now - 86000000 }),
+    sample('sections-done-2', 'project-2', 'Remove the old onboarding', { taskStage: 'completed', lastResponseAt: now - 200000000, completedAt: now - 190000000 }),
+    sample('sections-done-3', 'project-1', 'Document the keyboard map', { provider: 'kimi', model: '', taskStage: 'completed', lastResponseAt: now - 300000000, completedAt: now - 290000000 }),
+  );
+  // These two finished while another thread was open, so they wait in Needs review.
+  localStorage.setItem('pandacode.sidebar.unreviewed', JSON.stringify(['sections-review-1', 'sections-review-2']));
+}
 let id = 10;
 let previewClaudeMode: 'inherit' | 'subscription' = 'inherit';
 const traceRoot = '/Users/you/Projects/orbit';
@@ -123,9 +138,11 @@ const providers: Provider[] = [
   { id: 'deepseek', name: 'DeepSeek', installed: true, path: '/sample/bin/dsh', version: 'Sample provider', models: [] },
   { id: 'commandcode', name: 'Command Code', installed: true, path: '/sample/bin/command-code', version: '1.87.1 (sample)', models: [] },
   { id: 'cline', name: 'Cline', installed: true, path: '/sample/bin/cline', version: '3.0.73 (sample)', models: [] },
+  { id: 'kilo', name: 'Kilo Code', installed: true, path: '/sample/bin/kilo', version: '7.3.41 (sample)', models: [] },
   { id: 'omp', name: 'Oh My Pi', installed: false, path: null, version: '', models: [] },
   { id: 'github-copilot', name: 'GitHub Copilot CLI', installed: true, path: '/sample/bin/copilot', version: 'GitHub Copilot CLI 1.0.82 (sample)', models: [] },
   { id: 'muse', name: 'Muse Code', installed: true, path: '/sample/bin/muse', version: 'Muse Code 1.4.7 (sample)', models: [] },
+  { id: 'devin', name: 'Devin CLI', installed: true, path: '/sample/bin/devin', version: 'devin 3000.11.216 (sample)', models: [] },
 ];
 // Mirrors providers::mimo::ENDPOINTS; the native side is the authority.
 const previewMimoEndpoints = [
@@ -157,6 +174,11 @@ function remoteCatalog(id: ProviderId): ProviderModel[] {
   return id === 'codex' ? ['gpt-5-codex', 'gpt-5'].map(model => fallbackModel('codex', model)) : [];
 }
 const catalogs: Record<ProviderId, ProviderModel[]> = {
+  // Recorded from `kilo acp` 7.3.41; efforts belong to its current model only.
+  kilo: [
+    { id: 'kilo/stealth/claude-sonnet-4.6', name: 'Kilo Gateway/Stealth: Claude Sonnet 4.6 (20% off)', description: '', reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'].map(id => ({ id, name: id, description: '' })), defaultReasoningEffort: 'none' },
+    { id: 'kilo/anthropic/claude-sonnet-4.6', name: 'Kilo Gateway/Anthropic: Claude Sonnet 4.6', description: '' },
+  ],
   pi: [{ id: 'anthropic/claude-sonnet-4-5', name: 'Claude Sonnet 4.5', description: 'Sample Pi model.', reasoningEfforts: [{ id: 'low', name: 'Low', description: '' }, { id: 'high', name: 'High', description: '' }], contextWindow: 200000 }],
   omp: [{ id: 'anthropic/claude-sonnet-4-5', name: 'Claude Sonnet 4.5', description: 'Sample omp model.', reasoningEfforts: [{ id: 'low', name: 'Low', description: '' }, { id: 'high', name: 'High', description: '' }], contextWindow: 200000 }],
   deepseek: [
@@ -174,6 +196,14 @@ const catalogs: Record<ProviderId, ProviderModel[]> = {
   // Recorded from `cline --acp` 3.0.73; efforts are its --thinking levels.
   cline: ['anthropic/claude-sonnet-5.5', 'anthropic/claude-opus-5.5', 'openai/gpt-6-sol'].map((id, index) => ({ id, name: ['Claude Sonnet 5.5', 'Claude Opus 5.5', 'GPT-6 Sol'][index], description: '', reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh'].map(effort => ({ id: effort, name: effort === 'xhigh' ? 'Extra high' : effort[0].toUpperCase() + effort.slice(1), description: '' })) })),
   'github-copilot': [{ id: 'default', name: 'Default', description: 'Use the model configured in GitHub Copilot CLI.' }],
+  // Recorded from `devin acp` 3000.11.216: each model lists its own thinking levels.
+  devin: ([
+    ['adaptive', 'Adaptive', [], ''], ['swe-2-high', 'SWE-2', ['medium', 'high', 'max'], 'high'],
+    ['claude-opus-5-5-medium', 'Claude Opus 5.5', ['low', 'medium', 'high', 'xhigh', 'max'], 'medium'],
+    ['gpt-6-sol-medium', 'GPT-6 Sol', ['none', 'low', 'medium', 'high', 'xhigh', 'max'], 'medium'],
+    ['glm-5-2', 'GLM-5.2 High', ['none', 'high', 'max'], 'high'],
+    ['fusion-claude-opus-5-5-medium-sidekick-swe-2-medium', 'Fusion (Claude Opus 5.5 Medium + SWE-2 Medium)', ['low', 'medium', 'high', 'xhigh', 'max'], 'medium'],
+  ] as [string, string, string[], string][]).map(([id, name, efforts, effort]) => ({ id, name, description: id === 'glm-5-2' ? 'Text only' : '', reasoningEfforts: efforts.map(value => ({ id: value, name: value === 'xhigh' ? 'Extra high' : value[0].toUpperCase() + value.slice(1), description: '' })), ...(effort ? { defaultReasoningEffort: effort } : {}) })),
   muse: ['muse-wonder-1.0', 'muse-spark-1.3'].map(id => ({ id, name: id, description: '', reasoningEfforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map(effort => ({ id: effort, name: effort === 'xhigh' ? 'Extra high' : effort[0].toUpperCase() + effort.slice(1), description: '' })), defaultReasoningEffort: 'high', contextWindow: 1007997 })),
   opencode: openCodePreviewModels,
   glm: [
@@ -452,7 +482,11 @@ function finishTiming(sessionId: string): void {
   turnChanges.finish(marker); history.push(marker);
   agent({ sessionId, kind: 'turn_changes', text: '', data: { messageId: marker.id, turnChanges: marker.turnChanges } });
 }
-function finish(sessionId: string, content: string) { const time = Date.now(); messages[sessionId].push({ id: ++id, sessionId, role: 'assistant', content, createdAt: time }); finishTiming(sessionId); const s = session(sessionId); if (content.trim()) s.lastResponseAt = time; s.status = 'idle'; s.taskStage = 'review'; s.updatedAt = time; timers.delete(sessionId); activeTools.delete(sessionId); agent({ sessionId, kind: 'done', text: '' }); }
+/* A task on another computer: like remote/mirror.rs, its history here is what was copied
+ * from the host, which happens when a run ends (just before its `done`). */
+const mirrorSynced = new Map<string, number>();
+function syncMirror(sessionId: string): void { if (mirrorSynced.has(sessionId)) mirrorSynced.set(sessionId, id); }
+function finish(sessionId: string, content: string) { const time = Date.now(); messages[sessionId].push({ id: ++id, sessionId, role: 'assistant', content, createdAt: time }); finishTiming(sessionId); const s = session(sessionId); if (content.trim()) s.lastResponseAt = time; s.status = 'idle'; s.taskStage = 'review'; s.updatedAt = time; timers.delete(sessionId); activeTools.delete(sessionId); syncMirror(sessionId); agent({ sessionId, kind: 'done', text: '' }); }
 /** Replays the Morning brief reference: five MCP tools (running, then completed), then the answer in chunks. `?replay=N` scales the pace. */
 function replayBrief(s: Session): void {
   const speed = Number(new URLSearchParams(location.search).get('replay')) || 1, at = (ms: number) => ms / speed;
@@ -663,17 +697,72 @@ const architect = createPreviewArchitect({
   agent,
 });
 
+/** Menu bar popover data; `window.__trayCalls` records what it asked for. */
+function trayCommand(command: string, args: Record<string, any>): unknown {
+  ((window as any).__trayCalls ??= []).push({ command, args });
+  if (command !== 'tray_snapshot') return undefined;
+  const now = Date.now(), minutes = (m: number) => now - m * 60_000, hours = (h: number) => new Date(now + h * 3_600_000).toISOString();
+  return {
+    running: [
+      { id: 'tray-running-1', title: 'Polish the new onboarding flow and keyboard navigation', project: 'PandaCode', provider: 'claude', at: minutes(4) },
+      { id: 'tray-running-2', title: 'Build search indexing', project: 'website', provider: 'codex', at: minutes(27) },
+    ],
+    waiting: [{ id: 'tray-waiting', title: 'Run the database migration', project: 'api', provider: 'opencode', at: minutes(12) }],
+    finished: [
+      { id: 'tray-done', title: 'Review the API changes', project: 'api', provider: 'kimi', at: minutes(8) },
+      { id: 'tray-failed', title: 'Fix flaky login test', project: 'PandaCode', provider: 'codex', at: minutes(65), failed: true },
+    ],
+    usage: [
+      { provider: 'claude', status: 'ready', plan: 'Max', stale: false, checkedAt: now, windows: [{ label: '5 hours', usedPercent: 42, resetsAt: hours(2.17) }, { label: 'Weekly', usedPercent: 83, resetsAt: hours(70) }] },
+      { provider: 'codex', status: 'ready', plan: 'Pro', stale: false, checkedAt: now, windows: [{ label: '5 hours', usedPercent: 97, resetsAt: hours(0.6) }] },
+    ],
+    checking: false,
+  };
+}
 export async function invoke<T>(command: string, args: Record<string, any>): Promise<T> {
+  if (command.startsWith('tray_')) return trayCommand(command, args) as T;
   if (command.startsWith('jj_')) return (await import('./preview-jj')).invokeJj<T>(command, args);
   if (command.includes('moodboard')) return (await import('./preview-moodboards')).invokeMoodboards<T>(command, args);
   if (command === 'bots_list' || command.startsWith('bot_')) return invokeBots<T>(command, args, {
     invoke, emit,
     addProject: name => { const p = { id: crypto.randomUUID(), name, path: `/Users/you/PandaCode Bots/${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}` }; projects.push(p); return p; },
   });
+  if (command === 'remote_device_grants' || command === 'remote_set_device_grant' || command.startsWith('remote_pair_')) return (await import('./preview-grants')).previewGrants(command, args) as T;
+  if (command === 'remote_diagnostics' || command === 'remote_diagnostics_export') return (await import('./preview-diagnostics')).previewDiagnostics(command, args) as T;
+  if (command === 'remote_reconnect') {
+    // Tests steer it: `__remoteReconnectHold` waits for `__remoteReconnectRelease()`, `__remoteReconnectFail` is an error text.
+    const w = window as any; w.__remoteReconnects = (w.__remoteReconnects ?? 0) + 1;
+    if (w.__remoteReconnectHold) await new Promise<void>(resolve => { w.__remoteReconnectRelease = () => { w.__remoteReconnectHold = false; resolve(); }; });
+    if (w.__remoteReconnectFail) { const failure = w.__remoteReconnectFail; w.__remoteReconnectFail = undefined; throw new Error(failure); }
+    return undefined as T;
+  }
   if (command === 'remote_repo_check') {
+    const w = window as any;
+    (w.__remoteRepoChecks ??= []).push(args);
+    if (w.__remoteRepoCheckManual) await new Promise<void>(resolve => { w.__remoteRepoCheckRelease = () => { w.__remoteRepoCheckManual = false; resolve(); }; });
     // `window.__remoteBehind` lets tests make GitHub lag this computer.
-    const repo = previewGithub.status(args.projectId).repo, behind = (window as any).__remoteBehind ?? {};
+    const repo = previewGithub.status(args.projectId).repo, behind = w.__remoteBehind ?? {};
     return { repo: repo?.nameWithOwner ?? null, branch: git.branch, ahead: behind.ahead ?? 0, dirty: behind.dirty ?? false, pushed: behind.pushed ?? true } as T;
+  }
+  if (command === 'remote_cancel_start') {
+    const w = window as any;
+    (w.__remoteCancelStarts ??= []).push(args);
+    if (w.__remoteCancelStartFail) throw new Error(w.__remoteCancelStartFail);
+    if (w.__remoteCancelStartHold) await new Promise<void>(resolve => { w.__remoteCancelStartRelease = () => { w.__remoteCancelStartHold = false; resolve(); }; });
+    const { cancelPreviewRemoteStart } = await import('./preview-remote');
+    // `__remoteCancelStartPending`: the host has not answered; `__remoteCancelStartFailLater()` then ends the start with an error frame.
+    if (w.__remoteCancelStartPending) {
+      w.__remoteCancelStartPending = false;
+      const started = (w.__remoteStarts ?? []).at(-1) ?? {};
+      w.__remoteCancelStartFailLater = () => { emit('remote://start-progress', { deviceId: started.deviceId, startId: started.startId ?? null, repo: null, stage: 'error', percent: null, detail: 'Start cancelled.' }); cancelPreviewRemoteStart(String(args.sessionId)); };
+      return { cancelled: false, pending: true } as T;
+    }
+    if (!cancelPreviewRemoteStart(String(args.sessionId))) throw new Error('This remote start is no longer active.');
+    return { cancelled: true } as T;
+  }
+  if (command === 'remote_workspace_image') {
+    ((window as any).__remoteWorkspaceImages ??= []).push({ sessionId: args.sessionId, path: args.path });
+    return invoke<T>('workspace_image', args);
   }
   if (command === 'remote_start_task') {
     // The task runs on the other computer; here it is an ordinary session that names it.
@@ -681,9 +770,24 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     const target = targets.find(item => item.deviceId === args.deviceId && item.online);
     if (!target) throw new Error('That computer is offline.');
     ((window as any).__remoteStarts ??= []).push(args);
+    // The host's stages (finding, downloading…), shown by src/remote-progress.ts; may fail on request.
+    await previewRemoteStart({ ...args, repo: previewGithub.status(args.projectId).repo?.nameWithOwner }, emit);
     const s = args.sessionId ? session(args.sessionId) : await invoke<Session>('create_session', { projectId: args.projectId, provider: args.provider, model: args.model, mode: args.mode });
     Object.assign(session(s.id), { projectId: args.projectId, provider: args.provider, model: args.model, mode: args.mode, reasoningEffort: args.effort, remoteDevice: { id: target.deviceId, name: target.name }, worktreeBranch: args.branch });
-    await invoke('send_message', { sessionId: s.id, text: args.prompt });
+    mirrorSynced.set(s.id, id);
+    const w = window as any;
+    if (w.__remoteStartAmbiguous) {
+      // The reply was lost (remote/mirror.rs): the row stays running and waits; `__remoteStartAttach()` lets the host task appear.
+      w.__remoteStartAmbiguous = false;
+      Object.assign(session(s.id), { status: 'running', draft: false });
+      emit('remote://start-progress', { deviceId: args.deviceId, startId: args.startId ?? null, repo: null, stage: 'starting', percent: null, detail: `Waiting for ${target.name}…` });
+      const { holdPreviewRemoteStart } = await import('./preview-remote');
+      holdPreviewRemoteStart(String(args.sessionId ?? args.startId ?? ''), () => { Object.assign(session(s.id), { remoteDevice: null, status: 'idle', draft: true }); emit('sessions-changed', {}); });
+      w.__remoteStartAttach = async () => { holdPreviewRemoteStart(String(args.sessionId ?? args.startId ?? ''), undefined); session(s.id).status = 'idle'; await invoke('send_message', { sessionId: s.id, text: args.prompt, imageIds: args.imageIds ?? [] }); emit('sessions-changed', {}); };
+      emit('sessions-changed', {});
+      return { sessionId: s.id } as T;
+    }
+    await invoke('send_message', { sessionId: s.id, text: args.prompt, imageIds: args.imageIds ?? [] });
     emit('sessions-changed', {});
     return { sessionId: s.id } as T;
   }
@@ -727,8 +831,9 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       return { provider: provider.id, name: provider.name, providers: provider.id === 'claude' ? ['claude', 'glm', 'mimo'] : [provider.id], installedVersion: version, latestVersion: version, status: 'current', method: null, canUpdate: false, message: 'Browser preview · installed agents are checked in the desktop app.', checkedAt: Date.now(), docsUrl: null };
     }); break;
     case 'update_agent': throw new Error('Agent updates are available in the desktop app.');
-    case 'jev_configuration': result = { enabled: false, decisionsEnabled: false, pythonPath: '', chromePath: '', textModel: 'inception/mercury-2.5', textBaseUrl: 'https://openrouter.ai/api/v1', typesafeKeySaved: false, textKeySaved: false }; break;
+    case 'jev_configuration': result = { enabled: false, decisionsEnabled: false, decisionProvider: 'typesafe', decisionModel: '', openrouterKeySaved: false, pythonPath: '', chromePath: '', textModel: 'inception/mercury-2.5', textBaseUrl: 'https://openrouter.ai/api/v1', typesafeKeySaved: false, textKeySaved: false }; break;
     case 'jev_doctor': result = { ready: false, pythonVersion: '', jevVersion: '', chromePath: '', issues: ['Jev runs in the desktop app. This browser preview does not launch browsers or contact model APIs.'] }; break;
+    case 'jev_decision_models': result = args?.provider === 'openrouter' ? [{ id: 'openai/gpt-4o-mini', name: 'OpenAI: GPT-4o mini' }, { id: 'anthropic/claude-haiku-4.5', name: 'Anthropic: Claude Haiku 4.5' }] : [{ id: 'jev-1.13.0', name: 'jev-1.13.0' }]; break;
     case 'jev_list_runs': case 'jev_assist_list': result = []; break;
     case 'jev_watch_run': break; // Preview never starts Chrome or contacts model providers.
     case 'jev_assist_prepare': {
@@ -763,7 +868,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       result = { provider, status: supported ? 'ready' : 'unsupported', checkedAt: Date.now(), stale: false,
         plan: provider === 'codex' ? 'Pro' : provider === 'opencode' ? 'Go' : null,
         windows: supported ? [
-          { label: provider === 'opencode' ? 'Go rolling window' : '5-hour window', usedPercent: provider === 'codex' ? 38 : 22, resetsAt: new Date(Date.now() + 7200000).toISOString() },
+          { label: provider === 'opencode' ? 'Go rolling window' : '5-hour window', usedPercent: args.connection ? 91 : provider === 'codex' ? 38 : 22, resetsAt: new Date(Date.now() + 7200000).toISOString() },
           { label: provider === 'opencode' ? 'Go weekly' : 'Weekly', usedPercent: 64, resetsAt: new Date(Date.now() + 3 * 86400000).toISOString() },
         ] : [], source: 'Sample limits for the browser preview. No provider request was made.',
         message: supported ? null : 'This harness does not expose account limits. Check its account dashboard.' };
@@ -840,7 +945,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       if (!Number.isSafeInteger(args.messageId) || args.messageId <= 0 || boundary < 0 || !['user', 'assistant'].includes(history[boundary].role)) throw new Error('Choose a saved user message or assistant response to fork.');
       const boundaryProvider = historicalProvider(history[boundary], history, source.provider);
       const created: Session = { ...structuredClone(source), id: crypto.randomUUID(), pinned: false, sidebarOrder: null, title: [...source.title].slice(0, 193).join('') + ' (fork)', resumeId: null, status: 'idle', archived: false, goalState: null, contextUsage: null, taskStage: 'in_progress', completedAt: null, lastResponseAt: null, lastPromptAt: null, createdAt: Date.now(), updatedAt: Date.now() };
-      const copied: Message[] = history.slice(0, boundary + 1).filter(message => !['internal', 'changes'].includes(message.role)).map(message => {
+      const copied: Message[] = history.slice(0, boundary + (args.exclusive ? 0 : 1)).filter(message => !['internal', 'changes'].includes(message.role)).map(message => {
         let content = message.content;
         if (message.role === 'tool') {
           try {
@@ -889,6 +994,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       if (args.enabled && !(s.limitedAt && s.limitedUntil)) throw new Error('This task has no usage limit with a known reset time.');
       s.resumeAtReset = Boolean(args.enabled) && Boolean(s.limitedAt); result = s; break;
     }
+    case 'tray_seen': result = null; break;
     case 'clear_usage_limit': { const s = session(args.sessionId); s.limitedAt = null; s.limitedUntil = null; s.resumeAtReset = false; result = null; break; }
     case 'queue_list': result = previewQueue().filter(entry => !args.sessionId || entry.sessionId === args.sessionId); break;
     case 'queue_add': {
@@ -925,11 +1031,13 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       savePreviewQueue([...queue, restored]); result = restored; break;
     }
     case 'steer_task': {
-      const s = session(args.sessionId);
+      const s = session(args.sessionId), w = window as any;
       if (!timers.has(s.id) && s.status !== 'running') throw new Error('The agent is not running; the message stays queued.');
-      // Claude-family, Codex, Pi and Muse take it live; others hold it for the next turn of the same run.
+      if (w.__remoteRefuse && s.remoteDevice) throw new Error(w.__remoteRefuse);
+      if (w.__remoteSteerHold && s.remoteDevice) await new Promise<void>(resolve => { w.__remoteSteerRelease = () => { w.__remoteSteerHold = false; resolve(); }; });
+      // Claude-family, Codex, Pi, Muse and Devin take it live; others hold it for the next turn of the same run.
       const text = String(args.text).trim(), steerId = `steer-${++id}`;
-      const mode = ['claude', 'glm', 'mimo', 'codex', 'pi', 'muse'].includes(s.provider) ? 'live' : 'next-turn';
+      const mode = ['claude', 'glm', 'mimo', 'codex', 'pi', 'muse', 'devin'].includes(s.provider) ? 'live' : 'next-turn';
       const report = (status: string) => agent({ sessionId: s.id, kind: 'steer' as AgentEvent['kind'], text, data: { id: steerId, status, mode } });
       window.setTimeout(() => report('pending'));
       window.setTimeout(() => {
@@ -1007,6 +1115,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'open_external_url': { const url = new URL(args.url); if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Use an HTTP or HTTPS URL.'); window.open(url.href, '_blank', 'noopener,noreferrer'); break; }
     case 'open_support': window.open('https://github.com/aicodeking/pandacode/issues', '_blank', 'noopener,noreferrer'); break;
     case 'local_sign_app': break;
+    case 'app_update_install_supported': result = true; break;
     case 'support_details': result = { version: 'Preview', platform: 'Browser preview', architecture: 'Not reported' }; break;
     case 'browser_inspect': result = args.action === 'read' ? { url: browserState.url, title: browserState.title, text: 'Browser preview sample page', elements: [] } : { dispatched: true }; break;
     case 'list_provider_models': result = args.deviceId ? remoteCatalog(args.provider as ProviderId) : args.provider === 'opencode' ? previewOpenCodeChoices() : catalogs[args.provider as ProviderId] ?? []; break;
@@ -1104,7 +1213,8 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       s.projectId = projectId; s.provider = args.provider; s.model = args.model; s.updatedAt = Date.now(); result = s; break;
     }
     case 'get_messages': {
-      const history = messages[args.sessionId] ?? [];
+      const synced = mirrorSynced.get(args.sessionId);
+      const history = (messages[args.sessionId] ?? []).filter(message => synced == null || message.id <= synced);
       const current = session(args.sessionId).provider;
       const eligible = history.filter(m => args.beforeId == null || m.id < args.beforeId);
       result = { messages: eligible.slice(-100).map(message => message.role === 'assistant'
@@ -1113,7 +1223,9 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     }
     case 'send_message': {
       if (resolveSlash(session(args.sessionId).provider, String(args.text)).action) throw new Error('This command opens a PandaCode control.');
-      const s = session(args.sessionId); assertIdle(s);
+      const s = session(args.sessionId), w = window as any; assertIdle(s);
+      if (w.__remoteRefuse && s.remoteDevice) throw new Error(w.__remoteRefuse);
+      if (w.__remoteSendHold && s.remoteDevice) await new Promise<void>(resolve => { w.__remoteSendRelease = () => { w.__remoteSendHold = false; resolve(); }; });
       let moodboardContext = '';
       for (const boardId of args.moodboardIds ?? []) {
         const board = await invoke<import('./moodboards').MoodboardDetail>('read_moodboard', { projectId: s.projectId, boardId });
@@ -1151,6 +1263,8 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     }
     case 'stop_session': {
       if (architect.isActive(args.sessionId)) { result = architect.control(args.sessionId, 'stop'); break; }
+      const w = window as any;
+      if (w.__stopHold) await new Promise<void>(resolve => { w.__stopRelease = () => { w.__stopHold = false; resolve(); }; });
       window.clearTimeout(timers.get(args.sessionId)); timers.delete(args.sessionId);
       finishTiming(args.sessionId);
       const pending = activeTools.get(args.sessionId);
@@ -1160,7 +1274,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
         agent({ sessionId: args.sessionId, kind: 'tool', text: 'Bash canceled', tool: { ...pending.activity } });
         activeTools.delete(args.sessionId);
       }
-      const stopped = session(args.sessionId); stopped.status = 'idle'; if (stopped.goalState?.status === 'active') { stopped.goalState.status = 'paused'; emitGoal(stopped); } agent({ sessionId: args.sessionId, kind: 'done', text: 'Stopped' }); break;
+      const stopped = session(args.sessionId); stopped.status = 'idle'; if (stopped.goalState?.status === 'active') { stopped.goalState.status = 'paused'; emitGoal(stopped); } syncMirror(args.sessionId); agent({ sessionId: args.sessionId, kind: 'done', text: 'Stopped' }); break;
     }
     case 'respond_approval': case 'respond_user_input': break;
     case 'git_status': result = checkoutGit(args.sessionId); break;
@@ -1314,6 +1428,8 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'cloud_connect': result = previewCloud.connect(args.provider, args.key, args.options ?? {}); emit('vm-changed', {}); break;
     case 'cloud_disconnect': result = previewCloud.disconnect(args.provider); emit('vm-changed', {}); break;
     case 'cloud_setup_sandboxes': result = previewCloud.setupSandboxes(); emit('vm-changed', {}); break;
+    case 'cloud_instabox_images': result = previewCloud.instaboxImages(); break;
+    case 'cloud_instabox_set_image': result = previewCloud.setInstaboxImage(args.image); break;
     case 'cloud_machines': result = previewCloud.list(); break;
     case 'cloud_create': result = previewCloud.create(args.provider, args.name); break;
     case 'cloud_power': result = previewCloud.power(args.id, args.action); break;
@@ -1333,6 +1449,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'design_save_comments': result = previewDesign.saveComments(args.comments); break;
     case 'skills_list': case 'skills_import_folder': case 'skills_import_github': case 'skills_activate':
     case 'skills_deactivate': case 'skills_matrix': case 'skills_scan': case 'skills_remove':
+    case 'skills_catalogs': case 'skills_catalog_add': case 'skills_catalog_refresh': case 'skills_catalog_state': case 'skills_catalog_import': case 'skills_discover':
       result = previewSkills.call(command, args); break;
     case 'simulator_status': result = previewSimulator.status(); break;
     case 'simulator_pose': result = await previewSimulator.pose(args.udid, args.pose); break;
@@ -1343,7 +1460,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'simulator_input': result = previewSimulator.input(args.udid, args.input); break;
     case 'simulator_appearance': result = previewSimulator.appearance(args.mode); break;
     case 'simulator_capture': result = await previewSimulator.capture(args.udid); break;
-    case 'list_files': result = (args.path ? args.path === 'public' ? [{ name: 'favicon.svg', isDir: false }] : args.path === 'src' ? [{ name: 'components', isDir: true }, { name: 'lib', isDir: true }, { name: 'main.ts', isDir: false }, { name: 'style.css', isDir: false }] : [{ name: 'search.ts', isDir: false }, { name: 'search.test.ts', isDir: false }] : [{ name: 'src', isDir: true }, { name: 'public', isDir: true }, { name: 'index.html', isDir: false }, { name: 'package.json', isDir: false }, { name: 'README.md', isDir: false }, { name: 'tsconfig.json', isDir: false }]).map(f => ({ ...f, path: [args.path, f.name].filter(Boolean).join('/') })) satisfies FileEntry[]; break;
+    case 'list_files': result = (args.path ? args.path === 'public' ? [{ name: 'favicon.svg', isDir: false }] : args.path === 'src' ? [{ name: 'components', isDir: true }, { name: 'lib', isDir: true }, { name: 'main.ts', isDir: false }, { name: 'style.css', isDir: false }] : [{ name: 'search.ts', isDir: false }, { name: 'search.test.ts', isDir: false }] : [{ name: 'src', isDir: true }, { name: 'public', isDir: true }, { name: 'index.html', isDir: false }, { name: 'package.json', isDir: false }, { name: 'README.md', isDir: false }, { name: 'tsconfig.json', isDir: false }, { name: 'report.pdf', isDir: false }, { name: 'proposal.docx', isDir: false }, { name: 'budget.xlsx', isDir: false }, { name: 'screenshot.png', isDir: false }]).map(f => ({ ...f, path: [args.path, f.name].filter(Boolean).join('/') })) satisfies FileEntry[]; break;
     case 'search_files': {
       const query = String(args.query ?? '').trim().toLocaleLowerCase().replace(/\/$/, '');
       const files = previewWorkspaceFiles.map(path => ({ path, isDir: false }));
@@ -1383,6 +1500,9 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       result = { id: crypto.randomUUID(), name, width: 1280, height: 800, thumbnail: String(args.dataUrl ?? '').startsWith('data:image/png') ? args.dataUrl : 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==' };
       break;
     }
+    // Any registry ID shows the yellow swatch; native reads browser-captures/<id>.png.
+    case 'prompt_image': result = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(String(args.id)) ? 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==' : null; break;
+    case 'reveal_path': if (!String(args.path ?? '').startsWith('/')) throw new Error('This attachment is no longer on this computer.'); break;
     case 'read_document': {
       const path = String(args.path ?? ''), name = path.split('/').pop() || 'Document';
       if (!path.startsWith('/')) throw new Error('Choose the document with the picker or drop it onto the message.');
@@ -1419,7 +1539,17 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><defs><linearGradient id="g" x1="0" x2="1"><stop stop-color="#2e513b"/><stop offset="1" stop-color="#ffd43b"/></linearGradient></defs><rect width="320" height="180" rx="12" fill="url(#g)"/><text x="160" y="96" fill="#fffcef" font-family="sans-serif" font-size="18" text-anchor="middle">${String(args.path).split('/').pop()}</text></svg>`;
       result = `data:image/svg+xml;base64,${btoa(svg)}`; break;
     }
-    case 'read_file': result = /\.(md|markdown)$/i.test(args.path) ? sampleReadme : args.path.endsWith('.json') ? '{\n  "name": "orbit",\n  "private": true,\n  "type": "module"\n}' : args.path.endsWith('.html') ? '<!doctype html>\n<html><head><title>Orbit</title></head><body><h1>Orbit</h1></body></html>' : sampleSource; break;
+    // Sample documents are the test fixtures, served by the dev server.
+    case 'read_document_file': {
+      const sample = ({ pdf: 'sample.pdf', docx: 'sample.docx', xlsx: 'sample.xlsx', png: 'sample.png', svg: 'sample.svg' } as Record<string, string>)[String(args.path).split('.').pop()!.toLowerCase()];
+      const response = sample && await fetch(`/tests/fixtures/${sample}`);
+      if (!response || !response.ok) throw new Error('Only PDF, Word (.docx) and spreadsheet files can be shown');
+      result = await response.arrayBuffer();
+      break;
+    }
+    // Like `Store::workspace_root`: a task on another computer has no checkout here.
+    case 'read_file': { const mirror = args.sessionId ? sessions.find(s => s.id === args.sessionId)?.remoteDevice : null; if (mirror) throw new Error(`This task runs on ${mirror.name}.`); }
+      result = /\.(md|markdown)$/i.test(args.path) ? sampleReadme : args.path.endsWith('.json') ? '{\n  "name": "orbit",\n  "private": true,\n  "type": "module"\n}' : args.path.endsWith('.html') ? '<!doctype html>\n<html><head><title>Orbit</title></head><body><h1>Orbit</h1></body></html>' : args.path.endsWith('.svg') ? '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/></svg>' : sampleSource; break;
     case 'get_metrics': result = { coreRssBytes: 0, activeAgents: timers.size, activeTerminals: 0, databaseBytes: 0 }; break;
     case 'get_terminal_activity': result = { running: false, processNames: [], uncertain: false }; break;
     case 'get_run_script': result = null; break;
