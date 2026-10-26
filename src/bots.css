@@ -17,7 +17,7 @@ dialog.bots-dialog{width:min(960px,calc(100vw - 32px));max-height:90dvh}
 .bots-dot.working{background:var(--success);box-shadow:0 0 0 3px color-mix(in srgb,var(--success) 20%,transparent)}
 @media(prefers-reduced-motion:no-preference){.bots-dot.working{animation:bots-pulse 1.6s ease-in-out infinite}}
 @keyframes bots-pulse{50%{box-shadow:0 0 0 5px color-mix(in srgb,var(--success) 6%,transparent)}}
-.bot-avatar{display:grid;place-items:center;flex:none;width:30px;height:30px;border-radius:50%;background:color-mix(in srgb,var(--accent) 55%,var(--raised));color:var(--bots-on-accent);font-weight:650;font-size:var(--text-md);line-height:1}
+.bot-avatar{display:grid;place-items:center;flex:none;width:var(--control);height:var(--control);border-radius:50%;background:color-mix(in srgb,var(--accent) 55%,var(--raised));color:var(--bots-on-accent);font-weight:650;font-size:var(--text-md);line-height:1}
 .bot-avatar.large{width:46px;height:46px;font-size:var(--text-xl)}
 
 /* Detail */
@@ -68,11 +68,11 @@ p.bots-hint{margin:0}
 .bots-field{display:flex;flex-direction:column;gap:5px;min-width:0}
 .bots-field>span{display:flex;align-items:center;gap:5px;font-size:var(--text-xs);font-weight:550;color:var(--muted)}
 .bots-field textarea{width:100%;padding:9px 12px;font:inherit;line-height:1.45}
-.bots-field input,.bots-field select{padding:8px 11px}
+.bots-field input,.bots-field select{min-height:var(--control-lg);padding:6px 11px}
 .bots-grid{display:grid;grid-template-columns:72px minmax(0,1fr);gap:10px}
 .bots-grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}
 .bots-templates,.bots-kinds{display:flex;flex-wrap:wrap;gap:6px}
-.bots-templates>button,.bots-kinds>button{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;border:1px solid var(--border);font-size:var(--text-sm);color:var(--text)}
+.bots-templates>button,.bots-kinds>button{display:inline-flex;align-items:center;gap:6px;min-height:var(--control-lg);padding:0 12px;border-radius:999px;border:1px solid var(--border);font-size:var(--text-sm);color:var(--text)}
 .bots-templates>button:hover,.bots-kinds>button:hover{background:var(--raised)}
 .bots-templates>button[aria-pressed=true],.bots-kinds>button[aria-pressed=true]{background:color-mix(in srgb,var(--accent) 28%,transparent);border-color:color-mix(in srgb,var(--accent) 70%,var(--border))}
 .bots-inline-form{display:flex;gap:8px}
