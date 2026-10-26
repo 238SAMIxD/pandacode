@@ -357,4 +357,27 @@ test.describe('thread order', () => {
     expect(Math.abs(panel.x - box.x)).toBeLessThan(2);
     expect(panel.y).toBeGreaterThanOrEqual(box.y + box.height);
   });
+
+  test('a right-click on a row’s tick, … or the gap beside them opens the app menu; again moves it', async ({ page }) => {
+    await open(page);
+    const actions = page.locator('#task-row-session-2 .task-actions');
+    await row(page, 'session-2').hover();
+    const area = (await actions.boundingBox())!;
+    // The padding gap before the tick: the actions span itself, not a button.
+    await actions.click({ button: 'right', position: { x: 4, y: area.height / 2 } });
+    await expect(menu(page)).toBeVisible();
+    await expect(menu(page).getByRole('menuitem', { name: 'Pin task', exact: true })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await row(page, 'session-2').hover();
+    await page.locator('#task-row-session-2 .task-more').click({ button: 'right' });
+    await expect(menu(page)).toBeVisible();
+    const first = (await menu(page).boundingBox())!;
+    // Right-clicking the same row elsewhere moves the open menu to the pointer instead of closing it.
+    const box = (await row(page, 'session-2').boundingBox())!;
+    await row(page, 'session-2').click({ button: 'right', position: { x: 30, y: 6 } });
+    await expect(menu(page)).toBeVisible();
+    await expect.poll(async () => Math.round((await menu(page).boundingBox())!.x)).toBe(Math.round(box.x + 30));
+    expect(Math.round(first.x)).not.toBe(Math.round(box.x + 30));
+    await expect(menu(page)).toHaveCount(1);
+  });
 });

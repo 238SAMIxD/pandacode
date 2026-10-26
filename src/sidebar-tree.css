@@ -58,7 +58,10 @@ html[data-theme] .sidebar .new-task-button>.icon{color:var(--focus)}
 /* Wrapper lets the heading button and the hover-reveal new-task icon sit side by side. */
 .folder-row{position:relative;display:flex;align-items:center;border-radius:3px}
 .folder-row:hover{background:var(--raised)}
-.folder-row>.folder-heading{flex:1;min-width:0;padding-right:54px}
+/* The + and … buttons take the right edge only while shown, so a long name uses it otherwise.
+   Nothing reflows: the row keeps its height; the name re-ellipsizes and the count steps aside. */
+.folder-row>.folder-heading{flex:1;min-width:0;padding-right:9px}
+.folder-row:is(:hover,:focus-within)>.folder-heading,.folder-row:has(>.folder-actions[aria-expanded=true])>.folder-heading{padding-right:54px}
 .folder-actions{--press:1}
 .folder-row>.folder-heading:hover{background:transparent}
 .folder-new-task,.folder-actions{position:absolute;z-index:1;right:3px;display:grid;place-items:center;width:24px;height:24px;border-radius:4px;color:var(--muted);opacity:0}
@@ -72,7 +75,7 @@ html[data-theme] .sidebar .new-task-button>.icon{color:var(--focus)}
 .folder-heading.drop-after{box-shadow:inset 0 -2px 0 var(--accent)}
 .folder-row:is(:hover,:focus-within)>:is(.folder-new-task,.folder-actions),.folder-actions[aria-expanded=true]{opacity:1}
 .folder-new-task:hover,.folder-actions:hover{color:var(--text);background:color-mix(in srgb,var(--text) 8%,transparent)}
-@media(hover:none){.folder-new-task,.folder-actions{opacity:1}}
+@media(hover:none){.folder-new-task,.folder-actions{opacity:1}.folder-row>.folder-heading{padding-right:54px}}
 
 /* Tasks hang off a thin guide under their folder. */
 .sidebar .folder-tasks{margin:1px 0 4px var(--tree-indent);padding-left:6px;border-left:1px solid var(--tree-guide);gap:1px}
@@ -147,9 +150,10 @@ html[data-theme=dark] .sidebar .task-indicator.unread{background:var(--accent)}
 .sidebar .task-actions{position:absolute;z-index:1;top:4px;right:0;padding-right:5px;display:flex;align-items:center;gap:1px;opacity:0;pointer-events:none}
 .sidebar .task-row-oneline>.task-actions{top:0;bottom:0}
 .sidebar .task-row:is(:hover,:focus-within)>.task-actions{opacity:1;pointer-events:auto}
-/* Light wallpaper: ages, counts and "Show N more" sit on frost over the scene, which darker scenes
-   pull toward grey; these keep them ≥6:1 on every scene at the default visibility. */
-html:not([data-theme="dark"]) .workspace[data-wallpaper]>.sidebar{--muted:#45483f;--faint:#4b4e45}
+/* Light wallpaper: secondary text (headings, "Show N more") and faint text (ages, counts) sit on
+   frost over the scene, which darker scenes pull toward grey. Two tiers below the title, both
+   ≥4.5:1 on every scene at the default visibility. */
+html:not([data-theme="dark"]) .workspace[data-wallpaper]>.sidebar{--muted:#3d4038;--faint:#585b53}
 /* The actions cover the status/age slot, which keeps its width, behind a short fade to the row's
    own background: the title keeps its length instead of shrinking for them. */
 .sidebar .task-row{--row-bg:var(--raised)}
@@ -168,13 +172,11 @@ html[data-theme] .workspace[data-wallpaper]>.sidebar .task-row:has(>.task-item.s
 .sidebar .task-check.checked:hover .icon{background:var(--accent-hover)}
 .sidebar .completed-group .task-title,.sidebar .task-row[data-stage=completed] .task-title{color:var(--muted)}
 
-.folder-more{display:block;width:100%;height:26px;padding:0 8px 0 29px;border-radius:3px;text-align:left;font-size:.76rem;color:var(--muted);--press:1}
+/* Its text lines up with the titles of the rows above it, in a folder or not. */
+.folder-more{display:block;width:100%;height:26px;padding:0 8px 0 9px;border-radius:3px;text-align:left;font-size:.76rem;color:var(--muted);--press:1}
 .folder-more:hover{color:var(--text);background:var(--raised)}
-/* Outside a folder (Completed, Chats) it lines up with the rows above it. */
-.sidebar .task-list:not(.folder-tasks)>.folder-more{padding-left:9px}
 .sidebar .folder-tasks>.no-tasks{padding:5px 8px 6px;font-size:.74rem}
 .sidebar .single-project .task-list{gap:1px}
-.sidebar .single-project .folder-more{padding-left:31px}
 /* "N more in other projects" sits under the list as a single quiet line. */
 .sidebar-note{flex:none;padding:4px 8px 2px;border-top:1px solid var(--tree-guide)}
 .sidebar-note[hidden]{display:none}

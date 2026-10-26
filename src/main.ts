@@ -3627,8 +3627,9 @@ async function forgetChat(projectId: string): Promise<void> {
 }
 type ChoiceOptions = Omit<Parameters<typeof import('./choice-menu').openChoiceMenu>[0], 'anchor' | 'onClose'>;
 async function showChoices(anchor: HTMLElement, options: ChoiceOptions): Promise<void> {
-  if (pendingMenuOpen?.anchor === anchor) { cancelPendingMenu(); return; }
-  if (choiceMenuCleanup && choiceMenuAnchor === anchor) { closeChoiceMenu(); return; }
+  // A second click on the trigger closes its menu; a right-click (a point) moves it there instead.
+  if (!options.point && pendingMenuOpen?.anchor === anchor) { cancelPendingMenu(); return; }
+  if (!options.point && choiceMenuCleanup && choiceMenuAnchor === anchor) { closeChoiceMenu(); return; }
   closeMenus();
   const { epoch, release } = beginMenuOpen(anchor);
   const generation = state.generation;

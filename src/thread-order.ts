@@ -114,7 +114,9 @@ export function bindThreadReordering(nav: HTMLElement, options: {
   nav.addEventListener('contextmenu', event => {
     // A pointer opens the menu where it is; the menu key (no coordinates) keeps it on the row.
     const point = event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : undefined;
-    const row = (event.target as Element).closest<HTMLElement>('.task-item');
+    // Anywhere on a row, its tick and … buttons and the gap beside them included.
+    const target = event.target as Element;
+    const row = target.closest('.task-row')?.querySelector<HTMLElement>(':scope>.task-item') ?? target.closest<HTMLElement>('.task-item');
     if (row) { event.preventDefault(); options.menu(row, point); return; }
     const heading = (event.target as Element).closest('.folder-row')?.querySelector<HTMLElement>('.folder-heading');
     if (heading) { event.preventDefault(); options.folderMenu(heading, point); }
