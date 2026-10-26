@@ -29,7 +29,7 @@ button .icon{pointer-events:none}
 .muted{color:var(--muted)}
 .workspace{--sidebar-default-width:235px;--conversation-min-width:420px;display:grid;grid-template-columns:var(--sidebar-width,var(--sidebar-default-width)) minmax(var(--conversation-min-width),1fr) var(--inspector-width,302px);height:100%;width:100%;transition:none}
 .workspace.inspector-closed{grid-template-columns:var(--sidebar-width,var(--sidebar-default-width)) minmax(var(--conversation-min-width),1fr)}
-.sidebar{position:relative;isolation:isolate;display:flex;flex-direction:column;background:radial-gradient(ellipse at 75% -15%,rgb(255 216 72 / .27),transparent 72%) 0 0/100% 190px no-repeat,var(--sidebar);border-right:1px solid var(--border);min-height:0;overflow:hidden}
+.sidebar{position:relative;isolation:isolate;display:flex;flex-direction:column;background:radial-gradient(ellipse at 75% -15%,rgb(var(--accent-rgb) / .27),transparent 72%) 0 0/100% 190px no-repeat,var(--sidebar);border-right:1px solid var(--border);min-height:0;overflow:hidden}
 .brand{height:var(--titlebar-height);display:flex;align-items:center;gap:9px;padding:0 20px;user-select:none;font-size:inherit;font-weight:620;letter-spacing:0;justify-content:flex-end}
 .brand-name{font-size:.92rem;font-weight:550;letter-spacing:-.015em;color:#706952}
 .sidebar-actions{container-type:inline-size;container-name:sidebar-actions;padding:15px 14px 23px;display:grid;gap:7px}
@@ -61,8 +61,8 @@ button .icon{pointer-events:none}
 .task-item.selected{background:var(--accent-dim);color:var(--text);font-weight:550}
 .task-indicator{width:5px;height:5px;background:#a4a49d;border-radius:50%;flex-shrink:0}
 .selected .task-indicator{background:var(--accent-ink)}
-.task-indicator.running{background:#ac8100;box-shadow:none;animation:breathe 1.5s infinite}
-.task-indicator.attention{background:#a45e13;box-shadow:0 0 0 3px rgb(var(--accent-rgb) / .3)}
+.task-indicator.running{background:var(--focus);box-shadow:none;animation:breathe 1.5s infinite}
+.task-indicator.attention{background:var(--accent-ink);box-shadow:0 0 0 3px rgb(var(--accent-rgb) / .3)}
 .provider-logo{width:20px;height:20px;display:inline-block;object-fit:contain;flex-shrink:0;vertical-align:middle;pointer-events:none}
 .provider-logo[data-provider="github-copilot"],.provider-logo[data-provider="cline"],.provider-logo[data-provider="devin"]{color:var(--text)}
 .provider-logo[data-provider="codex"]{transform:scale(1.25)}
@@ -227,7 +227,7 @@ mark{background:color-mix(in srgb,var(--accent) 45%,transparent);color:inherit;b
 .tool-group-hint{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .tool-group-status{flex:none;font-size:var(--thread-font);color:var(--accent-ink)}
 .tool-group-status.has-failure{color:var(--danger)}
-.tool-group-body{min-width:0;padding:4px 0 2px 15px;border-left:1px solid var(--border);margin:2px 0 4px 6px}
+.tool-group-body{min-width:0;padding:4px 0 2px 15px;margin:2px 0 4px 6px}
 .tool-group-body .tool-activity{margin-bottom:3px;padding-left:0}
 .live-activity .turn-activity-body{padding-top:2px}
 .live-activity .message-content{font-size:var(--thread-font);line-height:1.65}
@@ -555,7 +555,7 @@ button:not(:disabled):active{transform:none!important}}
 .file-preview-actions .icon-button .icon{width:12px;height:12px}
 button:not(:disabled):active{background-color:var(--accent-dim);transition:none}
 .preview-status{font-size:.7rem;line-height:1.4;color:var(--muted);margin-left:auto;white-space:nowrap}
-.send-button:not(:disabled):active,.primary-button:not(:disabled):active,.new-task-button:not(:disabled):active{background:#e8bd23;scale:.97;transition:none}
+.send-button:not(:disabled):active,.primary-button:not(:disabled):active,.new-task-button:not(:disabled):active{background:var(--accent-hover);scale:.97;transition:none}
 #resource-status{width:26px;height:26px;border-radius:2px}
 .file-preview-header,.file-preview-title{color:var(--text);font-size:.8rem}
 .change-row:focus-within .stage-button,.file-row:focus-within .file-attach,.change-group:focus-within .change-group-title button{opacity:1}
@@ -645,25 +645,27 @@ input.effort-range::-moz-range-thumb{width:18px;height:18px;border:0;border-radi
 button:hover>.info-mark,button:focus-visible>.info-mark,.info-mark:hover{color:var(--text)}
 .tip-bubble{position:fixed;z-index:90;max-width:280px;padding:7px 10px;border-radius:4px;background:color-mix(in srgb,var(--text) 94%,transparent);color:var(--bg);font-size:.74rem;line-height:1.45;font-weight:450;letter-spacing:0;text-align:left;pointer-events:none;box-shadow:0 10px 28px -10px rgb(0 0 0 / .45);opacity:0;transform:translateY(3px)}
 .tip-bubble[data-placement="below"]{transform:translateY(-3px)}
-.tip-bubble.tip-visible{opacity:1;transform:none;transition:opacity 140ms ease-out,transform 220ms var(--spring-fast,ease-out)}
-@media(prefers-reduced-motion:reduce){.tip-bubble.tip-visible{transition:none}}
+.tip-bubble.tip-visible{opacity:1;transform:none}
 @media(prefers-contrast:more){.tip-bubble{outline:1px solid var(--bg)}}
 .model-menu{width:380px}
-.model-menu-search,.project-menu-search,.choice-menu-search{display:flex;align-items:center;gap:8px;flex-shrink:0;margin:0 0 6px;padding:0 8px;color:var(--muted);background:transparent;border:0;border-bottom:1px solid var(--border);border-radius:0;box-shadow:none;transition:border-color 120ms}
+.model-menu-search,.project-menu-search,.choice-menu-search{display:flex;align-items:center;gap:8px;flex-shrink:0;margin:0 0 6px;padding:0 8px;color:var(--muted);background:transparent;border:0;border-bottom:1px solid var(--border);border-radius:0;box-shadow:none}
 .model-menu-search:focus-within,.project-menu-search:focus-within,.choice-menu-search:focus-within{border-bottom-color:var(--focus);box-shadow:none}
 .model-menu-search input,.project-menu-search input,.choice-menu-search input{width:100%;min-width:0;padding:5px 0;border:0;border-radius:0;background:none;font-size:.82rem;box-shadow:none;line-height:1.4}
 .model-menu-search input:focus,.project-menu-search input:focus,.choice-menu-search input:focus{border:0;box-shadow:none}
 .project-menu-search{margin:0 0 6px;padding:0 8px}
 .model-menu-group-heading{padding:8px 8px 4px}
 .model-menu-group+.model-menu-group{border-color:rgb(94 81 42 / .09);margin-top:7px;padding-top:4px}
-.model-menu-option,.project-menu-option,.choice-menu-option{border-radius:4px;transition:background-color 100ms,color 100ms,box-shadow 100ms;position:relative}
+.model-menu-option,.project-menu-option,.choice-menu-option{border-radius:4px;position:relative}
 .model-menu-option{min-height:28px;padding:4px 8px;font-size:.84rem}
-.model-menu-option:not(:disabled):hover,.project-menu-option:not(:disabled):hover,.choice-menu-option:not(:disabled):hover,.model-menu-option.model-menu-active,.project-menu-option.project-menu-active,.choice-menu-option.choice-menu-active{background:rgb(237 232 215 / .55)}
-/* The current choice is a solid fill of the chosen accent, like the selected task. */
-.model-menu-option.model-menu-current,.project-menu-option[aria-selected="true"],.choice-menu-option[aria-checked="true"]{background:rgb(var(--accent-rgb) / .22);box-shadow:none;color:var(--text)}
-.model-menu-option:not(:disabled):active,.project-menu-option:not(:disabled):active,.choice-menu-option:not(:disabled):active,.project-menu-open:not(:disabled):active{background:color-mix(in srgb,var(--accent) 50%,var(--bg));box-shadow:inset 0 0 0 1px rgb(151 112 13 / .12);transition:none}
-/* The current choice is shown by its fill alone; no tick. */
-.model-menu-option.model-menu-current>.icon:last-child,.project-menu-option[aria-selected="true"]>.icon:last-child,.choice-menu-option[aria-checked="true"]>.icon:last-child{display:none}
+.model-menu-option:not(:disabled):hover,.project-menu-option:not(:disabled):hover,.choice-menu-option:not(:disabled):hover,.model-menu-option.model-menu-active,.project-menu-option.project-menu-active,.choice-menu-option.choice-menu-active{background:color-mix(in srgb,var(--text) 7%,transparent)}
+/* Model and project menus fill the current choice with the accent, like the selected task. */
+.model-menu-option.model-menu-current,.project-menu-option[aria-selected="true"]{background:rgb(var(--accent-rgb) / .22);box-shadow:none;color:var(--text)}
+.model-menu-option:not(:disabled):active,.project-menu-option:not(:disabled):active,.choice-menu-option:not(:disabled):active,.project-menu-open:not(:disabled):active{background:color-mix(in srgb,var(--accent) 50%,var(--bg));box-shadow:inset 0 0 0 1px rgb(var(--accent-rgb) / .14)}
+/* …and show it by that fill alone, no tick. */
+.model-menu-option.model-menu-current>.icon:last-child,.project-menu-option[aria-selected="true"]>.icon:last-child{display:none}
+/* Choice menus (sidebar, filters, settings pickers) mark the current choice with a trailing check only. */
+.choice-menu-option[aria-checked="true"]>.icon:last-child{flex:none;width:14px;height:14px;margin-left:auto;color:var(--accent-ink)}
+html[data-theme="dark"] .choice-menu-option[aria-checked="true"]>.icon:last-child{color:var(--accent)}
 .project-menu-path{color:#716e63}
 .choice-menu{width:300px}
 .task-title-row{display:flex;align-items:center;gap:6px;min-width:0}
@@ -681,7 +683,9 @@ button:hover>.info-mark,button:focus-visible>.info-mark,.info-mark:hover{color:v
 .choice-menu-description{font-size:.78rem;line-height:1.35;font-weight:400;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1 1 0%;min-width:0}
 .choice-menu-error,.choice-menu-status{flex-shrink:0;font-size:.76rem;line-height:1.5;margin:6px 10px;color:var(--muted);overflow-wrap:anywhere}
 .choice-menu-error{color:var(--danger)}
-.choice-menu-option:focus-visible{outline:2px solid var(--focus);outline-offset:-2px}
+/* Keyboard focus is the hover fill plus a thin focus ring, so ↑/↓ reads like the pointer. */
+.choice-menu-option:focus-visible{outline:none;background:color-mix(in srgb,var(--text) 7%,transparent);box-shadow:inset 0 0 0 1px var(--focus)}
+html[data-theme="dark"] .choice-menu-option:focus-visible{background:color-mix(in srgb,var(--text) 9%,transparent)}
 .choice-menu-option.is-danger,.choice-menu-option.is-danger>.icon{color:var(--danger)}
 .delete-task-dialog{max-width:440px}
 .delete-task-name{font-weight:600;overflow-wrap:anywhere;margin:0 0 12px}
@@ -694,7 +698,7 @@ button:hover>.info-mark,button:focus-visible>.info-mark,.info-mark:hover{color:v
 .settings-select>.provider-logo{width:19px;height:19px}
 .settings-select>.icon:last-child{width:13px;height:13px;color:var(--muted)}
 .wallpaper-customize{margin-top:12px}
-.project-filter[aria-expanded="true"],.model-picker[aria-expanded="true"],.mode-picker[aria-expanded="true"],.composer-project[aria-expanded="true"],.settings-select[aria-expanded="true"]{background:#fff1b9;box-shadow:inset 0 0 0 1px rgb(177 132 16 / .13)}
+.project-filter[aria-expanded="true"],.model-picker[aria-expanded="true"],.mode-picker[aria-expanded="true"],.composer-project[aria-expanded="true"],.settings-select[aria-expanded="true"]{background:var(--accent-tint);box-shadow:inset 0 0 0 1px rgb(var(--accent-rgb) / .18)}
 .project-filter:not(:disabled):active,.model-picker:not(:disabled):active,.mode-picker:not(:disabled):active,.composer-project:not(:disabled):active,.settings-select:not(:disabled):active{background:color-mix(in srgb,var(--accent) 52%,var(--bg));transition:none}
 .model-picker,.mode-picker,.composer-project{padding:6px;border-radius:3px}
 @media(prefers-reduced-transparency:reduce){.floating-menu{background:#fffefb;backdrop-filter:none;-webkit-backdrop-filter:none}.model-menu-search,.project-menu-search,.choice-menu-search{background:transparent}}
@@ -750,7 +754,7 @@ html[data-theme="dark"] :is(.new-task-button,.primary-button,.send-button,.commi
 html[data-theme="dark"] .new-task-button kbd{color:color-mix(in srgb,var(--on-accent) 72%,var(--accent))}
 html[data-theme="dark"] .send-button.stop-button:not(:disabled){background:var(--text);color:var(--bg)}
 html[data-theme="dark"] :is(.task-indicator.running,.selected .task-indicator,.activity-dot){background:var(--accent)}
-html[data-theme="dark"] .task-indicator.attention{background:#edb464}
+html[data-theme="dark"] .task-indicator.attention{background:var(--accent)}
 html[data-theme="dark"] .provider-logo[data-provider="codex"]{filter:invert(1)}
 html[data-theme="dark"] .provider-logo[data-provider="kimi"]{border-radius:50%;box-shadow:0 0 0 1px rgb(255 255 255 / .22)}
 html[data-theme="dark"] .user-avatar{background:var(--raised)}
@@ -784,14 +788,14 @@ html[data-theme="dark"] :is(.model-menu-search,.project-menu-search,.choice-menu
 html[data-theme="dark"] :is(.model-menu-search,.project-menu-search,.choice-menu-search):focus-within{border-color:var(--focus);box-shadow:none}
 html[data-theme="dark"] :is(.model-menu-group+.model-menu-group,.project-menu-footer){border-color:var(--border)}
 html[data-theme="dark"] :is(.model-menu-option,.project-menu-option,.choice-menu-option):not(:disabled):hover,
-html[data-theme="dark"] :is(.model-menu-option.model-menu-active,.project-menu-option.project-menu-active,.choice-menu-option.choice-menu-active){background:#3a3a32}
-html[data-theme="dark"] :is(.model-menu-option.model-menu-current,.project-menu-option[aria-selected="true"],.choice-menu-option[aria-checked="true"]){background:rgb(var(--accent-rgb) / .24);box-shadow:none}
-html[data-theme="dark"] :is(.model-menu-option,.project-menu-option,.choice-menu-option,.project-menu-open):not(:disabled):active{background:#5b4b20;box-shadow:inset 0 0 0 1px rgb(var(--accent-rgb) / .18)}
-html[data-theme="dark"] :is(.model-menu-option.model-menu-current,.project-menu-option[aria-selected="true"],.choice-menu-option[aria-checked="true"])>.icon:last-child{background:var(--accent);color:var(--on-accent)}
+html[data-theme="dark"] :is(.model-menu-option.model-menu-active,.project-menu-option.project-menu-active,.choice-menu-option.choice-menu-active){background:color-mix(in srgb,var(--text) 9%,transparent)}
+html[data-theme="dark"] :is(.model-menu-option.model-menu-current,.project-menu-option[aria-selected="true"]){background:rgb(var(--accent-rgb) / .24);box-shadow:none}
+html[data-theme="dark"] :is(.model-menu-option,.project-menu-option,.choice-menu-option,.project-menu-open):not(:disabled):active{background:color-mix(in srgb,var(--accent) 35%,var(--bg));box-shadow:inset 0 0 0 1px rgb(var(--accent-rgb) / .18)}
+html[data-theme="dark"] :is(.model-menu-option.model-menu-current,.project-menu-option[aria-selected="true"])>.icon:last-child{background:var(--accent);color:var(--on-accent)}
 html[data-theme="dark"] .project-menu-path{color:var(--muted)}
 html[data-theme="dark"] .settings-select{background:linear-gradient(#33332e,#2b2b27);border-color:#4a4a42;box-shadow:0 1px 3px rgb(0 0 0 / .1)}
 html[data-theme="dark"] :is(.project-filter,.model-picker,.mode-picker,.composer-project,.settings-select)[aria-expanded="true"]{background:var(--accent-dim);box-shadow:inset 0 0 0 1px rgb(var(--accent-rgb) / .14)}
-html[data-theme="dark"] :is(.project-filter,.model-picker,.mode-picker,.composer-project,.settings-select):not(:disabled):active{background:#5b4b20}
+html[data-theme="dark"] :is(.project-filter,.model-picker,.mode-picker,.composer-project,.settings-select):not(:disabled):active{background:color-mix(in srgb,var(--accent) 35%,var(--bg))}
 
 html[data-theme="dark"]:is([data-native-material="liquidGlass"],[data-native-material="vibrancy"]) .main-pane{background:var(--bg)}
 html[data-theme="dark"]:is([data-native-material="liquidGlass"],[data-native-material="vibrancy"]) .sidebar{
@@ -906,11 +910,12 @@ html[data-native-platform=macos] .github-view .gh-repos-head{padding-left:calc(8
 @media (max-width:900px){.preview-status{display:none}}
 /* The prompt box and the bar above it have no border, except under increased contrast. */
 @media (prefers-contrast:more){html[data-theme] .workspace :is(.composer,.composer-context,.composer:focus-within),html[data-theme] .workspace[data-wallpaper] .conversation-pane :is(.composer,.composer-context,.composer:focus-within){border-color:var(--text)}}
-/* Dropdowns and popovers are one solid surface with no border (dialogs and toasts keep the glass).
-   `body` lifts this above the per-menu glass rules, including lazily loaded ones. */
-html[data-theme] body :is(.floating-menu,.bp-menu){background:var(--panel);border-color:transparent;backdrop-filter:none;-webkit-backdrop-filter:none;box-shadow:0 14px 36px -10px rgb(0 0 0 / .2),0 3px 10px -4px rgb(0 0 0 / .1)}
-html[data-theme="dark"] body :is(.floating-menu,.bp-menu){box-shadow:0 16px 40px -10px rgb(0 0 0 / .6),0 3px 10px -4px rgb(0 0 0 / .35)}
-@media (prefers-contrast:more){html[data-theme] body :is(.floating-menu,.bp-menu){border-color:var(--text)}}
+/* Popovers other than menus are one solid surface with no border. Menus (.floating-menu) keep
+   the warm glass from the --glass-* tokens, with solid fallbacks under reduced transparency/contrast. */
+html[data-theme] body .bp-menu{background:var(--panel);border-color:transparent;backdrop-filter:none;-webkit-backdrop-filter:none;box-shadow:0 14px 36px -10px rgb(0 0 0 / .2),0 3px 10px -4px rgb(0 0 0 / .1)}
+html[data-theme="dark"] body .bp-menu{box-shadow:0 16px 40px -10px rgb(0 0 0 / .6),0 3px 10px -4px rgb(0 0 0 / .35)}
+@media (prefers-reduced-transparency:reduce){html[data-theme] body .floating-menu{background:var(--panel);backdrop-filter:none;-webkit-backdrop-filter:none}}
+@media (prefers-contrast:more){html[data-theme] body :is(.floating-menu,.bp-menu){background:var(--panel);border-color:var(--text);backdrop-filter:none;-webkit-backdrop-filter:none}}
 /* Modals are one solid surface with no border: no glass, sheen or hairline on the plate. */
 html[data-theme] body .dialog-plate{background:var(--panel);border-color:transparent;backdrop-filter:none;-webkit-backdrop-filter:none;box-shadow:0 40px 100px -30px rgb(0 0 0 / .32),0 16px 36px -20px rgb(0 0 0 / .2)}
 html[data-theme="dark"] body .dialog-plate{box-shadow:0 40px 100px -30px rgb(0 0 0 / .7),0 16px 36px -20px rgb(0 0 0 / .45)}
