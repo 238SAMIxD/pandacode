@@ -239,8 +239,10 @@ export class OverlayThreadView {
         const tool = decodeToolActivity(message.content);
         return tool ? `tool:${tool.id}` : `message:${message.id}`;
       };
-      activity.innerHTML = groupToolRuns(turn.activity,toolKey).map(run => {
-        if (run.kind === 'tools') return renderToolGroup(run.items.map(message => ({key:toolKey(message)!,content:message.content})));
+      const running = last && ['running','waiting','coordinating'].includes(this.latest?.subagent?.status || this.latest?.status || this.task!.status);
+      const runs = groupToolRuns(turn.activity,toolKey);
+      activity.innerHTML = runs.map((run,index) => {
+        if (run.kind === 'tools') return renderToolGroup(run.items.map(message => ({key:toolKey(message)!,content:message.content})), false, running && index === runs.length - 1);
         const message = run.item;
         if (message.role === 'tool') return renderToolStatus(message.content);
         return `<article class="launcher-thread-message"${message.role === 'assistant' ? ` data-commentary="${message.id}" data-message-id="${message.id}"` : ''}><div></div>${message.role === 'assistant' || message.role === 'user' ? messageActionsHtml(message.sessionId, message.id, this.canFork(message)) : ''}</article>`;
