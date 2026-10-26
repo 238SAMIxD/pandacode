@@ -13,7 +13,7 @@
 .recipe-text{max-width:22ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .recipe-reason{color:var(--muted)}
 .recipe-status{font-weight:var(--weight-strong)}
-.recipe-status[data-status="blocked"]{color:var(--danger,#d44)}
-.recipe-status[data-status="manual"],.recipe-status[data-status="fallback"]{color:var(--warning,#b80)}
+.recipe-status[data-status="blocked"]{color:var(--danger)}
+.recipe-status[data-status="manual"],.recipe-status[data-status="fallback"]{color:var(--warning)}
 .recipe-json{width:100%;min-height:220px;font:12px/1.45 var(--mono,ui-monospace,monospace);margin-bottom:8px}
 .recipe-actions{display:flex;justify-content:flex-end;gap:8px}

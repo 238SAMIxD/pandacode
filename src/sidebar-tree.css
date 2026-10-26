@@ -1,14 +1,14 @@
 /* Compact sidebar: list-style actions, then pinned tasks and one folder per project.
    Selectors are scoped to .sidebar so they win over the older card-style rules and theme variants. */
-.sidebar{--tree-row:28px;--tree-indent:15px;--tree-guide:color-mix(in srgb,var(--muted) 22%,transparent)}
+.sidebar{--tree-row:var(--row);--tree-indent:15px;--tree-guide:color-mix(in srgb,var(--muted) 22%,transparent)}
 
-.sidebar .sidebar-actions{padding:4px 8px 8px;gap:1px}
+.sidebar .sidebar-actions{padding:var(--space-1) var(--space-2) var(--space-2);gap:1px}
 .sidebar .sidebar-actions>button,
-html[data-theme] .sidebar .sidebar-actions>.new-task-button{height:var(--tree-row);width:100%;padding:0 9px;gap:10px;justify-content:flex-start;border:0;border-radius:var(--radius-sm);background:transparent;box-shadow:none;color:var(--text);font-size:var(--text-sm);font-weight:var(--weight-medium)}
+html[data-theme] .sidebar .sidebar-actions>.new-task-button{height:var(--tree-row);width:100%;padding:0 9px;gap:var(--space-2);justify-content:flex-start;border:0;border-radius:var(--radius-sm);background:transparent;box-shadow:none;color:var(--text);font-size:var(--text-sm);font-weight:var(--weight-medium)}
 .sidebar .sidebar-actions>button:hover,
 html[data-theme] .sidebar .sidebar-actions>.new-task-button:hover{background:var(--raised);box-shadow:none;color:var(--text)}
 html[data-theme] .sidebar .sidebar-actions>.new-task-button:not(:disabled):active{background:var(--raised);scale:.98}
-.sidebar .sidebar-actions>button>.icon{--icon-size:var(--icon-md);--icon-stroke:var(--icon-stroke-md);flex:none;color:var(--muted)}
+.sidebar .sidebar-actions>button>.icon{--icon-size:var(--icon-sm);--icon-stroke:var(--icon-stroke-sm);flex:none;color:var(--muted)}
 html[data-theme] .sidebar .new-task-button>.icon{color:var(--focus)}
 .sidebar .sidebar-actions kbd,html[data-theme] .sidebar .new-task-button kbd{margin-left:auto;color:var(--faint);font-size:var(--text-2xs);background:none;border:0;padding:0}
 
@@ -43,10 +43,10 @@ html[data-theme] .sidebar .new-task-button>.icon{color:var(--focus)}
 .sidebar .group-heading>.icon{--icon-size:var(--icon-sm);--icon-stroke:var(--icon-stroke-sm);color:var(--focus)}
 .sidebar .group-heading>span{font-size:var(--text-2xs);font-weight:var(--weight-regular);color:var(--faint);font-variant-numeric:tabular-nums}
 
-.folder-heading{display:flex;align-items:center;gap:9px;width:100%;height:var(--tree-row);padding:0 9px;border-radius:var(--radius-sm);justify-content:flex-start;color:var(--text);font-size:var(--text-sm);font-weight:var(--weight-medium);--press:1}
+.folder-heading{display:flex;align-items:center;gap:var(--space-2);width:100%;height:var(--tree-row);padding:0 9px;border-radius:var(--radius-sm);justify-content:flex-start;color:var(--text);font-size:var(--text-sm);font-weight:var(--weight-medium);--press:1}
 .folder-heading:hover{background:var(--raised)}
-.folder-heading>.icon{--icon-size:var(--icon-md);--icon-stroke:var(--icon-stroke-md);flex:none;color:var(--muted)}
-.folder-heading>.task-app-icon{flex:none;width:16px;height:16px;border-radius:var(--radius-sm);object-fit:contain}
+.folder-heading>.icon{--icon-size:var(--icon-sm);--icon-stroke:var(--icon-stroke-sm);flex:none;color:var(--muted)}
+.folder-heading>.task-app-icon{flex:none;width:var(--icon-sm);height:var(--icon-sm);border-radius:var(--radius-xs);object-fit:contain}
 .folder-heading>.task-app-default{display:grid;place-items:center;background:color-mix(in srgb,var(--text) 10%,transparent);color:var(--muted);font-size:.6rem;font-weight:var(--weight-strong);line-height:1}
 .folder-heading[aria-expanded=false]>.task-app-icon{opacity:.7}
 .folder-heading>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -82,15 +82,15 @@ html[data-theme] .sidebar .new-task-button>.icon{color:var(--focus)}
 .sidebar .task-list{gap:1px}
 /* Two-line card: where (app icon, checkout, status, age), then what (title, branch, PR, agent).
    Quiet until hovered or selected. */
-.sidebar .task-item{display:grid;grid-template-columns:minmax(0,1fr);row-gap:2px;min-height:0;height:auto;padding:6px 8px 6px 9px;border-radius:var(--radius-sm);align-items:center;font-size:var(--text-sm);font-weight:var(--weight-regular);color:var(--text)}
+.sidebar .task-item{display:grid;grid-template-columns:minmax(0,1fr);row-gap:2px;min-height:0;height:auto;padding:var(--space-1) var(--space-2);border-radius:var(--radius-sm);align-items:center;font-size:var(--text-sm);font-weight:var(--weight-regular);color:var(--text)}
 .sidebar .task-line{display:flex;align-items:center;gap:6px;min-width:0}
 .sidebar .task-head{height:18px;font-size:var(--text-2xs);color:var(--muted)}
-.sidebar .task-app-icon{flex:none;width:14px;height:14px;border-radius:var(--radius-xs);object-fit:contain}
+.sidebar .task-app-icon{flex:none;width:var(--icon-sm);height:var(--icon-sm);border-radius:var(--radius-xs);object-fit:contain}
 .sidebar .task-app-default{display:grid;place-items:center;background:color-mix(in srgb,var(--text) 10%,transparent);color:var(--muted);font-size:.6rem;font-weight:var(--weight-strong);line-height:1}
 .sidebar .task-checkout{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* In a folder each task is one line: the title, then its PR, harness, status and age. */
 .sidebar .task-item.task-oneline{height:var(--tree-row);padding-top:0;padding-bottom:0}
-.sidebar .project-filter>.task-app-icon{flex:none;width:14px;height:14px;border-radius:var(--radius-sm);object-fit:contain}
+.sidebar .project-filter>.task-app-icon{flex:none;width:var(--icon-sm);height:var(--icon-sm);border-radius:var(--radius-xs);object-fit:contain}
 .sidebar .project-filter>.task-app-default{display:grid;place-items:center;background:color-mix(in srgb,var(--text) 10%,transparent);color:var(--muted);font-size:.55rem;font-weight:var(--weight-strong);line-height:1}
 .sidebar .project-filter:has(>.task-app-icon){gap:6px}
 .sidebar .task-top{gap:6px}
@@ -216,8 +216,9 @@ html[data-theme] .workspace[data-wallpaper]>.sidebar .task-row:has(>.task-item.s
 /* Menus: the shared glass, compact one-line rows, named groups for settings menus. */
 .choice-menu{padding:4px}
 .choice-menu .choice-menu-list{gap:1px}
-.choice-menu .choice-menu-option{min-height:26px;padding:3px 8px;gap:8px}
-.choice-menu .choice-menu-option>.icon,.choice-menu .choice-menu-option>.provider-logo,.choice-menu .choice-menu-option>.task-app-icon{width:15px;height:15px}
+.choice-menu .choice-menu-option{min-height:var(--row);padding:var(--space-0-5) var(--space-2);gap:var(--space-2);border-radius:var(--radius-sm)}
+.choice-menu .choice-menu-option>.icon{--icon-size:var(--icon-sm);--icon-stroke:var(--icon-stroke-sm)}
+.choice-menu .choice-menu-option>.provider-logo,.choice-menu .choice-menu-option>.task-app-icon{width:var(--icon-sm);height:var(--icon-sm)}
 .choice-menu .choice-menu-label{font-size:var(--text-sm)}
 .choice-menu-group{display:contents}
 .choice-menu-heading{display:flex;align-items:center;flex:none;height:22px;padding:0 8px;font-size:var(--text-2xs);font-weight:var(--weight-strong);color:var(--muted)}
@@ -225,8 +226,8 @@ html[data-theme] .workspace[data-wallpaper]>.sidebar .task-row:has(>.task-item.s
 .choice-menu-segments>.choice-menu-label{flex:1;font-size:var(--text-sm);font-weight:var(--weight-medium);color:var(--text)}
 .choice-menu-segment-list{display:flex;gap:1px;padding:2px;border-radius:var(--radius-md);background:color-mix(in srgb,var(--text) 6%,transparent)}
 .choice-menu .choice-menu-option.choice-menu-segment{width:auto;min-width:28px;min-height:22px;padding:0 7px;justify-content:center;font-size:var(--text-xs);font-weight:var(--weight-medium);font-variant-numeric:tabular-nums;color:var(--muted)}
-.choice-menu .choice-menu-option.choice-menu-segment[aria-checked=true]{background:var(--accent-dim);color:var(--accent-ink)}
-html[data-theme=dark] .choice-menu .choice-menu-option.choice-menu-segment[aria-checked=true]{background:rgb(var(--accent-rgb) / .24);color:var(--text)}
+.choice-menu .choice-menu-option.choice-menu-segment[aria-checked=true]{background:var(--fill-selected);color:var(--accent-ink)}
+html[data-theme=dark] .choice-menu .choice-menu-option.choice-menu-segment[aria-checked=true]{color:var(--text)}
 .choice-menu-separator{flex:none;height:1px;margin:4px 6px;background:var(--glass-line,var(--border))}
 .icon.icon-down{rotate:180deg}
 /* A toast that can be undone carries its Undo; ⌘Z does the same. */
@@ -237,6 +238,6 @@ html[data-theme=dark] .toast-undo{color:var(--accent)}
 /* Flat list: each row names its project after the title, while there is room. Titles come first:
    in a narrow sidebar only the project icon stays (the name is in the row's tooltip). */
 .sidebar .navigation{container:sidebar-nav / inline-size}
-.sidebar .flat-group .task-top>.task-app-icon{width:14px;height:14px}
+.sidebar .flat-group .task-top>.task-app-icon{width:var(--icon-sm);height:var(--icon-sm)}
 .sidebar .task-project-name{flex:0 1 auto;min-width:4.5em;max-width:35%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--text-2xs);color:var(--faint)}
 @container sidebar-nav (max-width:264px){.sidebar .task-project-name{display:none}}

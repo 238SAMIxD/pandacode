@@ -18,7 +18,7 @@
   --glass-fill-hover:rgb(255 255 255 / .82);
   --glass-line:rgb(20 18 8 / .08);
   --scrim:rgb(24 21 12 / .14);
-  --sheet-radius:8px;
+  --sheet-radius:var(--radius-lg);
   --press:.97;
 }
 html[data-theme="dark"]{
@@ -82,8 +82,8 @@ dialog .command-footer{border-top-color:var(--glass-line)}
 [data-segmented]>.segment-thumb{position:absolute;z-index:0;left:0;top:0;width:var(--seg-w,0px);height:var(--seg-h,0px);transform:translate(var(--seg-x,0px),var(--seg-y,0px));pointer-events:none;will-change:transform}
 [data-segmented][data-segment-ready]>.segment-thumb{transition:transform var(--spring-duration) var(--spring),width var(--spring-duration) var(--spring),height var(--spring-duration) var(--spring)}
 [data-segmented]>button:is([aria-pressed="true"],[aria-selected="true"],.selected){background:transparent!important;box-shadow:none!important}
-.view-switch>.segment-thumb{border-radius:var(--radius-xs);background:var(--raised);box-shadow:0 1px 3px #00000012,inset 0 1px 0 rgb(255 255 255 / .35)}
-.inspector-tabs>.segment-thumb{border-radius:var(--radius-xs);background:#fff;box-shadow:0 1px 3px rgb(0 0 0 / .08)}
+.view-switch>.segment-thumb{border-radius:var(--radius-xs);background:var(--raised);box-shadow:0 1px 3px rgb(0 0 0 / .07),inset 0 1px 0 rgb(255 255 255 / .35)}
+.inspector-tabs>.segment-thumb{border-radius:var(--radius-xs);background:var(--bg);box-shadow:0 1px 3px rgb(0 0 0 / .08)}
 .settings-tabs>.segment-thumb{border-radius:var(--radius-sm);background:var(--panel);box-shadow:0 1px 4px rgb(0 0 0 / .09),inset 0 1px 0 rgb(255 255 255 / .4)}
 html[data-theme="dark"] .inspector-tabs>.segment-thumb{background:#3a3a35;box-shadow:0 1px 3px rgb(0 0 0 / .25),inset 0 1px 0 rgb(255 255 255 / .05)}
 html[data-theme="dark"] :is(.view-switch,.settings-tabs)>.segment-thumb{box-shadow:0 1px 3px rgb(0 0 0 / .25),inset 0 1px 0 rgb(255 255 255 / .05)}
@@ -121,7 +121,7 @@ html[data-theme="dark"] .composer:focus-within{box-shadow:0 0 0 3px rgb(var(--ac
   [data-segmented][data-segment-ready]>.segment-thumb{transition:none}
 }
 @media(prefers-reduced-transparency:reduce),(prefers-contrast:more){
-  .dialog-plate,.toast{background:#fff;backdrop-filter:none;-webkit-backdrop-filter:none}
+  .dialog-plate,.toast{background:var(--bg);backdrop-filter:none;-webkit-backdrop-filter:none}
   .dialog-scrim{backdrop-filter:none;-webkit-backdrop-filter:none;background:rgb(35 35 30 / .32)}
   html[data-theme="dark"] :is(.dialog-plate,.toast){background:#272724}
   html[data-theme="dark"] .dialog-scrim{background:rgb(0 0 0 / .5)}

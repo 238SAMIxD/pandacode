@@ -39,7 +39,7 @@ html .drawer-heading{border-bottom:0}
 .message>.message-content{padding-left:0}
 /* Flush with the right edge of the centered 830px column, not centered within it. */
 html .transcript>.user-message{width:fit-content;max-width:min(78%,640px);margin-left:auto;margin-right:max(0px,calc((100% - 830px) / 2))}
-.user-message>.message-content{text-align:left;padding:9px 14px;border-radius:var(--radius-md) var(--radius-md) var(--radius-xs) var(--radius-md);background:color-mix(in srgb,var(--text) 7%,transparent)}
+.user-message>.message-content{text-align:left;padding:9px 14px;border-radius:var(--radius-md);background:color-mix(in srgb,var(--text) 7%,transparent)}
 .user-message>.message-content .message-attachments{margin-top:6px}
 /* Rows that once lined up with the author avatar now start at the column edge, like replies. */
 html .workspace:not(.side-thread) :is(.transcript,#stream-region)>:is(.turn-activity,.tool-activity,.tool-activity-status-row,.coordination-status,.turn-changes-row){padding-left:0}
