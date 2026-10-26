@@ -698,6 +698,9 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     invoke, emit,
     addProject: name => { const p = { id: crypto.randomUUID(), name, path: `/Users/you/PandaCode Bots/${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}` }; projects.push(p); return p; },
   });
+  if (command === 'remote_device_grants' || command === 'remote_set_device_grant') return (await import('./preview-grants')).previewGrants(command, args) as T;
+  if (command === 'remote_diagnostics') return (await import('./preview-diagnostics')).previewDiagnostics(command, args) as T;
+  if (command === 'remote_reconnect') { const w = window as any; w.__remoteReconnects = (w.__remoteReconnects ?? 0) + 1; return undefined as T; }
   if (command === 'remote_repo_check') {
     const w = window as any;
     (w.__remoteRepoChecks ??= []).push(args);
