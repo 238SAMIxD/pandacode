@@ -287,14 +287,14 @@ function teamState(s: Session): { id: string; label: string } {
   const kind = team.config.auto && routing?.enabled ? TEAM_KINDS.find(k => k.id === routing?.mode) : undefined;
   return kind ?? { id: 'lead', label: 'Team' };
 }
-const teamButtonHtml = (s: Session) => `${icon('worktree')}<span>${escape(teamState(s).label)}</span>${icon('down')}`;
+const teamButtonHtml = (s: Session) => `${teamToggles.has(s.id) ? '<span class="support-spinner" aria-hidden="true"></span>' : icon('worktree')}<span>${escape(teamState(s).label)}</span>${icon('down')}`;
 /** Team opens the team menu, or with Settings → Classic team setup opens Architect & workers. */
 function teamButton(s: Session): string {
   if (s.remoteDevice) return '';
-  const on = Boolean(teams.get(s.id));
+  const on = Boolean(teams.get(s.id)), busy = teamToggles.has(s.id);
   return classicTeamSetup()
-    ? `<button type="button" class="composer-team-button" data-action="architect-setup" aria-label="Architect & workers" aria-pressed="${on}" title="Architect & workers">${icon('worktree')}<span>Team</span></button>`
-    : `<button type="button" id="team-trigger" class="composer-team-button" data-action="team-menu" aria-description="${escape(TEAM_TIP)}" data-tip="${escape(TEAM_TIP)}" aria-haspopup="dialog" aria-expanded="false" ${on ? 'data-on' : ''}>${teamButtonHtml(s)}</button>`;
+    ? `<button type="button" class="composer-team-button" data-action="architect-setup" aria-label="Architect & workers" aria-pressed="${on}" aria-busy="${busy}" ${busy ? 'disabled' : ''} title="Architect & workers">${icon('worktree')}<span>Team</span></button>`
+    : `<button type="button" id="team-trigger" class="composer-team-button" data-action="team-menu" aria-description="${escape(TEAM_TIP)}" data-tip="${escape(TEAM_TIP)}" aria-haspopup="dialog" aria-expanded="false" aria-busy="${busy}" ${on ? 'data-on' : ''}>${teamButtonHtml(s)}</button>`;
 }
 /** Panda Router's global mode, cached for the Team button and menu; Settings announces every status it shows. */
 let routing: RoutingStatus | null = null;
@@ -312,6 +312,7 @@ function syncTeamButton(): void {
   const html = teamButtonHtml(s);
   if (trigger.innerHTML !== html) trigger.innerHTML = html;
   trigger.toggleAttribute('data-on', Boolean(teams.get(s.id)));
+  trigger.setAttribute('aria-busy', String(teamToggles.has(s.id)));
 }
 function applyRouting(ticket: number, next: RoutingStatus): boolean {
   if (ticket !== routingTicket) return false;
@@ -405,13 +406,16 @@ function prepareModelRouting(): void {
     })
     .catch(cause => console.warn('Model routing could not prepare', cause));
 }
-let teamToggleBusy = false;
+const teamToggles = new Set<string>();
 const mirrorTeamNote = (task: Session) => `Teams for this task are set up on ${task.remoteDevice?.name ?? 'the other computer'}.`;
-/** Turns an automatic team on (replacing any other team) or the task's team off; false when nothing changed. */
+/** Turns an automatic team on (replacing any other team) or the task's team off; false when nothing changed.
+ * While it saves, the task is configuring: the Team button shows it, and sending and queue dispatch wait. */
 async function setTeam(task: Session, on: boolean, render = true): Promise<boolean> {
-  if (teamToggleBusy) return false;
-  teamToggleBusy = true;
+  if (configuringSessions.has(task.id)) return false;
+  teamToggles.add(task.id); configuringSessions.add(task.id);
   try {
+    // In place: the Team menu stays anchored to the button while it applies.
+    if (task.id === state.sessionId) syncTeamButton();
     let config: TeamConfig | null = null;
     if (on) {
       prepareModelRouting();
@@ -421,9 +425,15 @@ async function setTeam(task: Session, on: boolean, render = true): Promise<boole
     const saved = await call<TeamSnapshot | null>('architect_configure', { sessionId: task.id, config, architect: null, profileId: null });
     onArchitect(saved ?? { sessionId: task.id, removed: true });
     await reloadSessions();
+    teamToggles.delete(task.id); configuringSessions.delete(task.id);
     if (task.id === state.sessionId) { if (render) renderComposer(); else syncTeamButton(); }
     return true;
-  } finally { teamToggleBusy = false; }
+  } finally {
+    // A failed save keeps the menu open with its error, so only the button is redrawn.
+    if (teamToggles.delete(task.id) && task.id === state.sessionId) syncTeamButton();
+    configuringSessions.delete(task.id);
+    run(dispatchQueue(task.id));
+  }
 }
 const ACTIVITY_WINDOW = 24 * 60 * 60 * 1000;
 /** Sort arrows for the sidebar's sort and view menu. */
@@ -1921,14 +1931,14 @@ function renderComposer(): void {
   const previous = state.drafts.get(s.id) ?? '';
   const running = isRunning(), behavior = approvalMode(s.provider, s.mode);
   // A bot's next model can be picked mid-turn; it applies from the next turn.
-  const team = teams.get(s.id), modelLocked = running && !team && !botForThread();
+  const team = teams.get(s.id), togglingTeam = teamToggles.has(s.id), modelLocked = (running && !team && !botForThread()) || togglingTeam;
   const target = remoteTargetFor(s), offline = remoteOffline(s), checking = remoteChecks.has(s.id), retrying = target ? remoteRetries.has(target.deviceId) : false;
   const sendControl = running
     ? `<button type="button" class="send-button stop-button" data-action="stop" title="Stop task (Esc)" aria-label="${remoteStartCancels.has(s.id) ? 'Stopping…' : 'Stop task'}" ${remoteStartCancels.has(s.id) ? 'disabled' : ''}>${icon('stop')}</button>`
     : checking ? '<button type="button" class="secondary-button remote-checking" aria-label="Checking…" disabled>Checking…</button>'
     : offline ? `<button type="button" class="secondary-button remote-composer-retry" data-action="remote-retry" aria-label="${retrying ? 'Reconnecting…' : 'Retry connection'}" ${retrying ? 'disabled' : ''}>${icon('refresh')}<span>${retrying ? 'Reconnecting…' : 'Retry'}</span></button>`
-    : `<button type="submit" class="send-button" title="Send message (${shortcut('Enter')})" aria-label="Send message">${icon('arrow')}</button>`;
-  $('#composer-area').innerHTML = `<form id="composer" class="composer ${running ? 'composer-running' : ''}"><div id="attachments" class="attachments">${attachmentBar(s)}</div><textarea id="prompt" data-session-id="${escape(s.id)}" aria-label="Message your coding agent" placeholder="${running ? (team ? 'Queue a follow-up…' : 'Queue a follow-up · ⌘↩ steers now') : composerPlaceholder()}" aria-description="${running ? `Enter to queue for when the agent finishes.${team ? '' : ' Command Enter to steer the running turn.'}` : 'Enter to send. Shift Enter for a new line.'}" rows="2"></textarea><div class="composer-toolbar"><div class="composer-tools">${button('attach', 'Attach files for context', 'plus', '', 'type="button"')}<button type="button" id="model-picker-trigger" class="model-picker" data-action="model" aria-label="Choose harness and model" aria-description="${escape([modelLabel(s), teamModelLabel(s)].filter(Boolean).join(' '))}" aria-haspopup="dialog" aria-expanded="false" title="${team && !team.config.auto ? 'Choose team profile and models' : 'Choose harness and model'}" ${modelLocked ? 'disabled' : ''}>${triggerLogo(s)}<span class="model-detail" data-model-label>${escape(modelLabel(s, false))}</span><span class="model-effort" data-effort-label ${effortLabel(s) ? '' : 'hidden'}>${escape(effortLabel(s))}</span><span class="team-model-count" data-team-model-label ${teamModelLabel(s) ? '' : 'hidden'}>${teamModelLabel(s)}</span>${icon('down')}</button><span class="composer-separator"></span><button type="button" id="mode-picker-trigger" class="mode-picker" data-action="mode" data-mode="${behavior.id}" title="${escape(behavior.description)}" aria-haspopup="dialog" aria-expanded="false" ${running ? 'disabled' : ''}>${icon(behavior.icon)}<span>${escape(behavior.label)}</span>${icon('down')}</button>${teamButton(s)}${tokenSaver.button(s.id)}</div>${running && !team ? `<button type="button" class="steer-button" data-action="steer" title="Send into the running turn (${shortcut('Enter')})" aria-label="Steer the running turn">${icon('spark')}<span>Steer</span></button>` : ''}${sendControl}</div></form>`;
+    : `<button type="submit" class="send-button" title="Send message (${shortcut('Enter')})" aria-label="Send message" ${togglingTeam ? 'disabled' : ''}>${icon('arrow')}</button>`;
+  $('#composer-area').innerHTML = `<form id="composer" class="composer ${running ? 'composer-running' : ''}"><div id="attachments" class="attachments">${attachmentBar(s)}</div><textarea id="prompt" data-session-id="${escape(s.id)}" aria-label="Message your coding agent" placeholder="${running ? (team ? 'Queue a follow-up…' : 'Queue a follow-up · ⌘↩ steers now') : composerPlaceholder()}" aria-description="${running ? `Enter to queue for when the agent finishes.${team ? '' : ' Command Enter to steer the running turn.'}` : 'Enter to send. Shift Enter for a new line.'}" rows="2"></textarea><div class="composer-toolbar"><div class="composer-tools">${button('attach', 'Attach files for context', 'plus', '', 'type="button"')}<button type="button" id="model-picker-trigger" class="model-picker" data-action="model" aria-label="Choose harness and model" aria-description="${escape([modelLabel(s), teamModelLabel(s)].filter(Boolean).join(' '))}" aria-haspopup="dialog" aria-expanded="false" title="${team && !team.config.auto ? 'Choose team profile and models' : 'Choose harness and model'}" ${modelLocked ? 'disabled' : ''}>${triggerLogo(s)}<span class="model-detail" data-model-label>${escape(modelLabel(s, false))}</span><span class="model-effort" data-effort-label ${effortLabel(s) ? '' : 'hidden'}>${escape(effortLabel(s))}</span><span class="team-model-count" data-team-model-label ${teamModelLabel(s) ? '' : 'hidden'}>${teamModelLabel(s)}</span>${icon('down')}</button><span class="composer-separator"></span><button type="button" id="mode-picker-trigger" class="mode-picker" data-action="mode" data-mode="${behavior.id}" title="${escape(behavior.description)}" aria-haspopup="dialog" aria-expanded="false" ${running || togglingTeam ? 'disabled' : ''}>${icon(behavior.icon)}<span>${escape(behavior.label)}</span>${icon('down')}</button>${teamButton(s)}${tokenSaver.button(s.id)}</div>${running && !team ? `<button type="button" class="steer-button" data-action="steer" title="Send into the running turn (${shortcut('Enter')})" aria-label="Steer the running turn">${icon('spark')}<span>Steer</span></button>` : ''}${sendControl}</div></form>`;
   $('#composer-area').insertAdjacentHTML('afterbegin', worktrees.contextBar(s, newTaskView()));
   // Approvals sit above everything that rides on the prompt, the context bar included.
   $('#composer-area').insertAdjacentHTML('afterbegin', '<div id="bot-failover-bar"></div>');
@@ -4575,6 +4585,7 @@ async function showBotTaskMenu(anchor: HTMLElement): Promise<void> {
 }
 async function assignTaskBot(task: Session, botId: string | null): Promise<void> {
   if (!newTaskView() || state.sessionId !== task.id) throw new Error('Choose a bot before the task\'s first message.');
+  if (configuringSessions.has(task.id)) return;
   configuringSessions.add(task.id);
   try {
     const bot = await call<import('./bots').Bot | null>('bot_assign_task', { sessionId: task.id, botId });

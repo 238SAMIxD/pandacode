@@ -298,7 +298,8 @@ mark{background:color-mix(in srgb,var(--accent) 45%,transparent);color:inherit;b
 .composer-team-button{font-size:var(--text-xs);color:var(--muted);gap:var(--space-1);height:var(--control);padding:0 var(--space-2);border-radius:var(--radius-sm);white-space:nowrap;flex-shrink:0}
 .composer-team-button .icon{--icon-size:var(--icon-sm);--icon-stroke:var(--icon-stroke-sm)}
 .composer-team-button>.icon:last-child:not(:first-child){--icon-size:var(--icon-xs);--icon-stroke:var(--icon-stroke-xs);margin-left:-1px}
-.composer-team-button:is([aria-pressed=true],[data-on]){color:var(--accent-ink);background:var(--fill-selected)}
+.composer-team-button:is([aria-pressed=true],[data-on],[aria-busy=true]){color:var(--accent-ink);background:var(--fill-selected)}
+.composer-team-button[aria-busy=true]{opacity:1;cursor:progress}
 .send-button{width:var(--control);height:var(--control);background:var(--accent);color:var(--on-accent);border-radius:var(--radius-sm);flex-shrink:0}
 .send-button .icon{--icon-size:var(--icon-sm);--icon-stroke:var(--icon-stroke-xs)}
 .send-button:hover:not(:disabled){background:var(--accent-hover);color:var(--on-accent);transform:none}
@@ -562,7 +563,7 @@ dialog input::placeholder{color:var(--muted)}
 .composer-area{padding-left:12px;padding-right:12px}
 .composer-tools{gap:6px}
 .composer-separator{display:none}
-.composer-team-button span{display:none}
+.composer-team-button span:not(.support-spinner){display:none}
 .composer-team-button{gap:3px}.composer-team-button>.icon:last-child:not(:first-child){width:8px;height:8px}
 .mode-picker span{display:none}
 .workspace-header{padding:0 11px}
