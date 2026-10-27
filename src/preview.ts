@@ -71,6 +71,18 @@ loadThreadOrder();
 // One sample task already tracks a GitHub issue so chips have something to show.
 sessions[2].issue = { kind: 'issue', number: 131, url: 'https://github.com/orbit-labs/orbit/issues/131', title: 'Keyboard shortcut cheat sheet', state: 'open', checkedAt: now };
 let id = 10;
+const ROUTING_KEY = 'pandacode.preview.routing';
+let previewRouting = { enabled: true, mode: 'cheapest', minP: 0.8, profiler: 'missing', error: null as string | null };
+try { previewRouting = { ...previewRouting, ...JSON.parse(localStorage.getItem(ROUTING_KEY) ?? '{}') }; } catch { /* Defaults. */ }
+const saveRouting = () => { try { localStorage.setItem(ROUTING_KEY, JSON.stringify(previewRouting)); } catch { /* Kept in memory only. */ } };
+/** Deterministic stand-in for Panda Router: longer text reads as harder, later pool entries as pricier and stronger. */
+function previewRoute(text: string, pool: { provider: string; model: string; name: string }[]) {
+  const difficulty = Math.min(0.95, 0.2 + text.length / 400);
+  const rated = pool.map((m, i) => ({ provider: m.provider, model: m.model, name: m.name, cardId: `${m.provider}:${m.model}`, pSuccess: Math.max(0.05, Math.min(0.99, 0.95 - difficulty * 0.6 + (i % 7) * 0.05)), estCostUsd: 0.002 * (1 + (i % 9)), estLatencyMs: 2000 + i * 100 }));
+  const score = (m: typeof rated[number]) => previewRouting.mode === 'quality' ? m.pSuccess : previewRouting.mode === 'cheapest' ? (m.pSuccess >= previewRouting.minP ? 1 - m.estCostUsd : -1) : m.pSuccess - m.estCostUsd * 5;
+  const ranking = [...rated].sort((a, b) => score(b) - score(a));
+  return { pick: ranking[0] ?? null, ranking, unrated: [], difficulty: Math.max(1, Math.round(difficulty * 10)), category: /test|bug|fix/i.test(text) ? 'debugging' : 'general coding', profiler: 'onnx', latencyMs: 12 };
+}
 let previewClaudeMode: 'inherit' | 'subscription' = 'inherit';
 const traceRoot = '/Users/you/Projects/orbit';
 const traceIndex = `${traceRoot}/src/lib/search-index.ts`;
@@ -753,6 +765,10 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       result = structuredClone(summary); break;
     }
     case 'turn_change_diff': result = turnChanges.diff(args.sessionId, args.changeId, args.path); break;
+    case 'model_routing_status': result = { ...previewRouting }; break;
+    case 'model_routing_configure': previewRouting = { ...previewRouting, ...(args.enabled != null ? { enabled: Boolean(args.enabled) } : {}), ...(args.mode ? { mode: args.mode } : {}), ...(args.minP != null ? { minP: Math.min(0.95, Math.max(0.5, Number(args.minP))) } : {}) }; saveRouting(); result = { ...previewRouting }; break;
+    case 'model_routing_prepare': previewRouting = { ...previewRouting, profiler: 'ready', error: null }; saveRouting(); result = { ...previewRouting }; break;
+    case 'model_routing_route': result = previewRoute(String(args.text), args.pool as any[]); break;
     case 'architect_get': result = architect.get(args.sessionId); break;
     case 'architect_configure': result = architect.configure(args.sessionId, args.config, args.architect, args.profileId); break;
     case 'architect_profiles': result = architect.profiles(); break;

@@ -44,6 +44,10 @@ shell-words = "1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tauri-plugin-updater = ">=2, <2.10"
 tauri-plugin-process = ">=2, <2.4"
+# Panda Router (src/panda_router): in-process task profiler, CPU only, static ONNX Runtime.
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-rustls"] }
+tokenizers = { version = "0.22.2", default-features = false, features = ["fancy-regex"] }
+libm = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"

@@ -41,6 +41,9 @@ embedded editor engine.
 - **Agent teams.** An [architect and up to three workers](docs/architect-workers.md),
   mixing harnesses and models, or named team profiles. Each spawned worker is one
   line in the turn that started it; click it to open the worker.
+- **Model routing.** In automatic teams the lead can let a local router pick each
+  worker's model, in about 10–25 ms and without sending the task anywhere. See
+  [model routing](docs/model-routing.md).
 - **Bots.** Put an agent behind Telegram, Slack, Discord, WhatsApp or a local web
   chat; each conversation is an ordinary task. The sidebar's **Bots** view lists
   every bot with its latest message. See [bots](docs/bots.md).
@@ -137,6 +140,7 @@ information:
 | Public model price list (for cost estimates) | `raw.githubusercontent.com` | Daily |
 | PandaCode's own updates (`latest.json` on this repository's latest release) | `github.com` | At launch and about every 6 hours; turn off in Settings → About |
 | Cloud agents (optional): the task's checkout, prompt and harness login go to the machine you chose; PandaCode checks on its active runs | The cloud provider you connected | Only for tasks you start on a cloud provider; while a run is active and at launch to re-attach |
+| Model routing profiler (optional): `model.int8.onnx` and `tokenizer.json`, from a pinned commit, verified by SHA-256 | `raw.githubusercontent.com` | Once, the first time you turn on a team (with routing on) or click Download or Route in Settings → Agents → Model routing; never at launch |
 | PandaCode Connect (optional): GitHub sign-in, then the relay that forwards your devices' end-to-end encrypted messages | `github.com`, the PandaCode relay | Only after you sign in under Settings → Remote access; nothing before |
 
 ## Install

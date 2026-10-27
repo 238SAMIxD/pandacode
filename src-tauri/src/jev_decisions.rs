@@ -1145,6 +1145,7 @@ mod tests {
     }
     fn configure_workers(store: &Store, task: &Session) {
         let config = architect::TeamConfig {
+            catalog: Vec::new(),
             auto: false,
             roster_only: false,
             name: None,

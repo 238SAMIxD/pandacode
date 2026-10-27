@@ -40,9 +40,11 @@ mod jev_decisions;
 mod local_servers;
 mod local_signing;
 mod message_queue;
+mod model_routing;
 mod moodboards;
 mod prompt_attachments;
 mod overlay;
+mod panda_router;
 mod provider_settings;
 mod remote;
 mod providers;
@@ -3139,6 +3141,7 @@ pub fn run() {
             std::fs::create_dir_all(&dir)?;
             provider_settings::setup(&dir).map_err(std::io::Error::other)?;
             connections::setup(&dir).map_err(std::io::Error::other)?;
+            model_routing::setup(&dir);
             // Optional integration storage must never prevent the workspace from opening.
             if jev::setup(&dir).is_err() {
                 eprintln!("Jev settings are unavailable; browser testing remains disabled.");
@@ -3223,6 +3226,10 @@ pub fn run() {
             let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
                 support::open_support,
                 support::support_details,
+                model_routing::model_routing_status,
+                model_routing::model_routing_configure,
+                model_routing::model_routing_prepare,
+                model_routing::model_routing_route,
                 local_sign_app,
                 agent_updates::check_agent_updates,
                 agent_updates::update_agent,

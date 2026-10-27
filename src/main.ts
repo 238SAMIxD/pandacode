@@ -19,6 +19,7 @@ import { afterRun as turnChecksAfterRun, enabled as turnChecksEnabled, noteManua
 import { limitActive, limitBanner, resetLabel } from './usage-limit';
 import { cascade, enterView, glideIn, glideOut, hideToast, installDialogMotion, publishSpringEasings, revealIn, showToast, trackSegment } from './motion';
 import { updateTeamProgress } from './team-progress';
+import { installedCatalog } from './team-catalog';
 import { classicTeamSetup, isTeam, namedTeams, teamDetail, TEAM_MODE_EVENT } from './team-mode';
 import { renderCoordination } from './coordination-message';
 import { renderTurnChanges, changeRequest, captureChangeCards, restoreChangeCards } from './turn-changes';
@@ -232,22 +233,18 @@ function teamButton(s: Session): string {
     ? `<button type="button" class="composer-team-button" data-action="architect-setup" aria-label="Architect & workers" aria-pressed="${on}" title="Architect & workers">${icon('worktree')}<span>Team</span></button>`
     : `<button type="button" class="composer-team-button" data-action="team-toggle" aria-label="Team" aria-description="${escape(TEAM_TIP)}" aria-pressed="${on}" data-tip="${escape(TEAM_TIP)}">${icon('worktree')}<span>Team</span></button>`;
 }
-const AUTO_ROSTER_MAX = 24, AUTO_PER_HARNESS = 6;
-/** Installed models the lead may pick from; it can also name any other model directly. */
-async function autoRoster(): Promise<WorkerProfile[]> {
-  const installed = state.providers.filter(p => p.installed);
-  const catalogs = await Promise.allSettled(installed.map(p => loadModels(p.id)));
-  const roster: WorkerProfile[] = [], ids = new Set<string>();
-  installed.forEach((harness, index) => {
-    const result = catalogs[index];
-    for (const model of (result.status === 'fulfilled' ? result.value : harness.models).slice(0, AUTO_PER_HARNESS)) {
-      const id = `${harness.id}-${model.id}`.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/-+$/, '').slice(0, 80);
-      if (!model.id || roster.length >= AUTO_ROSTER_MAX || ids.has(id)) continue;
-      ids.add(id);
-      roster.push({ id, name: `${model.name} · ${harness.name}`.slice(0, 80), provider: harness.id, model: model.id, reasoningEffort: null });
-    }
-  });
-  return roster;
+/** An automatic team's config with the current installed models (the capped roster for the lead,
+ * the full catalog for Panda Router), keeping the limits of `base` or the last saved setup. */
+async function autoTeamConfig(base?: TeamConfig): Promise<TeamConfig> {
+  const [library, { roster, catalog }] = await Promise.all([base ? Promise.resolve(null) : call<TeamLibrary>('architect_profiles'), installedCatalog(state.providers, loadModels)]);
+  const limits = base ?? library?.lastSetup?.config;
+  return { auto: true, workers: roster, catalog, maxParallel: limits?.maxParallel ?? 0, maxRounds: limits?.maxRounds ?? 8, maxAssignments: limits?.maxAssignments ?? 24, workspace: 'shared', summaryLimit: limits?.summaryLimit ?? 3072 };
+}
+/** Warms Panda Router's profiler when a team starts; failures only reach the console. */
+function prepareModelRouting(): void {
+  void call<{ enabled: boolean }>('model_routing_status')
+    .then(status => status.enabled ? call('model_routing_prepare') : undefined)
+    .catch(cause => console.warn('Model routing could not prepare', cause));
 }
 let teamToggleBusy = false;
 async function toggleTeam(): Promise<void> {
@@ -258,9 +255,8 @@ async function toggleTeam(): Promise<void> {
     const team = teams.get(task.id) ?? await loadTeam(task.id);
     let config: TeamConfig | null = null;
     if (!team) {
-      const [library, workers] = await Promise.all([call<TeamLibrary>('architect_profiles'), autoRoster()]);
-      const limits = library.lastSetup?.config;
-      config = { auto: true, workers, maxParallel: limits?.maxParallel ?? 0, maxRounds: limits?.maxRounds ?? 8, maxAssignments: limits?.maxAssignments ?? 24, workspace: 'shared', summaryLimit: limits?.summaryLimit ?? 3072 };
+      prepareModelRouting();
+      config = await autoTeamConfig();
     }
     if (task.id !== state.sessionId) return;
     const saved = await call<TeamSnapshot | null>('architect_configure', { sessionId: task.id, config, architect: null, profileId: null });
@@ -2978,6 +2974,12 @@ async function showModel(anchor: HTMLElement): Promise<void> {
         if (teams.get(selected.id)?.config.rosterOnly) {
           await call<TeamSnapshot | null>('architect_configure', { sessionId: selected.id, config: null, architect: null, profileId: null });
           onArchitect({ sessionId: selected.id, removed: true });
+        }
+        // An automatic team keeps its limits but learns about newly installed models.
+        const auto = teams.get(selected.id)?.config;
+        if (auto?.auto && !auto.rosterOnly) {
+          const saved = await call<TeamSnapshot | null>('architect_configure', { sessionId: selected.id, config: await autoTeamConfig(auto), architect: null, profileId: null });
+          onArchitect(saved ?? { sessionId: selected.id, removed: true });
         }
         const updated = await call<Session>('configure_session', { sessionId: selected.id, provider: providerId, model });
         const index = state.sessions.findIndex(s => s.id === selected.id); if (index >= 0) state.sessions[index] = updated;
