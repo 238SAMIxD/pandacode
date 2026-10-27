@@ -1870,7 +1870,7 @@ mod tests {
             &project.id,
             &LaunchContext {
                 provider: "kimi".into(),
-                reasoning_effort: Some("high".into()),
+                reasoning_effort: Some("high level".into()),
                 ..LaunchContext::default()
             },
             true,
