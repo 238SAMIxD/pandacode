@@ -3300,9 +3300,12 @@ test('⌘F finds text in the thread, in your messages and the agent’s, and ste
   await expect(input).toBeFocused();
   await input.fill('search');
   const count = find.locator('.thread-find-count');
-  await expect(count).toHaveText(/^1 of \d+$/);
-  const total = Number((await count.textContent())!.split(' of ')[1]);
+  // A fresh search starts at the first match below the header's fade, which may not be the first.
+  await expect(count).toHaveText(/^\d+ of \d+$/);
+  const [start, total] = (await count.textContent())!.split(' of ').map(Number);
   expect(total).toBeGreaterThan(1);
+  for (let index = start; index > 1; index--) await input.press('Shift+Enter');
+  await expect(count).toHaveText(`1 of ${total}`);
   // Matches come from both sides of the conversation, highlighted without touching the DOM.
   const owners = await page.evaluate(() => {
     const all = (CSS as any).highlights.get('thread-find');

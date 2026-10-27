@@ -21,7 +21,7 @@ async function openMirror(page: Page, before?: () => Promise<void>) {
 test('a mirror shows its host subagents, live and from the saved snapshot', async ({ page }) => {
   // Sent while another task was open: only the saved snapshot can show it.
   await openMirror(page, () => page.evaluate(c => (window as any).__mirrorSubagent(c), child('run:a', 'Explorer')));
-  const trigger = page.getByRole('button', { name: 'Subagents', exact: true });
+  const trigger = page.locator('#agents-toggle');
   await expect(trigger).toBeVisible();
   await page.evaluate(c => (window as any).__mirrorSubagent(c), child('run:b', 'Reviewer', 'completed', 'Looks good.'));
   await trigger.click();
@@ -32,8 +32,8 @@ test('a mirror shows its host subagents, live and from the saved snapshot', asyn
 
 test('a mirror shows the host team read-only, with worker transcripts and live row changes', async ({ page }) => {
   await openMirror(page);
-  const trigger = page.getByRole('button', { name: 'Open workers' });
-  await expect(trigger).toContainText('1/2');
+  const trigger = page.locator('#agents-toggle');
+  await expect(trigger).toHaveAttribute('aria-label', 'Agents: 1 running');
   await trigger.click();
   const panel = page.getByRole('dialog', { name: 'Workers', exact: true });
   await expect(panel.locator('.architect-worker-row')).toHaveCount(2);
@@ -51,14 +51,14 @@ test('a mirror shows the host team read-only, with worker transcripts and live r
 
   // The host's `team` event: worker 2 finished; the mirror rereads its team.
   await page.evaluate(() => (window as any).__mirrorTeamWorker({ id: 'w2', status: 'completed', summary: 'Wrote the guide' }));
-  await expect(trigger).toContainText('2/2');
+  await expect(trigger).toHaveAttribute('aria-label', 'Agents');
   await expect(panel.locator('.architect-worker-row[data-worker-id="w2"]')).toContainText('Done');
 });
 
 test('a long host worker transcript loads its older pages when scrolled back', async ({ page }) => {
   await openMirror(page);
   await page.evaluate(() => (window as any).__previewMirrorLongWorker(130));
-  await page.getByRole('button', { name: 'Open workers' }).click();
+  await page.locator('#agents-toggle').click();
   const panel = page.getByRole('dialog', { name: 'Workers', exact: true });
   await panel.locator('.architect-worker-row[data-worker-id="w1"]').click();
   const history = panel.locator('.architect-worker-history');
