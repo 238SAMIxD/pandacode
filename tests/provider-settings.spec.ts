@@ -22,6 +22,9 @@ test('provider connections expose Kilo models, approval modes and executable set
   const settings = page.getByRole('region', { name: 'Settings', exact: true });
   await settings.getByRole('tab', { name: 'Providers', exact: true }).click();
   const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Kilo Code', exact: false }) });
+  await expect(card.locator('h3 .provider-logo[data-provider="kilo"]')).toBeVisible();
+  const ompCard = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Oh My Pi', exact: false }) });
+  await expect(ompCard.locator('h3 .provider-logo[data-provider="omp"]')).toBeVisible();
   await expect(card).toContainText('kilo auth login');
   await expect(card.getByRole('link', { name: 'Kilo CLI docs' })).toHaveAttribute('href', 'https://kilo.ai/docs/code-with-ai/platforms/cli');
   await card.locator('summary').click();

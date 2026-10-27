@@ -74,7 +74,7 @@ button .icon{pointer-events:none}
 .task-indicator.running{background:var(--focus);box-shadow:none;animation:breathe 1.5s infinite}
 .task-indicator.attention{background:var(--accent-ink);box-shadow:0 0 0 3px rgb(var(--accent-rgb) / .3)}
 .provider-logo{width:20px;height:20px;display:inline-block;object-fit:contain;flex-shrink:0;vertical-align:middle;pointer-events:none}
-.provider-logo[data-provider="github-copilot"],.provider-logo[data-provider="cline"],.provider-logo[data-provider="devin"]{color:var(--text)}
+.provider-logo[data-provider="github-copilot"],.provider-logo[data-provider="cline"],.provider-logo[data-provider="devin"],.provider-logo[data-provider="kilo"]{color:var(--text)}
 .provider-logo[data-provider="codex"]{transform:scale(1.25)}
 .provider-logo[data-provider="pi"]{image-rendering:pixelated}
 .task-provider{width:18px;height:18px;opacity:.8;flex-shrink:0;align-self:center}
@@ -745,6 +745,7 @@ html[data-theme="dark"] :is(.task-indicator.running,.selected .task-indicator,.a
 html[data-theme="dark"] .task-indicator.attention{background:var(--accent)}
 html[data-theme="dark"] .provider-logo[data-provider="codex"]{filter:invert(1)}
 html[data-theme="dark"] .provider-logo[data-provider="kimi"]{border-radius:50%;box-shadow:none}
+html[data-theme="dark"] .provider-logo[data-provider="omp"]{border-radius:4px;box-shadow:0 0 0 1px rgb(255 255 255 / .18)}
 html[data-theme="dark"] .user-avatar{background:var(--raised)}
 html[data-theme="dark"] .composer{background:#262624;border-color:transparent;box-shadow:0 2px 5px rgb(0 0 0 / .1),0 8px 24px rgb(0 0 0 / .15)}
 html[data-theme="dark"] .composer:focus-within{border-color:transparent;box-shadow:0 0 0 3px rgb(var(--accent-rgb) / .1),0 8px 24px rgb(0 0 0 / .15)}
