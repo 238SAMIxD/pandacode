@@ -304,6 +304,8 @@ pub(super) fn stop_settled(provider: &str, value: &Value) -> bool {
         "omp" => value["type"] == "prompt_result" || value["type"] == "session_settled",
         // Muse ends an interrupted turn with `turn/completed` (terminal `cancelled`).
         "muse" => value["method"] == "turn/completed",
+        // ZCode settles through its `turn.completed` event (a cancelled run included).
+        "zcode" => zcode::stop_settled(value),
         _ => false,
     }
 }

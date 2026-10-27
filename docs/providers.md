@@ -1,7 +1,7 @@
 # Provider integrations
 
 PandaCode launches each installed CLI directly. Claude, Codex, Kimi, OpenCode,
-Antigravity, Grok Build, and Devin CLI own their authentication; sign in using their official
+Antigravity, Grok Build, Devin CLI, and ZCode own their authentication; sign in using their official
 CLI or extension.
 The optional Z.AI Coding Plan and MiMo Token Plan API keys are stored as separate
 entries in PandaCode's secrets store (see [secret storage](#secret-storage)) and injected only into their isolated Claude subprocesses. The app discovers executable paths
@@ -809,6 +809,54 @@ command, a Plan turn and a live steer). The recorded frames back the unit tests 
 `providers/devin.rs`, and an ignored smoke test
 (`installed_devin_lists_models_with_efforts`) reads the real catalog and command list
 without sending a prompt.
+
+## ZCode
+
+ZCode (z.ai's coding CLI, installed to `~/.local/bin/zcode` by its install script)
+has no ACP mode; PandaCode drives its own `zcode app-server` protocol instead —
+newline-delimited JSON on stdio with no handshake and no transport auth, so the
+process is trusted like any local CLI. Each run spawns one `zcode app-server` and
+speaks `session/create` → `session/subscribe` → `session/send`, mirroring how the
+ZCode desktop app drives the same binary.
+
+**Sign-in.** ZCode owns its authentication; sign in once with `zcode` in a terminal.
+PandaCode never handles credentials. If the account is not signed in, the turn stops
+with “ZCode requires sign-in. Run `zcode` in a terminal and sign in, then send again.”
+
+**Models and effort.** Model discovery opens a throwaway session and reads the
+catalog from the `session/create` snapshot (`settings.model.available`), never
+sending a prompt. Each entry keeps its label as the invocation id, with the
+provider label, context window and per-model reasoning levels as advertised; the
+`default` choice delegates to whatever the CLI has configured. Selected model and
+thinking level are applied with `session/setModel` / `session/setThoughtLevel` and
+verified against the returned snapshot — a model the server refuses fails the turn
+instead of silently running in a different one.
+
+**Approvals.** See [approvals](approvals.md): Plan → `plan`, Standard → `build`,
+Accept edits → `edit`, Full access → `yolo`. Permission requests arrive as
+`interaction/requestPermission` reverse requests with ready-made response objects;
+PandaCode answers with the offered `allow`/`deny` response, never inventing a
+standing grant. Sessions use deferred persistence, so captures and failed starts
+leave nothing in the user's ZCode history; `session/resume` keeps a task's session
+across turns.
+
+**Turn data.** Streaming text and reasoning deltas (`model.streaming`), tool calls
+(`tool.updated`), per-turn token usage (`turn.completed`) and titles all come from
+the `session/event` stream; a busy session queues a second message server-side, so
+steering holds for the next turn.
+
+**Not yet.** Screenshots are refused (the composer offers documents and folders
+with a note); interactive questions (`interaction/requestUserInput`) decline with a
+note so the turn continues; slash-command discovery and the harness console are not
+offered. The protocol is ZCode's private surface and evolves with the CLI — frames
+are parsed defensively (unknown events ignored, unknown reverse requests answered
+`-32601`) and pinned per recorded version.
+
+Verified against the CLI bundled with ZCode.app (user-agent `ZCode/3.16.3`) on
+2026-10-25 by driving `zcode app-server` directly (create, subscribe, two turns,
+a permission round-trip, mode/thought switches, usage and resume). The recorded
+frames back the unit tests in `providers/zcode.rs`, and an ignored smoke test
+(`installed_zcode_lists_models`) reads the real catalog without sending a prompt.
 
 ## Kilo Code
 

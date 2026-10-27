@@ -9,6 +9,9 @@ Retrieved from provider-owned sources on September 12, 2026. These marks identif
 | `src/assets/providers/kimi.png` | [MoonshotAI/kimi-cli, web/public/logo.png](https://github.com/MoonshotAI/kimi-cli/blob/main/web/public/logo.png) ([raw asset](https://raw.githubusercontent.com/MoonshotAI/kimi-cli/main/web/public/logo.png)) | Copied byte for byte. The official repository provides this 128 × 128 PNG icon; it was not traced into an invented vector. Upstream Git blob: `033c0f4fb2e28a9daeca0205812d15bf3e547893`. | 11,486 |
 | `src/assets/providers/github-copilot.svg` | [GitHub Primer Octicons, `copilot-16.svg`](https://github.com/primer/octicons/blob/main/icons/copilot-16.svg) | Preserves the official Copilot mark and canvas; the SVG uses `currentColor` so PandaCode can tint it with the active theme's text color. | 1,566 |
 
+| `src/assets/providers/zcode.svg` | Drawn for PandaCode (not retrieved): a rounded square with a bold Z. ZCode ships no redistributable brand asset at the time of writing; this placeholder mark identifies the integration and should be replaced with the official mark when z.ai publishes one. |
+| `mobile/assets/providers/zcode.svg` | Byte-identical copy of `src/assets/providers/zcode.svg` (the mobile app mirrors desktop provider marks). |
+
 The helper in `src/provider-logos.ts` resolves a fixed provider-to-local-asset mapping. Vite bundles the assets; rendering performs no remote brand-asset requests. Decorative images have empty alt text and `aria-hidden="true"`; adjacent provider text supplies the accessible name. Keep the logos proportional and preserve their colors when changing the interface.
 
 SHA-256 checksums:

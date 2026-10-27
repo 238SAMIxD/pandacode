@@ -411,6 +411,7 @@ fn known_provider(provider: &str) -> bool {
             | "github-copilot"
             | "muse"
             | "devin"
+            | "zcode"
     )
 }
 

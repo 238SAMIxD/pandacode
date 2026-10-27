@@ -74,6 +74,9 @@ impl Protocol {
             "codex" => self.accept(id, text, "next-turn", reply, &mut step),
             "pi" | "omp" => return self.pi_steer(id, text, reply),
             "muse" => return self.muse_steer(id, text, reply),
+            // A busy ZCode session queues a `session/send` server-side, but the
+            // queue's delivery is not observable enough to report live; hold it.
+            "zcode" => self.accept(id, text, "next-turn", reply, &mut step),
             _ => {
                 let _ = reply.send(Err("This agent cannot be steered; the message stays queued.".into()));
             }
@@ -202,6 +205,8 @@ impl Protocol {
         } else if self.config.provider == "muse" {
             self.config.prompt = text;
             self.muse_turn(step);
+        } else if self.config.provider == "zcode" {
+            self.zcode_prompt(text, step);
         } else {
             self.pi.settled = false;
             step.write.push(json!({"type":"prompt","id":"pandacode-prompt","message":text}));

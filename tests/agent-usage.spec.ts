@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 
-const installed = ['claude', 'codex', 'kimi', 'opencode', 'glm', 'grok', 'mimo', 'pi', 'deepseek', 'commandcode', 'cline', 'kilo', 'github-copilot', 'muse', 'devin'];
+const installed = ['claude', 'codex', 'kimi', 'opencode', 'glm', 'grok', 'mimo', 'pi', 'deepseek', 'commandcode', 'cline', 'kilo', 'github-copilot', 'muse', 'devin', 'zcode'];
 const usageButton = (page: Page) => page.getByRole('button', { name: 'Agent usage', exact: true });
 const dialog = (page: Page) => page.getByRole('dialog', { name: 'Agent usage', exact: true });
 const card = (page: Page, name: string) => dialog(page).locator('.usage-card').filter({ hasText: name });
@@ -45,6 +45,7 @@ async function openApp(page: Page, hold: string[] = [], failures: string[] = [],
         'github-copilot': result('github-copilot', 'unsupported', 'GitHub Copilot CLI does not expose usage limits through this agent.'),
         muse: result('muse', 'unsupported', 'Muse Code reports its usage windows only inside a running session.'),
         devin: result('devin', 'unsupported', 'Devin does not expose plan limits through its ACP server.'),
+        zcode: result('zcode', 'unsupported', 'ZCode does not expose plan limits through its app-server.'),
       },
     };
   }, { hold, failures, ledgerFixture: ledger(), connections });
