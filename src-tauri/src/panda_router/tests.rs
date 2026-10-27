@@ -139,9 +139,10 @@ fn check_route(label: &str, got: &Route, want: &FixtureRoute, p_tol: f64) {
 }
 
 /// int8 kernels differ by CPU (the fixture was dumped on one Mac; CI's runner takes another kernel path,
-/// moving single probabilities by up to ~0.06), so ONNX end to end is checked by decisions: same top
-/// category unless Python's top two were close, expected difficulty within 0.75, flags within this.
-/// The matcher itself is pinned exactly by the heuristic tests.
+/// moving single probabilities and flags by up to ~0.2), so ONNX end to end is checked by decisions:
+/// same top category unless Python's top two were close, expected difficulty within 0.75, and the route
+/// checks below. Flags count only through those routes. Exact token ids still pin the tokenizer, and
+/// the matcher is pinned exactly by the heuristic tests.
 const ONNX_TOL: f64 = 0.15;
 
 fn check_profile_drift(label: &str, got: &TaskProfile, want: &FixtureProfile) {
@@ -152,9 +153,6 @@ fn check_profile_drift(label: &str, got: &TaskProfile, want: &FixtureProfile) {
     assert!(g == w || sorted[0] - sorted[1] < 0.15, "{label} category {g} vs {w}");
     let expected = |p: &[f64]| p.iter().enumerate().map(|(i, x)| (i + 1) as f64 * x).sum::<f64>();
     close(&format!("{label} expected difficulty"), expected(&got.difficulty), expected(&want.difficulty), 0.75);
-    for (i, w) in want.flags.iter().enumerate() {
-        close(&format!("{label} flags[{i}]"), got.flags[i], *w, ONNX_TOL);
-    }
 }
 
 /// ONNX routes under hardware drift: same category, difficulty within a level, and the pick among
