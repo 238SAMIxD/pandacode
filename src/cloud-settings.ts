@@ -6,7 +6,7 @@ import './cloud-settings.css';
 import { escape } from './dom';
 import { infoMark } from './tooltip';
 
-export type CloudConnection = { provider: 'daytona' | 'cloudflare' | 'aws' | 'vercel' | 'railway' | 'gcloud' | KeyedProvider; connected: boolean; detail: string | null; sandboxes?: boolean };
+export type CloudConnection = { provider: 'daytona' | 'cloudflare' | 'aws' | 'vercel' | 'railway' | 'gcloud' | 'docker' | KeyedProvider; connected: boolean; detail: string | null; sandboxes?: boolean };
 export type CloudSettingsHost = {
   call<T>(command: string, args?: Record<string, unknown>): Promise<T>;
   listen(name: 'cloud-setup', callback: (event: { provider: string; label: string }) => void): Promise<() => void>;
@@ -16,6 +16,10 @@ export type CloudSettingsHost = {
 type Field = { name: string; label: string; placeholder: string; secret?: boolean; optional?: boolean; sparse?: boolean };
 /* Sandbox providers that connect with one API key (docs/cloud-agents.md → Provider settings). */
 const KEYED = {
+  digitalocean: { name: 'DigitalOcean', key: 'API token', docs: 'cloud.digitalocean.com/account/api/tokens', fields: [{ name: 'region', label: 'Region', placeholder: 'Optional, e.g. nyc1', optional: true }] },
+  vultr: { name: 'Vultr', key: 'API key', docs: 'my.vultr.com/settings → API', fields: [{ name: 'region', label: 'Region', placeholder: 'Optional, e.g. ewr', optional: true }] },
+  hetzner: { name: 'Hetzner', key: 'API token', docs: 'console.hetzner.cloud → Security → API tokens', fields: [{ name: 'location', label: 'Location', placeholder: 'Optional, e.g. fsn1', optional: true }] },
+  runpod: { name: 'RunPod', key: 'API key', docs: 'runpod.io → Settings → API Keys', fields: [{ name: 'gpu', label: 'GPU type', placeholder: 'Optional, e.g. NVIDIA RTX 3090', optional: true }, { name: 'image', label: 'Image', placeholder: 'Optional, an image with SSH built in', optional: true }] },
   e2b: { name: 'E2B', key: 'API key', docs: 'e2b.dev/dashboard → API keys', fields: [] },
   modal: { name: 'Modal', key: 'Token secret', docs: 'modal.com/settings/tokens', fields: [{ name: 'tokenId', label: 'Token ID', placeholder: 'ak-…' }, { name: 'environment', label: 'Environment', placeholder: 'Optional', optional: true }] },
   codesandbox: { name: 'CodeSandbox', key: 'API key', docs: 'codesandbox.io/t/api', fields: [] },
@@ -61,6 +65,11 @@ const PROVIDERS: Record<CloudConnection['provider'], { name: string; summary: st
     name: 'Google Cloud', summary: 'Deploys by agents: Cloud Run and Cloud Storage.',
     fields: [{ name: 'project', label: 'Project ID', placeholder: 'my-app-123456' }, { name: 'region', label: 'Region', placeholder: 'Optional, such as us-central1', optional: true }, { name: 'zone', label: 'Zone', placeholder: 'Optional; for cloud agent VMs, such as us-central1-a', optional: true, sparse: true }],
     note: 'Uses your installed gcloud CLI and its sign-in (run `gcloud auth login` first); PandaCode downloads nothing and stores only the project, region and zone.', connect: 'Connect',
+  },
+  docker: {
+    name: 'Docker', summary: 'Containers on this machine or any Docker host.',
+    fields: [{ name: 'engine', label: 'Engine', placeholder: 'Optional; docker (default), podman, apple or lxc', optional: true }, { name: 'endpoint', label: 'Docker host', placeholder: 'Optional; empty for this machine, ssh://user@host or tcp://host:2376', optional: true }, { name: 'image', label: 'Image', placeholder: 'Optional, e.g. ubuntu:24.04', optional: true }, { name: 'tlsCa', label: 'TLS CA path', placeholder: 'Optional; for tcp:// Docker hosts', optional: true, sparse: true }, { name: 'tlsCert', label: 'TLS cert path', placeholder: 'Optional; for tcp:// Docker hosts', optional: true, sparse: true }, { name: 'tlsKey', label: 'TLS key path', placeholder: 'Optional; for tcp:// Docker hosts', optional: true, sparse: true }],
+    note: 'Runs each task in its own container (label or name prefix pandacode) — Docker, Podman, Apple Containers, or the lxc client (LXD/Incus, which uses its own configured remotes; Podman remote hosts take ssh://). For ssh:// and tcp:// hosts, that daemon is root-equivalent — only point at machines you trust. Containers keep their disk until deleted and use this machine’s or the host’s resources; nothing is billed.', connect: 'Connect',
   },
   ...Object.fromEntries(Object.entries(KEYED).map(([id, provider]) => [id, {
     name: provider.name, summary: 'Cloud machines for agents.',
