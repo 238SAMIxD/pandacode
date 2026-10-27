@@ -429,7 +429,7 @@ mod tests {
             project_id: "p".into(), provider: "claude".into(), model: "opus".into(), mode: "ask".into(), heartbeat_minutes: 0, next_heartbeat_at: None,
             paused: false, memory_version: 0, notify_channel_id: None, notify_thread: None, created_at: 0, updated_at: 0, color: String::new(),
             reasoning_effort: String::new(), backup_models: vec![model("codex", "gpt-5"), model("kimi", "k2")], fallback_mode: "auto".into(),
-            notify: true, while_working: "queue".into(), show_plan: false,
+            notify: true, while_working: "queue".into(), show_plan: false, soul: String::new(), skills: Vec::new(), mcp: Vec::new(),
         }
     }
 

@@ -47,7 +47,7 @@ const AGENTS_STOPPING: &str = "Wait for the current agents to stop before resumi
 const CONTINUE_BODY: &str = "Background commands, monitors and scheduled wakeups do not report back after your turn ends, so nothing is waiting on them. Continue now: dispatch the remaining work to workers, run any check you need in the foreground and wait for it in this turn, or call finish_team with a summary if the objective is done. Do not end this turn waiting on anything.";
 const FAILED_PREFIX: &str = "A worker failed while other workers are still running, for this objective: ";
 const FAILED_BODY: &str = "\n\nRead the failed worker's error and result. Retry it with followup_worker, dispatch a replacement, or leave it for the final review. Other workers are still active: do not edit their files, repeat completed assignments, or poll. You may end this turn after you act; settled work will trigger review.\n\n";
-const HARNESSES: [&str; 15] = [
+const HARNESSES: [&str; 17] = [
     "claude",
     "codex",
     "kimi",
@@ -60,9 +60,11 @@ const HARNESSES: [&str; 15] = [
     "deepseek",
     "commandcode",
     "cline",
+    "kilo",
     "omp",
     "github-copilot",
     "muse",
+    "devin",
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -523,6 +525,15 @@ pub async fn architect_configure(
     }
     Ok(changed)
 }
+/// A task on another computer runs its team there (docs/remote-access.md): this computer
+/// only shows it, so nothing may configure, start or control a local team for it.
+pub(crate) fn refuse_mirror(store: &Store, session_id: &str) -> Result<()> {
+    let device: Option<String> = store.db.query_row("SELECT remote_device FROM sessions WHERE id=?1", [session_id], |r| r.get(0)).optional().map_err(|e| e.to_string())?.flatten();
+    match device {
+        Some(device) => Err(format!("This task's team runs on {}.", crate::remote::device_label(&device))),
+        None => Ok(()),
+    }
+}
 pub(super) fn configure_state(
     state: &AppState,
     session_id: &str,
@@ -535,6 +546,7 @@ pub(super) fn configure_state(
     }
     let agents = state.agents.lock().map_err(|e| e.to_string())?;
     let store = state.store.lock().map_err(|e| e.to_string())?;
+    refuse_mirror(&store, session_id)?;
     if parent_of(&store, session_id)?.is_some() {
         return Err("This worker is managed by its architect. Use the team controls.".into());
     }
@@ -732,6 +744,7 @@ pub(crate) fn start_state(
 ) -> Result<(TeamSnapshot, Admission)> {
     let agents = state.agents.lock().map_err(|e| e.to_string())?;
     let store = state.store.lock().map_err(|e| e.to_string())?;
+    refuse_mirror(&store, session_id)?;
     if let Some(project) = expected_project {
         if store.session(session_id)?.project_id != project {
             return Err("Task moved to a different project. Read its details again.".into());
@@ -815,6 +828,7 @@ fn control_state(state: &AppState, session_id: &str, action: &str) -> Result<Tea
     let team = {
         let agents = state.agents.lock().map_err(|e| e.to_string())?;
         let store = state.store.lock().map_err(|e| e.to_string())?;
+        refuse_mirror(&store, session_id)?;
         let mut team = load(&store, session_id)?.ok_or("Team is unavailable.")?;
         match action {
             "pause" | "stop" => {

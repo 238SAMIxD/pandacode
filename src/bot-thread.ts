@@ -238,7 +238,9 @@ function decorateSteps(transcript: HTMLElement): void {
     const steps = turn.querySelectorAll('.turn-activity-body [data-tool-key]').length, failed = turn.querySelectorAll('.turn-activity-body [data-tool-status="failed"]').length;
     const label = turn.querySelector<HTMLElement>('.turn-activity-label');
     if (!steps || !label) continue;
-    const duration = /for (?:about )?(.+)$/.exec(label.textContent ?? '')?.[1];
+    // Folded traces keep "Worked for 12s" in the summary's title; older ones in the label.
+    const said = turn.querySelector('.turn-activity-summary')?.getAttribute('title') ?? label.textContent ?? '';
+    const duration = /for (?:about )?(.+)$/.exec(said)?.[1];
     label.textContent = `${steps} ${steps === 1 ? 'step' : 'steps'}${duration ? ` · ${duration}` : ''}`;
     turn.classList.add('bot-steps');
     // A turn folds once when it finishes (the live run was open); after that the reader decides.

@@ -156,3 +156,6 @@ dialog.bot-settings-dialog{width:min(880px,calc(100vw - 32px));max-height:88dvh}
 .bs-advanced>.bs-row{border-top:1px solid var(--border)}
 .bots-detail .bs-row>.bots-switch{justify-self:end;width:2.1rem;min-height:0;padding:0}
 @media(prefers-reduced-transparency:reduce),(prefers-contrast:more){.bp-avatar-pop{backdrop-filter:none;-webkit-backdrop-filter:none;background:var(--panel)}}
+.bots-soul-actions{display:flex;gap:.5rem;flex-wrap:wrap}
+.bots-soul-actions [hidden],.bots-soul-error[hidden]{display:none}
+.bots-soul-error{margin:0}

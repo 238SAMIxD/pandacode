@@ -46,9 +46,9 @@ impl Cache {
         }
     }
 
-    fn commit(&mut self, discovery: Discovery, metadata: &Value, now: Instant) {
+    fn commit(&mut self, discovery: Discovery, models: Vec<ModelInfo>, now: Instant) {
         if discovery.revision == self.1 {
-            self.store(discovery.key, metadata, now);
+            self.store(discovery.key, models, now);
         }
     }
 
@@ -64,8 +64,7 @@ impl Cache {
             .map(|(_, models)| models.clone())
     }
 
-    fn store(&mut self, key: Key, metadata: &Value, now: Instant) {
-        let models = acp::parse_models(metadata);
+    fn store(&mut self, key: Key, models: Vec<ModelInfo>, now: Instant) {
         // A default-only response is not a catalog and must not overwrite a
         // previously discovered usable list.
         if models.len() <= 1 {
@@ -108,6 +107,11 @@ pub(crate) fn begin(provider: &str, path: &Path) -> Option<Discovery> {
 }
 
 pub(crate) fn store(discovery: Option<Discovery>, metadata: &Value) {
+    store_models(discovery, acp::parse_models(metadata));
+}
+
+/// For harnesses whose catalog takes more than one `session/new` result (Devin).
+pub(crate) fn store_models(discovery: Option<Discovery>, models: Vec<ModelInfo>) {
     let Some(discovery) = discovery else {
         return;
     };
@@ -115,7 +119,7 @@ pub(crate) fn store(discovery: Option<Discovery>, metadata: &Value) {
         return;
     }
     if let Ok(mut cache) = cache().lock() {
-        cache.commit(discovery, metadata, Instant::now());
+        cache.commit(discovery, models, Instant::now());
     }
 }
 
@@ -159,9 +163,9 @@ mod tests {
         let metadata =
             json!({"models":{"availableModels":[{"modelId":"model-a","name":"Model A"}]}});
         let mut cache = Cache::default();
-        cache.store(identity.clone(), &metadata, now);
+        cache.store(identity.clone(), acp::parse_models(&metadata), now);
         assert_eq!(cache.get(&identity, now).unwrap()[1].id, "model-a");
-        cache.store(identity.clone(), &json!({}), now);
+        cache.store(identity.clone(), acp::parse_models(&json!({})), now);
         assert!(cache.get(&identity, now).is_some());
         assert!(cache.get(&identity, now + TTL).is_none());
         let mut replaced = identity.clone();
@@ -173,7 +177,7 @@ mod tests {
         for index in 0..30 {
             cache.store(
                 key("antigravity", Path::new(&format!("/fixture/{index}"))),
-                &metadata,
+                acp::parse_models(&metadata),
                 now,
             );
         }
@@ -226,10 +230,10 @@ mod tests {
         let mut cache = Cache::default();
         let in_flight = cache.begin(identity.clone());
         cache.invalidate("antigravity");
-        cache.commit(in_flight, &old, now);
+        cache.commit(in_flight, acp::parse_models(&old), now);
         assert!(cache.get(&identity, now).is_none());
         let refreshed = cache.begin(identity.clone());
-        cache.commit(refreshed, &new, now);
+        cache.commit(refreshed, acp::parse_models(&new), now);
         assert_eq!(cache.get(&identity, now).unwrap()[1].id, "new-model");
     }
 }

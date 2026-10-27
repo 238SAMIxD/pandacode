@@ -127,6 +127,66 @@ test.describe('bots', () => {
     await expect(crumb(page)).toContainText('Scout');
   });
 
+  test('a bot references its own skills and MCP servers, and a project task can start with it', async ({ page }) => {
+    await newBot(page, 'Scout');
+    await openSettings(page, 'Skills');
+    const skill = panel(page).getByRole('checkbox', { name: 'Use Release notes' });
+    await expect(skill).not.toBeChecked();
+    await skill.check();
+    await expect(panel(page).locator('.bots-skills')).toContainText('Files in the bot\'s workspace');
+    const mcp = panel(page).getByRole('checkbox', { name: 'Use MCP server Preview documentation' });
+    await mcp.check();
+    await expect(panel(page).locator('.bots-mcp')).toContainText('From User config');
+    await page.keyboard.press('Escape');
+    await expect(panel(page)).toBeHidden();
+    // A second bot on the same harness keeps its own, empty selection (same page: preview bots live in memory).
+    await showBotsView(page);
+    await sidebar(page).getByRole('button', { name: 'Add bot or channel' }).click();
+    await sidebar(page).getByRole('menu', { name: 'Create' }).getByRole('menuitem', { name: 'New bot' }).click();
+    await bots(page).getByRole('region', { name: 'Suggestions' }).getByRole('button', { name: /Researcher/ }).click();
+    await bots(page).getByRole('textbox', { name: 'Name' }).fill('Writer');
+    await bots(page).getByRole('button', { name: 'Create bot' }).click();
+    await expect(crumb(page)).toContainText('Writer');
+    await openSettings(page, undefined, 'Writer');
+    await panel(page, 'Writer').getByRole('tab', { name: 'Skills' }).click();
+    await expect(panel(page, 'Writer').getByRole('checkbox', { name: 'Use Release notes' })).not.toBeChecked();
+    await expect(panel(page, 'Writer').getByRole('checkbox', { name: 'Use MCP server Preview documentation' })).not.toBeChecked();
+    await page.keyboard.press('Escape');
+
+    // A new project task offers the bots, defaulting to none.
+    await showTasksView(page);
+    await page.locator('#navigation .task-item', { hasText: 'Explore the project' }).click();
+    await page.locator('.new-task-button').click();
+    const chip = page.locator('#composer-bot');
+    await expect(chip).toHaveText(/No bot/);
+    await chip.click();
+    await page.getByRole('menu', { name: 'Bot' }).getByRole('menuitemradio', { name: /Scout/ }).click();
+    await expect(chip).toHaveText(/Scout/);
+    const taskId = await page.locator('#prompt').getAttribute('data-session-id');
+    await page.locator('#prompt').fill('Write the release notes');
+    await page.locator('#prompt').press('Enter');
+    await expect(page.locator('#transcript .user-message').last().locator('.message-content')).toHaveText('Write the release notes');
+    // The task stays in its project, now marked with its bot; its first message carried the bot's brief and skills.
+    await expect(page.locator('.composer-computer-fixed', { hasText: 'with Scout' })).toBeVisible();
+    await expect(crumb(page)).toHaveCount(0);
+    const briefs = await page.evaluate(() => (window as any).__botTaskBriefs);
+    expect(briefs).toHaveLength(1);
+    expect(briefs[0].sessionId).toBe(taskId);
+    expect(briefs[0].brief).toContain('You are Scout');
+    expect(briefs[0].brief).toContain('### release-notes');
+    expect(briefs[0].brief).toContain('MCP servers chosen for this bot: Preview documentation');
+    await expect(page.locator('#transcript .agent-message').last()).toContainText('browser preview', { timeout: 15_000 });
+    // A follow-up does not repeat the brief, and a task without a bot gets none.
+    await page.locator('#prompt').fill('Thanks');
+    await page.locator('#prompt').press('Enter');
+    await page.locator('.new-task-button').click();
+    await expect(page.locator('#composer-bot')).toHaveText(/No bot/);
+    await page.locator('#prompt').fill('Plain task');
+    await page.locator('#prompt').press('Enter');
+    await expect(page.locator('#transcript .user-message').last()).toContainText('Plain task');
+    expect(await page.evaluate(() => (window as any).__botTaskBriefs.filter((item: any) => item.brief).length)).toBe(1);
+  });
+
   test('chatting with a bot streams like any task and keeps its brief out of the transcript', async ({ page }) => {
     await newBot(page);
     await page.locator('#prompt').fill('What can you help me with?');
@@ -134,7 +194,7 @@ test.describe('bots', () => {
     const sent = page.locator('#transcript .user-message').last();
     await expect(sent).toContainText('What can you help me with?');
     // The brief rides along for the agent but is the bot's setup, not an attachment: not shown.
-    await expect(sent.locator('.message-context')).toHaveCount(0);
+    await expect(sent.locator('.message-attachments')).toHaveCount(0);
     await expect(sent.locator('.message-content')).toHaveText('What can you help me with?');
     await expect(page.locator('#transcript .agent-message').last()).toContainText('browser preview', { timeout: 15_000 });
     await expect(page.locator('#prompt')).toHaveValue('');
@@ -407,7 +467,7 @@ test.describe('bots', () => {
     await expect(tab(page, 'Profile')).toHaveAttribute('aria-selected', 'true');
     // Sections are a vertical list, like Settings, and arrow keys move through it.
     await expect(panel(page).getByRole('tablist', { name: 'Bot settings' })).toHaveAttribute('aria-orientation', 'vertical');
-    await expect(panel(page).getByRole('tab')).toHaveText([/^Profile/, /^Connections/, /^Schedules/, /^Memory/, /^Activity/]);
+    await expect(panel(page).getByRole('tab')).toHaveText([/^Profile/, /^Connections/, /^Schedules/, /^Memory/, /^Skills/, /^Activity/]);
     await tab(page, 'Profile').focus();
     await page.keyboard.press('ArrowDown');
     await expect(tab(page, 'Connections')).toHaveAttribute('aria-selected', 'true');
@@ -434,6 +494,36 @@ test.describe('bots', () => {
     await expect(panel(page)).toBeHidden();
     await expect(sidebar(page).getByRole('button', { name: 'Create your first bot' })).toBeVisible();
     await expect(crumb(page)).toHaveCount(0);
+  });
+
+  test('a soul.md is copied into the profile apart from the instructions, and can be removed', async ({ page }) => {
+    await newBot(page, 'Leo');
+    await openSettings(page, undefined, 'Leo');
+    const settings = panel(page, 'Leo');
+    const file = settings.locator('input[data-soul-file]');
+    const soul = settings.getByRole('textbox', { name: 'Soul' });
+    await expect(soul).toHaveValue('');
+    await file.setInputFiles({ name: 'soul.md', mimeType: 'text/markdown', buffer: Buffer.from([0xff, 0xfe, 0x00]) });
+    await expect(settings.locator('.bots-soul-error')).toHaveText('soul.md is not UTF-8 text. Save it as UTF-8 Markdown and try again.');
+    await file.setInputFiles({ name: 'soul.md', mimeType: 'text/markdown', buffer: Buffer.alloc(64 * 1024 + 1, 'a') });
+    await expect(settings.locator('.bots-soul-error')).toHaveText('soul.md is larger than 64 KB. Shorten it and try again.');
+    await expect(soul).toHaveValue('');
+    await file.setInputFiles({ name: 'soul.md', mimeType: 'text/markdown', buffer: Buffer.from('# Leo\nDry wit, blunt under pressure.') });
+    await expect(soul).toHaveValue('# Leo\nDry wit, blunt under pressure.');
+    await expect(settings.locator('.bots-soul-error')).toBeHidden();
+    await expect(settings.getByRole('textbox', { name: 'Instructions' })).not.toHaveValue(/Dry wit/);
+    // The profile saves as you go, so the soul is kept after closing.
+    await expect(settings.locator('.bs-saved')).toHaveText('Saved');
+    await page.keyboard.press('Escape');
+    await openSettings(page, undefined, 'Leo');
+    await expect(soul).toHaveValue('# Leo\nDry wit, blunt under pressure.');
+    await settings.getByRole('button', { name: 'Remove', exact: true }).click();
+    await expect(soul).toHaveValue('');
+    await expect(settings.getByRole('button', { name: 'Remove', exact: true })).toBeHidden();
+    await expect(settings.locator('.bs-saved')).toHaveText('Saved');
+    await page.keyboard.press('Escape');
+    await openSettings(page, undefined, 'Leo');
+    await expect(soul).toHaveValue('');
   });
 
   test('Open chat in settings returns to the conversation', async ({ page }) => {

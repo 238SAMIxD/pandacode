@@ -40,12 +40,14 @@ html .drawer-heading{border-bottom:0}
 /* Flush with the right edge of the centered 830px column, not centered within it. */
 html .transcript>.user-message{width:fit-content;max-width:min(78%,640px);margin-left:auto;margin-right:max(0px,calc((100% - 830px) / 2))}
 .user-message>.message-content{text-align:left;padding:9px 14px;border-radius:7px 7px 2px 7px;background:color-mix(in srgb,var(--text) 7%,transparent)}
-.user-message>.message-content .message-context{margin-top:6px;text-align:left}
+.user-message>.message-content .message-attachments{margin-top:6px}
 /* Rows that once lined up with the author avatar now start at the column edge, like replies. */
 html .workspace:not(.side-thread) :is(.transcript,#stream-region)>:is(.turn-activity,.tool-activity,.tool-activity-status-row,.coordination-status,.turn-changes-row){padding-left:0}
 html .message>.message-actions{position:absolute;top:100%;left:0;margin:2px 0 0;padding:0;min-height:24px;opacity:0;z-index:2;transition:opacity 140ms ease}
 html .message>.message-actions button{width:24px;height:24px;min-height:24px;padding:4px}
 .message>.message-actions .icon{width:14px;height:14px}
+/* Under a traced answer they stay visible at rest, like the reference. */
+html .message.after-trace>.message-actions{opacity:.6}
 html .message:hover>.message-actions,html .message>.message-actions:focus-within,html .message>.message-actions:hover{opacity:1}
 @media(hover:none){html .message>.message-actions{opacity:.7}}
 @media(prefers-contrast:more){.user-message>.message-content{outline:1px solid var(--border)}}
