@@ -851,6 +851,19 @@ impl Store {
         Ok(())
     }
 
+    /// Tasks set to resume at reset whose limit has lifted (`pandacode serve` resumes them;
+    /// the desktop window schedules the same sends from the frontend).
+    pub fn due_limit_resumes(&self, now: i64) -> Result<Vec<String>> {
+        let mut statement = self
+            .db
+            .prepare(
+                "SELECT id FROM sessions WHERE resume_at_reset=1 AND limited_until IS NOT NULL AND limited_until<=?1 AND archived=0 AND draft=0 ORDER BY limited_until LIMIT 50",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = statement.query_map([now], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| e.to_string())
+    }
+
     /// The PandaCode task already continuing an agent conversation, if any.
     pub fn imported_task(&self, provider: &str, resume_id: &str) -> Result<Option<String>> {
         self.db
@@ -1870,6 +1883,24 @@ mod tests {
             .create_session(&project.id, "claude", "sonnet", "auto")
             .unwrap();
         (store, session)
+    }
+
+    /// Usage-limit resumes list only flagged tasks whose reset has passed (serve mode).
+    #[test]
+    fn limit_resumes_are_only_the_due_flagged_live_tasks() {
+        let (store, due) = empty_session();
+        let future = store.create_session(&due.project_id, "claude", "sonnet", "auto").unwrap();
+        let draft = store.create_session(&due.project_id, "claude", "sonnet", "auto").unwrap();
+        store.mark_draft(&draft.id).unwrap();
+        for (sid, until) in [(&due.id, Some(1000)), (&future.id, Some(4_000_000_000_000)), (&draft.id, Some(1000))] {
+            store.set_limited(sid, until).unwrap();
+            store.set_resume_at_reset(sid, true).unwrap();
+        }
+        assert!(store.due_limit_resumes(500).unwrap().is_empty());
+        assert_eq!(store.due_limit_resumes(2000).unwrap(), vec![due.id.clone()]);
+        // A task that is no longer flagged waits like any other.
+        store.set_resume_at_reset(&due.id, false).unwrap();
+        assert!(store.due_limit_resumes(2000).unwrap().is_empty());
     }
 
     #[test]

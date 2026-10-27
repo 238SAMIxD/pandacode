@@ -67,9 +67,12 @@ mod usage_ledger;
 mod workspace;
 mod jj;
 mod tray;
+mod headless;
+mod headless_bots;
 
 pub use usage_keychain::handle_usage_keychain_helper;
 pub use cloud_agents::handle_cloud_bridge;
+pub use headless::handle as handle_serve;
 
 use providers::{AgentEvent, RunConfig, RunInput};
 use serde::Serialize;
@@ -2226,6 +2229,24 @@ async fn launch_operation_admitted(
         if !was_stopped {
             bots::run_finished(&app, &session_id, successful);
         }
+        // Serve has no window: link pull requests and send the next queued message natively.
+        if headless::active() {
+            let (pr_app, pr_session) = (app.clone(), session_id.clone());
+            tauri::async_runtime::spawn(async move {
+                if successful {
+                    if let Err(error) =
+                        github_detect_pull_request(pr_app.state::<AppState>(), pr_session).await
+                    {
+                        eprintln!("serve: pull request detection failed: {error}");
+                    }
+                }
+            });
+            // Only a clean run end delivers the next queued message; failed, stopped and
+            // limited runs hold it, as on the desktop.
+            if successful && !was_stopped {
+                headless::drain_queue(app.clone(), session_id.clone());
+            }
+        }
         // Keep Start blocked until the old run's final event has been queued.
         // Otherwise its delayed `done` can finish a newly started UI stream.
         drop(children);
@@ -3420,6 +3441,116 @@ async fn local_sign_app() -> Result<()> {
         .map_err(|e| e.to_string())?
 }
 
+/// State and services shared by the desktop app and `pandacode serve` (docs/headless.md):
+/// storage, credentials, the cloud-run resume loop, Connect hosting, bots and archiving.
+/// Returns the app data dir. GUI-only startup (overlay, tray, appearance, VM idle watch)
+/// stays with the desktop's `run()`.
+fn setup_common(app: &tauri::App) -> crate::Result<PathBuf> {
+    if let Ok(cache) = app.path().app_cache_dir() {
+        turn_changes::cleanup_cache(&cache.join("turn-captures"));
+    }
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    secret_store::setup(&dir);
+    provider_settings::setup(&dir)?;
+    connections::setup(&dir)?;
+    model_routing::setup(&dir);
+    // Optional integration storage must never prevent the workspace from opening.
+    if jev::setup(&dir).is_err() {
+        eprintln!("Jev settings are unavailable; browser testing remains disabled.");
+    }
+    // Retain the database filename and bundle identifier so upgrades reuse existing data.
+    let store = Store::open(&dir.join("kingcode.sqlite3"))?;
+    if let Err(error) = store.discard_empty_drafts() {
+        eprintln!("Could not clear unsent new tasks: {error}");
+    }
+    app.manage(AppState {
+        store: Arc::new(Mutex::new(store)),
+        agents: Arc::new(Mutex::new(HashMap::new())),
+        terminals: Arc::new(Mutex::new(HashMap::new())),
+        shutdown: AtomicU8::new(0),
+    });
+    cloud_agents::init(app.handle());
+    remote::setup(app.handle(), &dir);
+    app.manage(browser::BrowserState::default());
+    app.manage(simulator::Simulators::default());
+    app.manage(vm::Vms::default());
+    app.manage(file_preview::FilePreviews::default());
+    app.manage(agent_tools::UiRequests::default());
+    app.manage(architect::Runtime::default());
+    architect::watchdog::watch(app.handle().clone());
+    bots::start(app.handle());
+    Ok(dir)
+}
+
+/// Run-loop events shared by the desktop and serve: an exit request stops local agents
+/// (cloud runs keep going on their machines) within a deadline, then the process exits.
+fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
+    if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+        // A headless host outlives its (immediately closed) window; only an explicit exit stops it.
+        if headless::active() && code.is_none() {
+            api.prevent_exit();
+            return;
+        }
+        let state = app.state::<AppState>();
+        if state.shutdown.load(Ordering::SeqCst) == 2 {
+            return;
+        }
+        api.prevent_exit();
+        if state.shutdown.swap(1, Ordering::SeqCst) == 1 {
+            return;
+        }
+        jev::shutdown();
+        app.state::<file_preview::FilePreviews>().shutdown();
+        // Cloud runs keep going on their machines; their bridges are killed below.
+        let cloud: HashSet<String> = state.store.lock().ok().and_then(|store| cloud_agents::active_runs(&store).ok()).unwrap_or_default().into_iter().collect();
+        if let Ok(agents) = state.agents.lock() {
+            for (_, tx) in agents.iter().filter(|(id, _)| !cloud.contains(*id)) {
+                let _ = tx.send(RunInput::Stop);
+            }
+        }
+        if let Ok(mut terms) = state.terminals.lock() {
+            terms.clear();
+        };
+        let handle = app.clone();
+        let agents = state.agents.clone();
+        tauri::async_runtime::spawn(async move {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(12);
+            while tokio::time::Instant::now() < deadline {
+                if agents.lock().map(|a| a.keys().all(|id| cloud.contains(id))).unwrap_or(true) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            providers::shutdown_all();
+            // Let pending pipe EOFs finish persistence after a forced cleanup.
+            for _ in 0..20 {
+                if agents.lock().map(|a| a.is_empty()).unwrap_or(true) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            handle
+                .state::<AppState>()
+                .shutdown
+                .store(2, Ordering::SeqCst);
+            handle.exit(0);
+        });
+    } else if matches!(event, tauri::RunEvent::Exit) {
+        app.state::<file_preview::FilePreviews>().shutdown();
+        // VMs PandaCode started release their memory when it quits.
+        app.state::<vm::Vms>().shutdown();
+        cloud::aws_screen::close(None);
+        providers::shutdown_all();
+    }
+}
+
+/// The app context, expanded once: each `generate_context!` embeds an Info.plist static,
+/// and a second expansion (serve mode) would define the same symbol twice.
+fn app_context() -> tauri::Context<tauri::Wry> {
+    tauri::generate_context!()
+}
+
 pub fn run() {
     // The npx installer signs the fresh bundle this way, before any window exists.
     if std::env::args().skip(1).any(|arg| arg == "--local-sign") {
@@ -3441,43 +3572,9 @@ pub fn run() {
                     eprintln!("Local signing failed: {error}");
                 }
             });
-            if let Ok(cache) = app.path().app_cache_dir() {
-                turn_changes::cleanup_cache(&cache.join("turn-captures"));
-            }
-            let dir = app.path().app_data_dir()?;
-            std::fs::create_dir_all(&dir)?;
-            secret_store::setup(&dir);
-            provider_settings::setup(&dir).map_err(std::io::Error::other)?;
-            connections::setup(&dir).map_err(std::io::Error::other)?;
-            model_routing::setup(&dir);
-            // Optional integration storage must never prevent the workspace from opening.
-            if jev::setup(&dir).is_err() {
-                eprintln!("Jev settings are unavailable; browser testing remains disabled.");
-            }
-            // Retain the database filename and bundle identifier so upgrades reuse existing data.
-            let store =
-                Store::open(&dir.join("kingcode.sqlite3")).map_err(std::io::Error::other)?;
-            if let Err(error) = store.discard_empty_drafts() {
-                eprintln!("Could not clear unsent new tasks: {error}");
-            }
-            app.manage(AppState {
-                store: Arc::new(Mutex::new(store)),
-                agents: Arc::new(Mutex::new(HashMap::new())),
-                terminals: Arc::new(Mutex::new(HashMap::new())),
-                shutdown: AtomicU8::new(0),
-            });
-            cloud_agents::init(app.handle());
+            let dir = setup_common(app)?;
             overlay::setup(app.handle(), &dir).map_err(std::io::Error::other)?;
-            remote::setup(app.handle(), &dir);
-            app.manage(browser::BrowserState::default());
-            app.manage(simulator::Simulators::default());
-            app.manage(vm::Vms::default());
             vm::watch_idle(app.handle().clone());
-            app.manage(file_preview::FilePreviews::default());
-            app.manage(agent_tools::UiRequests::default());
-            app.manage(architect::Runtime::default());
-            architect::watchdog::watch(app.handle().clone());
-            bots::start(app.handle());
             if let Err(error) = tray::setup(app.handle()) {
                 eprintln!("Menu bar item is unavailable: {error}");
             }
@@ -3874,60 +3971,7 @@ pub fn run() {
             ];
             handler(invoke)
         })
-        .build(tauri::generate_context!())
+        .build(app_context())
         .expect("Failed to launch PandaCode");
-    app.run(|app, event| {
-        if let tauri::RunEvent::ExitRequested { api, .. } = event {
-            let state = app.state::<AppState>();
-            if state.shutdown.load(Ordering::SeqCst) == 2 {
-                return;
-            }
-            api.prevent_exit();
-            if state.shutdown.swap(1, Ordering::SeqCst) == 1 {
-                return;
-            }
-            jev::shutdown();
-            app.state::<file_preview::FilePreviews>().shutdown();
-            // Cloud runs keep going on their machines; their bridges are killed below.
-            let cloud: HashSet<String> = state.store.lock().ok().and_then(|store| cloud_agents::active_runs(&store).ok()).unwrap_or_default().into_iter().collect();
-            if let Ok(agents) = state.agents.lock() {
-                for (_, tx) in agents.iter().filter(|(id, _)| !cloud.contains(*id)) {
-                    let _ = tx.send(RunInput::Stop);
-                }
-            }
-            if let Ok(mut terms) = state.terminals.lock() {
-                terms.clear();
-            };
-            let handle = app.clone();
-            let agents = state.agents.clone();
-            tauri::async_runtime::spawn(async move {
-                let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(12);
-                while tokio::time::Instant::now() < deadline {
-                    if agents.lock().map(|a| a.keys().all(|id| cloud.contains(id))).unwrap_or(true) {
-                        break;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                }
-                providers::shutdown_all();
-                // Let pending pipe EOFs finish persistence after a forced cleanup.
-                for _ in 0..20 {
-                    if agents.lock().map(|a| a.is_empty()).unwrap_or(true) {
-                        break;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                }
-                handle
-                    .state::<AppState>()
-                    .shutdown
-                    .store(2, Ordering::SeqCst);
-                handle.exit(0);
-            });
-        } else if matches!(event, tauri::RunEvent::Exit) {
-            app.state::<file_preview::FilePreviews>().shutdown();
-            // VMs PandaCode started release their memory when it quits.
-            app.state::<vm::Vms>().shutdown();
-            cloud::aws_screen::close(None);
-            providers::shutdown_all();
-        }
-    });
+    app.run(on_run_event);
 }
