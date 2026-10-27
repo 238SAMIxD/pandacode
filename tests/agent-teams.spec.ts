@@ -81,7 +81,8 @@ test('a named agent team is a choice in the model picker and lists only its mode
   await closeSettings(page);
 
   await modelButton(page).click();
-  const team = picker(page).getByRole('button', { name: 'Agent team · Reviewers', exact: true });
+  await picker(page).getByRole('tab', { name: /^Teams/ }).click();
+  const team = picker(page).getByRole('option', { name: 'Agent team · Reviewers', exact: true });
   await expect(team).toBeVisible();
   await team.click();
   await expect(picker(page)).toBeHidden();
@@ -103,9 +104,10 @@ test('a named agent team is a choice in the model picker and lists only its mode
 
   // The picker marks the team, not the lead's plain model, as current.
   await modelButton(page).click();
-  await expect(picker(page).getByRole('button', { name: 'Agent team · Reviewers', exact: true })).toHaveAttribute('aria-current', 'true');
+  await expect(picker(page).getByRole('option', { name: 'Agent team · Reviewers', exact: true })).toHaveAttribute('aria-current', 'true');
   await expect(picker(page).locator('[aria-current="true"]')).toHaveCount(1);
   // A plain model leaves the team for a single agent.
+  await picker(page).getByRole('tab', { name: 'Claude Code', exact: true }).click();
   await picker(page).locator('.model-menu-option:not(.model-menu-team):not([disabled])').first().click();
   await expect(picker(page)).toBeHidden();
   expect((await calls(page, 'architect_configure')).at(-1).args).toMatchObject({ config: null });
@@ -114,7 +116,8 @@ test('a named agent team is a choice in the model picker and lists only its mode
   await expect(modelButton(page)).not.toContainText('Reviewers');
   // No team in the Team menu removes an agent team too.
   await modelButton(page).click();
-  await picker(page).getByRole('button', { name: 'Agent team · Reviewers', exact: true }).click();
+  await picker(page).getByRole('tab', { name: /^Teams/ }).click();
+  await picker(page).getByRole('option', { name: 'Agent team · Reviewers', exact: true }).click();
   await expect(page.locator('#team-trigger')).toHaveAccessibleName('Reviewers');
   await page.locator('#team-trigger').click();
   await page.getByRole('menuitemradio', { name: 'No team', exact: true }).click();
@@ -123,7 +126,8 @@ test('a named agent team is a choice in the model picker and lists only its mode
   await expect(modelButton(page)).not.toContainText('Reviewers');
   // A team kind replaces the named team with an automatic one.
   await modelButton(page).click();
-  await picker(page).getByRole('button', { name: 'Agent team · Reviewers', exact: true }).click();
+  await picker(page).getByRole('tab', { name: /^Teams/ }).click();
+  await picker(page).getByRole('option', { name: 'Agent team · Reviewers', exact: true }).click();
   await expect(page.locator('#team-trigger')).toHaveAccessibleName('Reviewers');
   await page.locator('#team-trigger').click();
   await page.getByRole('menuitemradio', { name: 'Best team', exact: true }).click();

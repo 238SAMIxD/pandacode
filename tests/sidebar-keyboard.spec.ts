@@ -94,7 +94,7 @@ test('/ also works from the transcript, but not on a control outside the list, a
   await page.keyboard.press('/');
   await expect(filter).toBeFocused();
   await filter.press('Escape');
-  await page.getByRole('button', { name: 'Board view', exact: true }).focus();
+  await page.getByRole('button', { name: 'Workspace view: Conversation', exact: true }).focus();
   await page.keyboard.press('/');
   await expect(filter).not.toBeFocused();
   await page.setViewportSize({ width: 600, height: 800 });

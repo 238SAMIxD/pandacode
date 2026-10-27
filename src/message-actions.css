@@ -1,5 +1,5 @@
 .message-actions{display:flex;align-items:center;gap:2px;min-height:28px;margin-top:6px;color:var(--muted);opacity:.62;transition:opacity 140ms ease}
-.message-actions button{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;min-height:28px;padding:5px;border:0;border-radius:3px;background:transparent;color:inherit;cursor:pointer;transition:background-color 120ms ease,color 120ms ease,transform 120ms ease}
+.message-actions button{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;min-height:28px;padding:5px;border:0;border-radius:var(--radius-sm);background:transparent;color:inherit;cursor:pointer;transition:background-color 120ms ease,color 120ms ease,transform 120ms ease}
 .message-actions .icon{width:15px;height:15px;flex:none}
 .message>.message-actions{padding-left:31px}
 .turn-activity-body .message>.message-actions{padding-left:0}

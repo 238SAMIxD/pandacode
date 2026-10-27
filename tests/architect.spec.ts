@@ -13,7 +13,8 @@ async function pickTeam(page: Page, kind: string): Promise<void> {
   await expect(page.getByRole('menuitemradio', { name: kind, exact: true })).toBeHidden();
 }
 const panel = (page: Page) => page.getByRole('dialog', { name: 'Workers', exact: true });
-const openWorkers = (page: Page) => page.getByRole('button', { name: 'Open workers', exact: true });
+// The team's panel opens from the action dock's Agents item.
+const openWorkers = (page: Page) => page.locator('#agents-toggle');
 const row = (page: Page, id: string) => panel(page).locator(`.architect-worker-row[data-worker-id="${id}"]`);
 const live = (page: Page) => panel(page).locator('.architect-worker-live');
 const transcript = (page: Page) => page.getByRole('log', { name: 'Conversation', exact: true });
@@ -161,15 +162,15 @@ test.describe('architect teams', () => {
       }, theme);
       await installArchitect(page, { 'session-2': team('session-2') });
       await seedHistory(page, 'session-2', 'build', '**Search is ready.** The index now reuses its cached entries.\n\n```ts\nconst index = cachedIndex;\n```');
-      if (view === 'board') { await page.getByRole('button', { name: 'Board view', exact: true }).click(); await selectTask(page, 'session-2', view); }
+      if (view === 'board') { await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click(); await selectTask(page, 'session-2', view); }
       await expect(page.locator('.workspace')).toHaveAttribute('data-wallpaper', 'mon-morning');
       await openWorkers(page).click();
       await expect(panel(page)).toBeVisible();
       await expect(panel(page)).toHaveCSS('opacity', '1'); await expect(panel(page)).toHaveCSS('filter', 'none');
-      const material = await workerSurface(panel(page));
-      // Solid like the dropdowns: no translucency, blur, gradient or border.
-      expect(material.alpha).toBe(1); expect(material.image).toBe('none');
-      expect(material.blur === 'none' || material.blur === '').toBe(true);
+      // The Agents flyout around the panel is the app's glass: translucent over a blur, with no gradient or border.
+      const material = await workerSurface(page.locator('#agents-flyout'));
+      expect(material.alpha).toBeLessThan(1); expect(material.image).toBe('none');
+      expect(material.blur).toContain('blur');
       await expect(panel(page)).toHaveCSS('border-top-color', 'rgba(0, 0, 0, 0)');
       const normalRow = await row(page, 'build').evaluate(node => getComputedStyle(node).backgroundColor);
       await row(page, 'build').hover();
@@ -180,7 +181,7 @@ test.describe('architect teams', () => {
       const detail = panel(page).locator('.architect-worker-message > div').first();
       await expect(detail).toContainText('Search is ready.');
       await expect(detail).toHaveCSS('filter', 'none'); await expect(detail).toHaveCSS('opacity', '1');
-      expect(await workerSurface(panel(page))).toEqual(material);
+      expect(await workerSurface(page.locator('#agents-flyout'))).toEqual(material);
       expect(await panel(page).evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
       await page.screenshot({ path: `/private/tmp/pandacode-workers-frost-${browserName}-${theme}-${view}-detail.png`, animations: 'disabled' });
       // Both accessibility preferences must remove translucency even while a detail is open.
@@ -191,12 +192,12 @@ test.describe('architect teams', () => {
         else await page.emulateMedia({ contrast: 'more' });
         await expect(page.locator('.workspace')).not.toHaveAttribute('data-wallpaper');
         await expect(panel(page)).toBeVisible(); await expect(detail).toContainText('Search is ready.');
-        const accessible = await workerSurface(panel(page));
+        const accessible = await workerSurface(page.locator('#agents-flyout'));
         expect(accessible.alpha).toBe(1); expect(accessible.blur).toBe('none'); expect(accessible.image).toBe('none');
         if (cdp) await cdp.send('Emulation.setEmulatedMedia', { features: [] });
         else await page.emulateMedia({ contrast: 'no-preference' });
         await expect(page.locator('.workspace')).toHaveAttribute('data-wallpaper', 'mon-morning');
-        expect(await workerSurface(panel(page))).toEqual(material);
+        expect(await workerSurface(page.locator('#agents-flyout'))).toEqual(material);
       }
       await cdp?.detach();
     });
@@ -354,7 +355,7 @@ test.describe('architect teams', () => {
     await expect(transcript(page)).toContainText('Sample architect review');
     await expect(page.locator('#prompt')).toBeEnabled();
     await panel(page).getByRole('button', { name: 'Close workers', exact: true }).click();
-    await page.getByRole('button', { name: 'Board view', exact: true }).click();
+    await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click();
     await expect(page.locator('[data-action="board-open"]')).toHaveCount(visibleTasks);
   });
 
@@ -467,7 +468,7 @@ test.describe('architect teams', () => {
   for (const view of ['conversation', 'board'] as const) {
     test(`renders internal coordination as neutral Team status and preserves real user JSON in ${view}`, async ({ page }) => {
       await installArchitect(page, { 'session-2': team('session-2') }, { 'session-2': coordinationHistory('session-2') });
-      if (view === 'board') { await page.getByRole('button', { name: 'Board view', exact: true }).click(); await selectTask(page, 'session-2', view); }
+      if (view === 'board') { await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click(); await selectTask(page, 'session-2', view); }
       const verify = async () => {
         const status = transcript(page).locator('.coordination-status[aria-label="Team status"]');
         await expect(status).toHaveCount(2);
@@ -510,7 +511,7 @@ test.describe('architect teams', () => {
         { id: 302, sessionId: 'session-2', role: 'assistant', content: 'Implementation and review are delegated to the workers.', createdAt: 3000 },
       ] });
       await seedHistory(page, 'session-2', 'review', 'Accessibility review is underway.');
-      if (view === 'board') { await page.getByRole('button', { name: 'Board view', exact: true }).click(); await selectTask(page, 'session-2', view); }
+      if (view === 'board') { await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click(); await selectTask(page, 'session-2', view); }
       const progress = transcript(page).locator('.team-progress[aria-label="Team progress"]');
       const builder = progress.locator('.team-progress-worker[data-worker-id="build"]');
       const reviewer = progress.locator('.team-progress-worker[data-worker-id="review"]');
@@ -603,7 +604,7 @@ test.describe('architect teams', () => {
       await seedHistory(page, 'session-2', 'build', 'Builder saved response.');
       await seedHistory(page, 'session-2', 'review', 'Reviewer saved response.');
       await selectTask(page, 'session-3');
-      if (view === 'board') await page.getByRole('button', { name: 'Board view', exact: true }).click();
+      if (view === 'board') { await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click(); }
       await page.evaluate(() => (window as any).__architectTest.publishOverlay({ sessionId: 'session-2', workerId: 'review', workerSessionId: 'worker-review' }));
       await expect(page.locator('#prompt')).toHaveAttribute('data-session-id', 'session-2');
       await expect(panel(page)).toBeVisible();
@@ -633,7 +634,7 @@ test.describe('architect teams', () => {
         fixture.subagents['session-2'] = [{ ...child, name: 'Parent reviewer', response: 'Parent child must stay separate.' }];
       });
       await selectTask(page, 'session-3');
-      if (view === 'board') await page.getByRole('button', { name: 'Board view', exact: true }).click();
+      if (view === 'board') { await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click(); }
       await page.evaluate(() => (window as any).__architectTest.publishOverlay({ sessionId: 'session-2', workerId: 'build', workerSessionId: 'worker-build', subagentId: 'shared-child' }));
       const childPanel = page.locator('#worker-subagents-panel');
       await expect(page.locator('#prompt')).toHaveAttribute('data-session-id', 'session-2');
@@ -663,7 +664,7 @@ test.describe('architect teams', () => {
     test(`streams two workers independently with stable controls in ${view}`, async ({ page }) => {
       await installArchitect(page, { 'session-2': team('session-2') });
       await seedHistory(page, 'session-2', 'build'); await seedHistory(page, 'session-2', 'review');
-      if (view === 'board') { await page.getByRole('button', { name: 'Board view', exact: true }).click(); await selectTask(page, 'session-2', view); }
+      if (view === 'board') { await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click(); await selectTask(page, 'session-2', view); }
       await openWorkers(page).click();
       await expect(row(page, 'build')).toContainText('Builder'); await expect(row(page, 'review')).toContainText('Reviewer');
       await row(page, 'build').click();
@@ -885,8 +886,6 @@ test.describe('architect teams', () => {
     await expect(openWorkers(page)).toBeVisible();
     await page.evaluate(() => (window as any).__architectTest.event({ sessionId: 'worker-build', kind: 'approval', requestId: 'ask-build', text: 'Run the worker verification command?' }));
     await expect(page.locator('#toast')).toContainText('A worker needs your input');
-    await expect(openWorkers(page)).toContainText('Needs input');
-    await page.evaluate(() => (window as any).__architectTest.event({ sessionId: 'worker-build', kind: 'approval_cancelled', requestId: 'ask-build' }));
-    await expect(openWorkers(page)).not.toContainText('Needs input');
+    await expect(openWorkers(page)).toHaveAttribute('aria-label', 'Agents: 1 running');
   });
 });

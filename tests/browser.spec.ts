@@ -103,7 +103,7 @@ test.describe('browser workspace', () => {
     await response.getByRole('button', { name: 'src/main.ts', exact: true }).click();
     await expect(page.locator('.file-view-path')).toHaveText('src/main.ts');
     await expect(response.getByRole('button', { name: 'missing.html', exact: true })).toHaveCount(0);
-    await page.getByRole('button', { name: 'Board view', exact: true }).click();
+    await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click();
     await page.locator('.board-card').filter({ hasText: 'Make search feel instant' }).click();
     await page.locator('.message-content').getByRole('button', { name: 'public/favicon.svg', exact: true }).click();
     await expect(page.locator('.file-view-path')).toHaveText('public/favicon.svg');

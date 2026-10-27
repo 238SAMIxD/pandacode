@@ -343,7 +343,11 @@ export class ArchitectView {
   needsInput(sessionId: string): boolean { const live = this.live.get(sessionId); return Boolean(live?.approvals.size || live?.inputs.size); }
   private worker(): TeamWorker | undefined { return this.team?.workers.find(w => w.id === this.selected); }
   private schedule(): void { if (this.frame || !this.panel) return; this.frame = requestAnimationFrame(() => { this.frame = 0; this.paintLive(); }); }
-  open(): void {
+  /** For the dock's Agents item: whether a team exists, how many workers run, and the panel. */
+  get present(): boolean { return Boolean(this.team); }
+  get running(): number { return this.team?.workers.filter(worker => worker.status === 'running').length ?? 0; }
+  get isOpen(): boolean { return Boolean(this.panel); }
+  open(focus = true): void {
     if (!this.team || this.panel) return;
     this.childAgents?.setTask('', false);
     const panel = document.createElement('section'); panel.className = 'architect-panel'; panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', 'Workers');
@@ -371,7 +375,7 @@ export class ArchitectView {
     scroll.addEventListener('scroll', () => { if (scroll.scrollTop < 72) void this.loadMessages(true); }, { passive: true });
     scroll.addEventListener('wheel', event => { if (event.deltaY < 0 && scroll.scrollTop < 72) void this.loadMessages(true); }, { passive: true });
     void Promise.allSettled([...new Set(this.team.config.workers.map(worker => worker.provider))].map(this.options.loadModels)).then(() => { if (this.panel === panel) this.paint(); });
-    this.trigger.setAttribute('aria-expanded', 'true'); this.paint(); showPopover(panel, this.trigger); panel.querySelector<HTMLButtonElement>('.architect-close')!.focus();
+    this.trigger.setAttribute('aria-expanded', 'true'); this.paint(); showPopover(panel, this.trigger); if (focus) panel.querySelector<HTMLButtonElement>('.architect-close')!.focus();
   }
   async openWorker(workerId: string, subagentId?: string): Promise<void> {
     const worker = this.team?.workers.find(worker => worker.id === workerId);
@@ -399,7 +403,7 @@ export class ArchitectView {
     finally { this.busy = false; this.paint(); }
   }
   private paint(): void {
-    const team = this.team; this.host.hidden = !team; if (!team) { this.close(); return; }
+    const team = this.team; this.host.hidden = !team; dispatchEvent(new Event('pandacode:agents')); if (!team) { this.close(); return; }
     const done = team.workers.filter(w => w.status === 'completed' || w.abandoned).length;
     const asking = team.workers.some(w => this.needsInput(w.sessionId));
     const progress = asking ? 'Needs input' : team.workers.length ? `${done}/${team.workers.length}` : 'Ready';

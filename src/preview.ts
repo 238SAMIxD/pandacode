@@ -5,6 +5,7 @@ import { historicalProvider } from './provider-handoff';
 import { isPreviewableFile } from './file-links';
 import type { CommandPanel, GoalState } from './command-center';
 import { createPreviewArchitect } from './preview-architect';
+import { namedTeamSetup } from './team-mode';
 import type { TeamSnapshot, TeamWorker } from './architect-types';
 import { createPreviewCloud, createPreviewVm } from './preview-vm';
 import { createPreviewTurnChanges } from './preview-turn-changes';
@@ -471,6 +472,8 @@ export function samplePick(kind: 'files' | 'folder'): string[] {
   return kind === 'folder' ? ['/Users/you/Projects/orbit-design'] : ['/Users/you/Pictures/dashboard-mockup.png', '/Users/you/Documents/Product brief.pdf'];
 }
 function agent(event: AgentEvent) { emit('agent-event', event); }
+/** tests: a live `subagent` event for any task (`__previewSubagent('session-1', { id, name, status, … })`). */
+(window as any).__previewSubagent = (sessionId: string, data: Record<string, unknown>) => agent({ sessionId, kind: 'subagent', text: '', data: { parentId: null, prompt: '', response: '', tools: [], startedAt: now, updatedAt: Date.now(), ...data } } as unknown as AgentEvent);
 function session(value: unknown): Session { const result = sessions.find(s => s.id === value); if (!result) throw new Error('Task not found'); return result; }
 function assertIdle(s: Session): void {
   if (s.status === 'running' || s.status === 'waiting' || timers.has(s.id)) throw new Error('Stop the agent before changing this task.');
@@ -748,6 +751,14 @@ function resolveSlash(provider: ProviderId, text: string): { action: string | nu
   return { action: command.action ?? null, arguments: match[2] ?? '' };
 }
 
+// `?teams` seeds two named agent teams for the model picker.
+if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('teams') && !localStorage.getItem('pandacode.preview.architect-library')) {
+  const team = (id: string, name: string, models: [ProviderId, string, string, string][]) => ({ id, name, updatedAt: now, setup: namedTeamSetup(name, { provider: models[0][0], harness: models[0][1], model: models[0][2], name: models[0][3] }, models.map(([provider, harness, model, label]) => ({ provider, harness, model, name: label }))) });
+  localStorage.setItem('pandacode.preview.architect-library', JSON.stringify({ enabled: false, lastSetup: null, activeProfileId: null, profiles: [
+    team('preview-ship-crew', 'Ship crew', [['claude', 'Claude Code', 'opus', 'Claude Opus 5'], ['codex', 'Codex', 'gpt-6-astra', 'GPT-6-Astra'], ['kimi', 'Kimi Code', 'kimi-code/k3', 'K3']]),
+    team('preview-budget-trio', 'Budget trio', [['deepseek', 'DeepSeek', 'deepseek-v4-pro', 'DeepSeek V4 Pro'], ['glm', 'GLM Coding Plan', 'default', 'GLM-5.3'], ['mimo', 'MiMo Token Plan', 'default', 'MiMo-V2.6-Pro']]),
+  ] }));
+}
 const architect = createPreviewArchitect({
   parent: session,
   assertIdle,

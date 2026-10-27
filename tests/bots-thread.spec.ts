@@ -259,8 +259,8 @@ test.describe('bot conversation', () => {
     await expect(page.locator('#stream-region .bot-working')).toBeVisible();
     await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
     const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
-    await picker.getByRole('searchbox', { name: 'Search harnesses and models', exact: true }).fill('next-model');
-    await picker.getByRole('button', { name: 'Use "next-model" with Kimi Code', exact: true }).click();
+    await picker.getByRole('combobox', { name: 'Search harnesses and models', exact: true }).fill('next-model');
+    await picker.getByRole('option', { name: /^Use "next-model" with / }).click();
     const badge = page.locator('#breadcrumb .bot-next-model');
     await expect(badge).toHaveText('After this turn');
     await expect(badge).toHaveAttribute('title', /finishes this turn\. next-model starts with the next one\.$/);

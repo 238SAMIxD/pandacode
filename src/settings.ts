@@ -1,6 +1,7 @@
 import './settings.css';
 import { mountProviderReadiness } from './provider-readiness';
 import { escape, icon } from './dom';
+import { infoMark } from './tooltip';
 import { providerLogo } from './provider-logos';
 import { uiSizeControls } from './ui-size';
 import type { Project, Provider, ProviderId } from './types';
@@ -59,12 +60,12 @@ export const SECTIONS: { id: SettingsSection; label: string; icon: string; descr
   { id: 'general', label: 'General', icon: 'settings', description: 'Text size, conversation density and the quick launcher.' },
   { id: 'appearance', label: 'Appearance', icon: 'sun', description: 'Theme, accent colors and wallpapers.' },
   { id: 'agents', label: 'Agents', icon: 'bot', description: 'Your default agent and the agent harnesses installed on this computer.' },
-  { id: 'providers', label: 'Providers', icon: 'server', description: 'Sign-ins, API keys and plans such as GLM Coding Plan and MiMo Token Plan, each for the agent it belongs to.' },
+  { id: 'providers', label: 'Providers', icon: 'lock', description: 'Sign-ins, API keys and plans such as GLM Coding Plan and MiMo Token Plan, each for the agent it belongs to.' },
   { id: 'teams', label: 'Agent teams', icon: 'grid', description: 'Named teams of models, and the classic team setup.' },
-  { id: 'tools', label: 'Tools & add-ons', icon: 'widget', description: 'App tools, MCP servers, skills and Jev.' },
+  { id: 'tools', label: 'Tools & add-ons', icon: 'terminal', description: 'App tools, MCP servers, skills and Jev.' },
   { id: 'skills', label: 'Skills & rules', icon: 'widget', description: 'Import skills and rules once, turn them on per harness, and check for drift.' },
-  { id: 'cloud', label: 'Cloud sandboxes', icon: 'globe', description: 'Daytona, Cloudflare and AWS machines for your agents.' },
-  { id: 'remote', label: 'Remote access', icon: 'server', description: 'Reach your other computers with PandaCode Connect, end-to-end encrypted.' },
+  { id: 'cloud', label: 'Cloud sandboxes', icon: 'server', description: 'Daytona, Cloudflare and AWS machines for your agents.' },
+  { id: 'remote', label: 'Remote access', icon: 'globe', description: 'Reach your other computers with PandaCode Connect, end-to-end encrypted.' },
   { id: 'github', label: 'GitHub', icon: 'github', description: 'Issues, pull requests and repositories through the GitHub CLI.' },
   { id: 'about', label: 'About & updates', icon: 'info', description: 'Version, updates, resource usage, license and support.' },
 ];
@@ -72,8 +73,9 @@ export const SECTIONS: { id: SettingsSection; label: string; icon: string; descr
 /** Key-based plans that run through Claude Code; they are set up under Providers, not listed as agents. */
 const PLANS = new Set<ProviderId>(['glm', 'mimo']);
 
+const LONG_DETAIL = 80;
 const switchRow = (id: string, title: string, detail: string, checked: boolean) =>
-  `<div class="setting-row"><div><strong>${title}</strong><small>${detail}</small></div><input type="checkbox" class="settings-switch" id="${id}" aria-label="${title}" ${checked ? 'checked' : ''}></div>`;
+  `<div class="setting-row"><div><strong>${title}${detail.length > LONG_DETAIL ? ` ${infoMark(detail)}` : ''}</strong>${detail.length > LONG_DETAIL ? '' : `<small>${detail}</small>`}</div><input type="checkbox" class="settings-switch" id="${id}" aria-label="${title}" ${checked ? 'checked' : ''}></div>`;
 
 function sectionHtml(id: SettingsSection, options: SettingsOptions): string {
   const defaultName = options.providers.find(provider => provider.id === options.defaultProvider)?.name ?? options.defaultProvider;
@@ -119,7 +121,7 @@ export function mountSettings(host: HTMLElement, options: SettingsOptions): Sett
   host.innerHTML = `<nav class="settings-nav" aria-label="Settings sections">
       <div class="settings-nav-head" data-tauri-drag-region><button type="button" class="settings-back" data-settings-close aria-label="Back to the workspace" title="Back (Esc)">${icon('back')}<span>Back</span></button></div>
       <h1 class="settings-nav-title" data-tauri-drag-region>Settings</h1>
-      <div class="settings-nav-list" role="tablist" aria-orientation="vertical" aria-label="Settings">${SECTIONS.map(section => `<button type="button" role="tab" id="settings-tab-${section.id}" data-section="${section.id}" aria-controls="settings-panel-${section.id}" aria-selected="false" tabindex="-1">${icon(section.icon)}<span>${section.label}</span></button>`).join('')}</div>
+      <div class="settings-nav-list" role="tablist" aria-orientation="vertical" aria-label="Settings">${SECTIONS.map(section => `<button type="button" role="tab" id="settings-tab-${section.id}" data-section="${section.id}" title="${section.label}" aria-controls="settings-panel-${section.id}" aria-selected="false" tabindex="-1">${icon(section.icon)}<span>${section.label}</span></button>`).join('')}</div>
     </nav>
     <div class="settings-content">${SECTIONS.map(section => `<section class="settings-panel" id="settings-panel-${section.id}" role="tabpanel" aria-labelledby="settings-tab-${section.id}" hidden><header class="settings-panel-head" data-tauri-drag-region><h2>${section.label}</h2><p>${section.description}</p></header><div class="settings-panel-body">${sectionHtml(section.id, options)}</div></section>`).join('')}</div>`;
   const tabs = [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')];

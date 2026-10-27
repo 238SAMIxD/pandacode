@@ -75,6 +75,8 @@ const paths: Record<string, string> = {
   trash: '<path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13"/>',
   move: '<path d="M12 3v18M3 12h18M8 7l4-4 4 4M8 17l4 4 4-4M7 8l-4 4 4 4m10-8 4 4-4 4"/>',
   grid: '<path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>',
+  kanban: '<rect x="3" y="4" width="5" height="16" rx="1.5"/><rect x="9.5" y="4" width="5" height="10" rx="1.5"/><rect x="16" y="4" width="5" height="13" rx="1.5"/>',
+  thread: '<path d="M14 9a2 2 0 0 1-2 2H6l-3 3V4a1 1 0 0 1 1-1h8a2 2 0 0 1 2 2Z"/><path d="M18 9h2a1 1 0 0 1 1 1v11l-3-3h-6a2 2 0 0 1-2-2v-1"/>',
   widget: '<rect x="3" y="5" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="10" height="5" rx="1.5"/><path d="M16 16.5h5"/>',
 };
 export function icon(name: string, cls = ''): string { return `<svg class="icon ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] ?? paths.file}</svg>`; }

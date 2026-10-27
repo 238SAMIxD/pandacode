@@ -120,7 +120,7 @@ test.describe('task deletion', () => {
 
   test('removes a board task and closes its details without removing the board project', async ({ page }) => {
     await openMain(page);
-    await page.getByRole('button', { name: 'Board view', exact: true }).click();
+    await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click();
     const board = page.getByRole('region', { name: 'Project board', exact: true });
     await board.getByRole('button', { name: `Open task: ${title}`, exact: true }).click();
     const details = page.getByRole('region', { name: 'Task details', exact: true });

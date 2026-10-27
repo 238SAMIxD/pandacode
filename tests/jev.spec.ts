@@ -478,7 +478,7 @@ test('runs are cancellable and live activity follows conversation and board deta
   await expect(chip).toContainText('Test stopped');
   await emit(page, { id: 'run-2', status: 'running', createdAt: Date.now() + 2000 });
   await expect(chip).toContainText('Testing app');
-  await page.getByRole('button', { name: 'Board view', exact: true }).click();
+  await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click();
   await page.getByRole('button', { name: 'Open task: Make search feel instant', exact: true }).click();
   await expect(chip).toBeVisible();
   await chip.click();
