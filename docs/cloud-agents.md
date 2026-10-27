@@ -161,4 +161,11 @@ of it have; on an image without it the watcher closes nothing.
 
 Nothing is sent anywhere until the user connects a provider and starts a cloud task. A
 cloud task sends the checkout, the prompt, and the harness's login to the chosen
-provider's machine in the user's own account.
+provider's machine in the user's own account. One thing more travels only when asked
+for: with **Include provider environment variables** turned on for a cloud (Settings →
+Agents → Cloud sandboxes, off by default), the harness's saved variables from
+Settings → Providers ride the same run — a proxy the cloud machine can reach, for
+example. They land in the same 0600, self-deleting command file as the login token,
+the harness's own credentials always win over them, and a variable whose proxy points
+at this computer (`127.0.0.1`, `localhost`) refuses to start the task, because a
+cloud machine cannot reach it.

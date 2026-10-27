@@ -86,6 +86,8 @@ const AGENT_TARGETS = [['e2b', 'E2B'], ['daytona', 'Daytona'], ['docker', 'Docke
 type PreviewCloudMachine = { id: string; provider: string; name: string; state: string; os: string; desktop: boolean; detail: string };
 export function createPreviewCloud() {
   const connected = new Map<string, string | null>();
+  /* Clouds whose agents inherit the harness's saved environment (Settings → Providers). */
+  const inheritEnvironment = new Set<string>();
   const machines: PreviewCloudMachine[] = [];
   const inputs: { id: string; input: Record<string, unknown> }[] = [];
   const kinds: Record<string, { provider: string; os: string; desktop: boolean; detail: string; needs: string }> = {
@@ -105,7 +107,7 @@ export function createPreviewCloud() {
     if ((globalThis as any).__instaboxImagesFail) throw new Error('InstaBox did not answer in time.');
     return { images: [{ value: INSTABOX_DEFAULT, label: 'agent-browser (default, includes the open-computer-use desktop tool)' }, { value: 'snapshot:sn_preview1', label: 'clean-agents · sn_preview1' }], selected: instaboxImage };
   };
-  const connections = () => [...BASE, ...KEYED].map(provider => ({ provider, connected: connected.has(provider), detail: connected.get(provider) ?? null, ...(provider === 'cloudflare' ? { sandboxes: connected.has(provider) && sandboxes } : {}) }));
+  const connections = () => [...BASE, ...KEYED].map(provider => ({ provider, connected: connected.has(provider), detail: connected.get(provider) ?? null, ...(provider === 'cloudflare' ? { sandboxes: connected.has(provider) && sandboxes } : {}), ...(provider !== 'railway' ? { inheritEnvironment: inheritEnvironment.has(provider) } : {}) }));
   const find = (id: unknown) => { const machine = machines.find(m => m.id === id); if (!machine) throw new Error('Unknown cloud machine.'); return machine; };
   return {
     inputs,
@@ -122,6 +124,12 @@ export function createPreviewCloud() {
     /** Providers that can run cloud agents, ready once connected. */
     agentTargets() { return AGENT_TARGETS.map(([provider, label]) => ({ provider, label, ready: connected.has(provider) })); },
     disconnect(provider: unknown) { connected.delete(String(provider)); if (provider === 'cloudflare') sandboxes = false; if (provider === 'instabox') instaboxImage = INSTABOX_DEFAULT; return connections(); },
+    setInheritEnvironment(provider: unknown, inherit: unknown) {
+      const id = String(provider);
+      if (![...BASE, ...KEYED].includes(id)) throw new Error('Choose an available cloud provider.');
+      if (inherit) inheritEnvironment.add(id); else inheritEnvironment.delete(id);
+      return connections();
+    },
     instaboxImages,
     setInstaboxImage(image: unknown) {
       if (!instaboxImages().images.some(option => option.value === image)) throw new Error('InstaBox can’t create machines from that image on this account. Pick another one.');

@@ -15,25 +15,62 @@ pub struct Connection {
     /// Cloudflare: the sandbox Worker is deployed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandboxes: Option<bool>,
+    /// Providers that can run cloud agents: whether their tasks include the
+    /// harness's saved environment variables (Settings → Providers). Absent on
+    /// deploy-only providers: nothing is ever sent without this being on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inherit_environment: Option<bool>,
     /// Non-secret details shown in Settings, such as an API URL or account.
     pub detail: Option<String>,
+}
+
+/// Providers whose cloud agents can inherit the harness's saved environment. Deploy-only
+/// providers (Railway, Netlify) cannot host agents, so the setting does not apply to them.
+fn inherits_environment(providers: &std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>, provider: &str) -> Option<bool> {
+    (!matches!(provider, "railway" | "netlify")).then(|| providers.get(provider).and_then(|options| options.get("inheritEnvironment").map(String::as_str)) == Some("true"))
 }
 
 pub fn connections() -> Vec<Connection> {
     let settings = super::settings();
     vec![
-        Connection { provider: "daytona", connected: super::secret("daytona_key").is_some(), sandboxes: None, detail: settings.daytona_organization.or(settings.daytona_api_url) },
-        Connection { provider: "cloudflare", connected: super::secret("cloudflare_token").is_some() && settings.cloudflare_account.is_some(), sandboxes: Some(super::secret("cloudflare_worker_token").is_some() && settings.cloudflare_worker_url.is_some()), detail: settings.cloudflare_account.clone() },
-        Connection { provider: "aws", connected: settings.aws_region.is_some(), sandboxes: None, detail: settings.aws_region.map(|region| format!("{} · {region}", settings.aws_profile.unwrap_or_else(|| "default profile".into()))) },
-        Connection { provider: "vercel", connected: super::secret("vercel_token").is_some(), sandboxes: None, detail: settings.vercel_team },
-        Connection { provider: "railway", connected: super::secret("railway_token").is_some(), sandboxes: None, detail: settings.railway_workspace },
-        Connection { provider: "netlify", connected: super::secret("netlify_token").is_some(), sandboxes: None, detail: settings.providers.get("netlify").and_then(|options| options.get("siteId").cloned()) },
-        Connection { provider: "gcloud", connected: settings.gcloud_project.is_some(), sandboxes: None, detail: settings.gcloud_project.map(|project| match settings.gcloud_region { Some(region) => format!("{project} · {region}"), None => project }) },
-        Connection { provider: "docker", connected: settings.providers.get("docker").is_some(), sandboxes: None, detail: settings.providers.get("docker").and_then(|options| options.get("detail").cloned()) },
+        Connection { provider: "daytona", connected: super::secret("daytona_key").is_some(), sandboxes: None, inherit_environment: inherits_environment(&settings.providers, "daytona"), detail: settings.daytona_organization.or(settings.daytona_api_url) },
+        Connection { provider: "cloudflare", connected: super::secret("cloudflare_token").is_some() && settings.cloudflare_account.is_some(), sandboxes: Some(super::secret("cloudflare_worker_token").is_some() && settings.cloudflare_worker_url.is_some()), inherit_environment: inherits_environment(&settings.providers, "cloudflare"), detail: settings.cloudflare_account.clone() },
+        Connection { provider: "aws", connected: settings.aws_region.is_some(), sandboxes: None, inherit_environment: inherits_environment(&settings.providers, "aws"), detail: settings.aws_region.map(|region| format!("{} · {region}", settings.aws_profile.unwrap_or_else(|| "default profile".into()))) },
+        Connection { provider: "vercel", connected: super::secret("vercel_token").is_some(), sandboxes: None, inherit_environment: inherits_environment(&settings.providers, "vercel"), detail: settings.vercel_team },
+        Connection { provider: "railway", connected: super::secret("railway_token").is_some(), sandboxes: None, inherit_environment: None, detail: settings.railway_workspace },
+        Connection { provider: "netlify", connected: super::secret("netlify_token").is_some(), sandboxes: None, inherit_environment: None, detail: settings.providers.get("netlify").and_then(|options| options.get("siteId").cloned()) },
+        Connection { provider: "gcloud", connected: settings.gcloud_project.is_some(), sandboxes: None, inherit_environment: inherits_environment(&settings.providers, "gcloud"), detail: settings.gcloud_project.map(|project| match settings.gcloud_region { Some(region) => format!("{project} · {region}"), None => project }) },
+        Connection { provider: "docker", connected: settings.providers.get("docker").is_some(), sandboxes: None, inherit_environment: inherits_environment(&settings.providers, "docker"), detail: settings.providers.get("docker").and_then(|options| options.get("detail").cloned()) },
     ]
     .into_iter()
-    .chain(super::sandbox::KEYED.iter().map(|&provider| Connection { provider, connected: super::sandbox::ready(provider), sandboxes: None, detail: settings.providers.get(provider).and_then(|options| options.get("detail").cloned()) }))
+    .chain(super::sandbox::KEYED.iter().map(|&provider| Connection { provider, connected: super::sandbox::ready(provider), sandboxes: None, inherit_environment: inherits_environment(&settings.providers, provider), detail: settings.providers.get(provider).and_then(|options| options.get("detail").cloned()) }))
     .collect()
+}
+
+/// Turn the per-cloud inheritance of the harness's saved environment on or off.
+/// Off by default: nothing is sent to the cloud unless this is on for that provider.
+#[tauri::command]
+pub async fn cloud_set_inherit_environment(provider: String, inherit: bool) -> Result<Vec<Connection>> {
+    crate::blocking(move || {
+        if !super::PROVIDERS.contains(&provider.as_str()) {
+            return Err("Choose an available cloud provider.".into());
+        }
+        if matches!(provider.as_str(), "railway" | "netlify" | "agentcore") {
+            return Err("This provider cannot host cloud agents, so there is no environment to inherit.".into());
+        }
+        let mut settings = super::settings();
+        if inherit {
+            settings.providers.entry(provider.clone()).or_default().insert("inheritEnvironment".into(), "true".into());
+        } else if let Some(options) = settings.providers.get_mut(&provider) {
+            options.remove("inheritEnvironment");
+            if options.is_empty() {
+                settings.providers.remove(&provider);
+            }
+        }
+        super::save_settings(&settings)?;
+        Ok(connections())
+    })
+    .await
 }
 
 #[tauri::command]

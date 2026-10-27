@@ -169,10 +169,7 @@ pub fn warm_key(session_id: &str, provider: &str) -> String {
 }
 
 fn valid_env_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 128
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && !name.starts_with(|c: char| c.is_ascii_digit())
+    crate::provider_settings::valid_env_name(name)
 }
 
 /// One variable from the settings form. A secret without a value keeps its saved one.

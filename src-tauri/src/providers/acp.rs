@@ -741,14 +741,14 @@ impl Protocol {
 /// Grok Build lists its models, context sizes and reasoning efforts in the
 /// `initialize` result, so discovery never has to create a session.
 pub(super) async fn grok_models(path: &Path) -> Result<Vec<ModelInfo>, String> {
-    let mut command = super::command(path)?;
+    let mut command = super::provider_command("grok", path)?;
     command.args(["--no-auto-update", "agent", "stdio"]);
     let capabilities = handshake(command, &std::env::temp_dir()).await?;
     let models = parse_grok_models(&capabilities["_meta"]["modelState"]);
     if models.len() > 1 {
         return Ok(models);
     }
-    let mut command = super::command(path)?;
+    let mut command = super::provider_command("grok", path)?;
     command.args(["--no-auto-update", "agent", "stdio"]);
     let (metadata, _) = inspect_with(command, &std::env::temp_dir(), false, true).await?;
     Ok(parse_models(&metadata))
@@ -828,7 +828,7 @@ pub(super) async fn models(path: &Path) -> Result<Vec<ModelInfo>, String> {
     if let Some(models) = super::acp_catalog::get("antigravity", path) { return Ok(models); }
     let discovery = super::acp_catalog::begin("antigravity", path);
     #[allow(unused_mut)]
-    let mut command = super::command(path)?;
+    let mut command = super::provider_command("antigravity", path)?;
     #[cfg(target_os = "linux")]
     command.arg("--uid=");
     let (metadata, _) = inspect(command, &std::env::temp_dir(), false).await?;
@@ -1032,7 +1032,7 @@ pub async fn provider_check_connection(provider: String) -> Result<ConnectionSta
     let Some(path) = super::executable(&provider).filter(|path| path.is_file()) else {
         return Ok(ConnectionStatus { installed: false, acp_ready: false, session_ready: false, state: "missing", message: "Select the installed official Antigravity ACP server executable.".into() });
     };
-    let command = match super::command(&path) {
+    let command = match super::provider_command(&provider, &path) {
         Ok(command) => command,
         Err(message) => return Ok(connection_status(Err(DiscoveryFailure { acp_ready: false, authentication_required: false, message }))),
     };
