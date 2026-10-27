@@ -27,6 +27,7 @@ pub fn connections() -> Vec<Connection> {
         Connection { provider: "aws", connected: settings.aws_region.is_some(), sandboxes: None, detail: settings.aws_region.map(|region| format!("{} · {region}", settings.aws_profile.unwrap_or_else(|| "default profile".into()))) },
         Connection { provider: "vercel", connected: super::secret("vercel_token").is_some(), sandboxes: None, detail: settings.vercel_team },
         Connection { provider: "railway", connected: super::secret("railway_token").is_some(), sandboxes: None, detail: settings.railway_workspace },
+        Connection { provider: "netlify", connected: super::secret("netlify_token").is_some(), sandboxes: None, detail: settings.providers.get("netlify").and_then(|options| options.get("siteId").cloned()) },
         Connection { provider: "gcloud", connected: settings.gcloud_project.is_some(), sandboxes: None, detail: settings.gcloud_project.map(|project| match settings.gcloud_region { Some(region) => format!("{project} · {region}"), None => project }) },
         Connection { provider: "docker", connected: settings.providers.get("docker").is_some(), sandboxes: None, detail: settings.providers.get("docker").and_then(|options| options.get("detail").cloned()) },
     ]
@@ -87,6 +88,14 @@ pub async fn cloud_connect(app: AppHandle, provider: String, key: String, option
                 super::set_secret("railway_token", key.trim())?;
                 let mut settings = super::settings();
                 settings.railway_workspace = workspace;
+                super::save_settings(&settings)?;
+            }
+            "netlify" => {
+                let site = netlify_site_id(text("siteId"))?;
+                block(verify_netlify(NETLIFY_API, key.trim(), site.as_deref()))?;
+                super::set_secret("netlify_token", key.trim())?;
+                let mut settings = super::settings();
+                set_option(&mut settings, "netlify", "siteId", site);
                 super::save_settings(&settings)?;
             }
             // Google Cloud uses gcloud's own login; PandaCode stores only the project and region.
@@ -163,6 +172,23 @@ async fn verify_vercel(token: &str, team: Option<&str>) -> Result<()> {
 }
 
 const RAILWAY_API: &str = "https://backboard.railway.com/graphql/v2";
+const NETLIFY_API: &str = "https://api.netlify.com/api/v1";
+
+fn netlify_site_id(site: Option<String>) -> Result<Option<String>> {
+    site.map(|id| uuid::Uuid::parse_str(&id).map(|id| id.to_string())
+        .map_err(|_| "A Netlify project ID is a UUID (Project configuration / General / Project details).".into())).transpose()
+}
+
+/// Check the selected project, or the account when no project was selected.
+async fn verify_netlify(api: &str, token: &str, site: Option<&str>) -> Result<()> {
+    let client = super::http::client(Duration::from_secs(30))?;
+    let path = site.map_or_else(|| "user".to_string(), |id| format!("sites/{id}"));
+    let reply = super::http::send("Netlify", client.get(format!("{api}/{path}")).bearer_auth(token)).await?;
+    if reply["id"].as_str().is_none_or(str::is_empty) {
+        return Err("Netlify did not return an account or project ID.".into());
+    }
+    Ok(())
+}
 
 /// An account token can read `me`; a workspace token only its own workspace.
 async fn verify_railway(api: &str, token: &str, workspace: Option<&str>) -> Result<()> {
@@ -243,6 +269,12 @@ pub async fn cloud_disconnect(app: AppHandle, provider: String) -> Result<Vec<Co
                 super::remove_secret("railway_token");
                 let mut settings = super::settings();
                 settings.railway_workspace = None;
+                super::save_settings(&settings)?;
+            }
+            "netlify" => {
+                super::remove_secret("netlify_token");
+                let mut settings = super::settings();
+                settings.providers.remove("netlify");
                 super::save_settings(&settings)?;
             }
             "gcloud" => {
@@ -460,6 +492,33 @@ mod tests {
         assert_eq!(settings.providers["gcloud"]["zone"], "us-east1-b");
         set_option(&mut settings, "gcloud", "zone", None);
         assert!(!settings.providers.contains_key("gcloud"));
+    }
+
+    #[test]
+    fn validates_netlify_project_ids() {
+        let id = "12345678-1234-4234-8234-123456789abc";
+        assert_eq!(netlify_site_id(Some(id.into())).unwrap(), Some(id.into()));
+        assert_eq!(netlify_site_id(Some(id.replace('-', ""))).unwrap(), Some(id.into()));
+        assert_eq!(netlify_site_id(None).unwrap(), None);
+        for bad in ["project-name", "../other", "--auth=override", "", "not/a/uuid"] {
+            assert!(netlify_site_id(Some(bad.into())).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn verifies_netlify_account_and_selected_project() {
+        let (base, seen) = mock::serve(|request, _| match (request.authorization.as_deref(), request.path.as_str()) {
+            (Some("Bearer account"), "/api/v1/user") => (200, r#"{"id":"user-1","email":"private@example.test"}"#),
+            (Some("Bearer project"), "/api/v1/sites/12345678-1234-4234-8234-123456789abc") => (200, r#"{"id":"12345678-1234-4234-8234-123456789abc"}"#),
+            (Some("Bearer malformed"), _) => (200, r#"{}"#),
+            _ => (401, r#"{"message":"Unauthorized"}"#),
+        });
+        let api = format!("{base}/api/v1");
+        verify_netlify(&api, "account", None).await.unwrap();
+        verify_netlify(&api, "project", Some("12345678-1234-4234-8234-123456789abc")).await.unwrap();
+        assert!(verify_netlify(&api, "bad", None).await.is_err());
+        assert!(verify_netlify(&api, "malformed", None).await.unwrap_err().contains("did not return"));
+        assert!(seen.lock().unwrap().iter().all(|request| request.method == "GET"));
     }
 
     #[tokio::test]

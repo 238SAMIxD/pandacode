@@ -1,12 +1,12 @@
 /* Settings → Agents → Cloud sandboxes: connect Daytona, Cloudflare, AWS and the keyed sandbox
  * providers so agents can create and use cloud machines (and run on them as cloud agents), and
- * Vercel, Railway and Google Cloud for deploys. Keys go straight to the OS keychain natively;
+ * Vercel, Railway, Netlify and Google Cloud for deploys. Keys go straight to the OS keychain natively;
  * this view never reads them back. */
 import './cloud-settings.css';
 import { escape } from './dom';
 import { infoMark } from './tooltip';
 
-export type CloudConnection = { provider: 'daytona' | 'cloudflare' | 'aws' | 'vercel' | 'railway' | 'gcloud' | 'docker' | KeyedProvider; connected: boolean; detail: string | null; sandboxes?: boolean };
+export type CloudConnection = { provider: 'daytona' | 'cloudflare' | 'aws' | 'vercel' | 'railway' | 'netlify' | 'gcloud' | 'docker' | KeyedProvider; connected: boolean; detail: string | null; sandboxes?: boolean };
 export type CloudSettingsHost = {
   call<T>(command: string, args?: Record<string, unknown>): Promise<T>;
   listen(name: 'cloud-setup', callback: (event: { provider: string; label: string }) => void): Promise<() => void>;
@@ -60,6 +60,12 @@ const PROVIDERS: Record<CloudConnection['provider'], { name: string; summary: st
     key: { name: 'key', label: 'API token', placeholder: 'railway.com/account/tokens', secret: true },
     fields: [{ name: 'workspace', label: 'Workspace ID', placeholder: 'Optional; needed for a workspace token', optional: true }],
     note: 'Use an account token, or a workspace token with its workspace ID. Agents run the Railway CLI with it (fetched on first use if it is not installed); it never enters their prompts.', connect: 'Connect',
+  },
+  netlify: {
+    name: 'Netlify', summary: 'Deploys by agents, draft and production.',
+    key: { name: 'key', label: 'Personal access token', placeholder: 'Netlify user settings / Applications', secret: true },
+    fields: [{ name: 'siteId', label: 'Project ID', placeholder: 'Optional; from Project configuration', optional: true }],
+    note: 'Create a personal access token in Netlify user settings. The optional project ID selects an existing project; otherwise the CLI uses this checkout. Tokens never enter agent prompts.', connect: 'Connect',
   },
   gcloud: {
     name: 'Google Cloud', summary: 'Deploys by agents: Cloud Run and Cloud Storage.',
