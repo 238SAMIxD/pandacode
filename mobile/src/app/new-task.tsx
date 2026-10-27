@@ -17,9 +17,10 @@ export default function NewTask() {
   const [prompt, setPrompt] = useState('');
   const start = async () => {
     try {
-      const session = await form.start(prompt);
+      const { sessionId: session, note } = await form.start(prompt);
       router.dismiss();
       router.push({ pathname: '/task/[device]/[session]', params: { device: deviceId, session } });
+      if (note) Alert.alert('Started in a worktree', note.replace(/^Started in a worktree: /, ''));
     } catch (e) {
       Alert.alert('Could not start the task', (e as Error).message);
     }

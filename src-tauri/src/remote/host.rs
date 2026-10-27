@@ -135,7 +135,8 @@ pub(crate) enum Call {
     /// `budget`: the page's JSON bytes ([`page_budget`]).
     Messages { session_id: String, page: MessagePaging, budget: usize },
     Team { session_id: String },
-    WorkerMessages { session_id: String, worker_id: String, after_id: i64, limit: i64 },
+    /// `before_id`: a page ending before it (`tail` is before the newest), else after `after_id`.
+    WorkerMessages { session_id: String, worker_id: String, after_id: i64, before_id: Option<i64>, limit: i64 },
     Attachment { session_id: String, id: String, variant: crate::attachments::Variant, offset: u64 },
     WorkspaceImage { session_id: String, path: String, variant: crate::attachments::Variant, offset: u64 },
     Send { session_id: String, text: String, image_ids: Vec<String> },
@@ -449,7 +450,15 @@ pub(crate) fn parse(host_enabled: bool, method: &str, params: &Value) -> Result<
                 None => WORKER_MESSAGE_PAGE_DEFAULT,
                 Some(value) => value.as_u64().and_then(|limit| i64::try_from(limit).ok()).filter(|limit| (1..=WORKER_MESSAGE_PAGE_MAX).contains(limit)).ok_or_else(|| format!("Limit must be between 1 and {WORKER_MESSAGE_PAGE_MAX}."))?,
             };
-            Call::WorkerMessages { session_id: id_param(params, "sessionId")?, worker_id: id_param(params, "workerId")?, after_id, limit }
+            let before_id = if params["tail"] == true {
+                Some(i64::MAX)
+            } else {
+                match params.get("beforeId").filter(|value| !value.is_null()) {
+                    None => None,
+                    Some(value) => Some(value.as_i64().filter(|id| *id > 0).ok_or("Invalid beforeId.")?),
+                }
+            };
+            Call::WorkerMessages { session_id: id_param(params, "sessionId")?, worker_id: id_param(params, "workerId")?, after_id, before_id, limit }
         }
         "task.attachment" => {
             let (variant, offset) = variant_offset(params)?;
@@ -883,6 +892,7 @@ fn worker_messages(
     session_id: &str,
     worker_id: &str,
     after_id: i64,
+    before_id: Option<i64>,
     limit: i64,
 ) -> Result<Value> {
     local_session_from(store, session_id)?;
@@ -902,10 +912,12 @@ fn worker_messages(
             |row| row.get(0),
         )
         .map_err(|error| error.to_string())?;
-    let mut query = store.db.prepare("SELECT m.id,m.session_id,m.role,CASE WHEN m.role='assistant' THEN COALESCE(substr(CAST(m.content AS BLOB),1,131076),X'') ELSE m.content END,m.created_at,m.turn_duration_ms,t.summary FROM messages m LEFT JOIN turn_changes t ON t.message_id=m.id WHERE m.session_id=?1 AND m.id>?2 ORDER BY m.id LIMIT ?3").map_err(|error| error.to_string())?;
+    // Backward pages read newest first and are put back in order below.
+    let (window, order) = if before_id.is_some() { ("<", "DESC") } else { (">", "") };
+    let mut query = store.db.prepare(&format!("SELECT m.id,m.session_id,m.role,CASE WHEN m.role='assistant' THEN COALESCE(substr(CAST(m.content AS BLOB),1,131076),X'') ELSE m.content END,m.created_at,m.turn_duration_ms,t.summary FROM messages m LEFT JOIN turn_changes t ON t.message_id=m.id WHERE m.session_id=?1 AND m.id{window}?2 ORDER BY m.id {order} LIMIT ?3")).map_err(|error| error.to_string())?;
     let rows = query
         .query_map(
-            rusqlite::params![worker_session, after_id, limit + 1],
+            rusqlite::params![worker_session, before_id.unwrap_or(after_id), limit + 1],
             |row| {
                 let role: String = row.get(2)?;
                 let content = match row.get_ref(3)? {
@@ -943,8 +955,12 @@ fn worker_messages(
     let mut messages = rows
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|error| error.to_string())?;
-    let fetched_more = messages.len() > limit as usize;
+    // Backward, the extra row is an older one: `hasOlder` reports it.
+    let fetched_more = messages.len() > limit as usize && before_id.is_none();
     messages.truncate(limit as usize);
+    if before_id.is_some() {
+        messages.reverse();
+    }
     for message in &mut messages {
         crate::architect::internal_turns::project_message(store, message)?;
         const NOTICE: &str = "\n\n[Message preview truncated at 128 KiB. The provider retains the complete conversation.]";
@@ -989,6 +1005,7 @@ fn worker_messages(
         message_values,
         has_older,
         fetched_more,
+        before_id.is_some(),
     );
     if let Some(id) = reply["messages"]
         .as_array()
@@ -997,6 +1014,10 @@ fn worker_messages(
     {
         reply["hasMore"] =
             json!(fetched_more || message_exists(&store.db, worker_session, id, false)?);
+    }
+    if before_id.is_some() {
+        // Tells viewers this host pages backward; older ones ignore `tail` and `beforeId`.
+        reply["tail"] = json!(true);
     }
     Ok(reply)
 }
@@ -1007,11 +1028,15 @@ fn fit_worker_message_page(
     values: Vec<Value>,
     has_older: bool,
     fetched_more: bool,
+    backward: bool,
 ) -> Value {
-    // Measured once each; `false` is the longer `hasMore`, so the sum never undercounts.
-    let envelope = json!({"messages": [], "hasMore": false, "hasOlder": has_older, "title": title, "lastId": last_id}).to_string().len();
-    let (mut kept, mut size, mut has_more) = (Vec::new(), envelope, fetched_more);
-    for mut message in values {
+    // Measured once each; `false` is the longer flag, so the sum never undercounts.
+    let envelope = json!({"messages": [], "hasMore": false, "hasOlder": false, "title": title, "lastId": last_id}).to_string().len();
+    let (mut kept, mut size, mut cut) = (Vec::new(), envelope, false);
+    // A backward page keeps the rows next to its cursor (the newest) and drops older ones,
+    // so a cut page continues backward (`hasOlder`), never forward.
+    let ordered: Box<dyn Iterator<Item = Value>> = if backward { Box::new(values.into_iter().rev()) } else { Box::new(values.into_iter()) };
+    for mut message in ordered {
         shrink(&mut message, MAX_MESSAGE);
         let length = message.to_string().len() + 1;
         if size + length > PAGE_BUDGET {
@@ -1021,12 +1046,16 @@ fn fit_worker_message_page(
                     kept.push(message);
                 }
             }
-            has_more = true;
+            cut = true;
             break;
         }
         size += length;
         kept.push(message);
     }
+    if backward {
+        kept.reverse();
+    }
+    let (has_more, has_older) = if backward { (fetched_more, has_older || cut) } else { (fetched_more || cut, has_older) };
     json!({"messages": kept, "hasMore": has_more, "hasOlder": has_older, "title": title, "lastId": last_id})
 }
 
@@ -1257,28 +1286,42 @@ async fn run_one(app: &tauri::AppHandle, from: &str, call: Call, full_access: bo
                 subscribed_tasks(&state, &requested)
             })
             .await?;
-            let state = remote(app);
-            let mut inner = state.lock();
-            let subscriber = inner.subscribers.entry(from.to_owned()).or_default();
-            // Added to, not replaced: a task started a moment ago may not be in the list yet.
-            // An expired (or overgrown) subscription starts over.
-            if subscriber.until.is_none_or(|until| until <= Instant::now()) || subscriber.sessions.len() > 4 * MAX_IDS {
-                subscriber.sessions.clear();
-            }
-            subscriber.until = Some(Instant::now() + SUBSCRIPTION);
-            subscriber.sessions.extend(session_ids);
-            // The plain-sized replay, read at the same journal position, is the fallback for
-            // events that pack poorly; it always fits. Measured after the lock is released.
-            let fallback = (budget > REPLAY_BUDGET).then(|| tasks.clone()).map(|mut tasks| {
-                let replay = inner.journal.resume(&mut tasks, &after, epoch.as_deref(), REPLAY_BUDGET);
-                (subscribe_reply(tasks, &missing, &replay), replay)
-            });
-            let replay = inner.journal.resume(&mut tasks, &after, epoch.as_deref(), budget);
-            drop(inner);
+            // In a block, so the lock is gone before the await below.
+            let (fallback, replay) = {
+                let state = remote(app);
+                let mut inner = state.lock();
+                let subscriber = inner.subscribers.entry(from.to_owned()).or_default();
+                // Added to, not replaced: a task started a moment ago may not be in the list yet.
+                // An expired (or overgrown) subscription starts over.
+                if subscriber.until.is_none_or(|until| until <= Instant::now()) || subscriber.sessions.len() > 4 * MAX_IDS {
+                    subscriber.sessions.clear();
+                }
+                subscriber.until = Some(Instant::now() + SUBSCRIPTION);
+                subscriber.sessions.extend(session_ids);
+                // The plain-sized replay, read at the same journal position, is the fallback for
+                // events that pack poorly; it always fits. Measured after the lock is released.
+                let fallback = (budget > REPLAY_BUDGET).then(|| tasks.clone()).map(|mut tasks| {
+                    let replay = inner.journal.resume(&mut tasks, &after, epoch.as_deref(), REPLAY_BUDGET);
+                    (subscribe_reply(tasks, &missing, &replay), replay)
+                });
+                let replay = inner.journal.resume(&mut tasks, &after, epoch.as_deref(), budget);
+                (fallback, replay)
+            };
             let reply = subscribe_reply(tasks, &missing, &replay);
             let (reply, replay) = match fallback {
                 Some(plain) if packed_len(&reply) > PAGE_BUDGET => plain,
                 _ => (reply, replay),
+            };
+            let reply = if replay.gaps > 0 {
+                let handle = app.clone();
+                crate::blocking(move || {
+                    let state = handle.state::<AppState>();
+                    let store = state.store.lock().map_err(|e| e.to_string())?;
+                    Ok(add_gap_subagents(reply, |id| store.subagents(id)))
+                })
+                .await?
+            } else {
+                reply
             };
             if replay.gaps > 0 {
                 super::diagnostics::record("replay.gap", format!("{} of {} tasks for {from}", replay.gaps, after.len()));
@@ -1354,12 +1397,12 @@ async fn run_one(app: &tauri::AppHandle, from: &str, call: Call, full_access: bo
             })
             .await
         }
-        Call::WorkerMessages { session_id, worker_id, after_id, limit } => {
+        Call::WorkerMessages { session_id, worker_id, after_id, before_id, limit } => {
             let handle = app.clone();
             crate::blocking(move || {
                 let state = handle.state::<AppState>();
                 let store = state.store.lock().map_err(|e| e.to_string())?;
-                worker_messages(&store, &session_id, &worker_id, after_id, limit)
+                worker_messages(&store, &session_id, &worker_id, after_id, before_id, limit)
             })
             .await
         }
@@ -1530,7 +1573,7 @@ async fn run_one(app: &tauri::AppHandle, from: &str, call: Call, full_access: bo
             Ok(json!({"sessionId": session_id}))
         }
         Call::BotMessage { bot_id, text } => {
-            let session_id = crate::bots::bot_message(app.clone(), bot_id, text).await?;
+            let session_id = crate::bots::bot_message(app.clone(), bot_id, text, None, None, None).await?;
             Ok(json!({"sessionId": session_id}))
         }
         Call::BotPause { bot_id, paused } => {
@@ -1563,7 +1606,7 @@ fn answered(app: &tauri::AppHandle, session_id: String, kind: &str, request_id: 
 struct HostStart {
     from: String,
     /// Set by `task.cancelStart`; `start::run_cancellable` checks it between steps and stops the clone.
-    cancel: Arc<std::sync::atomic::AtomicBool>,
+    cancel: Arc<start::Cancel>,
     result: tokio::sync::watch::Sender<Option<Result<Value>>>,
     at: Instant,
 }
@@ -1598,13 +1641,8 @@ async fn start_once(app: &tauri::AppHandle, from: &str, request: start::Start) -
         tauri::async_runtime::spawn(async move {
             // A panic (or the task being dropped) below still settles the start.
             let settle = Settle(entry.clone());
+            // A cancel is refused once the task is being made, so a made task is never unseen.
             let result = start::run_cancellable(&app, &from, request, entry.cancel.clone()).await;
-            // Cancelled after the task was made: it must not run unseen.
-            if let (true, Ok(reply)) = (entry.cancel.load(Ordering::SeqCst), &result) {
-                if let Some(session) = reply["sessionId"].as_str() {
-                    let _ = crate::stop_session(app.clone(), app.state::<AppState>(), session.to_owned()).await;
-                }
-            }
             if let Err(error) = &result {
                 super::diagnostics::record("start.failed", error.chars().take(200).collect::<String>());
             }
@@ -1641,20 +1679,31 @@ fn start_status(start: Option<&HostStart>) -> Value {
     let Some(start) = start else { return json!({"state": "unknown"}) };
     match &*start.result.borrow() {
         None => json!({"state": "running"}),
-        Some(Ok(reply)) => json!({"state": "done", "sessionId": reply["sessionId"]}),
+        // With the worktree note too, for a viewer whose `task.start` reply was lost.
+        Some(Ok(reply)) => {
+            let mut done = json!({"state": "done", "sessionId": reply["sessionId"]});
+            for key in ["worktree", "note"].into_iter().filter(|key| !reply[key].is_null()) {
+                done[key] = reply[key].clone();
+            }
+            done
+        }
         Some(Err(error)) => json!({"state": "failed", "error": error}),
     }
 }
 
 /// `task.cancelStart`: a running start is told to stop and its callers get `CANCELLED`
-/// at once; a start that already made its task says so (`cancelled: false`).
+/// at once; a start that already made its task says so (`cancelled: false`), and one making
+/// it now answers `cancelled: false, pending: true` (the viewer links and stops it once made).
 fn cancel_start(start: &HostStart) -> Value {
     let mut answer = json!({"cancelled": true});
     start.result.send_if_modified(|slot| match slot {
-        None => {
-            start.cancel.store(true, Ordering::SeqCst);
+        None if start.cancel.cancel() => {
             *slot = Some(Err(start::CANCELLED.into()));
             true
+        }
+        None => {
+            answer = json!({"cancelled": false, "pending": true});
+            false
         }
         Some(Ok(reply)) => {
             answer = json!({"cancelled": false, "sessionId": reply["sessionId"]});
@@ -2481,6 +2530,32 @@ fn subscribed_tasks(state: &AppState, ids: &[String]) -> Result<(Vec<Value>, Vec
     Ok((tasks, missing))
 }
 
+/// A task whose replay has a gap may have lost its last `subagent` events (a run that ended
+/// while the viewer was away has no live snapshot): its saved children go with it, as many
+/// tasks as keep the reply within [`PAGE_BUDGET`]. Live runs already carry theirs.
+fn add_gap_subagents(mut reply: Value, saved: impl Fn(&str) -> Result<Vec<crate::providers::SubagentActivity>>) -> Value {
+    let ids: Vec<String> = reply["tasks"].as_array().map(|tasks| tasks.iter().filter(|task| task["gap"] == true && task.get("subagents").is_none()).filter_map(|task| task["sessionId"].as_str().map(str::to_owned)).collect()).unwrap_or_default();
+    let mut size = reply.to_string().len();
+    for id in ids {
+        let Ok((children, truncated)) = saved(&id).and_then(|children| bounded_subagents(&children, SUBAGENT_SNAPSHOT_BUDGET)) else { continue };
+        if children.is_empty() {
+            continue;
+        }
+        let mut extra = json!({"subagents": children});
+        if truncated {
+            extra["subagentsTruncated"] = json!(true);
+        }
+        let added = extra.to_string().len();
+        if size + added > PAGE_BUDGET {
+            break;
+        }
+        let Some(task) = reply["tasks"].as_array_mut().and_then(|tasks| tasks.iter_mut().find(|task| task["sessionId"] == id.as_str())) else { continue };
+        task.as_object_mut().into_iter().for_each(|task| task.extend(extra.as_object().cloned().unwrap_or_default()));
+        size += added;
+    }
+    reply
+}
+
 fn subscribe_reply(tasks: Vec<Value>, missing: &[Value], replay: &Resumed) -> Value {
     let mut reply = json!({"tasks": tasks, "missing": missing, "epoch": replay.epoch});
     if replay.more {
@@ -3094,6 +3169,7 @@ mod tests {
                 roster_only: false,
                 name: None,
                 workers: vec![],
+                catalog: vec![],
                 max_parallel: 0,
                 max_rounds: 8,
                 max_assignments: 50,
@@ -3170,6 +3246,97 @@ mod tests {
         assert_eq!(event["kind"], "team");
         assert_eq!(event["data"]["id"], "w1");
         assert_eq!(event["data"]["sessionId"], "session-w1");
+    }
+
+    #[test]
+    fn gap_tasks_get_their_saved_subagents_within_budget() {
+        let reply = json!({"tasks": [
+            {"sessionId": "ended", "gap": true},
+            {"sessionId": "live", "gap": true, "subagents": []},
+            {"sessionId": "caught-up"},
+            {"sessionId": "none", "gap": true},
+        ]});
+        let saved = |id: &str| Ok(if id == "none" { vec![] } else { vec![subagent(&format!("{id}:a"), "done")] });
+        let out = add_gap_subagents(reply.clone(), saved);
+        assert_eq!(out["tasks"][0]["subagents"][0]["id"], "ended:a", "an ended run's children come back");
+        assert_eq!(out["tasks"][1]["subagents"], json!([]), "a live snapshot is kept");
+        assert!(out["tasks"][2].get("subagents").is_none() && out["tasks"][3].get("subagents").is_none());
+        let full = json!({"tasks": [{"sessionId": "ended", "gap": true, "title": "x".repeat(PAGE_BUDGET)}]});
+        assert!(add_gap_subagents(full, saved)["tasks"][0].get("subagents").is_none(), "never past the budget");
+    }
+
+    #[test]
+    fn worker_transcripts_page_from_the_tail_and_back() {
+        let store = crate::storage::Store::open(std::path::Path::new(":memory:")).unwrap();
+        let project = store.add_project(&std::env::temp_dir()).unwrap();
+        let parent = store.create_session(&project.id, "claude", "sonnet", "full").unwrap();
+        let child = store.create_session(&project.id, "codex", "gpt", "full").unwrap();
+        let mut team = team_fixture(vec![worker_fixture("w1", "running")]);
+        team.session_id = parent.id.clone();
+        team.workers[0].session_id = child.id.clone();
+        store.db.execute("INSERT INTO architect_teams(session_id,content) VALUES(?1,?2)", rusqlite::params![parent.id, serde_json::to_string(&team).unwrap()]).unwrap();
+        for index in 0..5 {
+            store.message(&child.id, if index % 2 == 0 { "user" } else { "assistant" }, &format!("m{index}")).unwrap();
+        }
+        let texts = |page: &Value| page["messages"].as_array().unwrap().iter().map(|m| m["content"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+        let tail = worker_messages(&store, &parent.id, "w1", 0, Some(i64::MAX), 2).unwrap();
+        assert_eq!(texts(&tail), ["m3", "m4"], "the newest, in order");
+        assert_eq!((tail["hasOlder"].as_bool(), tail["hasMore"].as_bool(), tail["tail"].as_bool()), (Some(true), Some(false), Some(true)));
+        let first = tail["messages"][0]["id"].as_i64().unwrap();
+        let older = worker_messages(&store, &parent.id, "w1", 0, Some(first), 2).unwrap();
+        assert_eq!(texts(&older), ["m1", "m2"]);
+        assert_eq!((older["hasOlder"].as_bool(), older["hasMore"].as_bool()), (Some(true), Some(true)));
+        let forward = worker_messages(&store, &parent.id, "w1", 0, None, 2).unwrap();
+        assert_eq!(texts(&forward), ["m0", "m1"]);
+        assert!(forward.get("tail").is_none(), "forward pages read as before");
+    }
+
+    /// Host and viewer together: a worker transcript too big for one page loads from the
+    /// tail back to its first message, each message once and in order, never merging newer
+    /// history into an older page.
+    #[test]
+    fn a_long_worker_transcript_pages_back_to_its_first_message() {
+        let store = crate::storage::Store::open(std::path::Path::new(":memory:")).unwrap();
+        let project = store.add_project(&std::env::temp_dir()).unwrap();
+        let parent = store.create_session(&project.id, "claude", "sonnet", "full").unwrap();
+        let child = store.create_session(&project.id, "codex", "gpt", "full").unwrap();
+        let mut team = team_fixture(vec![worker_fixture("w1", "completed")]);
+        team.session_id = parent.id.clone();
+        team.workers[0].session_id = child.id.clone();
+        store.db.execute("INSERT INTO architect_teams(session_id,content) VALUES(?1,?2)", rusqlite::params![parent.id, serde_json::to_string(&team).unwrap()]).unwrap();
+        // 30 messages of 20 KiB: about three host pages each way.
+        let written: Vec<String> = (0..30).map(|index| format!("m{index:02} {}", "x".repeat(20 * 1024))).collect();
+        for (index, text) in written.iter().enumerate() {
+            store.message(&child.id, if index % 2 == 0 { "user" } else { "assistant" }, text).unwrap();
+        }
+        let store = StdMutex::new(store);
+        let ask = |key: &str, value: Value| {
+            let mut params = json!({"sessionId": parent.id, "workerId": "w1"});
+            params[key] = value;
+            let reply = match parse(true, "task.workerMessages", &params).unwrap() {
+                Call::WorkerMessages { session_id, worker_id, after_id, before_id, limit } => worker_messages(&store.lock().unwrap(), &session_id, &worker_id, after_id, before_id, limit),
+                _ => unreachable!(),
+            };
+            std::future::ready(reply)
+        };
+        let page = |before: Option<i64>| tauri::async_runtime::block_on(super::super::mirror::worker_pages(ask, before)).unwrap();
+        let ids = |page: &Value| page["messages"].as_array().unwrap().iter().map(|m| m["id"].as_i64().unwrap()).collect::<Vec<_>>();
+        let mut loaded = page(None);
+        assert!(loaded["hasOlder"] == true && ids(&loaded).len() < 30, "the tail page was cut: {}", ids(&loaded).len());
+        let mut seen = loaded["messages"].as_array().unwrap().clone();
+        let mut pages = 1;
+        while loaded["hasOlder"] == true {
+            let first = seen[0]["id"].as_i64().unwrap();
+            loaded = page(Some(first));
+            let older = ids(&loaded);
+            assert!(!older.is_empty() && older.iter().all(|id| *id < first), "an older page holds only older rows: {older:?} before {first}");
+            seen = [loaded["messages"].as_array().unwrap().clone(), seen].concat();
+            pages += 1;
+            assert!(pages < 30);
+        }
+        assert!(pages >= 3, "{pages}");
+        let texts: Vec<&str> = seen.iter().map(|m| m["content"].as_str().unwrap()).collect();
+        assert_eq!(texts, written.iter().map(String::as_str).collect::<Vec<_>>());
     }
 
     fn team_state(status: &str, active_workers: i64, revision: u64) -> TeamState {
@@ -3289,7 +3456,7 @@ mod tests {
             "id": id, "sessionId": "session-w1", "role": "assistant", "content": "response ".repeat(320),
             "createdAt": id, "turnDurationMs": null, "authorProvider": "codex", "turnChanges": null, "coordinationKind": null,
         })).collect();
-        let page = fit_worker_message_page("Worker w1", Some(100), values, false, true);
+        let page = fit_worker_message_page("Worker w1", Some(100), values, false, true, false);
         assert!(page.to_string().len() <= PAGE_BUDGET);
         assert_eq!(page["title"], "Worker w1");
         assert_eq!(page["lastId"], 100);
@@ -3300,13 +3467,13 @@ mod tests {
         // Linear: thousands of small messages fit at once, filling the budget closely.
         let values = (1..=5000).map(|id| json!({"id": id, "role": "assistant", "content": "ok ".repeat(10)})).collect();
         let started = Instant::now();
-        let page = fit_worker_message_page("Worker w1", Some(5000), values, false, false);
+        let page = fit_worker_message_page("Worker w1", Some(5000), values, false, false, false);
         assert!(started.elapsed() < Duration::from_secs(2));
         let size = page.to_string().len();
         assert!(size <= PAGE_BUDGET && size > PAGE_BUDGET - 200, "{size}");
         assert_eq!(page["hasMore"], true);
         // One oversized message is cut to fit, never dropped.
-        let page = fit_worker_message_page("Worker w1", Some(1), vec![json!({"id": 1, "content": "x".repeat(400 * 1024)})], false, false);
+        let page = fit_worker_message_page("Worker w1", Some(1), vec![json!({"id": 1, "content": "x".repeat(400 * 1024)})], false, false, false);
         assert_eq!(page["messages"][0]["id"], 1);
         assert!(page.to_string().len() <= PAGE_BUDGET);
     }
@@ -3428,8 +3595,17 @@ mod tests {
                 session_id: "s1".into(),
                 worker_id: "w1".into(),
                 after_id: 0,
+                before_id: None,
                 limit: WORKER_MESSAGE_PAGE_DEFAULT
             })
+        );
+        assert_eq!(
+            parse(true, "task.workerMessages", &json!({"sessionId": "s1", "workerId": "w1", "tail": true})),
+            Ok(Call::WorkerMessages { session_id: "s1".into(), worker_id: "w1".into(), after_id: 0, before_id: Some(i64::MAX), limit: WORKER_MESSAGE_PAGE_DEFAULT })
+        );
+        assert_eq!(
+            parse(true, "task.workerMessages", &json!({"sessionId": "s1", "workerId": "w1", "beforeId": 40, "limit": 10})),
+            Ok(Call::WorkerMessages { session_id: "s1".into(), worker_id: "w1".into(), after_id: 0, before_id: Some(40), limit: 10 })
         );
         assert_eq!(
             parse(
@@ -3441,6 +3617,7 @@ mod tests {
                 session_id: "s1".into(),
                 worker_id: "w1".into(),
                 after_id: 7,
+                before_id: None,
                 limit: 25
             })
         );
@@ -3450,6 +3627,8 @@ mod tests {
             json!({"sessionId": "s1", "workerId": "w1", "afterId": -1}),
             json!({"sessionId": "s1", "workerId": "w1", "afterId": "7"}),
             json!({"sessionId": "s1", "workerId": "w1", "limit": 0}),
+            json!({"sessionId": "s1", "workerId": "w1", "beforeId": 0}),
+            json!({"sessionId": "s1", "workerId": "w1", "beforeId": "9"}),
             json!({"sessionId": "s1", "workerId": "w1", "limit": WORKER_MESSAGE_PAGE_MAX + 1}),
         ] {
             assert!(
@@ -4079,25 +4258,36 @@ mod tests {
         assert_eq!(start_status(Some(&first)), json!({"state": "running"}));
         // Cancelled while running: callers get CANCELLED at once and the start is told to stop.
         assert_eq!(cancel_start(&first), json!({"cancelled": true}));
-        assert!(first.cancel.load(Ordering::SeqCst));
+        assert!(first.cancel.is_set());
         assert_eq!(*first.result.borrow(), Some(Err(start::CANCELLED.to_string())));
         assert_eq!(start_status(Some(&first)), json!({"state": "failed", "error": start::CANCELLED}));
         // A start that already made its task says so and is left alone.
         let (done, _) = claim_start(&mut starts, "st2", "viewer", now).unwrap();
         done.result.send_replace(Some(Ok(json!({"sessionId": "h1"}))));
         assert_eq!(cancel_start(&done), json!({"cancelled": false, "sessionId": "h1"}));
-        assert!(!done.cancel.load(Ordering::SeqCst));
+        assert!(!done.cancel.is_set());
         assert_eq!(start_status(Some(&done)), json!({"state": "done", "sessionId": "h1"}));
+        // A worktree fallback's note survives a lost `task.start` reply.
+        done.result.send_replace(Some(Ok(json!({"sessionId": "h1", "worktree": true, "note": "Started in a worktree: busy."}))));
+        assert_eq!(start_status(Some(&done)), json!({"state": "done", "sessionId": "h1", "worktree": true, "note": "Started in a worktree: busy."}));
+        // Cancelled while its task is being made: too late, the start goes on and is not failed.
+        let (making, _) = claim_start(&mut starts, "st6", "viewer", now).unwrap();
+        assert!(!making.cancel.is_set());
+        // What `start::run_cancellable` does before it creates the task.
+        making.cancel.commit().unwrap();
+        assert_eq!(cancel_start(&making), json!({"cancelled": false, "pending": true}));
+        assert!(!making.cancel.is_set());
+        assert_eq!(start_status(Some(&making)), json!({"state": "running"}));
         // A cancel that arrives before its start was claimed leaves it cancelled, so it never runs.
         let (early, _) = claim_start(&mut starts, "st5", "viewer", now).unwrap();
         cancel_start(&early);
         let (late, fresh) = claim_start(&mut starts, "st5", "viewer", now).unwrap();
-        assert!(!fresh && late.cancel.load(Ordering::SeqCst));
+        assert!(!fresh && late.cancel.is_set());
         assert_eq!(*late.result.borrow(), Some(Err(start::CANCELLED.to_string())));
         // Finished starts are forgotten after an hour; running ones never are.
         let (_running, _) = claim_start(&mut starts, "st3", "viewer", now).unwrap();
         claim_start(&mut starts, "st4", "viewer", now + START_MEMORY + Duration::from_secs(1)).unwrap();
-        assert_eq!(starts.keys().map(String::as_str).collect::<HashSet<_>>(), HashSet::from(["st3", "st4"]));
+        assert_eq!(starts.keys().map(String::as_str).collect::<HashSet<_>>(), HashSet::from(["st3", "st4", "st6"]));
     }
 
     #[test]

@@ -151,7 +151,7 @@ fn run_git(root: &Path, args: &[&str], limit: usize, commit: bool) -> Result<Git
         Duration::from_secs(if commit { 120 } else { 30 }),
     )
 }
-fn run_git_bounded(
+pub(crate) fn run_git_bounded(
     root: &Path,
     args: &[&str],
     limit: usize,

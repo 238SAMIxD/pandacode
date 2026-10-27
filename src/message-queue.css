@@ -27,3 +27,16 @@
 @media(hover:none){.queue-actions{opacity:1}}
 @media(prefers-reduced-transparency:reduce){.queue-panel{background:var(--panel);backdrop-filter:none;-webkit-backdrop-filter:none}}
 @media(prefers-contrast:more){.queue-panel{border-color:var(--border)}}
+
+.queue-row{flex-wrap:wrap}
+.queue-row[draggable=true]{cursor:grab}
+.queue-row:focus-visible{outline:none;box-shadow:0 0 0 2px color-mix(in srgb,var(--focus) 40%,transparent)}
+.queue-row.dragging{opacity:.45}
+.queue-row.drag-over{box-shadow:inset 0 2px 0 var(--accent)}
+.queue-index .icon{width:12px;height:12px}
+.queue-badge{flex:none;padding:1px 7px;border-radius:999px;font-size:.68rem;font-weight:550;color:var(--accent-ink);background:color-mix(in srgb,var(--accent) 28%,transparent)}
+.queue-badge.warn{color:var(--focus);background:color-mix(in srgb,var(--focus) 16%,transparent)}
+.queue-edit-head{display:flex;align-items:center;gap:8px;font-size:.74rem;color:var(--muted)}
+.queue-confirm{flex-basis:100%;display:flex;align-items:center;justify-content:flex-end;gap:6px;padding:4px 2px;font-size:.8rem}
+.queue-confirm strong{margin-right:auto;font-weight:600}
+.queue-confirm button{padding:3px 10px;font-size:.78rem}

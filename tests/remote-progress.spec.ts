@@ -149,3 +149,34 @@ test('a failed start shows in the strip, not as a toast, and Retry sends it agai
   await expect(page.locator('#composer-area .composer-computer-fixed')).toHaveText('on Studio iMac');
   expect(await page.evaluate(() => (window as any).__remoteStarts.length)).toBe(2);
 });
+
+test('a busy host checkout starts in a worktree and says so; a steer while starting is queued', async ({ page }) => {
+  const note = 'Started in a worktree: Studio iMac has uncommitted changes in orbit.';
+  await page.addInitScript(text => { (window as any).__remoteStartBusy = text; }, note);
+  await sendToStudio(page, 'Fix the login bug');
+  for (let step = 0; step < 3; step++) await next(page);
+  // Nothing to steer yet: the message waits in the queue instead of failing.
+  const prompt = page.getByRole('textbox', { name: 'Message your coding agent' });
+  await prompt.fill('Also add a test');
+  await prompt.press('ControlOrMeta+Enter');
+  await expect(page.locator('#toast')).toContainText('Studio iMac is still starting this task; your message is queued for after it.');
+  await expect(page.locator('[data-queue-id]')).toHaveCount(1);
+  await expect(page.locator('[data-queue-id]')).toContainText('Also add a test');
+  for (let step = 0; step < 4; step++) await next(page);
+  await expect(page.locator('#stream-region .live-status')).toHaveText(note);
+  await next(page);
+  await expect(page.locator('#composer-area .composer-computer-fixed')).toHaveText('on Studio iMac');
+  await expect(page.locator('#composer-area .composer-inline-note')).toHaveText(note);
+});
+
+test('a start whose reply was lost still shows the host worktree note once it links', async ({ page }) => {
+  test.slow();
+  const note = 'Started in a worktree: Studio iMac has an agent working in orbit.';
+  await page.addInitScript(() => { (window as any).__remoteStartAmbiguous = true; });
+  await sendToStudio(page, 'Lost reply, busy host');
+  for (let step = 0; step < 8; step++) await next(page);
+  await page.waitForFunction(() => typeof (window as any).__remoteStartAttach === 'function');
+  await expect(page.locator('#stream-region .turn-activity-label')).toContainText('Waiting for Studio iMac');
+  await page.evaluate(text => (window as any).__remoteStartAttach(text), note);
+  await expect(page.locator('#composer-area .composer-inline-note')).toHaveText(note);
+});

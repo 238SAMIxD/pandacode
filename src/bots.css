@@ -189,3 +189,54 @@ html[data-theme=dark] .bots-kind:not([data-kind=web]){background:var(--raised);c
 .bots-items>li:nth-child(even),.bots-activity>li:nth-child(even){background:color-mix(in srgb,var(--text) 3.5%,transparent)}
 .bots-items,.bots-stats>span,.bots-confirm,.bots-connect,.bots-templates>button,.bots-kinds>button,.bots-kind-grid>button{background-color:color-mix(in srgb,var(--text) 3.5%,transparent)}
 .bots-templates>button[aria-pressed=true],.bots-kinds>button[aria-pressed=true],.bots-kind-grid>button[aria-pressed=true]{background-color:var(--accent-dim)}
+/* New bot: one centered column (live icon, color, face, name, purpose, brain), then suggestions. */
+.bots-create{display:flex;flex-direction:column;align-items:center;gap:24px;min-width:0;padding:6px 0 4px}
+.bots.bots-creating{grid-template-columns:minmax(0,1fr)}
+.bots.bots-creating>.bots-list{display:none}
+.bc-form{width:min(420px,100%);gap:12px}
+.bc-preview{display:grid;place-items:center}
+.bot-avatar.bc-avatar{width:72px;height:72px;font-size:2rem;box-shadow:0 14px 34px -18px color-mix(in srgb,var(--text) 55%,transparent)}
+.bc-form>:is(.color-picker,.avatar-picker){justify-content:center}
+.color-picker{display:flex;flex-wrap:wrap;align-items:center;gap:7px}
+.color-swatch{flex:none;width:20px;height:20px;padding:0;border-radius:50%;--press:1}
+.color-swatch.auto{background:var(--fill-active)}
+.color-swatch:hover{box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 45%,transparent)}
+.color-swatch[aria-pressed=true]{box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--accent)}
+.color-swatch:focus-visible{outline:2px solid var(--focus);outline-offset:3px}
+.bc-required{margin-left:1px;font-style:normal;color:var(--danger)}
+.bc-error{margin:-6px 0 0;font-size:.78rem;color:var(--danger)}
+.bc-count{align-self:flex-end;margin-top:-8px;font-size:.72rem;color:var(--faint);font-variant-numeric:tabular-nums}
+.bc-brain{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr) minmax(0,1fr);gap:6px}
+.bc-control{display:flex;min-width:0;flex-direction:column;gap:4px}
+.bc-control>span{overflow:hidden;color:var(--muted);font-size:.67rem;font-weight:550;text-overflow:ellipsis;white-space:nowrap}
+.bc-brain select{width:100%;min-width:0}
+.bc-actions{display:flex;gap:8px}
+.bc-actions>.primary-button{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:36px}
+.bc-suggestions{width:100%;min-width:0}
+.bc-suggestions h4{margin:0 0 8px;text-align:center;font-size:.78rem;font-weight:600;color:var(--muted)}
+.bc-rail{--fade:32px;width:100%;max-width:100%;overflow-x:auto;scroll-snap-type:x mandatory;scroll-padding-inline:12px;scrollbar-width:none}
+.bc-rail::-webkit-scrollbar{display:none}
+.bc-rail.fade-start{-webkit-mask-image:linear-gradient(90deg,transparent,#000 var(--fade));mask-image:linear-gradient(90deg,transparent,#000 var(--fade))}
+.bc-rail.fade-end{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - var(--fade)),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - var(--fade)),transparent)}
+.bc-rail.fade-start.fade-end{-webkit-mask-image:linear-gradient(90deg,transparent,#000 var(--fade),#000 calc(100% - var(--fade)),transparent);mask-image:linear-gradient(90deg,transparent,#000 var(--fade),#000 calc(100% - var(--fade)),transparent)}
+.bc-rail ul{display:flex;gap:10px;width:max-content;margin:0;padding:3px 12px 6px;list-style:none}
+.bc-rail li{scroll-snap-align:start}
+.bc-card{display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;gap:6px;width:170px;height:100%;min-height:120px;padding:12px;border-radius:var(--radius-md);background:var(--fill-hover);text-align:left;color:var(--text);--press:1}
+.bc-card:hover{background:var(--fill-active)}
+.bc-card[aria-pressed=true]{background:var(--accent-dim)}
+.bc-card:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.bc-card b{font-size:.86rem;font-weight:600}
+.bc-card small{font-size:.76rem;line-height:1.4;color:var(--muted)}
+.bot-avatar.bc-card-avatar{width:32px;height:32px}
+@media(max-width:520px){.bc-brain{grid-template-columns:minmax(0,1fr)}}
+/* Backup-model failover: the hold card and the switch rows in a bot conversation. */
+.bot-failover{display:flex;flex-direction:column;gap:8px;max-width:520px;margin:8px auto;padding:12px 14px;border-radius:var(--radius-lg);background:var(--fill-hover)}
+.bot-failover header{display:flex;align-items:center;gap:8px}
+.bot-failover header small{margin-left:auto;font-size:.74rem;color:var(--muted)}
+.bot-failover-icon{display:inline-flex;color:var(--warning,var(--accent))}
+.bot-failover p{margin:0;font-size:.84rem;color:var(--muted)}
+.bot-failover-error{margin:0 auto;color:var(--danger);font-size:.82rem}
+.bot-failover-actions{display:flex;gap:8px}
+.bot-failover-always{display:flex;align-items:center;gap:6px;font-size:.78rem;color:var(--muted)}
+.model-switch-marker{display:flex;justify-content:center;align-items:baseline;gap:6px;margin:6px auto;font-size:.76rem;color:var(--faint)}
+.model-switch-marker time{font-variant-numeric:tabular-nums}

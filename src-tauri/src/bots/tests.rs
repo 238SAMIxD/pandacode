@@ -2,6 +2,7 @@ use rusqlite::params;
 use super::channels::{self, discord, http, slack, telegram, web, whatsapp};
 use super::{brief, gateway, guard, schedule, *};
 use serde_json::json;
+use super::shared_channels::Running;
 
 const MINUTE: i64 = 60_000;
 const DAY: i64 = 24 * 60 * MINUTE;
@@ -85,6 +86,171 @@ fn editing_instructions_rebriefs_threads() {
     let (same, created) = thread_session(&f.store, &updated, DESKTOP, DESKTOP, "Scout · You").unwrap();
     assert_eq!((same.as_str(), created), (session.as_str(), false));
     assert_eq!(owner_of(&f.store, &session).unwrap().unwrap().0.id, bot.id);
+}
+
+#[test]
+fn profile_changes_reconfigure_existing_idle_threads() {
+    let f = fixture();
+    let bot = bot(&f);
+    let (session, _) = thread_session(&f.store, &bot, DESKTOP, DESKTOP, "Scout · You").unwrap();
+    let mut changed = input("Scout");
+    changed.provider = "codex".into();
+    changed.model = "gpt-5".into();
+    changed.mode = "plan".into();
+    changed.reasoning_effort = "high".into();
+    update(&f.store, &bot.id, &changed).unwrap();
+    let current = f.store.session(&session).unwrap();
+    assert_eq!((current.provider.as_str(), current.model.as_str(), current.mode.as_str()), ("codex", "gpt-5", "plan"));
+    assert_eq!(current.reasoning_effort.as_deref(), Some("high"));
+}
+
+#[test]
+fn startup_reconciles_active_bot_deliveries_as_failed() {
+    let f = fixture();
+    let source = bot(&f);
+    let target = create(&f.store, &input("Partner"), &f.root).unwrap();
+    let (source_session, _) = thread_session(&f.store, &source, DESKTOP, "source", "Scout · Source").unwrap();
+    let (target_session, _) = thread_session(&f.store, &target, DESKTOP, "target", "Partner · Target").unwrap();
+    f.store.db.execute("INSERT INTO bot_messages(id,source_bot_id,target_bot_id,source_session_id,target_session_id,source_channel_id,source_external_id,text,status,depth,created_at,updated_at) VALUES('delivery',?1,?2,?3,?4,'web','thread','hello','in_progress',1,1,1)", params![source.id,target.id,source_session,target_session]).unwrap();
+    let channel = shared_channels::create(&f.store, "launch", &[source.id.clone()]).unwrap();
+    let message_id = crate::storage::id();
+    f.store.db.execute("INSERT INTO bot_shared_channel_messages(id,channel_id,kind,text,status,created_at) VALUES(?1,?2,'user','ship it','in_progress',1)", params![message_id,channel.id]).unwrap();
+    f.store.db.execute("INSERT INTO bot_shared_channel_deliveries(id,channel_id,message_id,bot_id,session_id,status,created_at,updated_at) VALUES('channel-delivery',?1,?2,?3,?4,'in_progress',1,1)", params![channel.id,message_id,source.id,target_session]).unwrap();
+    shared_channels::reconcile_in_progress(&f.store).unwrap();
+    let direct: String = f.store.db.query_row("SELECT status FROM bot_messages WHERE id='delivery'", [], |row| row.get(0)).unwrap();
+    let assigned: String = f.store.db.query_row("SELECT status FROM bot_shared_channel_deliveries WHERE id='channel-delivery'", [], |row| row.get(0)).unwrap();
+    let parent: String = f.store.db.query_row("SELECT status FROM bot_shared_channel_messages WHERE id=?1", [&message_id], |row| row.get(0)).unwrap();
+    assert_eq!((direct.as_str(), assigned.as_str(), parent.as_str()), ("failed", "failed", "failed"));
+}
+
+#[test]
+fn channel_post_status_follows_retries_and_bot_resets() {
+    let f = fixture();
+    let scout = bot(&f);
+    let writer = create(&f.store, &input("Writer"), &f.root).unwrap();
+    let (scout_session, _) = thread_session(&f.store, &scout, DESKTOP, DESKTOP, "Scout · You").unwrap();
+    let (writer_session, _) = thread_session(&f.store, &writer, DESKTOP, DESKTOP, "Writer · You").unwrap();
+    let channel = shared_channels::create(&f.store, "launch", &[scout.id.clone(), writer.id.clone()]).unwrap();
+    let parent = |id: &str| f.store.db.query_row("SELECT status FROM bot_shared_channel_messages WHERE id=?1", [id], |row| row.get::<_, String>(0)).unwrap();
+    let delivery = |id: &str, message: &str, bot: &str, session: &str, status: &str, created: i64, updated: i64| {
+        f.store.db.execute("INSERT INTO bot_shared_channel_deliveries(id,channel_id,message_id,bot_id,session_id,status,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)", params![id,channel.id,message,bot,session,status,created,updated]).unwrap();
+    };
+    // Stopped at 5, then continued on Writer at 6, which completed: the retry wins.
+    f.store.db.execute("INSERT INTO bot_shared_channel_messages(id,channel_id,kind,text,status,created_at) VALUES('retried',?1,'user','ship it','stopped',1)", [&channel.id]).unwrap();
+    delivery("first", "retried", &scout.id, &scout_session, "stopped", 1, 5);
+    delivery("second", "retried", &writer.id, &writer_session, "completed", 6, 8);
+    shared_channels::settle_posts(&f.store, &["retried".into()]).unwrap();
+    assert_eq!(parent("retried"), "completed");
+    // Resetting the bot doing the work leaves the post stopped, so it can be continued.
+    f.store.db.execute("INSERT INTO bot_shared_channel_messages(id,channel_id,kind,text,status,created_at) VALUES('open',?1,'user','draft it','in_progress',9)", [&channel.id]).unwrap();
+    delivery("working", "open", &scout.id, &scout_session, "in_progress", 9, 9);
+    reset(&f.store, &scout.id).unwrap();
+    assert_eq!(parent("open"), "stopped");
+}
+
+#[test]
+fn failed_channel_posts_stay_failed_until_a_retry_and_queue_takes_promote_their_delivery() {
+    let f = fixture();
+    let scout = bot(&f);
+    let writer = create(&f.store, &input("Writer"), &f.root).unwrap();
+    let (scout_session, _) = thread_session(&f.store, &scout, DESKTOP, DESKTOP, "Scout · You").unwrap();
+    let (writer_session, _) = thread_session(&f.store, &writer, DESKTOP, DESKTOP, "Writer · You").unwrap();
+    let channel = shared_channels::create(&f.store, "launch", &[scout.id.clone(), writer.id.clone()]).unwrap();
+    let parent = |id: &str| f.store.db.query_row("SELECT status FROM bot_shared_channel_messages WHERE id=?1", [id], |row| row.get::<_, String>(0)).unwrap();
+    let delivery = |id: &str, bot: &str, session: &str, status: &str, created: i64, updated: i64| {
+        f.store.db.execute("INSERT INTO bot_shared_channel_deliveries(id,channel_id,message_id,bot_id,session_id,status,created_at,updated_at) VALUES(?1,?2,'post',?3,?4,?5,?6,?7)", params![id,channel.id,bot,session,status,created,updated]).unwrap();
+    };
+    f.store.db.execute("INSERT INTO bot_shared_channel_messages(id,channel_id,kind,text,status,created_at) VALUES('post',?1,'user','ship it','in_progress',10)", [&channel.id]).unwrap();
+    // One post to two bots shares its fan-out time: Scout's early failure is not hidden by Writer.
+    delivery("scout", &scout.id, &scout_session, "failed", 10, 11);
+    delivery("writer", &writer.id, &writer_session, "completed", 10, 20);
+    shared_channels::settle_posts(&f.store, &["post".into()]).unwrap();
+    assert_eq!(parent("post"), "failed");
+    // A retry made after the failure wins once it completes.
+    delivery("retry", &scout.id, &scout_session, "completed", 21, 30);
+    shared_channels::settle_posts(&f.store, &["post".into()]).unwrap();
+    assert_eq!(parent("post"), "completed");
+
+    // Taking a queued assignment from the queue marks it in progress at once, so Stop sees it.
+    f.store.db.execute("INSERT INTO bot_shared_channel_messages(id,channel_id,kind,text,status,created_at) VALUES('queued',?1,'user','draft it','queued',40)", [&channel.id]).unwrap();
+    f.store.db.execute("INSERT INTO bot_shared_channel_deliveries(id,channel_id,message_id,bot_id,session_id,status,created_at,updated_at) VALUES('waiting',?1,'queued',?2,?3,'queued',40,40)", params![channel.id,writer.id,writer_session]).unwrap();
+    assert_eq!(shared_channels::promote_taken(&f.store, &writer_session, "Work requested in #other:\n\ndraft it"), None);
+    assert_eq!(shared_channels::promote_taken(&f.store, &writer_session, "Work requested in #launch:\n\ndraft it\n\nBrief"), Some(Running::Delivery("waiting".into())));
+    let waiting = Running::Delivery("waiting".into());
+    assert!(!shared_channels::delivery_stopped(&f.store, &waiting));
+    f.store.db.execute("UPDATE bot_shared_channel_deliveries SET status='stopped' WHERE id='waiting'", []).unwrap();
+    assert!(shared_channels::delivery_stopped(&f.store, &waiting));
+}
+
+#[test]
+fn promoted_posts_recover_after_a_restart_and_launches_credit_their_own_request() {
+    let f = fixture();
+    let scout = bot(&f);
+    let writer = create(&f.store, &input("Writer"), &f.root).unwrap();
+    let (writer_session, _) = thread_session(&f.store, &writer, DESKTOP, DESKTOP, "Writer · You").unwrap();
+    let channel = shared_channels::create(&f.store, "launch", &[writer.id.clone()]).unwrap();
+    let status = |table: &str, id: &str| f.store.db.query_row(&format!("SELECT status FROM {table} WHERE id=?1"), [id], |row| row.get::<_, String>(0)).unwrap();
+    f.store.db.execute("INSERT INTO bot_shared_channel_messages(id,channel_id,kind,text,status,created_at) VALUES('post',?1,'user','draft it','queued',1)", [&channel.id]).unwrap();
+    f.store.db.execute("INSERT INTO bot_shared_channel_deliveries(id,channel_id,message_id,bot_id,session_id,status,created_at,updated_at) VALUES('d',?1,'post',?2,?3,'queued',1,1)", params![channel.id,writer.id,writer_session]).unwrap();
+    // Promotion moves the post with its delivery, so a restart can settle it.
+    assert_eq!(shared_channels::promote_taken(&f.store, &writer_session, "Work requested in #launch:\n\ndraft it"), Some(Running::Delivery("d".into())));
+    assert_eq!(status("bot_shared_channel_messages", "post"), "in_progress");
+    shared_channels::reconcile_in_progress(&f.store).unwrap();
+    assert_eq!((status("bot_shared_channel_deliveries", "d"), status("bot_shared_channel_messages", "post")), ("failed".into(), "failed".into()));
+    // A queued delivery whose queue entry was taken before the restart is settled too.
+    f.store.db.execute("INSERT INTO bot_shared_channel_messages(id,channel_id,kind,text,status,created_at) VALUES('lost',?1,'user','test it','queued',2)", [&channel.id]).unwrap();
+    f.store.db.execute("INSERT INTO bot_shared_channel_deliveries(id,channel_id,message_id,bot_id,session_id,status,created_at,updated_at) VALUES('l',?1,'lost',?2,?3,'queued',2,2)", params![channel.id,writer.id,writer_session]).unwrap();
+    f.store.db.execute("INSERT INTO bot_shared_channel_messages(id,channel_id,kind,text,status,created_at) VALUES('kept',?1,'user','ship it','queued',3)", [&channel.id]).unwrap();
+    f.store.db.execute("INSERT INTO bot_shared_channel_deliveries(id,channel_id,message_id,bot_id,session_id,status,created_at,updated_at) VALUES('k',?1,'kept',?2,?3,'queued',3,3)", params![channel.id,writer.id,writer_session]).unwrap();
+    crate::message_queue::add(&f.store, &writer_session, "Work requested in #launch:\n\nship it", &json!([])).unwrap();
+    shared_channels::reconcile_in_progress(&f.store).unwrap();
+    assert_eq!((status("bot_shared_channel_messages", "lost"), status("bot_shared_channel_messages", "kept")), ("failed".into(), "queued".into()));
+    // Two requests wait for Writer; the turn that launches marks only its own request running.
+    let (scout_session, _) = thread_session(&f.store, &scout, DESKTOP, DESKTOP, "Scout · You").unwrap();
+    for (id, text) in [("first", "one"), ("second", "two")] {
+        f.store.db.execute("INSERT INTO bot_messages(id,source_bot_id,target_bot_id,source_session_id,target_session_id,source_channel_id,source_external_id,text,status,depth,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,'desktop','desktop',?6,'queued',1,1,1)", params![id,scout.id,writer.id,scout_session,writer_session,text]).unwrap();
+    }
+    assert_eq!(shared_channels::promote_taken(&f.store, &writer_session, "Message from Scout:\n\ntwo"), Some(Running::Message("second".into())));
+    assert_eq!((status("bot_messages", "first"), status("bot_messages", "second")), ("queued".into(), "in_progress".into()));
+    // A turn that fails to launch puts its request back to queued, with its post.
+    shared_channels::launch_failed(&f.store, &writer_session, &Running::Message("second".into()));
+    assert_eq!(status("bot_messages", "second"), "queued");
+    let promoted = shared_channels::promote_taken(&f.store, &writer_session, "Work requested in #launch:\n\nship it").unwrap();
+    assert_eq!((status("bot_shared_channel_deliveries", "k"), status("bot_shared_channel_messages", "kept")), ("in_progress".into(), "in_progress".into()));
+    shared_channels::launch_failed(&f.store, &writer_session, &promoted);
+    assert_eq!((status("bot_shared_channel_deliveries", "k"), status("bot_shared_channel_messages", "kept")), ("queued".into(), "queued".into()));
+    // A deleted channel is preview only until it is restored.
+    shared_channels::set_archived(&f.store, &channel.id, true).unwrap();
+    assert!(shared_channels::update(&f.store, &channel.id, "renamed", &[writer.id.clone()], None).is_err());
+    shared_channels::set_archived(&f.store, &channel.id, false).unwrap();
+    assert!(shared_channels::update(&f.store, &channel.id, "renamed", &[writer.id.clone()], None).is_ok());
+}
+
+#[test]
+fn assignments_carry_recent_channel_history() {
+    let f = fixture();
+    let scout = bot(&f);
+    let channel = shared_channels::create(&f.store, "launch", &[scout.id.clone()]).unwrap();
+    f.store.db.execute("INSERT INTO bot_shared_channel_messages(id,channel_id,kind,text,status,created_at) VALUES('ask',?1,'user','find the bug','completed',1)", [&channel.id]).unwrap();
+    f.store.db.execute("INSERT INTO bot_shared_channel_messages(id,channel_id,kind,author_bot_id,text,created_at) VALUES('answer',?1,'reply',?2,'It is in\n parse()',2)", params![channel.id,scout.id]).unwrap();
+    f.store.db.execute("INSERT INTO bot_shared_channel_messages(id,channel_id,kind,text,status,created_at) VALUES('now',?1,'user','fix it','in_progress',3)", [&channel.id]).unwrap();
+    assert_eq!(shared_channels::recent_history(&f.store, &channel.id, "now").unwrap(), "- You: find the bug\n- Scout: It is in parse()");
+    assert_eq!(shared_channels::recent_history(&f.store, &channel.id, "ask").unwrap().lines().count(), 2);
+}
+
+#[test]
+fn channel_history_returns_the_latest_page() {
+    let f = fixture();
+    let scout = bot(&f);
+    let channel = shared_channels::create(&f.store, "launch", &[scout.id.clone()]).unwrap();
+    for at in 1..=5 {
+        f.store.db.execute("INSERT INTO bot_shared_channel_messages(id,channel_id,kind,text,created_at) VALUES(?1,?2,'reply',?3,?4)", params![format!("m{at}"),channel.id,format!("reply {at}"),at]).unwrap();
+    }
+    let page = shared_channels::detail(&f.store, &channel.id, 3).unwrap();
+    assert!(page.has_more);
+    assert_eq!(page.messages.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["m3", "m4", "m5"]);
+    let all = shared_channels::detail(&f.store, &channel.id, 5).unwrap();
+    assert!(!all.has_more && all.messages.len() == 5);
 }
 
 #[test]
@@ -329,6 +495,7 @@ fn local_server_parses_requests_and_guards_hosts() {
     assert!(http::parse_head("garbage").is_none());
     assert!(http::same("abc", "abc") && !http::same("abc", "abd") && !http::same("abc", "ab"));
     assert_eq!(web::visible("hi\n\nBot brief:\nYou are Scout"), "hi");
+    assert_eq!(preview("**hi**\n\nBot brief:\nYou are Scout"), "hi");
     assert_eq!(web::new_token().len(), 64);
     assert_eq!(web::page("not a channel!").status, 404);
     let engine = http::Response::markdown_engine();
@@ -416,6 +583,100 @@ fn schema_version_includes_bots() {
     let f = fixture();
     let version: i64 = f.store.db.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
     assert_eq!(version, crate::storage::SCHEMA_VERSION);
+}
+
+#[test]
+fn profile_settings_default_save_and_validate() {
+    let f = fixture();
+    let created = bot(&f);
+    assert_eq!((created.color.as_str(), created.fallback_mode.as_str(), created.while_working.as_str()), ("", "ask", "queue"));
+    assert!(created.notify && !created.show_plan && created.backup_models.is_empty());
+    let mut next = input("Scout");
+    next.color = "#3B82F6".into();
+    next.reasoning_effort = "high".into();
+    next.backup_models = vec![BackupModel { provider: "codex".into(), model: "gpt-5".into() }];
+    next.fallback_mode = "auto".into();
+    next.notify = Some(false);
+    next.while_working = "steer".into();
+    next.show_plan = true;
+    let saved = update(&f.store, &created.id, &next).unwrap();
+    assert_eq!(saved.color, "#3b82f6");
+    assert_eq!(saved.backup_models, next.backup_models);
+    assert_eq!((saved.fallback_mode.as_str(), saved.while_working.as_str(), saved.reasoning_effort.as_str()), ("auto", "steer", "high"));
+    assert!(!saved.notify && saved.show_plan);
+    assert_eq!(saved.memory_version, created.memory_version + 1, "the plan rule is part of the brief");
+    assert!(brief::compose(&saved, &[], "desktop", "").contains("short plan"));
+    let (session, _) = thread_session(&f.store, &saved, DESKTOP, DESKTOP, "Scout · You").unwrap();
+    assert_eq!(f.store.session(&session).unwrap().reasoning_effort.as_deref(), Some("high"));
+    for bad in [
+        BotInput { color: "red".into(), ..input("Scout") },
+        BotInput { fallback_mode: "never".into(), ..input("Scout") },
+        BotInput { while_working: "drop".into(), ..input("Scout") },
+        BotInput { reasoning_effort: "max; drop".into(), ..input("Scout") },
+        BotInput { backup_models: vec![BackupModel { provider: "nope".into(), model: "x".into() }], ..input("Scout") },
+        BotInput { backup_models: (0..5).map(|i| BackupModel { provider: "codex".into(), model: format!("m{i}") }).collect(), ..input("Scout") },
+    ] {
+        assert!(update(&f.store, &created.id, &bad).is_err());
+    }
+}
+
+#[test]
+fn upgrade_adds_profile_columns_to_older_bot_tables() {
+    let db = rusqlite::Connection::open_in_memory().unwrap();
+    db.execute_batch("CREATE TABLE bots(id TEXT PRIMARY KEY, name TEXT NOT NULL); INSERT INTO bots VALUES('b','Old');").unwrap();
+    upgrade(&db).unwrap();
+    upgrade(&db).unwrap();
+    let (notify, plan, backups, working): (bool, bool, String, String) =
+        db.query_row("SELECT notify,show_plan,backup_models,while_working FROM bots", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap();
+    assert!(notify && !plan);
+    assert_eq!((backups.as_str(), working.as_str()), ("[]", "queue"));
+    for table in ["bot_shared_channels", "bot_shared_channel_members", "bot_shared_channel_messages", "bot_shared_channel_deliveries", "bot_messages"] {
+        let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)", [table], |r| r.get(0)).unwrap();
+        assert!(exists, "upgrade creates {table}");
+    }
+}
+
+#[test]
+fn shared_channel_routing_uses_lead_and_limits_mentions_to_two_members() {
+    let members = vec!["scout".to_owned(), "writer".to_owned(), "ledger".to_owned()];
+    assert_eq!(shared_channels::route_recipients(&members, Some("scout"), &[]).unwrap(), ["scout"]);
+    assert_eq!(shared_channels::route_recipients(&members, Some("scout"), &["writer".into(), "ledger".into()]).unwrap(), ["writer", "ledger"]);
+    assert!(shared_channels::route_recipients(&members, Some("scout"), &["scout".into(), "writer".into(), "ledger".into()]).is_err());
+    assert!(shared_channels::route_recipients(&members, Some("missing"), &[]).is_err());
+    assert!(shared_channels::route_recipients(&members, Some("scout"), &["outsider".into()]).is_err());
+}
+
+#[test]
+fn shared_channel_persists_members_and_archive_state() {
+    let f = fixture();
+    let scout = bot(&f);
+    let mut writer_input = input("Writer"); writer_input.name = "Writer".into();
+    let writer = create(&f.store, &writer_input, &f.root).unwrap();
+    let channel = shared_channels::create(&f.store, "launch", &[scout.id.clone(), writer.id.clone()]).unwrap();
+    assert_eq!(channel.lead_bot_id.as_deref(), Some(scout.id.as_str()));
+    let updated = shared_channels::update(&f.store, &channel.id, "launch", &[writer.id.clone()], Some(&writer.id)).unwrap();
+    assert_eq!(updated.lead_bot_id.as_deref(), Some(writer.id.as_str()));
+    shared_channels::set_archived(&f.store, &channel.id, true).unwrap();
+    let detail = shared_channels::detail(&f.store, &channel.id, shared_channels::HISTORY_PAGE).unwrap();
+    assert!(detail.channel.archived);
+    assert_eq!(detail.channel.member_ids, [writer.id]);
+}
+
+#[test]
+fn a_bot_update_carries_its_hop_depth_into_the_next_turn_only() {
+    let f = fixture();
+    let scout = bot(&f);
+    let writer = create(&f.store, &input("Writer"), &f.root).unwrap();
+    let (source_session, _) = thread_session(&f.store, &scout, DESKTOP, DESKTOP, "Scout · You").unwrap();
+    let (target_session, _) = thread_session(&f.store, &writer, DESKTOP, DESKTOP, "Writer · You").unwrap();
+    f.store.db.execute(
+        "INSERT INTO bot_messages(id,source_bot_id,target_bot_id,source_session_id,target_session_id,source_channel_id,source_external_id,text,status,result,depth,created_at,updated_at) VALUES('collab',?1,?2,?3,?4,'desktop','desktop','Review this','completed','Looks good',2,10,20)",
+        rusqlite::params![scout.id,writer.id,source_session,target_session],
+    ).unwrap();
+    f.store.message(&source_session, "user", "Update from Writer:\n\nLooks good").unwrap();
+    assert_eq!(shared_channels::current_hop_depth(&f.store, &source_session).unwrap(), 2);
+    f.store.message(&source_session, "user", "A new request from me").unwrap();
+    assert_eq!(shared_channels::current_hop_depth(&f.store, &source_session).unwrap(), 0);
 }
 
 /// Talks to the real services with made-up credentials: proves the requests are well-formed

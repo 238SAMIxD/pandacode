@@ -1907,6 +1907,7 @@ mod tests {
             &state,
             &original.id,
             Some(TeamConfig {
+                catalog: Vec::new(),
                 auto: false,
                 roster_only: false,
                 name: None,

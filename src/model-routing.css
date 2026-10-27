@@ -1,0 +1,19 @@
+/* Settings → Agents → Model routing. */
+.routing-modes{position:relative;display:flex;gap:2px;padding:2px;border-radius:4px;background:color-mix(in srgb,var(--raised) 78%,transparent);flex:none}
+.routing-modes>.segment-thumb{border-radius:3px;background:var(--panel);box-shadow:0 1px 4px rgb(0 0 0 / .1),inset 0 1px 0 rgb(255 255 255 / .4)}
+html[data-theme=dark] .routing-modes>.segment-thumb{background:color-mix(in srgb,var(--text) 13%,transparent)}
+.routing-modes>button{position:relative;z-index:1;padding:3px 11px;border-radius:3px;font-size:.78rem;font-weight:500;color:var(--muted);white-space:nowrap;--press:1}
+.routing-modes>button.selected{color:var(--text)}
+.routing-modes>button:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+.routing-off{margin:0;font-size:.78rem;color:var(--muted)}
+.routing-minp{width:72px;height:30px;padding:0 8px;border-radius:3px;border:1px solid color-mix(in srgb,var(--text) 12%,transparent);background:color-mix(in srgb,var(--text) 4%,transparent);color:var(--text);font:inherit;font-size:.82rem}
+.routing-minp:focus-visible,.routing-text:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+.routing-try{display:flex;flex-direction:column;gap:6px;padding:2px 1rem 10px}
+.routing-text{width:100%;min-width:0;box-sizing:border-box;resize:vertical;padding:8px 10px;border-radius:3px;border:1px solid color-mix(in srgb,var(--text) 12%,transparent);background:color-mix(in srgb,var(--text) 4%,transparent);color:var(--text);font:inherit;font-size:.82rem;line-height:1.45}
+.routing-try-actions{display:flex;justify-content:flex-end}
+.routing-result{font-size:.78rem;color:var(--muted)}
+.routing-summary{margin:0 0 4px}
+.routing-ranking{list-style:none;margin:0;padding:0}
+.routing-ranking li{display:grid;grid-template-columns:40px 1fr 48px 64px;gap:8px;align-items:center;min-height:26px}
+.routing-ranking li:first-child{color:var(--text);font-weight:600}
+.routing-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

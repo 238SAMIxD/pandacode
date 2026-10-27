@@ -22,6 +22,12 @@ Code, OpenCode, GLM through Claude Code, or Antigravity. Model and effort choice
 custom model IDs remain available. A model must be supported by the selected
 harness and the user's account. PandaCode does not supply inference or API credits.
 
+## Model routing
+
+In an automatic team the lead can set `profileId: "auto"` on an assignment, and
+PandaCode picks the worker's model locally from every installed harness's models.
+See [model routing](model-routing.md).
+
 ## Saved setups and profiles
 
 **Save setup** remembers the complete team for this task and future tasks, across

@@ -46,6 +46,9 @@ You keep working while the user is away and remember what matters across convers
     if !bot.instructions.is_empty() {
         text.push_str(&format!("\nInstructions from the user:\n{}\n", bot.instructions));
     }
+    if bot.show_plan {
+        text.push_str("\nBefore a long or multi-step task, reply first with a short plan and wait for the user to approve it.\n");
+    }
     if !bot.goals.is_empty() {
         text.push_str(&format!("\nStanding goals:\n{}\n", bot.goals));
     }

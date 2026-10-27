@@ -71,7 +71,7 @@ function parseBlock(block: string): MessageAttachment[] {
 
 /** Bot briefs and token-saver style notes are setup, not attachments, so they stay hidden. */
 export function parseAttachments(blocks: string[]): MessageAttachment[] {
-  return blocks.filter(block => !block.startsWith('Bot brief:\n') && !block.startsWith('Response style (PandaCode token saver')).flatMap(parseBlock);
+  return blocks.filter(block => !block.startsWith('Bot brief:\n') && !block.startsWith('Your ongoing role is:') && !block.startsWith('Response style (PandaCode token saver')).flatMap(parseBlock);
 }
 
 const ICONS: Record<MessageAttachment['kind'], string> = { file: 'file', document: 'file', folder: 'folder', image: 'camera', github: 'issue', raw: 'attach' };

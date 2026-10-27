@@ -76,7 +76,8 @@ export async function previewRemoteStart(args: Record<string, any>, emit: (name:
     }
     const failure = w.__remoteStartFail;
     if (failure) { w.__remoteStartFail = undefined; send('error', null, failure); throw new Error(failure); }
-    send('starting'); await step();
+    // `__remoteStartBusy`: the host's checkout was busy, so it reports the worktree it used instead.
+    send('starting', null, w.__remoteStartBusy ?? null); await step();
   } finally { activeStarts.delete(key); }
 }
 /** Test hook: a computer going offline or coming back. */

@@ -75,7 +75,7 @@ export function createPreviewArchitect(host: PreviewHost) {
     const guidance = typeof config.leadGuidance === 'string' ? config.leadGuidance.trim() : '';
     // Native counts UTF-8 bytes, so multibyte text reaches the limit sooner than its length.
     if (new TextEncoder().encode(guidance).length > 2000) throw new Error('Lead guidance must be under 2000 bytes.');
-    return { ...(config.auto ? { auto: true } : {}), ...(config.rosterOnly ? { rosterOnly: true } : {}), ...(config.name != null ? { name: config.name } : {}), ...(guidance ? { leadGuidance: guidance } : {}), workers, maxParallel: integer(config.maxParallel, 0, Number.MAX_SAFE_INTEGER, 'Parallel workers'), maxRounds: integer(config.maxRounds, 1, 20, 'Review rounds'), maxAssignments: integer(config.maxAssignments, 1, 50, 'Assignments'), workspace: 'shared', summaryLimit: integer(config.summaryLimit, 512, 6000, 'Summary limit') };
+    return { ...(config.auto ? { auto: true } : {}), ...(config.rosterOnly ? { rosterOnly: true } : {}), ...(config.name != null ? { name: config.name } : {}), ...(guidance ? { leadGuidance: guidance } : {}), workers, ...(Array.isArray(config.catalog) && config.catalog.length ? { catalog: config.catalog.slice(0, 1000).map(p => ({ ...p })) } : {}), maxParallel: integer(config.maxParallel, 0, Number.MAX_SAFE_INTEGER, 'Parallel workers'), maxRounds: integer(config.maxRounds, 1, 20, 'Review rounds'), maxAssignments: integer(config.maxAssignments, 1, 50, 'Assignments'), workspace: 'shared', summaryLimit: integer(config.summaryLimit, 512, 6000, 'Summary limit') };
   }
   try {
     const saved: unknown = JSON.parse(localStorage.getItem(storageKey) ?? '{}');
