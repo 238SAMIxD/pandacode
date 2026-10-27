@@ -109,11 +109,12 @@ button .icon{pointer-events:none}
 .main-pane{--header-fade:32px;--header-glass:color-mix(in srgb,var(--bg) 84%,transparent);--header-blur:blur(16px) saturate(1.15)}
 /* Conversation view: the transcript starts under the header (pulled up by its height) and pads
    its content back down, so nothing is hidden at rest. Anything in flow above the transcript
-   (file tabs, details, JEV activity) keeps the old stacked layout. The first row clears the fade too,
+   (file tabs, details, JEV activity) keeps the old stacked layout, and so does a shared bot channel, whose
+   own header row would otherwise sit under the workspace header. The first row clears the fade too,
    and scroll-padding keeps focus and scrollIntoView below the header, its fade and any floating bar
    (the bars sit inside the fade's band, so the larger of the two counts). */
 .workspace:not(.board-view,.github-view)>.main-pane>.work-area{overflow:visible}
-.workspace:not(.board-view,.github-view) .conversation-pane:not(.new-task-page):not(:has(>:is(.file-tabs,.task-details-heading,.jev-activity):not([hidden]))){--header-under:var(--titlebar-height);--header-fade-under:var(--header-fade)}
+.workspace:not(.board-view,.github-view) .conversation-pane:not(.new-task-page,.channel-thread):not(:has(>:is(.file-tabs,.task-details-heading,.jev-activity):not([hidden]))){--header-under:var(--titlebar-height);--header-fade-under:var(--header-fade)}
 .conversation-pane>.transcript{margin-top:calc(-1 * var(--header-under,0px));padding-top:calc(max(var(--transcript-top,28px),var(--header-fade-under,0px)) + var(--header-under,0px));scroll-padding-top:calc(var(--header-under,0px) + max(var(--header-fade-under,0px),var(--floating-bars,0px)) + 12px)}
 /* The team and subagent triggers float over the thread's top right, under the header, instead of
    taking an in-flow row (which drew an empty band across the pane); the transcript pads for them.
