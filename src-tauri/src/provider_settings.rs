@@ -138,6 +138,29 @@ pub fn deepseek_key() -> Result<Option<String>> {
     stored_key(DEEPSEEK_KEY)
 }
 
+/// Usage checks must never open an unlock or credential-access dialog. This
+/// provider's keys have only ever lived in the secrets file (the harness
+/// shipped after the file store), so a noninteractive peek is the whole store
+/// on macOS; keep normal agent launch/settings behavior in `deepseek_key`.
+#[cfg(target_os = "macos")]
+pub(crate) fn deepseek_key_for_usage() -> Result<Option<String>> {
+    Ok(crate::secret_store::peek(SERVICE, DEEPSEEK_KEY.account))
+}
+
+/// Credential Manager's read is noninteractive.
+#[cfg(target_os = "windows")]
+pub(crate) fn deepseek_key_for_usage() -> Result<Option<String>> {
+    deepseek_key()
+}
+
+/// keyring's Secret Service backend unconditionally unlocks matching locked
+/// items during get_password(). It has no noninteractive read option, so the
+/// background check cannot establish whether a saved key overrides env.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub(crate) fn deepseek_key_for_usage() -> Result<Option<String>> {
+    Err("Noninteractive DeepSeek secure-store access is unavailable.".into())
+}
+
 pub fn commandcode_key() -> Result<Option<String>> {
     stored_key(COMMANDCODE_KEY)
 }
@@ -556,6 +579,7 @@ pub async fn provider_remove_mimo_key() -> Result<Configuration> {
 pub async fn provider_save_deepseek_key(key: String) -> Result<Configuration> {
     crate::blocking(move || {
         save_key(DEEPSEEK_KEY, &key)?;
+        crate::agent_usage::invalidate("deepseek");
         crate::providers::acp_catalog::invalidate("deepseek");
         configuration()
     })
@@ -565,6 +589,7 @@ pub async fn provider_save_deepseek_key(key: String) -> Result<Configuration> {
 pub async fn provider_remove_deepseek_key() -> Result<Configuration> {
     crate::blocking(|| {
         remove_key(DEEPSEEK_KEY)?;
+        crate::agent_usage::invalidate("deepseek");
         crate::providers::acp_catalog::invalidate("deepseek");
         configuration()
     })
