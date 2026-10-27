@@ -360,7 +360,7 @@ fn validate(input: &BotInput) -> Result<BotInput> {
         return Err("The personality is larger than 64 KB. Shorten it and try again.".into());
     }
     let color = input.color.trim();
-    if !color.is_empty() && !(color.len() == 7 && color.starts_with('#') && color[1..].bytes().all(|c| c.is_ascii_hexdigit())) {
+    if !(color.is_empty() || color.len() == 7 && color.starts_with('#') && color[1..].bytes().all(|c| c.is_ascii_hexdigit())) {
         return Err("Choose a color from the list.".into());
     }
     if input.reasoning_effort.len() > 40 || input.reasoning_effort.chars().any(|c| !(c.is_ascii_alphanumeric() || c == '-' || c == '_')) {

@@ -5,7 +5,13 @@ import type { Message } from '../src/types';
 type View = 'conversation' | 'board';
 const errors = new WeakMap<Page, string[]>();
 const setup = (page: Page) => page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Architect & workers', exact: true }) });
-const trigger = (page: Page) => page.getByRole('button', { name: 'Team', exact: true });
+/** The Team button opens No team · Cheap · Balanced · Best; a team on carries `data-on`. */
+const trigger = (page: Page) => page.locator('#team-trigger');
+async function pickTeam(page: Page, kind: string): Promise<void> {
+  await trigger(page).click();
+  await page.getByRole('menuitemradio', { name: kind, exact: true }).click();
+  await expect(page.getByRole('menuitemradio', { name: kind, exact: true })).toBeHidden();
+}
 const panel = (page: Page) => page.getByRole('dialog', { name: 'Workers', exact: true });
 // The team's panel opens from the action dock's Agents item.
 const openWorkers = (page: Page) => page.locator('#agents-toggle');
@@ -112,10 +118,10 @@ async function nextPaint(page: Page): Promise<void> {
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 }
 
-/** Team mode is one toggle: the task's model leads and picks worker models itself. */
+/** Team mode is one menu pick: the task's model leads and Panda Router (or the lead) picks worker models. */
 async function saveDefaultTeam(page: Page): Promise<void> {
-  await trigger(page).click();
-  await expect(trigger(page)).toHaveAttribute('aria-pressed', 'true');
+  await pickTeam(page, 'Balanced team');
+  await expect(trigger(page)).toHaveAttribute('data-on', '');
   await expect(openWorkers(page)).toBeVisible();
 }
 
@@ -382,9 +388,9 @@ test.describe('architect teams', () => {
   test('turns the team off again and returns the task to its single agent', async ({ page }) => {
     await installArchitect(page);
     await saveDefaultTeam(page);
-    await trigger(page).click();
+    await pickTeam(page, 'No team');
     await expect(openWorkers(page)).toBeHidden();
-    await expect(trigger(page)).toHaveAttribute('aria-pressed', 'false');
+    await expect(trigger(page)).not.toHaveAttribute('data-on');
     await expect(page.locator('[data-team-model-label]')).toBeHidden();
     expect((await calls(page, 'architect_configure')).at(-1).args).toMatchObject({ sessionId: 'session-2', config: null, profileId: null });
     await page.reload(); await selectTask(page, 'session-2');

@@ -211,10 +211,10 @@ fn message_status(store: &Store, message_id: &str) -> Result<String> {
     let statuses: Vec<&str> = rows.iter()
         .filter(|(status, _, ended_at)| !matches!(status.as_str(), "stopped" | "failed") || !rows.iter().any(|(_, created, _)| created > ended_at))
         .map(|(status, _, _)| status.as_str()).collect();
-    let status = if statuses.iter().any(|s| *s == "in_progress") { "in_progress" }
-        else if statuses.iter().any(|s| *s == "queued") { "queued" }
-        else if statuses.iter().any(|s| *s == "failed") { "failed" }
-        else if statuses.iter().any(|s| *s == "stopped") { "stopped" }
+    let status = if statuses.contains(&"in_progress") { "in_progress" }
+        else if statuses.contains(&"queued") { "queued" }
+        else if statuses.contains(&"failed") { "failed" }
+        else if statuses.contains(&"stopped") { "stopped" }
         else { "completed" };
     Ok(status.into())
 }

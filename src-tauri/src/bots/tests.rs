@@ -112,7 +112,7 @@ fn startup_reconciles_active_bot_deliveries_as_failed() {
     let (source_session, _) = thread_session(&f.store, &source, DESKTOP, "source", "Scout · Source").unwrap();
     let (target_session, _) = thread_session(&f.store, &target, DESKTOP, "target", "Partner · Target").unwrap();
     f.store.db.execute("INSERT INTO bot_messages(id,source_bot_id,target_bot_id,source_session_id,target_session_id,source_channel_id,source_external_id,text,status,depth,created_at,updated_at) VALUES('delivery',?1,?2,?3,?4,'web','thread','hello','in_progress',1,1,1)", params![source.id,target.id,source_session,target_session]).unwrap();
-    let channel = shared_channels::create(&f.store, "launch", &[source.id.clone()]).unwrap();
+    let channel = shared_channels::create(&f.store, "launch", std::slice::from_ref(&source.id)).unwrap();
     let message_id = crate::storage::id();
     f.store.db.execute("INSERT INTO bot_shared_channel_messages(id,channel_id,kind,text,status,created_at) VALUES(?1,?2,'user','ship it','in_progress',1)", params![message_id,channel.id]).unwrap();
     f.store.db.execute("INSERT INTO bot_shared_channel_deliveries(id,channel_id,message_id,bot_id,session_id,status,created_at,updated_at) VALUES('channel-delivery',?1,?2,?3,?4,'in_progress',1,1)", params![channel.id,message_id,source.id,target_session]).unwrap();
@@ -188,7 +188,7 @@ fn promoted_posts_recover_after_a_restart_and_launches_credit_their_own_request(
     let scout = bot(&f);
     let writer = create(&f.store, &input("Writer"), &f.root).unwrap();
     let (writer_session, _) = thread_session(&f.store, &writer, DESKTOP, DESKTOP, "Writer · You").unwrap();
-    let channel = shared_channels::create(&f.store, "launch", &[writer.id.clone()]).unwrap();
+    let channel = shared_channels::create(&f.store, "launch", std::slice::from_ref(&writer.id)).unwrap();
     let status = |table: &str, id: &str| f.store.db.query_row(&format!("SELECT status FROM {table} WHERE id=?1"), [id], |row| row.get::<_, String>(0)).unwrap();
     f.store.db.execute("INSERT INTO bot_shared_channel_messages(id,channel_id,kind,text,status,created_at) VALUES('post',?1,'user','draft it','queued',1)", [&channel.id]).unwrap();
     f.store.db.execute("INSERT INTO bot_shared_channel_deliveries(id,channel_id,message_id,bot_id,session_id,status,created_at,updated_at) VALUES('d',?1,'post',?2,?3,'queued',1,1)", params![channel.id,writer.id,writer_session]).unwrap();
@@ -221,16 +221,16 @@ fn promoted_posts_recover_after_a_restart_and_launches_credit_their_own_request(
     assert_eq!((status("bot_shared_channel_deliveries", "k"), status("bot_shared_channel_messages", "kept")), ("queued".into(), "queued".into()));
     // A deleted channel is preview only until it is restored.
     shared_channels::set_archived(&f.store, &channel.id, true).unwrap();
-    assert!(shared_channels::update(&f.store, &channel.id, "renamed", &[writer.id.clone()], None).is_err());
+    assert!(shared_channels::update(&f.store, &channel.id, "renamed", std::slice::from_ref(&writer.id), None).is_err());
     shared_channels::set_archived(&f.store, &channel.id, false).unwrap();
-    assert!(shared_channels::update(&f.store, &channel.id, "renamed", &[writer.id.clone()], None).is_ok());
+    assert!(shared_channels::update(&f.store, &channel.id, "renamed", std::slice::from_ref(&writer.id), None).is_ok());
 }
 
 #[test]
 fn assignments_carry_recent_channel_history() {
     let f = fixture();
     let scout = bot(&f);
-    let channel = shared_channels::create(&f.store, "launch", &[scout.id.clone()]).unwrap();
+    let channel = shared_channels::create(&f.store, "launch", std::slice::from_ref(&scout.id)).unwrap();
     f.store.db.execute("INSERT INTO bot_shared_channel_messages(id,channel_id,kind,text,status,created_at) VALUES('ask',?1,'user','find the bug','completed',1)", [&channel.id]).unwrap();
     f.store.db.execute("INSERT INTO bot_shared_channel_messages(id,channel_id,kind,author_bot_id,text,created_at) VALUES('answer',?1,'reply',?2,'It is in\n parse()',2)", params![channel.id,scout.id]).unwrap();
     f.store.db.execute("INSERT INTO bot_shared_channel_messages(id,channel_id,kind,text,status,created_at) VALUES('now',?1,'user','fix it','in_progress',3)", [&channel.id]).unwrap();
@@ -242,7 +242,7 @@ fn assignments_carry_recent_channel_history() {
 fn channel_history_returns_the_latest_page() {
     let f = fixture();
     let scout = bot(&f);
-    let channel = shared_channels::create(&f.store, "launch", &[scout.id.clone()]).unwrap();
+    let channel = shared_channels::create(&f.store, "launch", std::slice::from_ref(&scout.id)).unwrap();
     for at in 1..=5 {
         f.store.db.execute("INSERT INTO bot_shared_channel_messages(id,channel_id,kind,text,created_at) VALUES(?1,?2,'reply',?3,?4)", params![format!("m{at}"),channel.id,format!("reply {at}"),at]).unwrap();
     }
@@ -654,7 +654,7 @@ fn shared_channel_persists_members_and_archive_state() {
     let writer = create(&f.store, &writer_input, &f.root).unwrap();
     let channel = shared_channels::create(&f.store, "launch", &[scout.id.clone(), writer.id.clone()]).unwrap();
     assert_eq!(channel.lead_bot_id.as_deref(), Some(scout.id.as_str()));
-    let updated = shared_channels::update(&f.store, &channel.id, "launch", &[writer.id.clone()], Some(&writer.id)).unwrap();
+    let updated = shared_channels::update(&f.store, &channel.id, "launch", std::slice::from_ref(&writer.id), Some(&writer.id)).unwrap();
     assert_eq!(updated.lead_bot_id.as_deref(), Some(writer.id.as_str()));
     shared_channels::set_archived(&f.store, &channel.id, true).unwrap();
     let detail = shared_channels::detail(&f.store, &channel.id, shared_channels::HISTORY_PAGE).unwrap();

@@ -552,6 +552,7 @@ fn answers() -> std::sync::MutexGuard<'static, Answers> {
 
 /// One ordered request queue per peer, shared by the relay and direct links, for one sign-in.
 fn peers() -> std::sync::MutexGuard<'static, (u64, HashMap<String, mpsc::Sender<Request>>)> {
+    #[allow(clippy::type_complexity)]
     static PEERS: std::sync::OnceLock<std::sync::Mutex<(u64, HashMap<String, mpsc::Sender<Request>>)>> = std::sync::OnceLock::new();
     PEERS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
 }

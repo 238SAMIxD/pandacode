@@ -112,6 +112,11 @@ pub(super) struct Card {
     pub tools: bool,
     pub vision: bool,
     pub supersedes: Vec<String>,
+    pub local: bool,
+    /// Mean ability over the skill axes (v4 "strength").
+    pub strength: f64,
+    /// v4 provenance prior penalty in logits for cards the success head was not trained on.
+    pub prior_penalty: f64,
 }
 
 fn validate(c: &RawCard) -> Result<(), String> {
@@ -173,7 +178,11 @@ fn compile(c: RawCard) -> Card {
             std::array::from_fn(|k| c.skills.get(SKILL_AXES[k]).map_or(fill_se, |s| s.se)),
         )
     };
+    let provenance = c.field_provenance.get("skills").or(c.provenance.as_ref()).map_or("estimated", String::as_str);
     Card {
+        strength: super::policy::np_sum(&theta) / 10.0,
+        prior_penalty: super::policy::provenance_penalty(provenance),
+        local: c.local,
         theta,
         se,
         a: c.discrimination.unwrap_or(DEFAULT_A),

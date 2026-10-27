@@ -1,19 +1,18 @@
-//! Deterministic matcher: MIRT P(success) (upstream `matcher/core.py`) and the routing policy (`matcher/policy.py`).
+//! Deterministic matcher: MIRT P(success) (upstream `matcher/core.py`) and the v4 routing path of
+//! `matcher/policy.py` (`Matcher._route` with `policy="v4"`, calibration off, no exploration).
 
-use std::cmp::Ordering;
 use std::f64::consts::{PI, SQRT_2};
 
 use super::cards::Card;
+use super::policy::{self, Arrays};
 use super::profile::{TaskProfile, FLAG_NEEDS_TOOLS, FLAG_NEEDS_VISION, N_DIFFICULTY};
+use super::success::HEAD;
 use super::Mode;
 
 const LAMBDA: f64 = 0.5;
-const FLOOR: f64 = 0.55;
-const W_QUALITY: f64 = 1.0;
-const W_COST: f64 = 0.3;
-const W_LATENCY: f64 = 0.1;
 const CONTEXT_MARGIN: f64 = 1.2;
 const INPUT_OVERHEAD_TOKENS: usize = 500;
+#[cfg(test)]
 pub(super) const DEFAULT_CARD: &str = "claude-opus-5.5";
 const REASONING: usize = 2;
 
@@ -65,7 +64,7 @@ impl Demand {
     }
 
     /// P(success | b = level) for levels 1..10, integrated over z ~ N(mu, sd) by Gauss-Hermite.
-    fn p_by_level(&self, card: &Card) -> ([f64; N_DIFFICULTY], f64) {
+    pub fn p_by_level(&self, card: &Card) -> ([f64; N_DIFFICULTY], f64) {
         let (mu, sd) = self.moments(card);
         let sigmoid = |x: f64| 0.5 * (1.0 + (0.5 * x).tanh());
         let mut out = [0.0; N_DIFFICULTY];
@@ -95,117 +94,172 @@ pub(super) fn normalized(d: &[f64; N_DIFFICULTY]) -> [f64; N_DIFFICULTY] {
 
 pub(super) struct Scored {
     pub p: f64,
+    pub p_lo: f64,
     pub cost: f64,
     pub latency: f64,
+    /// Expected cost including the failure term (candidates only; NaN otherwise).
+    pub expected_cost: f64,
 }
 
 pub(super) struct Decision {
     pub scored: Vec<Scored>,
     pub chosen: Option<usize>,
+    pub decided_by: String,
     /// Candidates, chosen first, then by P(success) descending.
     pub order: Vec<usize>,
+    pub ladder: Vec<usize>,
+    /// The decision difficulty (widened for vague requests).
+    pub difficulty: [f64; N_DIFFICULTY],
 }
 
-fn cmp(a: f64, b: f64) -> Ordering {
-    a.partial_cmp(&b).unwrap_or(Ordering::Equal)
+pub(super) struct Request<'a> {
+    pub profile: &'a TaskProfile,
+    pub text: &'a str,
+    /// Profile difficulty, or an escalation posterior.
+    pub difficulty: &'a [f64; N_DIFFICULTY],
+    /// De-duplicated pool of cards.
+    pub pool: &'a [&'a Card],
+    /// Pool entries that already failed, in failure order.
+    pub failed: &'a [usize],
+    /// The previous route's escalation ladder (pool indices).
+    pub prev_ladder: &'a [usize],
+    pub requires_tools: bool,
+    pub mode: Mode,
+    pub min_p: f64,
 }
 
-/// `pool` is the de-duplicated list of cards; `failed[i]` excludes pool entry i.
-pub(super) fn decide(
-    profile: &TaskProfile,
-    difficulty: &[f64; N_DIFFICULTY],
-    pool: &[&Card],
-    failed: &[bool],
-    text_chars: usize,
-    mode: Mode,
-    min_p: f64,
-) -> Decision {
-    let demand = Demand::new(profile);
-    let diff = normalized(difficulty);
-    let in_tok = (text_chars / 4 + INPUT_OVERHEAD_TOKENS) as f64;
-    let out_tok = 10f64.powf(profile.out_p50);
-    let mut quality = Vec::with_capacity(pool.len());
-    let scored: Vec<Scored> = pool
-        .iter()
-        .map(|card| {
-            let (by_level, mu) = demand.p_by_level(card);
-            quality.push((mu / 10.0).clamp(0.0, 1.0));
-            Scored {
-                p: by_level.iter().zip(diff).map(|(p, d)| p * d).sum::<f64>().clamp(0.0, 1.0),
-                cost: (in_tok * card.cost_in + out_tok * card.cost_out) / 1e6,
-                latency: card.ttft_ms + out_tok / card.tps * 1000.0,
-            }
-        })
+/// v4 P and its lower bound per card: the success head for cards it was trained on; otherwise the card's
+/// P at the upper difficulty quantile, recentred on this task's covered cards (`Matcher._v4_p`).
+fn v4_p(r: &Request, p_levels: &[[f64; N_DIFFICULTY]], cost: &[f64], diff: &[f64; N_DIFFICULTY]) -> (Vec<f64>, Vec<f64>, [f64; N_DIFFICULTY]) {
+    let head = &*HEAD;
+    let (dec, vague) = head.decision_difficulty(r.profile, r.text, diff);
+    let level = super::success::quantile_level(&dec, head.quantile());
+    let (alpha, beta) = head.card_calibration();
+    let n = r.pool.len();
+    let penalty: Vec<f64> = (0..n)
+        .map(|i| r.pool[i].prior_penalty + if cost[i] <= 0.0 || r.pool[i].local { policy::FREE_PENALTY } else { 0.0 })
         .collect();
+    let card_q: Vec<f64> = p_levels.iter().map(|l| policy::p_at_level(l, level)).collect();
+    let mut p: Vec<f64> = (0..n).map(|i| policy::sigmoid(alpha + beta * policy::logit(card_q[i]) - penalty[i])).collect();
+    let mut p_lo = p.clone();
+    let covered: Vec<usize> = (0..n).filter(|&i| head.covers(&r.pool[i].id)).collect();
+    let failed: Vec<&str> = r.failed.iter().map(|&i| r.pool[i].id.as_str()).collect();
+    if !failed.is_empty() {
+        // Uncovered cards also lose the mean correlated-failure shift.
+        for i in (0..n).filter(|i| !covered.contains(i)) {
+            let shift = head.failure_offset(&failed, &r.pool[i].id);
+            p[i] = policy::sigmoid(policy::logit(p[i]) + shift);
+            p_lo[i] = policy::sigmoid(policy::logit(p_lo[i]) + shift);
+        }
+    }
+    if !covered.is_empty() {
+        let x = head.features(r.profile, r.text, &dec, vague);
+        let (pc, lo): (Vec<f64>, Vec<f64>) =
+            covered.iter().map(|&i| head.predict(&x, &r.pool[i].id, head.failure_offset(&failed, &r.pool[i].id))).unzip();
+        if covered.len() >= 2 {
+            // Upstream recomputes every card here, so the failure shift above survives only with < 2 covered cards.
+            let ref_q: Vec<f64> = covered.iter().map(|&i| card_q[i]).collect();
+            p = policy::shrunk_card_p(&card_q, &ref_q, &pc, &penalty, alpha, beta);
+            p_lo = policy::shrunk_card_p(&card_q, &ref_q, &lo, &penalty, alpha, beta);
+        }
+        for (k, &i) in covered.iter().enumerate() {
+            (p[i], p_lo[i]) = (pc[k], lo[k]);
+        }
+    }
+    let p: Vec<f64> = p.iter().map(|v| v.clamp(0.0, 1.0)).collect();
+    let p_lo = p_lo.iter().zip(&p).map(|(lo, p)| lo.min(*p).clamp(0.0, 1.0)).collect();
+    (p, p_lo, dec)
+}
+
+fn cmp(a: f64, b: f64) -> std::cmp::Ordering {
+    a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal)
+}
+
+pub(super) fn decide(r: &Request) -> Decision {
+    let pool = r.pool;
+    let n = pool.len();
+    let demand = Demand::new(r.profile);
+    let diff = normalized(r.difficulty);
+    let in_tok = (r.text.chars().count() / 4 + INPUT_OVERHEAD_TOKENS) as f64;
+    let out_tok = 10f64.powf(r.profile.out_p50);
+    let p_levels: Vec<[f64; N_DIFFICULTY]> = pool.iter().map(|c| demand.p_by_level(c).0).collect();
+    let cost: Vec<f64> = pool.iter().map(|c| (in_tok * c.cost_in + out_tok * c.cost_out) / 1e6).collect();
+    let latency: Vec<f64> = pool.iter().map(|c| c.ttft_ms + out_tok / c.tps * 1000.0).collect();
+    let (p, p_lo, dec) = v4_p(r, &p_levels, &cost, &diff);
+    let strength: Vec<f64> = pool.iter().map(|c| c.strength).collect();
 
     // Hard filters.
-    let needs_tools = profile.flags[FLAG_NEEDS_TOOLS] > 0.5;
-    let needs_vision = profile.flags[FLAG_NEEDS_VISION] > 0.5;
-    let mut cand: Vec<usize> = (0..pool.len())
+    let needs_tools = r.profile.flags[FLAG_NEEDS_TOOLS].max(if r.requires_tools { 1.0 } else { 0.0 }) > 0.5;
+    let needs_vision = r.profile.flags[FLAG_NEEDS_VISION] > 0.5;
+    let mut cand: Vec<usize> = (0..n)
         .filter(|&i| {
             let c = pool[i];
-            !failed[i] && (c.tools || !needs_tools) && (c.vision || !needs_vision) && in_tok * CONTEXT_MARGIN <= c.context
+            !r.failed.contains(&i)
+                && (c.tools || !needs_tools)
+                && (c.vision || !needs_vision)
+                && in_tok * CONTEXT_MARGIN <= c.context
         })
         .collect();
 
     // Newer version wins when it costs no more for this task.
     let newer = |old: &str| cand.iter().rev().copied().find(|&j| pool[j].supersedes.iter().any(|s| s == old));
-    let superseded: Vec<usize> = cand
-        .iter()
-        .copied()
-        .filter(|&i| newer(&pool[i].id).is_some_and(|j| scored[j].cost <= scored[i].cost + 1e-12))
-        .collect();
+    let superseded: Vec<usize> =
+        cand.iter().copied().filter(|&i| newer(&pool[i].id).is_some_and(|j| cost[j] <= cost[i] + 1e-12)).collect();
     cand.retain(|i| !superseded.contains(i));
 
-    let max_of = |f: &dyn Fn(&Scored) -> f64| cand.iter().map(|&i| f(&scored[i])).fold(0.0, f64::max);
-    let (max_cost, max_lat) = (max_of(&|s| s.cost), max_of(&|s| s.latency));
-    let norm = |x: f64, m: f64| if m > 0.0 { x / m } else { 0.0 };
-    let util = |i: usize| {
-        let s = &scored[i];
-        W_QUALITY * quality[i] * s.p - W_COST * norm(s.cost, max_cost) - W_LATENCY * norm(s.latency, max_lat)
-    };
-    let cts = |i: usize| scored[i].cost / scored[i].p.max(1e-6);
-    let p = |i: usize| scored[i].p;
-    // max by (p, -cost, -i)
-    let best_p = |set: &[usize]| {
-        set.iter().copied().max_by(|&a, &b| cmp(p(a), p(b)).then(cmp(scored[b].cost, scored[a].cost)).then(b.cmp(&a)))
-    };
-
-    let chosen = if cand.is_empty() {
-        None
-    } else {
-        let eligible: Vec<usize> = cand.iter().copied().filter(|&i| p(i) >= FLOOR).collect();
-        if eligible.is_empty() {
-            cand.iter().copied().find(|&i| pool[i].id == DEFAULT_CARD).or_else(|| {
-                cand.iter().copied().max_by(|&a, &b| cmp(p(a), p(b)).then(b.cmp(&a)))
-            })
-        } else {
-            match mode {
-                Mode::Cheapest => {
-                    let above: Vec<usize> = eligible.iter().copied().filter(|&i| p(i) >= min_p).collect();
-                    if above.is_empty() {
-                        best_p(&eligible)
-                    } else {
-                        above.into_iter().min_by(|&a, &b| {
-                            cmp(cts(a), cts(b))
-                                .then(cmp(scored[a].cost, scored[b].cost))
-                                .then(cmp(scored[a].latency, scored[b].latency))
-                                .then(cmp(p(b), p(a)))
-                                .then(a.cmp(&b))
-                        })
-                    }
-                }
-                Mode::Balanced => eligible.into_iter().max_by(|&a, &b| cmp(util(a), util(b)).then(b.cmp(&a))),
-                Mode::Quality => best_p(&eligible),
-            }
+    let mut expected = vec![f64::NAN; n];
+    let (mut chosen, mut decided_by, mut ladder) = (None, "none:all_filtered".to_string(), Vec::new());
+    if !cand.is_empty() {
+        let pick = |v: &[f64]| cand.iter().map(|&i| v[i]).collect::<Vec<f64>>();
+        let (cp, cpm, cc, cl, cs) = (pick(&p_lo), pick(&p), pick(&cost), pick(&latency), pick(&strength));
+        let arrays = Arrays { p: &cp, p_mean: &cpm, cost: &cc, latency: &cl, strength: &cs };
+        let (k, by, e) = policy::choose(r.mode, &arrays, r.min_p);
+        for (j, &i) in cand.iter().enumerate() {
+            expected[i] = e[j];
         }
-    };
+        let (mut greedy, mut by) = (cand[k], by);
+        // After a failure never step down: only models at least as strong as the strongest failed one.
+        let floor_s = r.failed.iter().map(|&i| strength[i]).fold(f64::NEG_INFINITY, f64::max);
+        let up: Vec<usize> = cand.iter().copied().filter(|&i| strength[i] >= floor_s - 1e-9).collect();
+        let key = |i: usize, j: usize| cmp(p_lo[i], p_lo[j]).then(cmp(strength[i], strength[j])).then(cmp(cost[j], cost[i]));
+        if let Some(&next) = r.prev_ladder.iter().find(|i| up.contains(i)) {
+            (greedy, by) = (next, "escalation_ladder".into());
+        } else if !up.is_empty() && !up.contains(&greedy) {
+            greedy = first_max(&up, key);
+            by = "escalation:stronger".into();
+        } else if up.is_empty() && !r.failed.is_empty() {
+            greedy = first_max(&cand, |i, j| cmp(strength[i], strength[j]).then(cmp(p_lo[i], p_lo[j])).then(cmp(cost[j], cost[i])));
+            by = "escalation:strongest_left".into();
+        }
+        (chosen, decided_by) = (Some(greedy), by);
+        ladder = cascade(pool, &cand, &p_lo, &cost, &strength).into_iter().filter(|i| up.is_empty() || up.contains(i)).collect();
+    }
 
     let mut order = cand;
-    order.sort_by(|&a, &b| cmp(p(b), p(a)).then(cmp(scored[a].cost, scored[b].cost)).then(a.cmp(&b)));
+    order.sort_by(|&a, &b| cmp(p[b], p[a]).then(cmp(cost[a], cost[b])).then(a.cmp(&b)));
     if let Some(c) = chosen {
         order.retain(|&i| i != c);
         order.insert(0, c);
     }
-    Decision { scored, chosen, order }
+    let scored = (0..n)
+        .map(|i| Scored { p: p[i], p_lo: p_lo[i], cost: cost[i], latency: latency[i], expected_cost: expected[i] })
+        .collect();
+    Decision { scored, chosen, decided_by, order, ladder, difficulty: dec }
+}
+
+/// Python `max(items, key)`: the first maximum.
+fn first_max(items: &[usize], ord: impl Fn(usize, usize) -> std::cmp::Ordering) -> usize {
+    items.iter().copied().fold(items[0], |best, x| if ord(x, best) == std::cmp::Ordering::Greater { x } else { best })
+}
+
+/// `Matcher._ladder`: the escalation ladder over the candidates (pool indices).
+fn cascade(pool: &[&Card], cand: &[usize], p_lo: &[f64], cost: &[f64], strength: &[f64]) -> Vec<usize> {
+    let ids: Vec<&str> = cand.iter().map(|&i| pool[i].id.as_str()).collect();
+    let off: Vec<Vec<f64>> = (0..ids.len())
+        .map(|a| (0..ids.len()).map(|b| if a == b { 0.0 } else { HEAD.failure_offset(&[ids[a]], ids[b]) }).collect())
+        .collect();
+    let pick = |v: &[f64]| cand.iter().map(|&i| v[i]).collect::<Vec<f64>>();
+    let (cp, cc, cs) = (pick(p_lo), pick(cost), pick(strength));
+    let allowed = policy::free_guard(&cp, &cc);
+    policy::ladder(&cp, &cc, &cs, &off, &allowed).into_iter().map(|k| cand[k]).collect()
 }

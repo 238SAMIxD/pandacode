@@ -396,6 +396,7 @@ test.describe('action dock', () => {
       await expect(agents(page)).toBeHidden();
       // A team brings it back.
       await page.getByRole('button', { name: 'Team', exact: true }).click();
+      await page.getByRole('menuitemradio', { name: 'Balanced team', exact: true }).click();
       await expect(agents(page)).toBeVisible();
     });
 
@@ -425,6 +426,7 @@ test.describe('action dock', () => {
     test('a click pins it open, Escape closes it, and both a team and subagents show', async ({ page }) => {
       await open(page);
       await page.getByRole('button', { name: 'Team', exact: true }).click();
+      await page.getByRole('menuitemradio', { name: 'Balanced team', exact: true }).click();
       await subagent(page, 'a', 'running');
       await agents(page).click();
       await expect(flyout(page).getByRole('dialog', { name: 'Workers', exact: true })).toBeVisible();

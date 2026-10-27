@@ -56,6 +56,7 @@ test.describe('thread header overlay', () => {
     await transcript.evaluate(node => { node.scrollTop = 0; });
     const before = (await box(page, '#transcript .message')).top;
     await page.getByRole('button', { name: 'Team', exact: true }).click();
+    await page.getByRole('menuitemradio', { name: 'Balanced team', exact: true }).click();
     const agents = page.locator('#action-dock #agents-toggle');
     await expect(agents).toBeVisible();
     await expect(page.locator('.architect-trigger')).toBeHidden();

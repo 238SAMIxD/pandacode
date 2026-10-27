@@ -1,7 +1,7 @@
 # Model routing
 
 In an automatic team the lead can let PandaCode pick each worker's model with
-[Panda Router](https://github.com/aicodeking/PandaOrchestrator) (MIT). It runs
+[Panda Router](https://github.com/aicodeking/PandaOrchestrator) v4 (MIT). It runs
 inside PandaCode, in Rust: no Python, no server and no extra install (ONNX
 Runtime is linked into the app). A route takes about 10–25 ms on the CPU, and
 nothing about the task leaves your machine.
@@ -13,8 +13,25 @@ nothing about the task leaves your machine.
    whether tools are required). It outputs a category, a difficulty from 1 to 10,
    the skill levels needed and a few flags.
 2. A deterministic matcher scores model cards (per-model skills, price, context
-   and latency) by P(success), cost and latency, and picks one under the mode.
-3. PandaCode launches the worker with the picked model of its harness.
+   and latency), and a small learned success head calibrates each P(success) with
+   a lower confidence bound. The policy picks one under the mode and also returns an
+   **escalation ladder**: the models to try in order if a pick fails.
+3. PandaCode launches the worker on the ladder's first rung, the cheapest model
+   that is safe to try (Balanced; Cheap uses the first rung whose lower bound clears
+   the minimum chance of success; Best, or no such rung, launches the policy's pick). The
+   dispatch note says so, for example `routed: Haiku · claude (ladder 1/3, opener;
+   policy pick Opus; …)`.
+4. The lead checks each routed result with tests, a typecheck or a review. When a
+   worker fails, or completes with a result that fails that check, the lead can
+   dispatch a replacement with `replaces: <worker ID>` (and optionally
+   `replaceReason`, the check it failed) and `profileId: "auto"`. The router treats every model
+   that failed that assignment (the whole chain of replaced workers) as evidence the
+   task is harder, excludes them, and never steps down: the next rung of the ladder
+   at least as strong as the strongest failed model, else a stronger model, else the
+   strongest left. The dispatch note names the step (`escalation_ladder`,
+   `escalation:stronger` or `escalation:strongest_left`) and the models it passed.
+5. An assignment gets at most 2 retries: once three attempts have failed, any
+   replacement is refused and the lead reports the failure to you instead.
 
 Model names are matched to cards by exact map, then card id or model string,
 loose spelling, vendor prefix, and last a digit-guarded fuzzy match (cutoff 0.75),
@@ -30,13 +47,13 @@ Settings → Agents → Model routing:
 
 - **Pick worker models with Panda Router**: the off switch.
 - **Mode**
-  - *Cheapest that passes* (default): the cheapest model whose P(success) is at
-    least the minimum.
-  - *Balanced*: the highest utility (success against cost and latency).
-  - *Best quality*: the model most likely to succeed.
-- **Minimum chance of success**: shown for Cheapest that passes only. Default 80%,
-  adjustable from 50 to 95%. Upstream uses 75%; PandaCode raises it because a
-  failed worker costs a review round.
+  - *Cheap*: the lowest expected cost whose P(success) lower bound is at least the
+    minimum; when none is, the best that is left (`:relaxed`). A failure escalates.
+  - *Balanced* (default): the highest utility (success against cost and latency).
+  - *Best*: the model most likely to succeed.
+- **Minimum chance of success**: shown for Cheap only. Default 50%, adjustable from
+  30 to 90%, compared with the lower bound of P. A saved 0.8 (the old default)
+  becomes 0.5; any other saved value is kept.
 - **Profiler**: *Ready*, *Downloading…*, *Not downloaded* or *Failed*, with
   **Download** (or **Retry**). *Keyword heuristic: …* (no button) means the profiler
   cannot run on this system — macOS older than 13.4, or ONNX Runtime failed to start —
@@ -44,9 +61,12 @@ Settings → Agents → Model routing:
 - **Route**: describe a task to see the pick and the alternatives, with
   P(success) and estimated cost.
 
-The mode can also be changed from the prompt box: while a task has a team and routing
-is on, a chip after **Team** shows the mode (Cheapest, Balanced, Best) and opens the same
-three choices. It is the same global setting, so it keeps whatever was used last.
+The prompt box's **Team** button (`showTeamMenu` in `src/main.ts`) offers *No team*,
+*Cheap team*, *Balanced team* and *Best team* while routing is on (and *Team*, where the
+lead picks models, while it is off). Each routed kind sets the same global mode with
+`model_routing_configure` and turns on an automatic team (`setTeam`). It is one global
+mode, not a per-task one: switching kinds changes it everywhere, so a running automatic
+team's label and its next routed dispatch follow it.
 
 While routing is off, `profileId: "auto"` is not refused: the worker gets the
 lead's own model (in a named team without the lead's model, the team's first
@@ -61,8 +81,16 @@ and **Route** return a "routing is off" error.
   is not limited by the 24-entry roster, and it is rebuilt each time a team turns
   on. The lead prompt names the number of rated models.
 - Before dispatching, the lead can call `route_models` with several tasks to
-  compare picks. It can pass the models that already failed, and the router
-  escalates past them.
+  compare picks: each answer has the pick, why (`decidedBy`), alternatives and the
+  first four rungs of the ladder. It can pass the models that already failed, oldest
+  first, and the router escalates past them.
+- A replacement dispatched with `replaces` marks the old worker abandoned
+  ("Replaced by worker …: <reason>"), so finishing does not wait on it. Failed workers
+  and completed ones whose result failed the lead's check can be replaced, each once;
+  stopped or unfinished workers cannot (a stop is no verdict on the model).
+- The lead prompt (only while routing is on) says this in one sentence: `auto` starts
+  on the cheapest safe model; verify each routed result; on failure dispatch a
+  replacement with `replaces` and `auto`, at most 2 retries, then report.
 - Named agent teams route only within their own roster.
 - When you name models in your message, the lead uses those.
 
@@ -70,8 +98,9 @@ and **Route** return a "routing is off" error.
 
 The profiler files — `model.int8.onnx` (31 MB) and `tokenizer.json` (3.5 MB) — are
 downloaded once from `raw.githubusercontent.com`, from a pinned commit
-(`f53f30e9712867b353de223460a0b172e7e927b3`) of `aicodeking/PandaOrchestrator`,
-and verified by SHA-256 before use. They go to app data. The request carries no
+(`83e408c794ef1d09b6d13b6ad8734e984f552402`) of `aicodeking/PandaOrchestrator`,
+and verified by SHA-256 before use. They go to `panda-router/v4` in app data; the
+v2 files of earlier releases are deleted once v4 loads. The request carries no
 content from your work. It happens only while routing is enabled and only when a team needs it (turning a team
 on, or a team's first routed dispatch) or when you click **Download** or **Route** in
 Settings, never at launch. After a failed attempt it waits 10 minutes before trying again
@@ -93,12 +122,16 @@ network request.
 ## Where the code lives
 
 - `src-tauri/src/panda_router.rs` and `panda_router/`: the ONNX profiler (`ort`,
-  `tokenizers`) and the MIRT matcher over the model cards. CI (macOS job) checks the
+  `tokenizers`), the MIRT matcher over the model cards, the success head and the v4
+  policy with its escalation ladder. CI (macOS job) checks the
   pinned assets: exact tokenizer ids and well-formed profiles and routes. int8 results
   vary slightly by CPU, so numeric parity with the Python reference (1e-4) runs with
   `PANDA_ROUTER_STRICT=1` on the machine that dumped `data/parity.json`; the matcher
   is pinned exactly by the heuristic parity tests.
 - `src-tauri/src/model_routing.rs`: settings, the download and the IPC.
 - `src-tauri/src/architect/routing.rs`: the team side (`profileId: "auto"`,
-  `route_models`, the catalog).
+  `replaces` and its failure chain, `route_models`, the catalog).
+- Live check with the real profiler: `PANDA_ROUTER_ASSETS=<dir>
+  cargo test --lib live_team_routing -- --ignored --nocapture` prints each pick, its
+  ladder and two escalation steps (`PANDA_ROUTER_MODE=cheapest|quality`).
 - `src/model-routing.ts`: the settings panel.

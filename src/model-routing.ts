@@ -17,9 +17,9 @@ export interface ModelRoutingOptions {
   call<T>(command: string, args?: Record<string, unknown>): Promise<T>;
 }
 
-const MODES: [RoutingMode, string][] = [['cheapest', 'Cheapest that passes'], ['balanced', 'Balanced'], ['quality', 'Best quality']];
-const MIN_P = 50, MAX_P = 95;
-const HELP = 'Panda Router runs locally. For each worker it predicts which of your installed models is likely to succeed and picks one by your mode. Balanced weighs success against cost; Cheapest that passes takes the lowest cost above the minimum success chance; Best quality takes the likeliest to succeed. The first use downloads a 35 MB profiler from GitHub.';
+const MODES: [RoutingMode, string][] = [['cheapest', 'Cheap'], ['balanced', 'Balanced'], ['quality', 'Best']];
+const MIN_P = 30, MAX_P = 90, DEFAULT_P = 50;
+const HELP = 'Panda Router runs locally. For each worker it predicts which of your installed models is likely to succeed and picks one by your mode. Balanced weighs success against cost; Cheap takes the lowest cost above the minimum chance of success and moves up only if review fails; Best takes the likeliest to succeed. The Team button in the prompt box sets the same mode. The first use downloads a 35 MB profiler from GitHub.';
 const money = (usd: number) => usd < 0.01 ? `$${usd.toFixed(4)}` : `$${usd.toFixed(2)}`;
 const percent = (p: number) => `${Math.round(p * 100)}%`;
 
@@ -28,7 +28,7 @@ export function mountModelRouting(host: HTMLElement, options: ModelRoutingOption
     <div class="setting-row"><div><strong>Model routing ${infoMark(HELP, 'About model routing')}</strong></div></div>
     <div class="setting-row"><div><strong>Pick worker models with Panda Router</strong></div><input type="checkbox" class="settings-switch routing-enabled" aria-label="Pick worker models with Panda Router"></div>
     <div class="setting-row"><div><strong>Mode</strong></div><div class="routing-modes" role="radiogroup" aria-label="Routing mode">${MODES.map(([id, label]) => `<button type="button" role="radio" aria-checked="false" tabindex="-1" data-mode="${id}">${label}</button>`).join('')}</div></div>
-    <div class="setting-row routing-minp-row" hidden><div><strong>Minimum chance of success</strong></div><input type="number" class="routing-minp" aria-label="Minimum chance of success in percent" min="50" max="95" step="1"></div>
+    <div class="setting-row routing-minp-row" hidden><div><strong>Minimum chance of success</strong></div><input type="number" class="routing-minp" aria-label="Minimum chance of success in percent" min="${MIN_P}" max="${MAX_P}" step="1"></div>
     <div class="setting-row"><div><strong>Profiler</strong><small class="routing-status" role="status"></small></div><button type="button" class="secondary-button routing-prepare" hidden></button></div>
     <div class="routing-try"><p class="routing-off" hidden>Routing is off. Turn it on to try it.</p><textarea class="routing-text" aria-label="Task to route" rows="3" spellcheck="false" placeholder="Describe a task to see which model Panda Router would pick."></textarea>
       <div class="routing-try-actions"><button type="button" class="secondary-button routing-route">Route</button></div>
@@ -61,7 +61,7 @@ export function mountModelRouting(host: HTMLElement, options: ModelRoutingOption
 
   const render = (next: RoutingStatus) => {
     status = next;
-    // The composer's worker-models chip follows every status shown here.
+    // The composer's Team button follows every status shown here.
     window.dispatchEvent(new CustomEvent('pandacode:routing', { detail: next }));
     enabled.checked = next.enabled;
     modes.querySelectorAll<HTMLButtonElement>('button').forEach(b => {
@@ -94,7 +94,7 @@ export function mountModelRouting(host: HTMLElement, options: ModelRoutingOption
     next.focus(); void configure({ mode: next.dataset.mode });
   });
   minP.addEventListener('change', () => {
-    const value = Math.min(MAX_P, Math.max(MIN_P, Math.round(Number(minP.value)) || MIN_P));
+    const value = Math.min(MAX_P, Math.max(MIN_P, Math.round(Number(minP.value)) || DEFAULT_P));
     minP.value = String(value);
     void configure({ minP: value / 100 });
   });
