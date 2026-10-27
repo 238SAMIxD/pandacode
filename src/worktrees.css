@@ -55,4 +55,4 @@ html[data-theme="dark"] .branch-chip:not(:disabled):active{background:color-mix(
 .worktree-cleanup-option{display:flex;align-items:flex-start;gap:10px;margin:6px 0 0;padding:11px 12px;border-radius:var(--radius-sm);background:var(--panel);font-size:var(--text-sm);line-height:1.5}
 .worktree-cleanup-option input{margin-top:2px}
 dialog .worktree-cleanup-option{background:color-mix(in srgb,var(--panel) 72%,transparent)}
-@media(prefers-contrast:more){.link-chip{border-color:var(--text)}.branch-chip[aria-expanded="true"]{outline:1px solid var(--focus);outline-offset:-1px}}
+@media(prefers-contrast:more){.link-chip{border:1px solid var(--text)}.branch-chip[aria-expanded="true"]{outline:1px solid var(--focus);outline-offset:-1px}}

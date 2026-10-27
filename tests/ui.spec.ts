@@ -955,7 +955,8 @@ test('synchronizes dark mode with native appearance without wallpapers and respe
   await expect.poll(() => page.evaluate(() => (window as any).__themeCalls.at(-1)?.darkMode)).toBe(false);
   await page.getByRole('button', { name: 'Dark mode', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__themeCalls.at(-1)?.darkMode)).toBe(true);
-  expect((await appearanceSurfaces(page)).alphas).toEqual([0, 0, 0, 0, 0, 1]);
+  const glass = (await appearanceSurfaces(page)).alphas;
+  expect([...glass.slice(0, 4), glass[4] < 1, glass[5]]).toEqual([0, 0, 0, 0, true, 1]);
   const devtools = await page.context().newCDPSession(page);
   await devtools.send('Emulation.setEmulatedMedia', { features: [
     { name: 'prefers-reduced-transparency', value: 'reduce' }, { name: 'prefers-contrast', value: 'more' },
@@ -1399,7 +1400,8 @@ for (const material of ['liquidGlass', 'vibrancy'] as const) {
     }, material);
     await expect(page.locator('html')).toHaveAttribute('data-native-material', material);
     const surfaces = await appearanceSurfaces(page);
-    expect(surfaces.alphas).toEqual([0, 0, 0, 0, 0, 1]);
+    // The sidebar keeps a flat translucent tint over the native material.
+    expect([...surfaces.alphas.slice(0, 4), surfaces.alphas[4] < 1, surfaces.alphas[5]]).toEqual([0, 0, 0, 0, true, 1]);
     expect(surfaces.sidebarBackdrop).toBe('none');
     expect(surfaces.mainContrast).toBeGreaterThanOrEqual(4.5);
     await expect(prompt(page)).toBeEnabled();

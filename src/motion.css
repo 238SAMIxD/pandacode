@@ -118,7 +118,7 @@ html[data-theme="dark"] .composer:focus-within{box-shadow:0 0 0 3px rgb(var(--ac
   dialog .settings-tabs{background:var(--raised)}
 }
 @media(prefers-contrast:more){
-  .dialog-plate,.toast{border-color:var(--border)}
+  .dialog-plate,.toast{border:1px solid var(--border)}
   [data-segmented]>button:is([aria-pressed="true"],[aria-selected="true"],.selected){outline:1px solid var(--text);outline-offset:-1px}
 }
 

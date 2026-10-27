@@ -24,7 +24,7 @@ async function expectClearBars(page: Page) {
     await expect(bar).toHaveCSS('background-image', 'none');
     await expect(bar).toHaveCSS('backdrop-filter', 'none');
     await expect(bar).toHaveCSS('border-top-width', '0px');
-    await expect(bar).toHaveCSS('border-bottom-width', '1px');
+    await expect(bar).toHaveCSS('border-bottom-width', '0px');
   }
 }
 
