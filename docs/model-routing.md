@@ -89,8 +89,11 @@ network request.
 ## Where the code lives
 
 - `src-tauri/src/panda_router.rs` and `panda_router/`: the ONNX profiler (`ort`,
-  `tokenizers`) and the MIRT matcher over the model cards. CI runs ONNX parity
-  tests against the pinned assets.
+  `tokenizers`) and the MIRT matcher over the model cards. CI (macOS job) checks the
+  pinned assets: exact tokenizer ids and well-formed profiles and routes. int8 results
+  vary slightly by CPU, so numeric parity with the Python reference (1e-4) runs with
+  `PANDA_ROUTER_STRICT=1` on the machine that dumped `data/parity.json`; the matcher
+  is pinned exactly by the heuristic parity tests.
 - `src-tauri/src/model_routing.rs`: settings, the download and the IPC.
 - `src-tauri/src/architect/routing.rs`: the team side (`profileId: "auto"`,
   `route_models`, the catalog).
