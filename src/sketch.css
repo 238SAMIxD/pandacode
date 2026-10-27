@@ -12,15 +12,15 @@ dialog.sketch-dialog .dialog-heading{flex-shrink:0}
 .sketch-tool,.sketch-group .icon-button{width:30px;height:28px;border-radius:var(--radius-sm);color:var(--muted);display:inline-flex;align-items:center;justify-content:center}
 .sketch-tool .icon,.sketch-group .icon-button .icon{width:15px;height:15px}
 .sketch-tool:hover,.sketch-option:hover,.sketch-group .icon-button:hover:not(:disabled){color:var(--text);background:color-mix(in srgb,var(--panel) 70%,transparent)}
-.sketch-tool[aria-pressed=true],.sketch-option[aria-pressed=true],html[data-theme="dark"] :is(.sketch-tool,.sketch-option)[aria-pressed=true]{color:var(--on-accent);background:var(--accent);box-shadow:inset 0 1px 0 rgb(255 255 255 / .45)}
+.sketch-tool[aria-pressed=true],.sketch-option[aria-pressed=true],html[data-theme="dark"] :is(.sketch-tool,.sketch-option)[aria-pressed=true]{color:var(--on-accent);background:var(--accent)}
 .sketch-group .icon-button:disabled{opacity:.4}
 .sketch-option{height:28px;padding:0 9px;border-radius:var(--radius-sm);font-size:var(--text-2xs);font-weight:550;color:var(--muted);display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
 .sketch-option .icon{width:13px;height:13px}
-.sketch-swatch{width:22px;height:22px;margin:0 2px;border-radius:50%;background:var(--swatch);border:2px solid transparent;box-shadow:inset 0 0 0 1px rgb(0 0 0 / .12)}
-.sketch-swatch[aria-pressed=true]{border-color:var(--panel);box-shadow:0 0 0 2px var(--swatch)}
+.sketch-swatch{width:22px;height:22px;margin:0 2px;border-radius:50%;background:var(--swatch)}
+.sketch-swatch[aria-pressed=true]{scale:1.25}
 .sketch-select{display:inline-flex;align-items:center;gap:6px;font-size:var(--text-2xs);color:var(--muted);font-weight:550;padding:0 4px 0 8px}
-.sketch-select select{height:24px;border-radius:var(--radius-xs);border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:var(--text-2xs);padding:0 6px}
-.sketch-stage{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;border-radius:var(--radius-sm);background:color-mix(in srgb,var(--raised) 60%,transparent);border:1px solid var(--border);overflow:hidden;padding:12px}
+.sketch-select select{height:24px;border-radius:var(--radius-xs);border:0;background:var(--fill-hover);color:var(--text);font-size:var(--text-2xs);padding:0 6px}
+.sketch-stage{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;border-radius:var(--radius-sm);background:color-mix(in srgb,var(--raised) 60%,transparent);overflow:hidden;padding:12px}
 .sketch-paper{position:relative;flex-shrink:0;box-shadow:0 1px 2px rgb(0 0 0 / .08),0 14px 40px -18px rgb(0 0 0 / .35);border-radius:var(--radius-xs);overflow:hidden;background:#fff}
 .sketch-paper canvas{display:block;touch-action:none;outline:none}
 .sketch-paper canvas:focus-visible{box-shadow:inset 0 0 0 2px var(--focus)}
