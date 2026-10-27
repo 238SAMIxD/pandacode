@@ -479,7 +479,8 @@ pub fn validate_reasoning_effort(provider: &str, effort: Option<&str>) -> Result
             ["low", "medium", "high", "xhigh", "max"].contains(&value)
         }
         // The current app-server schema deliberately permits catalog-defined effort IDs.
-        ("codex" | "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "kilo" | "devin" | "zcode" | "hermes", Some(value)) => {
+        // Kimi's thinking option lists on/off or the model's levels (low/high/max).
+        ("codex" | "kimi" | "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "kilo" | "devin" | "zcode" | "hermes", Some(value)) => {
             !value.is_empty()
                 && value.len() <= 64
                 && value
@@ -487,7 +488,6 @@ pub fn validate_reasoning_effort(provider: &str, effort: Option<&str>) -> Result
                     .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
         }
         ("pi" | "omp", Some(value)) => ["off", "minimal", "low", "medium", "high", "xhigh"].contains(&value),
-        ("kimi", Some(value)) => ["on", "off"].contains(&value),
         ("muse", Some(value)) => muse::valid_effort(value),
         _ => false,
     };
@@ -1299,7 +1299,7 @@ impl Protocol {
                     .flatten()
                     .take(8)
                     .filter_map(|option| option["value"].as_str())
-                    .filter(|value| ["on", "off"].contains(value))
+                    .filter(|value| validate_reasoning_effort("kimi", Some(value)).is_ok())
                     .map(str::to_owned)
                     .collect();
             }
@@ -3635,7 +3635,8 @@ mod tests {
         assert!(models[2].reasoning_efforts.is_empty());
         assert_eq!(models[3].context_window, None);
         assert!(validate_reasoning_effort("claude", Some("ultra")).is_err());
-        assert!(validate_reasoning_effort("kimi", Some("high")).is_err());
+        assert!(validate_reasoning_effort("kimi", Some("high")).is_ok());
+        assert!(validate_reasoning_effort("kimi", Some("high level")).is_err());
         assert!(validate_reasoning_effort("codex", Some("future_effort")).is_ok());
         assert!(validate_reasoning_effort("codex", Some("")).is_err());
     }
@@ -3728,6 +3729,22 @@ mod tests {
             &json!({"configOptions":[{"id":"thinking","options":[{"value":"on"}]}]}),
         );
         assert!(p.receive(json!({"id":4,"result":{}})).is_err());
+    }
+
+    /// Recorded from Kimi Code 2.3.1 `acp` after `session/set_config_option` model=kimi-code/k3.1-pro.
+    #[test]
+    fn kimi_sets_a_recorded_thinking_level() {
+        let mut cfg = config("kimi");
+        cfg.model = "kimi-code/k3.1-pro".into();
+        cfg.reasoning_effort = Some("low".into());
+        let mut p = Protocol::new(cfg);
+        p.remote_id = "remote".into();
+        p.receive(json!({"id":4,"result":{}})).unwrap();
+        p.receive(json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote","update":{"sessionUpdate":"config_option_update","configOptions":[
+            {"type":"select","id":"thinking","name":"Thinking","category":"thought_level","currentValue":"max","options":[{"value":"low","name":"Thinking Low"},{"value":"high","name":"Thinking High"},{"value":"max","name":"Thinking Max"}]}]}}})).unwrap();
+        let thinking = p.receive(json!({"id":5,"result":{}})).unwrap();
+        assert_eq!(thinking.write[0]["params"]["configId"], "thinking");
+        assert_eq!(thinking.write[0]["params"]["value"], "low");
     }
 
     #[test]
