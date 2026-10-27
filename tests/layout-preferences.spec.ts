@@ -319,15 +319,12 @@ test('layout preferences keep controls readable at 160 percent in wide and narro
     await expect(inspector).toBeVisible();
     await expect.poll(() => rootSize(page)).toBeCloseTo(22.4, 2);
     await expect.poll(() => sidebarWidth(page)).toBe(190);
-    const breadcrumb = await page.locator('.breadcrumb').boundingBox();
     const actions = await page.locator('#action-dock').boundingBox();
     const header = await page.locator('.workspace-header').boundingBox();
-    expect(breadcrumb).not.toBeNull();
     expect(actions).not.toBeNull();
     expect(header).not.toBeNull();
-    // The action dock floats below the header here; in a header row it would follow the breadcrumb.
-    if (actions!.y < header!.y + header!.height) expect(breadcrumb!.x + breadcrumb!.width).toBeLessThanOrEqual(actions!.x + .5);
-    else expect(actions!.y).toBeGreaterThanOrEqual(header!.y + header!.height);
+    // The project name no longer shows at the top; the dock floats below the header or sits in its row.
+    await expect(page.locator('.breadcrumb')).toBeHidden();
     expect(actions!.x + actions!.width).toBeLessThanOrEqual(header!.x + header!.width + .5);
     expect(actions!.x + actions!.width).toBeLessThanOrEqual(width + .5);
     const projectLabel = page.locator('.breadcrumb > button');

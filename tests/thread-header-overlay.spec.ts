@@ -13,16 +13,16 @@ async function openThread(page: Page, width = 1200): Promise<void> {
 
 test.describe('thread header overlay', () => {
   for (const width of [1200, 900, 620]) {
-    test(`the transcript scrolls under a blurred header at ${width}px`, async ({ page }) => {
+    test(`the transcript fades out under the bare header at ${width}px`, async ({ page }) => {
       await openThread(page, width);
       const header = page.locator('.workspace-header');
-      const style = await header.evaluate(node => {
-        const band = getComputedStyle(node, '::before');
-        return { position: getComputedStyle(node).position, blur: band.backdropFilter || band.getPropertyValue('-webkit-backdrop-filter'), mask: band.maskImage || band.getPropertyValue('-webkit-mask-image') };
-      });
+      // No top bar: the header paints nothing and the transcript fades itself out under it.
+      const style = await header.evaluate(node => ({ position: getComputedStyle(node).position, band: getComputedStyle(node, '::before').content, fill: getComputedStyle(node).backgroundColor, mask: (s => s.maskImage || s.getPropertyValue('-webkit-mask-image'))(getComputedStyle(document.querySelector('#transcript')!)) }));
       expect(style.position).toBe('relative');
-      expect(style.blur).toContain('blur');
+      expect(style.band).toBe('none');
+      expect(style.fill).toBe('rgba(0, 0, 0, 0)');
       expect(style.mask).toContain('gradient');
+      await expect(page.locator('#breadcrumb')).toBeHidden();
 
       const headerBottom = (await box(page, '.workspace-header')).bottom;
       const transcript = page.locator('#transcript');
@@ -31,7 +31,7 @@ test.describe('thread header overlay', () => {
       await transcript.evaluate(node => { node.scrollTop = 0; });
       expect((await box(page, '#transcript .message')).top).toBeGreaterThanOrEqual(headerBottom);
 
-      await transcript.evaluate(node => { node.scrollTop = 40; });
+      await transcript.evaluate(node => { node.scrollTop = 90; });
       expect(await transcript.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
       expect((await box(page, '#transcript .message')).top).toBeLessThan(headerBottom);
 
@@ -63,7 +63,7 @@ test.describe('thread header overlay', () => {
     await page.locator('#transcript').evaluate(node => { node.scrollTop = 0; });
     const first = await box(page, '#transcript .message');
     expect(first.top).toBeGreaterThanOrEqual(bar.bottom);
-    await page.locator('#transcript').evaluate(node => { node.scrollTop = 40; });
+    await page.locator('#transcript').evaluate(node => { node.scrollTop = 90; });
     expect((await box(page, '#transcript .message')).top).toBeLessThan(bar.bottom);
     await expect(trigger).toBeVisible();
   });
