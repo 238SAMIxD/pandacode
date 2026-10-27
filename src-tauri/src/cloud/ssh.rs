@@ -48,7 +48,7 @@ pub fn key_pair() -> Result<(PathBuf, String)> {
     let file = dir.join("vps-key");
     let private = match super::secret("vps_key") {
         Some(private) => private,
-        None => generate(&dir)?,
+        None => generate(dir)?,
     };
     write_private(&file, private.as_bytes())?;
     Ok((file.clone(), public_of_cached(&private, &file)?))

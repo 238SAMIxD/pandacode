@@ -457,7 +457,7 @@ mod tests {
     fn missing_env_and_malformed_entries_report_per_bot() {
         let store = store();
         let root = root();
-        let var = format!("TEST_TOKEN_{}", uuid::Uuid::new_v4().simple().to_string());
+        let var = format!("TEST_TOKEN_{}", uuid::Uuid::new_v4().simple());
         let doc: Value = serde_json::from_str(&format!(
             r#"{{"bots": [
                 {{"name": "tg", "provider": "claude", "model": "sonnet", "mode": "auto",

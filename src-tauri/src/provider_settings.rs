@@ -1449,7 +1449,7 @@ mod tests {
         insert_env_var(&mut environment, "claude", "HTTPS_PROXY", "http://127.0.0.1:1080").unwrap();
         assert_eq!(environment["claude"]["HTTPS_PROXY"], "http://127.0.0.1:1080");
         assert!(drop_env_var(&mut environment, "claude", "HTTPS_PROXY"));
-        assert!(environment.get("claude").is_none(), "the last variable prunes the provider");
+        assert!(!environment.contains_key("claude"), "the last variable prunes the provider");
         assert!(!drop_env_var(&mut environment, "claude", "HTTPS_PROXY"), "removing is idempotent");
         insert_env_var(&mut environment, "claude", "A", "1").unwrap();
         for index in 1..MAX_ENV {

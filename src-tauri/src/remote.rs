@@ -658,7 +658,7 @@ mod tests {
         assert_eq!(settings.account.as_ref().unwrap().login, "octocat");
         assert_ne!(settings.device_id, first, "a 409 made this a new device");
         assert_eq!(secrets::read(&dir).token.as_deref(), Some(relay_token(&settings.device_id).as_str()));
-        assert_eq!(config::load(&dir).host_enabled, true);
+        assert!(config::load(&dir).host_enabled);
         assert_eq!(seen.lock().unwrap().len(), 2, "the 409 retried once");
         let _ = std::fs::remove_dir_all(dir);
     }

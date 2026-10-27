@@ -221,7 +221,7 @@ fn valid_name(name: &str) -> Result<&str> {
         && name.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
         && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
         && !name.ends_with('-');
-    ok.then_some(name).ok_or_else(|| "Vultr names use lowercase letters, digits and dashes, starting with a letter or digit (up to 63).".to_string().into())
+    ok.then_some(name).ok_or_else(|| "Vultr names use lowercase letters, digits and dashes, starting with a letter or digit (up to 63).".to_string())
 }
 
 pub fn connect(key: &str, options: &Value) -> Result<()> {

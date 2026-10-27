@@ -40,7 +40,7 @@ pub fn connections() -> Vec<Connection> {
         Connection { provider: "railway", connected: super::secret("railway_token").is_some(), sandboxes: None, inherit_environment: None, detail: settings.railway_workspace },
         Connection { provider: "netlify", connected: super::secret("netlify_token").is_some(), sandboxes: None, inherit_environment: None, detail: settings.providers.get("netlify").and_then(|options| options.get("siteId").cloned()) },
         Connection { provider: "gcloud", connected: settings.gcloud_project.is_some(), sandboxes: None, inherit_environment: inherits_environment(&settings.providers, "gcloud"), detail: settings.gcloud_project.map(|project| match settings.gcloud_region { Some(region) => format!("{project} · {region}"), None => project }) },
-        Connection { provider: "docker", connected: settings.providers.get("docker").is_some(), sandboxes: None, inherit_environment: inherits_environment(&settings.providers, "docker"), detail: settings.providers.get("docker").and_then(|options| options.get("detail").cloned()) },
+        Connection { provider: "docker", connected: settings.providers.contains_key("docker"), sandboxes: None, inherit_environment: inherits_environment(&settings.providers, "docker"), detail: settings.providers.get("docker").and_then(|options| options.get("detail").cloned()) },
     ]
     .into_iter()
     .chain(super::sandbox::KEYED.iter().map(|&provider| Connection { provider, connected: super::sandbox::ready(provider), sandboxes: None, inherit_environment: inherits_environment(&settings.providers, provider), detail: settings.providers.get(provider).and_then(|options| options.get("detail").cloned()) }))

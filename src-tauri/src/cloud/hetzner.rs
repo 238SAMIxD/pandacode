@@ -115,7 +115,7 @@ impl Hetzner {
     }
     async fn action(&self, native: &str, kind: &str) -> Result<u64> {
         let made = self.api(reqwest::Method::POST, &format!("/servers/{native}/actions/{kind}"), None).await?;
-        made["action"]["id"].as_u64().ok_or_else(|| "Hetzner did not report the power action.".to_string().into())
+        made["action"]["id"].as_u64().ok_or_else(|| "Hetzner did not report the power action.".to_string())
     }
     async fn wait_action(&self, id: u64) -> Result<()> {
         for _ in 0..ACTION_TRIES {
@@ -225,7 +225,7 @@ fn valid_name(name: &str) -> Result<&str> {
         && name.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
         && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
         && !name.ends_with('-');
-    ok.then_some(name).ok_or_else(|| "Hetzner names use lowercase letters, digits and dashes, starting with a letter or digit (up to 63).".to_string().into())
+    ok.then_some(name).ok_or_else(|| "Hetzner names use lowercase letters, digits and dashes, starting with a letter or digit (up to 63).".to_string())
 }
 
 pub fn connect(key: &str, options: &Value) -> Result<()> {

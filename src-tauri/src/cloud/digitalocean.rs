@@ -162,7 +162,7 @@ impl DigitalOcean {
         Ok(self.api(reqwest::Method::GET, &format!("/droplets/{id}"), None).await?["droplet"]["status"].as_str().unwrap_or_default().to_string())
     }
     fn action_id(made: &Value) -> Result<u64> {
-        made["action"]["id"].as_u64().ok_or_else(|| "DigitalOcean did not report the power action.".to_string().into())
+        made["action"]["id"].as_u64().ok_or_else(|| "DigitalOcean did not report the power action.".to_string())
     }
     async fn exists(&self, id: &str) -> Result<bool> {
         let page = self.api(reqwest::Method::GET, "/droplets?tag_name=pandacode&per_page=200", None).await?;
@@ -231,7 +231,7 @@ fn valid_name(name: &str) -> Result<&str> {
         && name.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
         && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
         && !name.ends_with('-');
-    ok.then_some(name).ok_or_else(|| "DigitalOcean names use lowercase letters, digits and dashes, starting with a letter or digit (up to 63).".to_string().into())
+    ok.then_some(name).ok_or_else(|| "DigitalOcean names use lowercase letters, digits and dashes, starting with a letter or digit (up to 63).".to_string())
 }
 
 pub fn connect(key: &str, options: &Value) -> Result<()> {

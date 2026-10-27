@@ -350,7 +350,7 @@ impl Protocol {
                         self.claude_message_id = id.to_owned();
                         self.zcode.reasoning = false;
                     }
-                    self.text_delta(id, None, &field(payload, "delta"), step);
+                    self.text_delta(id, None, field(payload, "delta"), step);
                 }
                 "reasoning_delta" if !self.zcode.reasoning => {
                     self.zcode.reasoning = true;
@@ -363,8 +363,8 @@ impl Protocol {
                 match field(payload, "kind") {
                     "scheduled" | "started" => {
                         self.tool_update(
-                            &id,
-                            Some(&field(payload, "toolName")),
+                            id,
+                            Some(field(payload, "toolName")),
                             Some("running"),
                             payload["input"]
                                 .as_object()
@@ -381,8 +381,8 @@ impl Protocol {
                             "failed"
                         };
                         self.tool_update(
-                            &id,
-                            Some(&field(payload, "toolName")),
+                            id,
+                            Some(field(payload, "toolName")),
                             Some(status),
                             None,
                             Some(content_preview(&result["content"], TOOL_OUTPUT_LIMIT)),
@@ -390,8 +390,8 @@ impl Protocol {
                         );
                     }
                     "error" => self.tool_update(
-                        &id,
-                        Some(&field(payload, "toolName")),
+                        id,
+                        Some(field(payload, "toolName")),
                         Some("failed"),
                         None,
                         Some(content_preview(&payload["error"], TOOL_OUTPUT_LIMIT)),
@@ -549,7 +549,7 @@ mod tests {
         json!({
             "protocol": {"name": "ZCode Protocol", "version": 1},
             "session": {
-                "createdAt": 1792931010147 as u64, "mode": "build",
+                "createdAt": 1792931010147_u64, "mode": "build",
                 "model": {"providerId": "omnirouter", "modelId": "zcproxy/GLM-5.3"},
                 "sessionId": "sess_540e3d16-8f19-449f-8576-7b0133fea47a",
                 "sessionKind": "interactive", "status": "idle", "title": "",

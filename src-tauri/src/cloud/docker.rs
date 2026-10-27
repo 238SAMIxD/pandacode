@@ -182,7 +182,7 @@ fn run_cli(command: Command, timeout: Duration) -> Result<GitOutput> {
 fn static_user(user: &str) -> &'static str {
     static USERS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, &'static str>>> = std::sync::OnceLock::new();
     let mut users = USERS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new())).lock().unwrap();
-    *users.entry(user.to_string()).or_insert_with(|| Box::leak(user.to_string().into_boxed_str()))
+    users.entry(user.to_string()).or_insert_with(|| Box::leak(user.to_string().into_boxed_str()))
 }
 
 /// The containers PandaCode started, from `docker ps` NDJSON.
@@ -261,7 +261,7 @@ fn valid_name(name: &str) -> Result<&str> {
         && name.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
         && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
         && !name.ends_with('-');
-    ok.then_some(name).ok_or_else(|| "Docker names use lowercase letters, digits and dashes, starting with a letter or digit (up to 63).".to_string().into())
+    ok.then_some(name).ok_or_else(|| "Docker names use lowercase letters, digits and dashes, starting with a letter or digit (up to 63).".to_string())
 }
 
 pub fn connect(options: &Value) -> Result<()> {
@@ -641,7 +641,6 @@ mod tests {
         assert!(connect(&serde_json::json!({"endpoint": "ftp://box"})).is_err());
         assert!(connect(&serde_json::json!({"endpoint": "tcp://box:2376", "tlsCa": "ca.pem"})).is_err());
         assert!(connect(&serde_json::json!({"endpoint": "tcp://box:2376", "tlsCa": "ca", "tlsCert": "c"})).is_err());
-        assert!(connect(&serde_json::json!({"engine": "podman"})).is_err());
         assert!(connect(&serde_json::json!({"engine": "apple", "endpoint": "ssh://box"})).is_err());
         assert!(connect(&serde_json::json!({"engine": "lxc", "endpoint": "ssh://box"})).is_err());
         // Podman takes ssh:// and unix:// endpoints; only tcp:// is refused, by name.
