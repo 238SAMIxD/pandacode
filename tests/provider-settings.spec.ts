@@ -522,7 +522,7 @@ test('Hermes Agent has an install card, four approval modes, and executable sett
   await expect(card).toContainText('hermes acp');
   await expect(card.getByRole('link', { name: 'Hermes docs' })).toHaveAttribute('href', 'https://hermes-agent.org');
   await expect(card.getByRole('link', { name: 'GitHub repository' })).toHaveAttribute('href', 'https://github.com/NousResearch/hermes-agent');
-  await card.locator('summary').click();
+  await card.locator('details.connection-path > summary').click();
   await expect(card.getByLabel('Hermes Agent executable', { exact: true })).toBeVisible();
 });
 

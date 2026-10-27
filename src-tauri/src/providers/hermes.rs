@@ -11,7 +11,7 @@ pub(super) fn configure(command: &mut Command, config: &RunConfig) {
 }
 
 pub(crate) fn configure_command(command: &mut Command, path: &Path) {
-    if !path.file_stem().is_some_and(|name| name == "hermes-acp") {
+    if path.file_stem().is_none_or(|name| name != "hermes-acp") {
         command.arg("acp");
     }
 }
