@@ -1,7 +1,7 @@
 /* Settings → Skills & rules. */
 .skills-import{display:flex;flex-direction:column;gap:8px;padding:.9rem 1rem}
 .skills-import-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.skills-import input,.skills-import select{flex:1;min-width:8rem;height:32px;padding:0 10px;border-radius:var(--radius-sm);border:1px solid color-mix(in srgb,var(--text) 12%,transparent);background:color-mix(in srgb,var(--text) 4%,transparent);color:var(--text);font:inherit;font-size:var(--text-sm)}
+.skills-import input,.skills-import select{flex:1;min-width:8rem;height:32px;padding:0 10px;border-radius:var(--radius-sm);background:color-mix(in srgb,var(--text) 4%,transparent);color:var(--text);font:inherit;font-size:var(--text-sm)}
 .skills-import select{flex:0 1 auto}
 .skills-import input:focus-visible,.skills-import select:focus-visible,.skills-toggle input:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
 .skills-import-actions{justify-content:space-between}
@@ -9,7 +9,7 @@
 .skills-error{margin:0;font-size:var(--text-xs);color:var(--danger)}
 .skills-list{list-style:none;margin:0;padding:0}
 .skills-item{padding:.8rem 1rem;display:flex;flex-direction:column;gap:8px}
-.skills-item+.skills-item{border-top:1px solid var(--border)}
+.skills-item+.skills-item{}
 .skills-item-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
 .skills-item-head small{display:block;font-size:var(--text-xs);color:var(--muted);margin-top:2px;overflow-wrap:anywhere}
 .skills-kind{margin-left:8px;padding:1px 6px;border-radius:var(--radius-sm);font-size:var(--text-2xs);background:rgb(var(--accent-rgb) / .14);color:var(--text)}
@@ -24,7 +24,7 @@
 .skills-empty,.skills-note{margin:.2rem 0 .6rem;font-size:var(--text-xs);color:var(--muted)}
 .skills-matrix-wrap{overflow-x:auto}
 .skills-matrix{border-collapse:collapse;width:100%;font-size:var(--text-xs)}
-.skills-matrix th,.skills-matrix td{padding:6px 8px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap}
+.skills-matrix th,.skills-matrix td{padding:6px 8px;text-align:left;white-space:nowrap}
 .skills-matrix thead th small{display:block;font-weight:normal;color:var(--muted)}
 .skills-status[data-status="off"]{color:var(--muted)}
 .skills-status[data-status="active"],.skills-status[data-status="prompt"]{color:var(--text)}
@@ -37,3 +37,6 @@
 .skills-catalog-skill code{font-size:var(--text-xs);color:var(--muted)}
 .skills-catalog-skill .skills-conflict{color:var(--danger)}
 .skills-item-head .skills-confirm{flex-wrap:nowrap}
+.skills-item:nth-child(even){background:color-mix(in srgb,var(--text) 3.5%,transparent)}
+.skills-import input,.skills-import select{background:color-mix(in srgb,var(--text) 6%,transparent)}
+.skills-matrix thead th{background:color-mix(in srgb,var(--text) 3.5%,transparent)}

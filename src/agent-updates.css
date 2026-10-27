@@ -6,7 +6,7 @@ dialog.agent-updates-dialog{width:min(620px,calc(100vw - 32px));max-height:85dvh
 .agent-update-later:hover,.agent-updates-details:hover,.agent-update-guide:hover{color:var(--text)}
 .agent-updates-list{list-style:none;padding:0;margin:0;min-width:0}
 .agent-updates-popup>.agent-updates-list{overflow:auto;min-height:0}
-.agent-update-row{padding:12px 0;border-bottom:1px solid color-mix(in srgb,var(--border) 65%,transparent);min-width:0}
+.agent-update-row{padding:12px 0;min-width:0}
 .agent-update-row:last-child{border-bottom:0}
 .agent-update-main{display:flex;align-items:center;gap:9px;min-width:0}
 .agent-update-main>.provider-logo{width:21px;height:21px;flex-shrink:0}
@@ -28,3 +28,4 @@ dialog.agent-updates-dialog{width:min(620px,calc(100vw - 32px));max-height:85dvh
 .agent-updates-empty{padding:24px 0;text-align:center;color:var(--muted);font-size:var(--text-sm)}
 @media(max-width:540px){.agent-updates-popup.floating-menu{right:12px;padding:12px}.agent-update-main{gap:7px}.agent-update-copy{gap:5px}.agent-update-copy>strong{max-width:42%}.agent-update-state{max-width:75px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.agent-update-version{flex:1}.agent-update-button{padding:5px 7px}}
 @media(prefers-contrast:more){.agent-update-row{border-color:var(--border)}}
+.agent-update-row:nth-child(even){background:color-mix(in srgb,var(--text) 3.5%,transparent)}
