@@ -20,11 +20,11 @@ dialog.moodboards-dialog[open]{display:flex;flex-direction:column}
 .moodboard-content{display:flex;flex-direction:column;min-width:0;min-height:0}
 .moodboard-toolbar{display:flex;gap:.65rem;align-items:center;padding:.1rem 0 .9rem}
 .moodboard-toolbar[hidden],.moodboard-footer[hidden],.moodboard-delete-confirm[hidden]{display:none}
-html[data-theme] .moodboard-title{min-width:0;width:auto;flex:1;font-size:var(--text-lg);font-weight:var(--weight-strong);letter-spacing:-.02em;background:transparent;border:1px solid transparent;padding:.4rem .35rem;box-shadow:none}
-.moodboard-title:hover{border-color:var(--border)}
+html[data-theme] .moodboard-title{min-width:0;width:auto;flex:1;font-size:var(--text-lg);font-weight:var(--weight-strong);letter-spacing:-.02em;background:transparent;border:0;padding:.4rem .35rem}
+.moodboard-title:hover{background:var(--fill-hover)}
 .moodboard-toolbar .secondary-button,.moodboard-footer .primary-button{font-size:var(--text-xs);gap:.4rem;padding:.55rem .7rem;white-space:nowrap}
 .moodboard-canvas{min-height:0;flex:1;overflow:auto;border-radius:var(--radius-md);scrollbar-width:thin;outline-offset:-3px;transition:background-color 100ms}
-.moodboard-canvas.is-dragging{background:color-mix(in srgb,var(--accent) 14%,transparent);outline:2px dashed var(--accent);outline-offset:-3px}
+.moodboard-canvas.is-dragging{background:color-mix(in srgb,var(--accent) 22%,transparent)}
 .moodboard-empty{height:100%;min-height:16rem;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:2rem;gap:.8rem;color:var(--muted)}
 .moodboard-empty>.icon{width:2rem;height:2rem;opacity:.7}
 .moodboard-empty h3{margin:0;font-size:var(--text-lg);font-weight:var(--weight-medium);letter-spacing:-.02em;color:var(--text)}
@@ -39,8 +39,8 @@ html[data-theme] .moodboard-title{min-width:0;width:auto;flex:1;font-size:var(--
 .moodboard-image-meta>span{font-size:var(--text-xs);white-space:nowrap;text-overflow:ellipsis;overflow:hidden;min-width:0;flex:1}
 .moodboard-image-meta .icon-button{width:1.6rem;height:1.6rem;flex-shrink:0;color:var(--muted)}
 .moodboard-image-meta .icon-button .icon{width:.8rem;height:.8rem}
-.moodboard-image-card textarea{display:block;resize:vertical;width:calc(100% - .85rem);min-height:3rem;max-height:8rem;margin:.1rem .425rem .5rem;padding:.35rem .2rem;background:transparent;border:1px solid transparent;box-shadow:none;border-radius:var(--radius-xs);font:inherit;font-size:var(--text-xs);color:var(--muted);line-height:1.5}
-.moodboard-image-card textarea:focus{color:var(--text);border-color:var(--border)}
+.moodboard-image-card textarea{display:block;resize:vertical;width:calc(100% - .85rem);min-height:3rem;max-height:8rem;margin:.1rem .425rem .5rem;padding:.35rem .2rem;background:transparent;border:0;border-radius:var(--radius-xs);font:inherit;font-size:var(--text-xs);color:var(--muted);line-height:1.5}
+.moodboard-image-card textarea:focus{color:var(--text);background:var(--fill-hover)}
 .moodboard-footer{display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding:.85rem .2rem 0;font-size:var(--text-2xs);color:var(--muted)}
 .moodboard-status{min-height:1.3rem;font-size:var(--text-xs);color:var(--muted);margin:.65rem 0 0;line-height:1.5}
 .moodboard-status[data-error=true]{color:var(--danger)}
