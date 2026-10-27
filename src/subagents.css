@@ -1,12 +1,4 @@
-.subagents-host{position:relative;display:flex;justify-content:flex-end;flex-shrink:0;padding:8px 24px 0;z-index:4;pointer-events:none}
-.subagents-host:has(>.subagents-trigger[hidden]){height:0;padding:0}
-.subagents-trigger{pointer-events:auto;font-size:var(--text-2xs);gap:7px;height:29px;padding:0 10px;border-radius:var(--radius-md);background:var(--panel);color:var(--muted);box-shadow:0 2px 8px #00000005;font-variant-numeric:tabular-nums}
-.subagents-trigger>.icon{width:13px;height:13px}
-.subagents-trigger>.icon:last-child{width:10px}
-.subagents-trigger.has-running>.icon:first-child{color:var(--accent-ink)}
-.subagents-trigger:hover,.subagents-trigger[aria-expanded=true]{background:var(--raised)}
-.subagents-trigger:active{scale:.97}
-.subagents-panel{position:absolute;top:calc(100% + 7px);right:24px;width:min(390px,calc(100% - 32px));max-height:min(540px,calc(100vh - 210px));display:flex;flex-direction:column;pointer-events:auto;border-radius:var(--radius-md);background:var(--panel);box-shadow:0 14px 45px #00000026,0 2px 8px #0000000a;overflow:hidden;text-align:left}
+.subagents-panel{display:flex;min-height:0;flex-direction:column;pointer-events:auto;overflow:hidden;text-align:left}
 .subagents-heading{display:flex;align-items:center;gap:8px;padding:10px 12px;flex-shrink:0}
 .subagents-heading>strong{font-size:var(--text-sm);font-weight:600}
 .subagents-summary{font-size:var(--text-2xs);color:var(--muted);margin-left:auto;font-variant-numeric:tabular-nums}
@@ -44,8 +36,4 @@
 .subagent-tools .tool-activity{padding-left:0}
 .subagent-tools .tool-activity pre{font-size:var(--text-2xs);padding:9px}
 .subagent-tools .tool-activity summary{min-height:25px}
-.side-thread .subagents-host{padding:0 24px 8px}
-.side-thread .subagents-panel{max-height:min(480px,55vh)}
-@media(max-width:700px){.subagents-host,.side-thread .subagents-host{padding-right:16px}.subagents-panel{right:16px}}
-@media(prefers-contrast:more){.subagents-panel,.subagents-trigger{border-color:var(--text);box-shadow:none}}
-@media(prefers-reduced-motion:reduce){.subagents-trigger:active{transform:none}}
+

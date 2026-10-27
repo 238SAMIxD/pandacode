@@ -7,7 +7,8 @@ const errors = new WeakMap<Page, string[]>();
 const setup = (page: Page) => page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Architect & workers', exact: true }) });
 const trigger = (page: Page) => page.getByRole('button', { name: 'Team', exact: true });
 const panel = (page: Page) => page.getByRole('dialog', { name: 'Workers', exact: true });
-const openWorkers = (page: Page) => page.getByRole('button', { name: 'Open workers', exact: true });
+// The team's panel opens from the action dock's Agents item.
+const openWorkers = (page: Page) => page.locator('#agents-toggle');
 const row = (page: Page, id: string) => panel(page).locator(`.architect-worker-row[data-worker-id="${id}"]`);
 const live = (page: Page) => panel(page).locator('.architect-worker-live');
 const transcript = (page: Page) => page.getByRole('log', { name: 'Conversation', exact: true });
@@ -160,10 +161,10 @@ test.describe('architect teams', () => {
       await openWorkers(page).click();
       await expect(panel(page)).toBeVisible();
       await expect(panel(page)).toHaveCSS('opacity', '1'); await expect(panel(page)).toHaveCSS('filter', 'none');
-      const material = await workerSurface(panel(page));
-      // Solid like the dropdowns: no translucency, blur, gradient or border.
-      expect(material.alpha).toBe(1); expect(material.image).toBe('none');
-      expect(material.blur === 'none' || material.blur === '').toBe(true);
+      // The Agents flyout around the panel is the app's glass: translucent over a blur, with no gradient or border.
+      const material = await workerSurface(page.locator('#agents-flyout'));
+      expect(material.alpha).toBeLessThan(1); expect(material.image).toBe('none');
+      expect(material.blur).toContain('blur');
       await expect(panel(page)).toHaveCSS('border-top-color', 'rgba(0, 0, 0, 0)');
       const normalRow = await row(page, 'build').evaluate(node => getComputedStyle(node).backgroundColor);
       await row(page, 'build').hover();
@@ -174,7 +175,7 @@ test.describe('architect teams', () => {
       const detail = panel(page).locator('.architect-worker-message > div').first();
       await expect(detail).toContainText('Search is ready.');
       await expect(detail).toHaveCSS('filter', 'none'); await expect(detail).toHaveCSS('opacity', '1');
-      expect(await workerSurface(panel(page))).toEqual(material);
+      expect(await workerSurface(page.locator('#agents-flyout'))).toEqual(material);
       expect(await panel(page).evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
       await page.screenshot({ path: `/private/tmp/pandacode-workers-frost-${browserName}-${theme}-${view}-detail.png`, animations: 'disabled' });
       // Both accessibility preferences must remove translucency even while a detail is open.
@@ -185,12 +186,12 @@ test.describe('architect teams', () => {
         else await page.emulateMedia({ contrast: 'more' });
         await expect(page.locator('.workspace')).not.toHaveAttribute('data-wallpaper');
         await expect(panel(page)).toBeVisible(); await expect(detail).toContainText('Search is ready.');
-        const accessible = await workerSurface(panel(page));
+        const accessible = await workerSurface(page.locator('#agents-flyout'));
         expect(accessible.alpha).toBe(1); expect(accessible.blur).toBe('none'); expect(accessible.image).toBe('none');
         if (cdp) await cdp.send('Emulation.setEmulatedMedia', { features: [] });
         else await page.emulateMedia({ contrast: 'no-preference' });
         await expect(page.locator('.workspace')).toHaveAttribute('data-wallpaper', 'mon-morning');
-        expect(await workerSurface(panel(page))).toEqual(material);
+        expect(await workerSurface(page.locator('#agents-flyout'))).toEqual(material);
       }
       await cdp?.detach();
     });
@@ -879,8 +880,6 @@ test.describe('architect teams', () => {
     await expect(openWorkers(page)).toBeVisible();
     await page.evaluate(() => (window as any).__architectTest.event({ sessionId: 'worker-build', kind: 'approval', requestId: 'ask-build', text: 'Run the worker verification command?' }));
     await expect(page.locator('#toast')).toContainText('A worker needs your input');
-    await expect(openWorkers(page)).toContainText('Needs input');
-    await page.evaluate(() => (window as any).__architectTest.event({ sessionId: 'worker-build', kind: 'approval_cancelled', requestId: 'ask-build' }));
-    await expect(openWorkers(page)).not.toContainText('Needs input');
+    await expect(openWorkers(page)).toHaveAttribute('aria-label', 'Agents: 1 running');
   });
 });

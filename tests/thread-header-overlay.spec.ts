@@ -13,27 +13,35 @@ async function openThread(page: Page, width = 1200): Promise<void> {
 
 test.describe('thread header overlay', () => {
   for (const width of [1200, 900, 620]) {
-    test(`the transcript fades out under the bare header at ${width}px`, async ({ page }) => {
+    test(`the transcript scrolls under the bare header with no fade at ${width}px`, async ({ page }) => {
       await openThread(page, width);
       const header = page.locator('.workspace-header');
-      // No top bar: the header paints nothing and the transcript fades itself out under it.
+      // No top bar: the header paints nothing and the transcript has no top fade.
       const style = await header.evaluate(node => ({ position: getComputedStyle(node).position, band: getComputedStyle(node, '::before').content, fill: getComputedStyle(node).backgroundColor, mask: (s => s.maskImage || s.getPropertyValue('-webkit-mask-image'))(getComputedStyle(document.querySelector('#transcript')!)) }));
       expect(style.position).toBe('relative');
       expect(style.band).toBe('none');
       expect(style.fill).toBe('rgba(0, 0, 0, 0)');
-      expect(style.mask).toContain('gradient');
+      expect(style.mask).toBe('none');
       await expect(page.locator('#breadcrumb')).toBeHidden();
 
-      const headerBottom = (await box(page, '.workspace-header')).bottom;
       const transcript = page.locator('#transcript');
-      // The transcript starts under the header, but its first message is fully visible at rest.
-      expect((await box(page, '#transcript')).top).toBeLessThan(headerBottom);
+      const top = (await box(page, '#transcript')).top;
+      // The transcript starts at the window's top edge, under the header, and its first message
+      // sits just below the mask's fade (fully opaque at rest): flush with the top unless the
+      // collapsed sidebar's buttons sit over the pane.
+      expect(top).toBeLessThanOrEqual(1);
+      const fade = await transcript.evaluate(node => parseFloat(getComputedStyle(node).getPropertyValue('--header-fade-under')) || 0);
+      const collapsed = await page.locator('.workspace').evaluate(node => node.classList.contains('sidebar-collapsed'));
+      expect(fade).toBeGreaterThan(0);
       await transcript.evaluate(node => { node.scrollTop = 0; });
-      expect((await box(page, '#transcript .message')).top).toBeGreaterThanOrEqual(headerBottom);
+      const first = (await box(page, '#transcript .message')).top - top;
+      expect(first).toBeGreaterThanOrEqual(fade);
+      expect(first).toBeLessThanOrEqual(collapsed ? 64 : 20);
 
+      await page.locator('#stream-region').evaluate(node => { node.style.minHeight = '900px'; });
       await transcript.evaluate(node => { node.scrollTop = 90; });
       expect(await transcript.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
-      expect((await box(page, '#transcript .message')).top).toBeLessThan(headerBottom);
+      expect((await box(page, '#transcript .message')).top - top).toBeLessThan(first);
 
       // Scrolled to the end, the last row sits inside the transcript, above the composer.
       await transcript.evaluate(node => { node.scrollTop = node.scrollHeight; });
@@ -42,43 +50,43 @@ test.describe('thread header overlay', () => {
     });
   }
 
-  test('the team bar floats over the thread with its left side in view', async ({ page }) => {
+  test('the team lives in the dock, so nothing floats over the top of the thread', async ({ page }) => {
     await openThread(page);
+    const transcript = page.locator('#transcript');
+    await transcript.evaluate(node => { node.scrollTop = 0; });
+    const before = (await box(page, '#transcript .message')).top;
     await page.getByRole('button', { name: 'Team', exact: true }).click();
-    const trigger = page.getByRole('button', { name: 'Open workers', exact: true });
-    await expect(trigger).toBeVisible();
-    const host = await page.locator('.architect-host').evaluate(node => ({ position: getComputedStyle(node).position, blur: getComputedStyle(node.querySelector('.architect-trigger')!).backdropFilter }));
-    expect(host.position).toBe('absolute');
-    expect(host.blur).toContain('blur');
-    const bar = await box(page, '.architect-trigger');
-    const pane = await box(page, '.conversation-pane');
-    expect(bar.left).toBeGreaterThanOrEqual(pane.left);
-    // The action dock floats beside it, so the bar stops at the dock's left.
-    expect(bar.right).toBeLessThanOrEqual((await box(page, '#action-dock')).left);
-    expect(bar.top).toBeGreaterThanOrEqual((await box(page, '.workspace-header')).bottom);
-    // Its left edge (the team icon) is what the pointer hits there, not a strip or the header.
-    const hit = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('.architect-trigger') !== null, { x: bar.left + 6, y: bar.top + bar.height / 2 });
-    expect(hit).toBe(true);
-    // At rest nothing sits under it; scrolled, the transcript passes beneath.
-    await page.locator('#transcript').evaluate(node => { node.scrollTop = 0; });
-    const first = await box(page, '#transcript .message');
-    expect(first.top).toBeGreaterThanOrEqual(bar.bottom);
-    await page.locator('#transcript').evaluate(node => { node.scrollTop = 90; });
-    expect((await box(page, '#transcript .message')).top).toBeLessThan(bar.bottom);
-    await expect(trigger).toBeVisible();
+    const agents = page.locator('#action-dock #agents-toggle');
+    await expect(agents).toBeVisible();
+    await expect(page.locator('.architect-trigger')).toBeHidden();
+    // No room is reserved for the old floating bars.
+    await transcript.evaluate(node => { node.scrollTop = 0; });
+    expect((await box(page, '#transcript .message')).top).toBe(before);
+    await agents.click();
+    const flyout = page.locator('#agents-flyout');
+    await expect(flyout.getByRole('dialog', { name: 'Workers', exact: true })).toBeVisible();
+    // The panel opens left of the dock, beside the Agents item, and never covers the dock.
+    const panel = await box(page, '#agents-flyout'), dock = await box(page, '#action-dock'), item = await box(page, '#agents-toggle');
+    expect(panel.right).toBeLessThanOrEqual(dock.left);
+    expect(Math.abs(panel.top - item.top)).toBeLessThanOrEqual(2);
+    expect(panel.bottom).toBeLessThanOrEqual(520);
   });
 
-  test('find in thread lands every match below the header, its fade, the team bar and the find bar', async ({ page }) => {
+  test('find in thread lands every match below the fade and the find bar', async ({ page }) => {
     await openThread(page);
-    await page.getByRole('button', { name: 'Team', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Open workers', exact: true })).toBeVisible();
+    // Let the thread's refresh redraw land first; it restores the scroll position it remembered.
+    await page.waitForTimeout(400);
     const transcript = page.locator('#transcript');
     // Room to scroll, then put the first "search" match just under the header, inside the fade.
     await page.locator('#stream-region').evaluate(node => { node.style.minHeight = '900px'; });
-    const headerBottom = (await box(page, '.workspace-header')).bottom;
-    await transcript.evaluate((node, y) => { node.scrollTop += node.querySelector('.user-message')!.getBoundingClientRect().top - y; }, headerBottom + 6);
-    // Let the scroll event land, so the transcript stops following the bottom.
-    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const fadeBottom = (await box(page, '#transcript')).top + await transcript.evaluate(node => parseFloat(getComputedStyle(node).getPropertyValue('--header-fade-under')) || 0);
+    // Retry until the position holds: the taller stream region can still pull the transcript to
+    // the bottom for a frame or two after the first scroll.
+    await expect.poll(async () => {
+      await transcript.evaluate((node, y) => { node.scrollTop += node.querySelector('.user-message')!.getBoundingClientRect().top - y; }, fadeBottom - 10);
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      return transcript.evaluate(node => Math.round(node.querySelector('.user-message')!.getBoundingClientRect().top));
+    }).toBe(Math.round(fadeBottom - 10));
     await page.keyboard.press('ControlOrMeta+f');
     const find = page.getByRole('search');
     const input = find.getByRole('searchbox', { name: 'Find in thread', exact: true });
@@ -87,15 +95,18 @@ test.describe('thread header overlay', () => {
     await expect(count).toHaveText(/^\d+ of \d+$/);
     const total = Number((await count.textContent())!.split(' of ')[1]);
     const current = () => page.evaluate(() => { const [range] = [...(CSS as any).highlights.get('thread-find-current')] as Range[]; return range.getBoundingClientRect().toJSON() as DOMRect; });
-    const limit = Math.max(headerBottom + 32, (await box(page, '.architect-trigger')).bottom, (await find.boundingBox())!.y + (await find.boundingBox())!.height);
+    const bar = (await find.boundingBox())!;
     const bottom = (await box(page, '#transcript')).bottom;
-    // The fresh search skips the covered match; stepping back to it, then through every match,
-    // must bring each fully into the clear area.
+    // The fresh search skips the faded match; stepping back to it, then through every match, must
+    // bring each fully into view: below the fade and never under the find bar. At the very top of
+    // the thread a match can sit above the bar, since the first message is flush with the top.
     for (const [index, key] of ['', 'Shift+Enter', ...Array(total).fill('Enter')].entries()) {
       if (key) await input.press(key);
       const rect = await current();
-      expect(rect.top, `step ${index}`).toBeGreaterThanOrEqual(limit);
+      expect(rect.top, `step ${index}`).toBeGreaterThanOrEqual(fadeBottom);
       expect(rect.bottom, `step ${index}`).toBeLessThanOrEqual(bottom);
+      const underBar = rect.left < bar.x + bar.width && bar.x < rect.right && rect.top < bar.y + bar.height && bar.y < rect.bottom;
+      expect(underBar, `step ${index}`).toBe(false);
     }
   });
 });

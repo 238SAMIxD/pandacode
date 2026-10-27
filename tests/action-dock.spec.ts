@@ -364,4 +364,84 @@ test.describe('action dock', () => {
       await cdp.detach();
     });
   }
+
+  test.describe('Agents item', () => {
+    const agents = (page: Page) => page.locator('#agents-toggle');
+    const flyout = (page: Page) => page.locator('#agents-flyout');
+    const subagents = (page: Page) => page.getByRole('region', { name: 'Subagents', exact: true });
+    const current = (page: Page) => page.locator('.task-item.selected').getAttribute('data-id');
+    const subagent = async (page: Page, id: string, status: string) => page.evaluate(([session, id, status]) => (window as any).__previewSubagent(session, { id, name: `Agent ${id}`, status }), [(await current(page))!, id, status]);
+
+    test('appears with a team or subagents, badges the running count and leaves with neither', async ({ page }) => {
+      await open(page);
+      await expect(agents(page)).toBeHidden();
+      await subagent(page, 'a', 'running'); await subagent(page, 'b', 'running');
+      await expect(agents(page)).toBeVisible();
+      await expect(agents(page)).toHaveAttribute('aria-label', 'Agents: 2 running');
+      await expect(agents(page)).toHaveAttribute('aria-haspopup', 'dialog');
+      const badge = agents(page).locator('.dock-badge');
+      await expect(badge).toHaveText('2');
+      // The badge is an accent fill with on-accent text and no border.
+      const style = await badge.evaluate(node => { const s = getComputedStyle(node), probe = document.createElement('i'); probe.style.color = 'var(--accent)'; document.body.append(probe); const accent = getComputedStyle(probe).color; probe.style.color = 'var(--on-accent)'; const on = getComputedStyle(probe).color; probe.remove(); return { fill: s.backgroundColor === accent, text: s.color === on, border: s.borderTopWidth }; });
+      expect(style).toEqual({ fill: true, text: true, border: '0px' });
+      await subagent(page, 'a', 'completed');
+      await expect(badge).toHaveText('1');
+      await expect(agents(page)).toHaveAttribute('aria-label', 'Agents: 1 running');
+      await subagent(page, 'b', 'failed');
+      await expect(badge).toBeHidden();
+      await expect(agents(page)).toHaveAttribute('aria-label', 'Agents');
+      await expect(agents(page)).toBeVisible();
+      // Another task has neither a team nor subagents: the item leaves.
+      await page.locator('.task-item:not(.selected)').first().click();
+      await expect(agents(page)).toBeHidden();
+      // A team brings it back.
+      await page.getByRole('button', { name: 'Team', exact: true }).click();
+      await expect(agents(page)).toBeVisible();
+    });
+
+    test('hover opens the panel left of the dock, which stays while the pointer is on it and closes after it leaves', async ({ page }) => {
+      await open(page);
+      await subagent(page, 'a', 'running');
+      await agents(page).hover();
+      await expect(subagents(page)).toBeVisible();
+      await expect(agents(page)).toHaveAttribute('aria-expanded', 'true');
+      // Hovering never steals focus from the prompt.
+      await expect(subagents(page).locator(':focus')).toHaveCount(0);
+      const panel = await rect(page, '#agents-flyout'), dock = await rect(page, '#action-dock'), item = await rect(page, '#agents-toggle');
+      expect(panel.right).toBeLessThanOrEqual(dock.left);
+      expect(Math.abs(panel.top - item.top)).toBeLessThanOrEqual(2);
+      // Across the gap and onto the panel: it stays.
+      await page.mouse.move(panel.right - 30, panel.top + 20, { steps: 6 });
+      await page.waitForTimeout(500);
+      await expect(flyout(page)).toBeVisible();
+      // Off both: it closes after a short grace.
+      await page.mouse.move(300, 600);
+      await page.waitForTimeout(100);
+      await expect(flyout(page)).toBeVisible();
+      await expect(flyout(page)).toBeHidden();
+      await expect(agents(page)).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    test('a click pins it open, Escape closes it, and both a team and subagents show', async ({ page }) => {
+      await open(page);
+      await page.getByRole('button', { name: 'Team', exact: true }).click();
+      await subagent(page, 'a', 'running');
+      await agents(page).click();
+      await expect(flyout(page).getByRole('dialog', { name: 'Workers', exact: true })).toBeVisible();
+      await expect(subagents(page)).toBeVisible();
+      await page.mouse.move(300, 600);
+      await page.waitForTimeout(600);
+      await expect(flyout(page)).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(flyout(page)).toBeHidden();
+      await expect(agents(page)).toBeFocused();
+      await expect(agents(page)).toHaveAttribute('aria-expanded', 'false');
+      // Enter pins it again from the keyboard; a second press closes it.
+      await page.keyboard.press('Enter');
+      await expect(flyout(page)).toBeVisible();
+      await agents(page).focus();
+      await page.keyboard.press('Space');
+      await expect(flyout(page)).toBeHidden();
+    });
+  });
 });

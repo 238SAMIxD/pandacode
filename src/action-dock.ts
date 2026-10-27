@@ -96,7 +96,7 @@ function tooltip(dock: HTMLElement) {
   const show = (item: HTMLElement) => {
     clearTimeout(timer);
     const text = labelOf(item);
-    if (!text) return;
+    if (!text || item.hasAttribute('data-dock-notip')) return;
     const wasShown = !tip.hidden && !leave;
     const before = wasShown ? { box: tip.getBoundingClientRect(), side: tip.dataset.side } : undefined;
     leave?.cancel(); leave = undefined;
@@ -297,4 +297,97 @@ export function mountActionDock(dock: HTMLElement): void {
   });
   rove(dock);
   requestAnimationFrame(() => { rove(dock); place(); });
+}
+
+/** What the Agents item reads from the team and subagent views (the architect view loads lazily). */
+export type AgentSource = { present: boolean; running: number; isOpen: boolean; open(focus: boolean): void; close(focus?: boolean): void };
+const AGENTS_OPEN = 150, AGENTS_CLOSE = 300;
+
+/** The Agents item: shown while the task has a team or subagents, badged with how many run.
+ * Hovering opens `flyout` (both views' panels) left of the dock; it stays while the pointer is
+ * on the item or the panel and closes `AGENTS_CLOSE` ms after it leaves both, which also carries
+ * it across the gap. A click (Enter/Space) pins or unpins it; Escape closes it. */
+export function mountAgents(item: HTMLButtonElement, flyout: HTMLElement, sources: () => AgentSource[]): void {
+  const badge = item.querySelector<HTMLElement>('.dock-badge')!;
+  let pinned = false, openTimer = 0, closeTimer = 0, shown = -1, focusedInside = false;
+  // A panel's close button takes focus with it, so remember whether focus was in the flyout.
+  document.addEventListener('focusin', event => { focusedInside = flyout.contains(event.target as Node); });
+  const isOpen = () => !flyout.hidden;
+  const place = () => {
+    if (!isOpen()) return;
+    const header = flyout.parentElement!.getBoundingClientRect(), box = item.getBoundingClientRect(), dock = item.closest('.action-dock')!;
+    if (vertical(dock as HTMLElement)) {
+      const right = header.right - dock.getBoundingClientRect().left + 10;
+      const top = Math.max(8, Math.min(box.top, innerHeight - 12 - Math.min(flyout.scrollHeight, 420)));
+      Object.assign(flyout.style, { right: `${Math.round(right)}px`, top: `${Math.round(top - header.top)}px`, maxHeight: `${Math.round(innerHeight - top - 12)}px` });
+    } else {
+      Object.assign(flyout.style, { right: `${Math.round(Math.max(8, header.right - box.right))}px`, top: `${Math.round(box.bottom - header.top + 8)}px`, maxHeight: `${Math.round(innerHeight - box.bottom - 20)}px` });
+    }
+  };
+  const focusFirst = () => flyout.querySelector<HTMLElement>('.architect-close, [data-subagent-id], .subagents-close')?.focus();
+  const show = (focus: boolean) => {
+    clearTimeout(openTimer); clearTimeout(closeTimer);
+    for (const source of sources()) if (source.present && !source.isOpen) source.open(false);
+    if (!flyout.querySelector('.architect-panel, .subagents-panel')) return;
+    flyout.hidden = false; item.setAttribute('aria-expanded', 'true'); place();
+    if (focus) focusFirst();
+  };
+  const hide = () => {
+    clearTimeout(openTimer); clearTimeout(closeTimer);
+    const inside = flyout.contains(document.activeElement) || (document.activeElement === document.body && focusedInside);
+    pinned = false;
+    for (const source of sources()) if (source.isOpen) source.close(false);
+    flyout.hidden = true; item.setAttribute('aria-expanded', 'false');
+    if (inside && !item.hidden) item.focus({ preventScroll: true });
+  };
+  const badgeTo = (count: number) => {
+    if (count === shown) return;
+    const was = shown > 0; shown = count;
+    if (count) badge.textContent = String(count);
+    if (was === count > 0) return;
+    cancel(badge);
+    if (count) badge.hidden = false;
+    if (still() || !interacted || typeof badge.animate !== 'function') { badge.hidden = !count; return; }
+    const { easing, duration } = curve();
+    const animation = track(badge, badge.animate(count ? [{ opacity: 0, scale: 0.3, offset: 0 }] : [{ opacity: 0, scale: 0.3 }], count ? { duration, easing } : { duration: duration * 0.7, easing: LEAVE, fill: 'forwards' }));
+    if (!count) animation.onfinish = () => { badge.hidden = true; animation.cancel(); };
+  };
+  const refresh = () => {
+    const present = sources().filter(source => source.present);
+    const running = present.reduce((sum, source) => sum + source.running, 0);
+    item.hidden = !present.length;
+    item.setAttribute('aria-label', running ? `Agents: ${running} running` : 'Agents');
+    badgeTo(running);
+    if (!present.length && isOpen()) hide(); else place();
+  };
+  addEventListener('pandacode:agents', refresh);
+  addEventListener('resize', place);
+  // Panels opened elsewhere (a transcript link, the command palette) show the flyout; closing the
+  // last panel from inside it hides the flyout.
+  new MutationObserver(() => {
+    const panel = flyout.querySelector('.architect-panel, .subagents-panel');
+    if (panel && !isOpen()) { pinned = true; flyout.hidden = false; item.setAttribute('aria-expanded', 'true'); place(); }
+    else if (!panel && isOpen()) hide();
+    else place();
+  }).observe(flyout, { subtree: true, childList: true });
+  const enter = (event: PointerEvent) => {
+    if (event.pointerType === 'touch') return;
+    clearTimeout(closeTimer);
+    if (!isOpen() && event.currentTarget === item) { clearTimeout(openTimer); openTimer = window.setTimeout(() => show(false), AGENTS_OPEN); }
+  };
+  const leave = () => { clearTimeout(openTimer); if (isOpen() && !pinned) { clearTimeout(closeTimer); closeTimer = window.setTimeout(hide, AGENTS_CLOSE); } };
+  for (const target of [item, flyout]) { target.addEventListener('pointerenter', enter); target.addEventListener('pointerleave', leave); }
+  item.addEventListener('click', () => {
+    if (isOpen() && pinned) { hide(); return; }
+    pinned = true; if (isOpen()) focusFirst(); else show(true);
+  });
+  // Before the panels' own Escape handlers, and only when no dialog or other menu is above it.
+  addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !isOpen() || event.defaultPrevented) return;
+    if ([...document.querySelectorAll('dialog[open], .floating-menu:not([aria-hidden="true"])')].some(other => !flyout.contains(other))) return;
+    event.preventDefault(); event.stopImmediatePropagation();
+    const focused = pinned || flyout.contains(document.activeElement) || document.activeElement === item;
+    hide(); if (focused) item.focus({ preventScroll: true });
+  }, true);
+  refresh();
 }

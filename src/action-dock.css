@@ -54,13 +54,29 @@ html .workspace .action-dock .update-later{height:calc(var(--dock-item) - 10px)}
 .action-dock-tip[hidden]{display:none}
 
 /* Nothing clickable sits under the floating dock: the transcript, the in-flow rows above it and
- * the file view stop at `--dock-clear`, and the floating team bars sit left of it. */
+ * the file view stop at `--dock-clear`. */
 .workspace:not(.board-view,.github-view) .conversation-pane:not(.new-task-page)>:is(.transcript,.file-tabs,.task-details-heading,.jev-activity){margin-right:var(--dock-clear)}
 /* The composer centres on the same column as the transcript. A new task's page keeps both centred:
  * its heading and composer sit clear of the dock. */
 .workspace:not(.board-view,.github-view) .conversation-pane:not(.new-task-page)>.composer-area{width:calc(100% - var(--dock-clear));margin-left:max(0px,(100% - var(--dock-clear) - 950px) / 2);margin-right:auto}
 .workspace:not(.board-view,.github-view) .conversation-pane>.file-view{right:var(--dock-clear)}
-.workspace:not(.side-thread) .conversation-pane>:is(.architect-host,.subagents-host){right:var(--dock-clear)}
+
+/* The Agents item's running count: a small accent badge on the icon's corner. */
+.action-dock .dock-badge{position:absolute;z-index:2;top:3px;right:3px;min-width:15px;height:15px;padding:0 4px;box-sizing:border-box;border-radius:8px;background:var(--accent);color:var(--on-accent);font:600 10px/15px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-variant-numeric:tabular-nums;text-align:center;pointer-events:none}
+.action-dock .dock-badge[hidden]{display:none}
+@media(max-height:640px){.action-dock .dock-badge{top:-2px;right:-3px}}
+
+/* The Agents flyout: the team and subagent panels in one glass, left of the dock and aligned with
+ * its Agents item (below it when the dock is a row); src/action-dock.ts places it. Their old
+ * floating triggers are gone; the dock item replaces them. */
+.agents-flyout{position:absolute;z-index:8;width:min(400px,calc(100vw - 96px));display:flex;flex-direction:column;overflow:hidden;border-radius:var(--radius-lg,14px);background:var(--glass-warm);backdrop-filter:var(--header-blur);-webkit-backdrop-filter:var(--header-blur);box-shadow:var(--floating-bar-shadow);color:var(--text);text-align:left;cursor:auto}
+.workspace[data-wallpaper] .agents-flyout{background:var(--header-glass)}
+.agents-flyout[hidden]{display:none}
+.agents-flyout>:is(.architect-host,.subagents-host){display:flex;flex-direction:column;min-height:0;flex:0 1 auto}
+.agents-flyout>:is(.architect-host,.subagents-host)[hidden],.agents-flyout>:is(.architect-host,.subagents-host):not(:has(>.architect-panel,>.subagents-panel)){display:none}
+.agents-flyout>*+*:not([hidden]){margin-top:2px}
+html .workspace .agents-flyout :is(.architect-panel,.subagents-panel){position:static;z-index:auto;flex:0 1 auto;width:auto;min-height:0;max-height:none;padding:0;border:0 solid transparent;border-radius:0;background:none;backdrop-filter:none;-webkit-backdrop-filter:none;box-shadow:none}
+.architect-trigger,.subagents-trigger{display:none!important}
 
 /* Short windows: smaller tiles and gaps. */
 @media(max-height:640px){.workspace{--dock-item:28px;--dock-pad:4px;--dock-rule:4px}}
@@ -80,11 +96,11 @@ html .workspace .action-dock .update-later{height:calc(var(--dock-item) - 10px)}
 .workspace:is(.board-view,.github-view) .action-dock-group+.action-dock-group::before{width:2px;height:20px;margin:0 5px}
 
 @media(prefers-reduced-transparency:reduce){
-  html .workspace .action-dock:not(:is(.board-view,.github-view) *),html .workspace .action-dock-tip{background:var(--panel);backdrop-filter:none;-webkit-backdrop-filter:none}
+  html .workspace .action-dock:not(:is(.board-view,.github-view) *),html .workspace :is(.action-dock-tip,.agents-flyout){background:var(--panel);backdrop-filter:none;-webkit-backdrop-filter:none}
 }
 @media(prefers-contrast:more){
-  html .workspace .action-dock:not(:is(.board-view,.github-view) *),html .workspace .action-dock-tip{background:var(--bg);backdrop-filter:none;-webkit-backdrop-filter:none;outline:1px solid var(--text)}
+  html .workspace .action-dock:not(:is(.board-view,.github-view) *),html .workspace :is(.action-dock-tip,.agents-flyout){background:var(--bg);backdrop-filter:none;-webkit-backdrop-filter:none;outline:1px solid var(--text)}
   .action-dock button.active::before{background:rgb(var(--accent-rgb) / .45)}
 }
 @media(max-width:650px){@media(prefers-reduced-transparency:reduce),(prefers-contrast:more){html .workspace .action-dock{background:none;outline:0}}}
-@media(forced-colors:active){.action-dock,.action-dock-tip{border:1px solid CanvasText}.action-dock button.active{outline:2px solid Highlight}}
+@media(forced-colors:active){.action-dock,.action-dock-tip,.agents-flyout{border:1px solid CanvasText}.action-dock button.active{outline:2px solid Highlight}}

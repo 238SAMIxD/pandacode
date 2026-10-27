@@ -472,6 +472,8 @@ export function samplePick(kind: 'files' | 'folder'): string[] {
   return kind === 'folder' ? ['/Users/you/Projects/orbit-design'] : ['/Users/you/Pictures/dashboard-mockup.png', '/Users/you/Documents/Product brief.pdf'];
 }
 function agent(event: AgentEvent) { emit('agent-event', event); }
+/** tests: a live `subagent` event for any task (`__previewSubagent('session-1', { id, name, status, … })`). */
+(window as any).__previewSubagent = (sessionId: string, data: Record<string, unknown>) => agent({ sessionId, kind: 'subagent', text: '', data: { parentId: null, prompt: '', response: '', tools: [], startedAt: now, updatedAt: Date.now(), ...data } } as unknown as AgentEvent);
 function session(value: unknown): Session { const result = sessions.find(s => s.id === value); if (!result) throw new Error('Task not found'); return result; }
 function assertIdle(s: Session): void {
   if (s.status === 'running' || s.status === 'waiting' || timers.has(s.id)) throw new Error('Stop the agent before changing this task.');

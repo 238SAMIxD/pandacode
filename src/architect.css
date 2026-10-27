@@ -71,13 +71,7 @@
 .architect-setup-popover :is(input:not([type=range])) { background-color: color-mix(in srgb, var(--bg) 65%, transparent); color: var(--text); }
 .architect-setup-popover .architect-profile-heading input { background: transparent; }
 .architect-setup-popover :is(input, button, summary):focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.architect-host { position: relative; flex-shrink: 0; display: flex; justify-content: flex-end; padding: 7px 24px 0; z-index: 5; pointer-events: none; }
-.architect-trigger { pointer-events: auto; display: flex; align-items: center; gap: 8px; font-size: var(--text-2xs); color: var(--muted); padding: 7px 10px; border-radius: var(--radius-md); background: color-mix(in srgb, var(--panel) 88%, transparent); -webkit-backdrop-filter: blur(16px) saturate(1.15); backdrop-filter: blur(16px) saturate(1.15); box-shadow: var(--floating-bar-shadow); }
-.architect-trigger .icon { width: 13px; height: 13px; }
-.architect-trigger .icon:last-child { width: 10px; }
-.architect-trigger small { color: var(--text); font-size: var(--text-2xs); font-variant-numeric: tabular-nums; }
-.architect-trigger[data-status=running] > .icon:first-child, .architect-trigger[data-status=waiting] > .icon:first-child { color: var(--accent-ink); }
-.architect-panel { pointer-events: auto; position: absolute; z-index: 8; top: calc(100% + 8px); right: 16px; width: min(460px, calc(100% - 32px)); max-height: min(660px, calc(100dvh - 235px)); display: flex; flex-direction: column; border-radius: var(--radius-md); background: var(--panel); box-shadow: 0 14px 45px #00000024; overflow: hidden; }
+.architect-panel { pointer-events: auto; display: flex; min-height: 0; flex-direction: column; overflow: hidden; }
 .architect-worker-list { color: var(--muted); font-size: var(--text-xs); line-height: 1.6; padding: 0 5px; }
 .architect-worker-row:hover { background: color-mix(in srgb, var(--raised) 70%, transparent); }
 .architect-worker-state[data-tone=accent] { color: var(--accent-ink); }
@@ -111,11 +105,6 @@ html[data-theme="dark"] .architect-worker-state[data-tone=accent] { color: var(-
 .architect-worker-detail .approval-card { margin: 12px 0; }
 .architect-worker-detail .approval-card p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .architect-history-retry, .architect-history-older { font-size: var(--text-2xs); margin-top: 10px; }
-.workspace[data-wallpaper] .architect-trigger { -webkit-backdrop-filter: var(--workspace-frost); backdrop-filter: var(--workspace-frost); }
-.side-thread .architect-host { padding-top: 0; padding-bottom: 8px; }
-.side-thread .architect-panel { max-height: min(620px, calc(100dvh - 300px)); }
-@media(max-width:700px) { .architect-host { padding-right: 16px; } }
-@media(prefers-reduced-transparency:reduce), (prefers-contrast:more) { .architect-trigger, .workspace[data-wallpaper] .architect-trigger { background: var(--panel); -webkit-backdrop-filter: none; backdrop-filter: none; } }
 
 .architect-worker-checkpoint { margin: 0 0 14px; font-size: var(--text-xs); color: var(--muted); }
 .architect-worker-checkpoint summary { display: flex; align-items: center; gap: 7px; cursor: pointer; padding: 7px 0; }
@@ -131,7 +120,6 @@ html[data-theme="dark"] .architect-worker-state[data-tone=accent] { color: var(-
 @media(prefers-reduced-motion:reduce) { .architect-worker-checkpoint summary::before { transition: none; } }
 
 /* The workers panel: one header line (title, task count, icon controls, close), then a tall row per worker. */
-.architect-panel { width: min(380px, calc(100% - 32px)); border-radius: var(--radius-md); }
 .architect-panel-heading { display: flex; align-items: center; gap: 6px; padding: 8px 8px 6px 14px; flex-shrink: 0; }
 .architect-panel-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: var(--text-md); font-weight: 650; }
 .architect-panel-count { flex: none; color: var(--muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; margin-right: 2px; }
