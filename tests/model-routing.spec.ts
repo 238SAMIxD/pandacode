@@ -3,13 +3,20 @@ import { expect, test, type Page } from '@playwright/test';
 // Settings → Agents → Model routing, and the uncapped model catalog sent with an automatic team.
 const settings = (page: Page) => page.getByRole('region', { name: 'Settings', exact: true });
 
-async function install(page: Page): Promise<void> {
+async function install(page: Page, init?: () => void): Promise<void> {
+  if (init) await page.addInitScript(init);
   await page.route('**/src/preview.ts*', async route => {
     const response = await route.fetch(); const source = await response.text();
     const marker = /async function invoke\(command, args\) \{/;
     expect(source).toMatch(marker);
     await route.fulfill({ response, body: source.replace(marker, `async function invoke(command, args) {
       (window.__routing ??= { calls: [] }).calls.push({ command, args: structuredClone(args) });
+      // Test hook: \`__routingFail[command] = message\` rejects that command until cleared.
+      const failure = window.__routingFail?.[command];
+      if (failure) throw new Error(failure);
+      // Test hook: \`__routingDelay[command] = ms\` holds that command back before it runs.
+      const delay = window.__routingDelay?.[command];
+      if (delay) await new Promise(resolve => setTimeout(resolve, delay));
       return invokePreview(command, args);
     }
     async function invokePreview(command, args) {`) });
@@ -107,4 +114,153 @@ test('the cap keeps every harness represented', async ({ page }) => {
     return { count: catalog.length, glm: catalog.filter(m => m.provider === 'glm').length };
   });
   expect(providers).toEqual({ count: 1000, glm: 3 });
+});
+
+const chip = (page: Page) => page.locator('#route-picker-trigger');
+const teamOn = async (page: Page) => {
+  await page.getByRole('button', { name: 'Team', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Team', exact: true })).toHaveAttribute('aria-pressed', 'true');
+};
+
+test('the composer picks the worker-model mode beside Team and remembers it', async ({ page }) => {
+  await install(page);
+  await expect(chip(page)).toBeHidden();
+  await teamOn(page);
+  await expect(chip(page)).toHaveAccessibleName('Worker models: Cheapest that passes');
+  await expect(chip(page)).toHaveText('Cheapest');
+  await chip(page).click();
+  await expect(page.getByRole('menuitemradio', { name: 'Cheapest that passes' })).toHaveAttribute('aria-checked', 'true');
+  await page.keyboard.press('ArrowDown');
+  await page.getByRole('menuitemradio', { name: 'Balanced' }).press('Enter');
+  await expect(chip(page)).toHaveAccessibleName('Worker models: Balanced');
+  expect((await calls(page, 'model_routing_configure')).at(-1).args).toEqual({ mode: 'balanced' });
+  // Picking the current mode only closes the menu.
+  const configures = (await calls(page, 'model_routing_configure')).length;
+  await chip(page).click();
+  await page.getByRole('menuitemradio', { name: 'Balanced' }).click();
+  await expect(page.getByRole('menuitemradio', { name: 'Balanced' })).toBeHidden();
+  expect(await calls(page, 'model_routing_configure')).toHaveLength(configures);
+  await page.reload();
+  await page.locator('.task-item[data-id="session-2"]').click();
+  await expect(chip(page)).toHaveAccessibleName('Worker models: Balanced');
+  await openAgents(page);
+  await expect(settings(page).getByRole('radio', { name: 'Balanced' })).toHaveAttribute('aria-checked', 'true');
+  // A change in Settings reaches the chip without a reload.
+  await settings(page).getByRole('radio', { name: 'Best quality' }).click();
+  // The modal makes the composer inert, so read the label itself.
+  await expect(chip(page)).toHaveAttribute('aria-label', 'Worker models: Best quality');
+  await expect(chip(page)).toHaveText('Best');
+  await settings(page).getByRole('checkbox', { name: 'Pick worker models with Panda Router', exact: true }).uncheck();
+  await expect(chip(page)).toBeHidden();
+});
+
+test('routing off at load keeps the chip hidden', async ({ page }) => {
+  await install(page, () => localStorage.setItem('pandacode.preview.routing', JSON.stringify({ enabled: false })));
+  await teamOn(page);
+  await expect(chip(page)).toBeHidden();
+});
+
+test('a remote task never shows the chip', async ({ page }) => {
+  await install(page);
+  await teamOn(page);
+  await expect(chip(page)).toBeVisible();
+  await page.evaluate(() => (window as any).__previewMirrorTeam());
+  await page.locator('.task-item[data-id="mirror-team"]').click();
+  await expect(page.locator('#prompt')).toHaveAttribute('data-session-id', 'mirror-team');
+  await expect(chip(page)).toBeHidden();
+});
+
+test('an unknown mode shows a neutral label and checks nothing', async ({ page }) => {
+  await install(page, () => localStorage.setItem('pandacode.preview.routing', JSON.stringify({ mode: 'fastest' })));
+  await teamOn(page);
+  await expect(chip(page)).toHaveAccessibleName('Worker models: Panda Router');
+  await chip(page).click();
+  await expect(page.getByRole('menuitemradio', { checked: true })).toHaveCount(0);
+  await expect(page.getByRole('menuitemradio')).toHaveCount(3);
+});
+
+test('a refused change shows the menu error and keeps the chip', async ({ page }) => {
+  await install(page);
+  await teamOn(page);
+  await page.evaluate(() => { (window as any).__routingFail = { model_routing_configure: 'Routing settings could not be saved.' }; });
+  await chip(page).click();
+  await page.getByRole('menuitemradio', { name: 'Balanced' }).click();
+  await expect(page.locator('.choice-menu-error')).toHaveText('Routing settings could not be saved.');
+  await expect(chip(page)).toHaveAccessibleName('Worker models: Cheapest that passes');
+});
+
+test('a status read during a pending change never overrides it', async ({ page }) => {
+  await install(page);
+  await teamOn(page);
+  await page.evaluate(() => { (window as any).__routingDelay = { model_routing_configure: 800 }; });
+  await chip(page).click();
+  await page.getByRole('menuitemradio', { name: 'Balanced' }).click();
+  // The read starts after the change and answers first, with the old mode.
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(chip(page)).toHaveAccessibleName('Worker models: Balanced');
+  await page.waitForTimeout(300);
+  await expect(chip(page)).toHaveAccessibleName('Worker models: Balanced');
+  await page.evaluate(() => { delete (window as any).__routingDelay; window.dispatchEvent(new Event('focus')); });
+  await expect(chip(page)).toHaveAccessibleName('Worker models: Balanced');
+});
+
+test('a failed status load recovers on the next render or focus', async ({ page }) => {
+  await install(page, () => { (window as any).__routingFail = { model_routing_status: 'Router unavailable.' }; });
+  await teamOn(page);
+  await expect(chip(page)).toBeHidden();
+  await page.evaluate(() => { delete (window as any).__routingFail; window.dispatchEvent(new Event('focus')); });
+  await expect(chip(page)).toHaveAccessibleName('Worker models: Cheapest that passes');
+  // A render recovers too, and once loaded renders ask nothing.
+  await page.evaluate(() => { (window as any).__routingFail = { model_routing_status: 'Router unavailable.' }; });
+  await page.reload();
+  await page.locator('.task-item[data-id="session-2"]').click();
+  await expect(page.locator('#prompt')).toHaveAttribute('data-session-id', 'session-2');
+  await page.evaluate(() => { delete (window as any).__routingFail; });
+  // Renders retry a failed load at most every 3 s (ROUTING_RETRY_MS).
+  await page.waitForTimeout(3100);
+  await page.locator('.task-item[data-id="session-1"]').click();
+  await page.locator('.task-item[data-id="session-2"]').click();
+  await expect(chip(page)).toBeVisible();
+  const loads = (await calls(page, 'model_routing_status')).length;
+  await page.locator('.task-item[data-id="session-1"]').click();
+  await page.locator('.task-item[data-id="session-2"]').click();
+  await expect(chip(page)).toBeVisible();
+  expect(await calls(page, 'model_routing_status')).toHaveLength(loads);
+});
+
+test('a routing change keeps the prompt focus and caret', async ({ page }) => {
+  await install(page);
+  await teamOn(page);
+  await expect(chip(page)).toBeVisible();
+  const prompt = page.locator('#prompt');
+  await prompt.fill('hello world'); await prompt.focus();
+  await prompt.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(5, 5));
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('pandacode:routing', { detail: { enabled: true, mode: 'quality', minP: 0.8, profiler: 'ready', error: null } })));
+  await expect(chip(page)).toHaveAccessibleName('Worker models: Best quality');
+  expect(await prompt.evaluate((el: HTMLTextAreaElement) => [document.activeElement === el, el.selectionStart, el.value])).toEqual([true, 5, 'hello world']);
+});
+
+test('the chip keeps its label and fits the toolbar from wide to the narrowest window', async ({ page }) => {
+  await install(page);
+  await teamOn(page);
+  await expect(chip(page)).toBeVisible();
+  for (const theme of ['light', 'dark']) {
+    if (await page.locator('html').getAttribute('data-theme') !== theme) await page.locator('[data-action="toggle-theme"]').click();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+    // 860 is the app's minimum window width (tauri.conf.json); 600 is the browser preview's narrow layout.
+    for (const width of [1280, 860, 600]) {
+      await page.setViewportSize({ width, height: 800 });
+      const layout = await page.evaluate(() => {
+        const toolbar = document.querySelector('.composer-toolbar')!, tools = document.querySelector('.composer-tools')!.getBoundingClientRect();
+        const button = document.querySelector('#route-picker-trigger')!, box = button.getBoundingClientRect(), team = document.querySelector('.composer-team-button')!.getBoundingClientRect();
+        const label = button.querySelector('span')!;
+        return { toolsRight: tools.right, right: box.right, overflow: toolbar.scrollWidth - toolbar.clientWidth, height: box.height, teamHeight: team.height, top: box.top, teamTop: team.top, label: label.offsetWidth > 0 && label.scrollWidth <= label.clientWidth };
+      });
+      expect(layout.label).toBe(true);
+      expect(layout.right).toBeLessThanOrEqual(layout.toolsRight);
+      expect(layout.overflow).toBeLessThanOrEqual(0);
+      expect(Math.abs(layout.height - layout.teamHeight)).toBeLessThanOrEqual(2);
+      expect(Math.abs(layout.top - layout.teamTop)).toBeLessThanOrEqual(2);
+    }
+  }
 });

@@ -64,6 +64,7 @@ import { approvalBarHtml } from './approval-bar';
 import { createThreadFind } from './thread-find';
 import type { RemoteHost, RemoteRepoCheck, RemoteStatus, RemoteTarget } from './remote-types';
 import type { RemoteStart } from './remote-progress';
+import type { RoutingMode, RoutingStatus } from './model-routing';
 import { CONNECT_SETUP, LOCAL, behindDialog, behindText, cancelledRemoteStart, clearRemoteStart, computerControl, computerItems, lastSeenText, remoteStart, remoteStartAttached, remoteStartStrip, startStageText, trackRemoteStart } from './remote-target';
 import './cloud-agents.css';
 import { SETUP_CHOICE, cloudActionItems, cloudIcon, cloudProvider, cloudStrip, deleteMachineDialog, harnessRefusal, type CloudStage, type CloudTarget } from './cloud-agents';
@@ -274,6 +275,87 @@ function teamButton(s: Session): string {
     ? `<button type="button" class="composer-team-button" data-action="architect-setup" aria-label="Architect & workers" aria-pressed="${on}" title="Architect & workers">${icon('worktree')}<span>Team</span></button>`
     : `<button type="button" class="composer-team-button" data-action="team-toggle" aria-label="Team" aria-description="${escape(TEAM_TIP)}" aria-pressed="${on}" data-tip="${escape(TEAM_TIP)}">${icon('worktree')}<span>Team</span></button>`;
 }
+/** Panda Router's global mode, cached for the composer's worker-models chip beside Team; Settings announces every status it shows. */
+let routing: RoutingStatus | null = null;
+/** Every change of `routing` (the chip's configure, a Settings status) takes a ticket; a reply lands only
+ * while no newer change has started. Reads (status, prepare) take none: they land only if no change
+ * started after them and none is pending, so a read never overrides a change. */
+let routingTicket = 0, routingConfiguring = 0, routingFailedAt = 0;
+let routingLoad: Promise<RoutingStatus | null> | null = null;
+/** A Settings status that arrived during a chip configure; applied if that configure fails. */
+let routingMissed: RoutingStatus | null = null;
+const ROUTING_RETRY_MS = 3000;
+const routeIcon = (path: string) => `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
+const ROUTE_MODES: { id: RoutingMode; label: string; short: string; description: string; leading: string }[] = [
+  { id: 'cheapest', label: 'Cheapest that passes', short: 'Cheapest', description: 'Lowest cost likely to pass', leading: routeIcon('<path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9z"/><circle cx="7.5" cy="7.5" r="1.2"/>') },
+  { id: 'balanced', label: 'Balanced', short: 'Balanced', description: 'Best value for the cost', leading: routeIcon('<path d="M12 4v16M7 20h10M5 8h14M5 8l-3 6a3 3 0 0 0 6 0zM19 8l-3 6a3 3 0 0 0 6 0z"/>') },
+  { id: 'quality', label: 'Best quality', short: 'Best', description: 'Strongest model for each worker', leading: icon('spark') },
+];
+/** A mode this build does not know (a newer native side) gets a neutral label and no checked row. */
+const UNKNOWN_ROUTE = { label: 'Panda Router', short: 'Routing', leading: icon('activity') };
+const ROUTE_TIP = 'Worker models: Panda Router picks each worker\'s model by this mode. Change it here or in Settings → Agent teams.';
+function routeChipContent(s: Session | undefined): { hidden: boolean; label: string; html: string } {
+  const mode = ROUTE_MODES.find(m => m.id === routing?.mode) ?? UNKNOWN_ROUTE;
+  return { hidden: !s || s.remoteDevice != null || !teams.get(s.id) || !routing?.enabled, label: `Worker models: ${mode.label}`, html: `${mode.leading}<span>${mode.short}</span>${icon('down')}` };
+}
+function routeChip(s: Session): string {
+  const chip = routeChipContent(s);
+  return `<button type="button" id="route-picker-trigger" class="route-picker" data-action="route-mode" aria-label="${escape(chip.label)}" aria-description="${escape(ROUTE_TIP)}" data-tip="${escape(ROUTE_TIP)}" aria-haspopup="dialog" aria-expanded="false" ${chip.hidden ? 'hidden' : ''}>${chip.html}</button>`;
+}
+/** Redraws only the chip, so the prompt keeps its focus and caret. */
+function syncRouteChip(): void {
+  const trigger = document.querySelector<HTMLElement>('#route-picker-trigger'); if (!trigger) return;
+  const chip = routeChipContent(session());
+  trigger.hidden = chip.hidden; trigger.setAttribute('aria-label', chip.label);
+  if (trigger.innerHTML !== chip.html) trigger.innerHTML = chip.html;
+}
+function applyRouting(ticket: number, next: RoutingStatus): boolean {
+  if (ticket !== routingTicket) return false;
+  routing = next; syncRouteChip(); return true;
+}
+/** A read started at `ticket` lands only if no change started since and none is pending. */
+function applyRead(ticket: number, next: RoutingStatus): void {
+  if (!routingConfiguring) applyRouting(ticket, next);
+}
+/** Reads the status once at a time; every caller shares the request in flight. */
+function loadRouting(): Promise<RoutingStatus | null> {
+  return routingLoad ??= (async () => {
+    const ticket = routingTicket;
+    try {
+      const next = await call<RoutingStatus>('model_routing_status');
+      routingFailedAt = 0; applyRead(ticket, next); return next;
+    } catch (cause) { routingFailedAt = Date.now(); console.warn('Model routing status is unavailable', cause); return null; }
+    finally { routingLoad = null; }
+  })();
+}
+/** Until a status has loaded, a team task asks again when it renders (no request once loaded). */
+function retryRouting(s: Session | undefined): void {
+  if (!routing && s && !s.remoteDevice && teams.get(s.id) && Date.now() - routingFailedAt >= ROUTING_RETRY_MS) void loadRouting();
+}
+// Settings' status is newer than anything in flight, except a configure started here, whose reply follows.
+window.addEventListener('pandacode:routing', event => {
+  const next = (event as CustomEvent<RoutingStatus>).detail;
+  if (routingConfiguring) routingMissed = next; else applyRouting(++routingTicket, next);
+});
+window.addEventListener('focus', () => void loadRouting());
+void loadRouting();
+async function showRouteMode(anchor: HTMLElement): Promise<void> {
+  await showChoices(anchor, { title: 'Worker models', width: 340, items: ROUTE_MODES.map(m => ({ id: m.id, label: m.label, description: m.description, leading: m.leading, selected: routing?.mode === m.id })), onSelect: async id => {
+    if (id === routing?.mode) return;
+    const ticket = ++routingTicket;
+    routingConfiguring++;
+    let saved = false;
+    try { applyRouting(ticket, await call<RoutingStatus>('model_routing_configure', { mode: id })); saved = true; }
+    finally {
+      routingConfiguring--;
+      // A Settings status that arrived meanwhile: re-read after a save (it may be newer), apply it after a failure.
+      if (!routingConfiguring && routingMissed) {
+        const missed = routingMissed; routingMissed = null;
+        if (saved) void loadRouting(); else applyRouting(++routingTicket, missed);
+      }
+    }
+  } });
+}
 /** An automatic team's config with the current installed models (the capped roster for the lead,
  * the full catalog for Panda Router), keeping the limits of `base` or the last saved setup. */
 async function autoTeamConfig(base?: TeamConfig): Promise<TeamConfig> {
@@ -283,8 +365,13 @@ async function autoTeamConfig(base?: TeamConfig): Promise<TeamConfig> {
 }
 /** Warms Panda Router's profiler when a team starts; failures only reach the console. */
 function prepareModelRouting(): void {
-  void call<{ enabled: boolean }>('model_routing_status')
-    .then(status => status.enabled ? call('model_routing_prepare') : undefined)
+  void loadRouting()
+    .then(status => {
+      // The cached status may be newer than the shared read this joined.
+      if (!(routing ?? status)?.enabled) return;
+      const ticket = routingTicket;
+      return call<RoutingStatus>('model_routing_prepare').then(next => applyRead(ticket, next));
+    })
     .catch(cause => console.warn('Model routing could not prepare', cause));
 }
 let teamToggleBusy = false;
@@ -1773,6 +1860,7 @@ async function respondApproval(sessionId: string, id: string, approved: boolean)
 }
 function renderComposer(): void {
   refreshTeamProgress();
+  retryRouting(session());
   architectView?.setTask(state.sessionId, teams.get(state.sessionId) ?? null, state.providers);
   goalBanner.update(session()?.goalState ?? null);
   slashPicker?.dispose(); slashPicker = undefined;
@@ -1810,7 +1898,7 @@ function renderComposer(): void {
     : checking ? '<button type="button" class="secondary-button remote-checking" aria-label="Checking…" disabled>Checking…</button>'
     : offline ? `<button type="button" class="secondary-button remote-composer-retry" data-action="remote-retry" aria-label="${retrying ? 'Reconnecting…' : 'Retry connection'}" ${retrying ? 'disabled' : ''}>${icon('refresh')}<span>${retrying ? 'Reconnecting…' : 'Retry'}</span></button>`
     : `<button type="submit" class="send-button" title="Send message (${shortcut('Enter')})" aria-label="Send message">${icon('arrow')}</button>`;
-  $('#composer-area').innerHTML = `<form id="composer" class="composer ${running ? 'composer-running' : ''}"><div id="attachments" class="attachments">${attachmentBar(s)}</div><textarea id="prompt" data-session-id="${escape(s.id)}" aria-label="Message your coding agent" placeholder="${running ? (team ? 'Queue a follow-up…' : 'Queue a follow-up · ⌘↩ steers now') : composerPlaceholder()}" aria-description="${running ? `Enter to queue for when the agent finishes.${team ? '' : ' Command Enter to steer the running turn.'}` : 'Enter to send. Shift Enter for a new line.'}" rows="2"></textarea><div class="composer-toolbar"><div class="composer-tools">${button('attach', 'Attach files for context', 'plus', '', 'type="button"')}<button type="button" id="model-picker-trigger" class="model-picker" data-action="model" aria-label="Choose harness and model" aria-description="${escape([modelLabel(s), teamModelLabel(s)].filter(Boolean).join(' '))}" aria-haspopup="dialog" aria-expanded="false" title="${team && !team.config.auto ? 'Choose team profile and models' : 'Choose harness and model'}" ${modelLocked ? 'disabled' : ''}><span class="provider-small ${s.provider}">${providerLogo(s.provider)}</span><span class="model-detail" data-model-label>${escape(modelLabel(s))}</span><span class="team-model-count" data-team-model-label ${teamModelLabel(s) ? '' : 'hidden'}>${teamModelLabel(s)}</span>${icon('down')}</button><span class="composer-separator"></span><button type="button" id="mode-picker-trigger" class="mode-picker" data-action="mode" data-mode="${behavior.id}" title="${escape(behavior.description)}" aria-haspopup="dialog" aria-expanded="false" ${running ? 'disabled' : ''}>${icon(behavior.icon)}<span>${escape(behavior.label)}</span>${icon('down')}</button>${teamButton(s)}${tokenSaver.button(s.id)}</div>${running && !team ? `<button type="button" class="steer-button" data-action="steer" title="Send into the running turn (${shortcut('Enter')})" aria-label="Steer the running turn">${icon('spark')}<span>Steer</span></button>` : ''}${sendControl}</div></form>${s.archived ? '<div class="composer-footnote"><span>Archived task</span></div>' : ''}`;
+  $('#composer-area').innerHTML = `<form id="composer" class="composer ${running ? 'composer-running' : ''}"><div id="attachments" class="attachments">${attachmentBar(s)}</div><textarea id="prompt" data-session-id="${escape(s.id)}" aria-label="Message your coding agent" placeholder="${running ? (team ? 'Queue a follow-up…' : 'Queue a follow-up · ⌘↩ steers now') : composerPlaceholder()}" aria-description="${running ? `Enter to queue for when the agent finishes.${team ? '' : ' Command Enter to steer the running turn.'}` : 'Enter to send. Shift Enter for a new line.'}" rows="2"></textarea><div class="composer-toolbar"><div class="composer-tools">${button('attach', 'Attach files for context', 'plus', '', 'type="button"')}<button type="button" id="model-picker-trigger" class="model-picker" data-action="model" aria-label="Choose harness and model" aria-description="${escape([modelLabel(s), teamModelLabel(s)].filter(Boolean).join(' '))}" aria-haspopup="dialog" aria-expanded="false" title="${team && !team.config.auto ? 'Choose team profile and models' : 'Choose harness and model'}" ${modelLocked ? 'disabled' : ''}><span class="provider-small ${s.provider}">${providerLogo(s.provider)}</span><span class="model-detail" data-model-label>${escape(modelLabel(s))}</span><span class="team-model-count" data-team-model-label ${teamModelLabel(s) ? '' : 'hidden'}>${teamModelLabel(s)}</span>${icon('down')}</button><span class="composer-separator"></span><button type="button" id="mode-picker-trigger" class="mode-picker" data-action="mode" data-mode="${behavior.id}" title="${escape(behavior.description)}" aria-haspopup="dialog" aria-expanded="false" ${running ? 'disabled' : ''}>${icon(behavior.icon)}<span>${escape(behavior.label)}</span>${icon('down')}</button>${teamButton(s)}${routeChip(s)}${tokenSaver.button(s.id)}</div>${running && !team ? `<button type="button" class="steer-button" data-action="steer" title="Send into the running turn (${shortcut('Enter')})" aria-label="Steer the running turn">${icon('spark')}<span>Steer</span></button>` : ''}${sendControl}</div></form>${s.archived ? '<div class="composer-footnote"><span>Archived task</span></div>' : ''}`;
   $('#composer-area').insertAdjacentHTML('afterbegin', worktrees.contextBar(s, newTaskView()));
   // Approvals sit above everything that rides on the prompt, the context bar included.
   $('#composer-area').insertAdjacentHTML('afterbegin', '<div id="bot-failover-bar"></div>');
@@ -5298,6 +5386,7 @@ async function action(name: string, element: HTMLElement): Promise<void> {
     }
     case 'architect-setup': await showArchitectSetup(element); break;
     case 'team-toggle': await toggleTeam(); break;
+    case 'route-mode': await showRouteMode(element); break;
     case 'steer': await steerFromComposer(); break;
     case 'remote-retry': await retryRemoteConnection(); break;
     case 'stop': if (session()) { notify('Stopping task…'); await stopTask(session()!); } break;

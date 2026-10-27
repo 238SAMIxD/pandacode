@@ -80,7 +80,7 @@ html .workspace :is(.architect-panel,.subagents-panel).floating-menu{
 .workspace[data-wallpaper] .conversation-pane :is(.attachments>span,.preview-notice){background:var(--thread-accent);border-color:var(--thread-border)}
 .workspace[data-wallpaper] .conversation-pane .message-error{background:var(--thread-error)}
 .workspace[data-wallpaper] .conversation-pane :is(.icon-button:hover,.secondary-button:hover,.subagent-row:hover,.subagents-trigger:hover,.subagents-trigger[aria-expanded=true]){background:var(--thread-hover)}
-.workspace[data-wallpaper] .conversation-pane :is(.model-picker,.mode-picker,.composer-project):is(:active,[aria-expanded=true]),
+.workspace[data-wallpaper] .conversation-pane :is(.model-picker,.mode-picker,.route-picker,.composer-project):is(:active,[aria-expanded=true]),
 .workspace[data-wallpaper] .conversation-pane :is(.subagent-row:active,.icon-button.active,.welcome-project:hover,.welcome-project:active){background:var(--thread-accent)}
 .workspace[data-wallpaper] .conversation-pane :is(.send-button:not(.stop-button),.primary-button){background:color-mix(in srgb,var(--accent) 92%,transparent)}
 .workspace[data-wallpaper] .conversation-pane :is(.send-button:not(.stop-button),.primary-button):hover:not(:disabled){background:color-mix(in srgb,var(--accent) 98%,transparent)}

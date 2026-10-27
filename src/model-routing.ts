@@ -39,18 +39,30 @@ export function mountModelRouting(host: HTMLElement, options: ModelRoutingOption
   const statusText = $('.routing-status'), prepare = $<HTMLButtonElement>('.routing-prepare');
   const text = $<HTMLTextAreaElement>('.routing-text'), routeButton = $<HTMLButtonElement>('.routing-route'), result = $('.routing-result');
   const modes = $('.routing-modes'), off = $('.routing-off');
-  let disposed = false, status: RoutingStatus | null = null, polling = 0;
+  let disposed = false, status: RoutingStatus | null = null, polling = 0, latest = 0, writing = 0;
+  // Only the reply to the newest request renders, so an older one never undoes a later change; a read
+  // (status poll) also yields to a change still in flight, and a replaced request's failure stays quiet.
+  const request = (command: string, args?: Record<string, unknown>, write = false) => {
+    const ticket = write ? ++latest : latest;
+    if (write) writing++;
+    return options.call<RoutingStatus>(command, args).then(
+      next => { if (!disposed && ticket === latest && (write || !writing)) render(next); },
+      cause => { if (ticket === latest) throw cause; },
+    ).finally(() => { if (write) writing--; });
+  };
   // A download started elsewhere (a team turning on) finishes on its own; follow it.
   const poll = () => {
     if (polling || disposed) return;
     polling = window.setTimeout(() => {
       polling = 0;
-      options.call<RoutingStatus>('model_routing_status').then(next => { if (!disposed) render(next); }).catch(() => { if (!disposed) poll(); });
+      request('model_routing_status').catch(() => { if (!disposed) poll(); });
     }, 1000);
   };
 
   const render = (next: RoutingStatus) => {
     status = next;
+    // The composer's worker-models chip follows every status shown here.
+    window.dispatchEvent(new CustomEvent('pandacode:routing', { detail: next }));
     enabled.checked = next.enabled;
     modes.querySelectorAll<HTMLButtonElement>('button').forEach(b => {
       const on = b.dataset.mode === next.mode;
@@ -66,7 +78,7 @@ export function mountModelRouting(host: HTMLElement, options: ModelRoutingOption
     prepare.textContent = next.profiler === 'failed' ? 'Retry' : 'Download';
   };
   const fail = (cause: unknown) => { if (!disposed) { result.hidden = false; result.textContent = cause instanceof Error ? cause.message : String(cause); } };
-  const configure = (patch: Record<string, unknown>) => options.call<RoutingStatus>('model_routing_configure', patch).then(next => { if (!disposed) render(next); }).catch(fail);
+  const configure = (patch: Record<string, unknown>) => request('model_routing_configure', patch, true).catch(fail);
 
   enabled.addEventListener('change', () => void configure({ enabled: enabled.checked }));
   modes.addEventListener('click', event => {
@@ -89,7 +101,7 @@ export function mountModelRouting(host: HTMLElement, options: ModelRoutingOption
   prepare.addEventListener('click', () => {
     prepare.disabled = true;
     if (status) render({ ...status, profiler: 'downloading', error: null });
-    options.call<RoutingStatus>('model_routing_prepare').then(next => { if (!disposed) render(next); }).catch(fail).finally(() => { prepare.disabled = false; });
+    request('model_routing_prepare').catch(fail).finally(() => { prepare.disabled = false; });
   });
   routeButton.addEventListener('click', async () => {
     const task = text.value.trim();
@@ -107,6 +119,6 @@ export function mountModelRouting(host: HTMLElement, options: ModelRoutingOption
     finally { routeButton.disabled = !status?.enabled; }
   });
 
-  void options.call<RoutingStatus>('model_routing_status').then(next => { if (!disposed) render(next); }).catch(fail);
+  void request('model_routing_status').catch(fail);
   return () => { disposed = true; clearTimeout(polling); };
 }

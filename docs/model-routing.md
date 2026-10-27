@@ -44,6 +44,10 @@ Settings → Agents → Model routing:
 - **Route**: describe a task to see the pick and the alternatives, with
   P(success) and estimated cost.
 
+The mode can also be changed from the prompt box: while a task has a team and routing
+is on, a chip after **Team** shows the mode (Cheapest, Balanced, Best) and opens the same
+three choices. It is the same global setting, so it keeps whatever was used last.
+
 While routing is off, `profileId: "auto"` is not refused: the worker gets the
 lead's own model (in a named team without the lead's model, the team's first
 model) and the dispatch note says "not routed (routing is off)". `route_models`
