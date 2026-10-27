@@ -10,7 +10,6 @@ html .inspector-heading,html[data-theme] .workspace[data-wallpaper]>.inspector .
 /* Header tools: quiet clusters split by hairline gaps; active tools tint, they don't fill. */
 .header-actions{align-items:center;gap:2px}
 .header-divider{width:1px;height:16px;margin:0 6px;border-radius:var(--radius-xs);background:color-mix(in srgb,var(--text) 12%,transparent)}
-.header-actions>.view-switch{margin-right:2px}
 .header-actions .icon-button{border-radius:var(--radius-sm);color:var(--muted)}
 .header-actions .icon-button:hover{color:var(--text);background:color-mix(in srgb,var(--text) 7%,transparent)}
 html .header-actions .icon-button.active,html .workspace[data-wallpaper] .header-actions .icon-button.active{color:var(--accent-ink);background:color-mix(in srgb,var(--text) 8%,transparent)}

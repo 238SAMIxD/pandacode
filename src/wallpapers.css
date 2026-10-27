@@ -15,14 +15,13 @@ html .workspace[data-wallpaper] :is(.main-pane,.sidebar,.inspector){--muted:#505
 .workspace[data-wallpaper] .board-card-open:active{background:color-mix(in srgb,var(--accent) 6%,transparent)}
 .workspace[data-wallpaper] .board-card-start{background:color-mix(in srgb,var(--raised) 58%,transparent)}
 .workspace[data-wallpaper] .board-card-start:is(:hover,:active){background:color-mix(in srgb,var(--accent-dim) 66%,transparent)}
-html .workspace[data-wallpaper]>.main-pane>.workspace-header{background:transparent;border:0;backdrop-filter:none;-webkit-backdrop-filter:none}
+html .workspace[data-wallpaper]>.main-pane>.workspace-header{background:transparent;border:0;border-bottom:1px solid var(--line-soft);backdrop-filter:none;-webkit-backdrop-filter:none}
 html[data-theme="dark"] .workspace-wallpaper::after{background:linear-gradient(180deg,rgb(28 28 27 / var(--wallpaper-scrim-edge,.8)),rgb(28 28 27 / var(--wallpaper-scrim-center,.856)) 48%,rgb(28 28 27 / var(--wallpaper-scrim-edge,.8)))}
 html[data-theme="dark"] .workspace[data-wallpaper] :is(.main-pane,.sidebar,.inspector){--muted:#d0cfc5;--faint:#c4c3b8}
 
 /* Navigation, board cards, and threads share the same frosted material. */
-.workspace[data-wallpaper]{--workspace-frost-surface:rgb(255 255 255 / .22);--workspace-frost:blur(24px) saturate(1.1)}
-html[data-theme="dark"] .workspace[data-wallpaper]{--workspace-frost-surface:rgb(26 29 25 / .28)}
-.workspace[data-wallpaper] .view-switch{background:var(--workspace-frost-surface);backdrop-filter:var(--workspace-frost);-webkit-backdrop-filter:var(--workspace-frost)}
+.workspace[data-wallpaper]{--workspace-frost-surface:rgb(255 255 255 / .5);--workspace-frost:blur(24px) saturate(1.1)}
+html[data-theme="dark"] .workspace[data-wallpaper]{--workspace-frost-surface:rgb(26 29 25 / .55)}
 html[data-theme] .workspace[data-wallpaper]>.main-pane{background:transparent}
 html[data-theme] .workspace[data-wallpaper]>:is(.sidebar,.inspector){
   --raised:rgb(255 255 255 / .3);
@@ -46,7 +45,7 @@ html[data-theme] .workspace[data-wallpaper]>.inspector .inspector-tabs button.se
 
 /* Tint the surfaces, never their text. Only floating UI needs a blur layer. */
 .workspace[data-wallpaper] .conversation-pane{
-  --thread-surface:rgb(255 255 255 / .36);
+  --thread-surface:rgb(255 255 255 / .5);
   --thread-floating:rgb(255 255 255 / .56);
   --thread-inset:rgb(246 246 239 / .4);
   --thread-hover:rgb(214 214 201 / .36);
@@ -56,7 +55,7 @@ html[data-theme] .workspace[data-wallpaper]>.inspector .inspector-tabs button.se
   --thread-frost:blur(18px) saturate(1.1);
 }
 html[data-theme="dark"] .workspace[data-wallpaper] .conversation-pane{
-  --thread-surface:rgb(32 33 30 / .36);
+  --thread-surface:rgb(32 33 30 / .55);
   --thread-floating:rgb(32 33 30 / .56);
   --thread-inset:rgb(57 59 51 / .32);
   --thread-hover:rgb(141 145 125 / .16);
@@ -98,7 +97,6 @@ html .workspace :is(.architect-panel,.subagents-panel).floating-menu{
   html[data-theme] .workspace[data-wallpaper]>.inspector{background:var(--panel);border-color:var(--border);backdrop-filter:none;-webkit-backdrop-filter:none}
   html .workspace[data-wallpaper]>.main-pane>.workspace-header{background:var(--bg)}
   .workspace[data-wallpaper] :is(.project-board,.conversation-pane){background:var(--bg)}
-  html:root .workspace[data-wallpaper] .view-switch{background:var(--panel);backdrop-filter:none;-webkit-backdrop-filter:none}
   html:root .workspace.side-thread[data-wallpaper] .conversation-pane{background:var(--bg);backdrop-filter:none;-webkit-backdrop-filter:none}
   .workspace.side-thread[data-wallpaper] .conversation-pane::before{content:none}
   html:root .workspace[data-wallpaper] .board-card{background:var(--bg);border-color:var(--border);backdrop-filter:none;-webkit-backdrop-filter:none}

@@ -142,8 +142,11 @@ html[data-theme=dark] .sidebar .task-indicator.unread{background:var(--accent)}
 @media(min-width:651px){.sidebar .navigation{display:flex;flex-direction:column}}
 .sidebar .navigation>*{flex:none}
 .sidebar .navigation:has(>.completed-group){padding-bottom:0}
-.sidebar .sidebar-section.completed-group{position:sticky;bottom:0;z-index:1;margin:auto -10px 0;padding:6px 10px 8px;border-top:1px solid var(--border);background:var(--sidebar)}
-.sidebar .completed-group>.task-list{max-height:40vh;overflow-y:auto;overscroll-behavior:contain}
+.sidebar .sidebar-section.completed-group{position:sticky;bottom:0;z-index:1;margin:auto -8px 0;padding:6px 8px 8px;border-top:1px solid var(--border);background:var(--sidebar)}
+/* Over a wallpaper the dock is frosted like the sidebar, dense enough that rows scrolling under it stay hidden. */
+.workspace[data-wallpaper] .sidebar .sidebar-section.completed-group{background:color-mix(in srgb,var(--sidebar) 94%,transparent);backdrop-filter:var(--workspace-frost);-webkit-backdrop-filter:var(--workspace-frost)}
+/* Capped so Active and Needs review keep about half the list in short windows. */
+.sidebar .completed-group>.task-list{max-height:clamp(84px,100vh - 600px,30vh);overflow-y:auto;overscroll-behavior:contain}
 .sidebar .section-heading>.section-count{margin-left:auto}
 .sidebar .section-toggle{width:100%;border-radius:var(--radius-sm);justify-content:flex-start;--press:1}
 .sidebar .section-toggle:hover{color:var(--text);background:var(--raised)}

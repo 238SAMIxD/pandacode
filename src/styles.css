@@ -33,13 +33,15 @@ button .icon{pointer-events:none}
 .muted{color:var(--muted)}
 .workspace{--sidebar-default-width:235px;--conversation-min-width:420px;display:grid;grid-template-columns:var(--sidebar-width,var(--sidebar-default-width)) minmax(var(--conversation-min-width),1fr) var(--inspector-width,302px);height:100%;width:100%;transition:none}
 .workspace.inspector-closed{grid-template-columns:var(--sidebar-width,var(--sidebar-default-width)) minmax(var(--conversation-min-width),1fr)}
-.sidebar{position:relative;isolation:isolate;display:flex;flex-direction:column;background:radial-gradient(ellipse at 75% -15%,rgb(var(--accent-rgb) / .27),transparent 72%) 0 0/100% 190px no-repeat,var(--sidebar);border-right:1px solid var(--border);min-height:0;overflow:hidden}
+.sidebar{position:relative;isolation:isolate;display:flex;flex-direction:column;background:radial-gradient(ellipse at 75% -15%,rgb(var(--accent-rgb) / .08),transparent 72%) 0 0/100% 190px no-repeat,var(--sidebar);border-right:1px solid var(--border);min-height:0;overflow:hidden}
 .brand{height:var(--titlebar-height);display:flex;align-items:center;gap:9px;padding:0 20px;user-select:none;font-size:inherit;font-weight:var(--weight-strong);letter-spacing:0;justify-content:flex-end}
 .brand-name{font-size:var(--text-sm);font-weight:var(--weight-medium);letter-spacing:-.015em;color:var(--muted)}
 /* The workspace view menu (Conversation, Board, GitHub) sits beside the name, or in the header while the sidebar is hidden. */
 .sidebar>.brand>.brand-name{margin-left:auto}
-.icon-button.view-menu{flex:none;width:28px;height:28px;--press:1}
-.view-menu .icon{--icon-size:var(--icon-md);--icon-stroke:var(--icon-stroke-md)}
+.icon-button.view-menu{flex:none;width:auto;height:var(--control);padding:0 4px 0 6px;gap:2px;--press:1}
+.view-menu .icon{--icon-size:var(--icon-sm);--icon-stroke:var(--icon-stroke-sm)}
+.view-menu .icon+.icon{--icon-size:11px;--icon-stroke:var(--icon-stroke-xs);color:var(--faint)}
+.header-leading>#view-divider{margin:0}
 .sidebar-actions{container-type:inline-size;container-name:sidebar-actions;padding:var(--space-3);display:grid;gap:var(--space-1)}
 .sidebar-actions button>span{white-space:nowrap}
 @container sidebar-actions (max-width:14em){.sidebar-actions kbd{display:none}}
@@ -99,7 +101,7 @@ button .icon{pointer-events:none}
 .sidebar-bottom>button kbd{margin-left:auto}
 .status-dot{width:5px;height:5px;background:var(--success);border-radius:50%;display:inline-block;flex-shrink:0}
 .main-pane{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg)}
-.workspace-header{container-type:inline-size;container-name:workspace-header;height:var(--titlebar-height);border-bottom:1px solid rgb(0 0 0 / .045);display:flex;align-items:center;justify-content:space-between;padding:0 19px 0 26px;gap:20px;flex-shrink:0;background:linear-gradient(180deg,var(--accent-tint),var(--bg));backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.workspace-header{container-type:inline-size;container-name:workspace-header;height:var(--titlebar-height);border-bottom:1px solid rgb(0 0 0 / .045);display:flex;align-items:center;justify-content:space-between;padding:0 19px 0 26px;gap:20px;flex-shrink:0;background:var(--bg);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
 .breadcrumb{display:flex;align-items:center;gap:var(--space-2);min-width:0;overflow:hidden;color:var(--muted);font-size:var(--text-sm)}
 .breadcrumb>.icon{--icon-size:var(--icon-sm);--icon-stroke:var(--icon-stroke-sm)}
 .breadcrumb>button{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--text);font-size:var(--text-sm);white-space:nowrap;font-weight:var(--weight-medium)}
@@ -278,6 +280,8 @@ mark{background:color-mix(in srgb,var(--accent) 45%,transparent);color:inherit;b
 .send-button{width:var(--control);height:var(--control);background:var(--accent);color:var(--on-accent);border-radius:var(--radius-sm);flex-shrink:0}
 .send-button .icon{--icon-size:var(--icon-sm);--icon-stroke:var(--icon-stroke-xs)}
 .send-button:hover:not(:disabled){background:var(--accent-hover);color:var(--on-accent);transform:none}
+/* Nothing to send yet: the button rests dim and fills with accent once there is text or an attachment. */
+html .composer:has(#prompt:placeholder-shown):not(:has(#attachments>*)) .send-button:not(.stop-button){background:var(--fill-active);color:var(--muted)}
 .stop-button{background:var(--text);color:var(--bg)}
 /* The line under the prompt always keeps its height, so the prompt sits in the same place in
    every thread whether or not there is a context count to show. */
@@ -512,12 +516,12 @@ dialog input::placeholder{color:var(--muted)}
 .composer-area{padding-left:20px;padding-right:20px}
 .brand{padding-left:18px}
 .task-item{font-size:var(--text-xs);padding-left:18px}
-.workspace-header{padding-left:22px;background:linear-gradient(180deg,var(--accent-tint),var(--bg));border-bottom:1px solid rgb(0 0 0 / .045);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}}
+.workspace-header{padding-left:22px;background:var(--bg);border-bottom:1px solid rgb(0 0 0 / .045);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}}
 @media(max-width:920px){
 .workspace{--sidebar-default-width:195px;--conversation-min-width:330px;grid-template-columns:var(--sidebar-width,var(--sidebar-default-width)) minmax(var(--conversation-min-width),1fr);transition:none}
 .workspace.inspector-closed{grid-template-columns:var(--sidebar-width,var(--sidebar-default-width)) minmax(var(--conversation-min-width),1fr)}
 .inspector{position:absolute;right:0;top:55px;bottom:28px;width:var(--inspector-width,300px);z-index:8;border-left:1px solid var(--border);box-shadow:-20px 0 40px rgb(0 0 0 / .07);animation:none;background:var(--panel)}
-.workspace-header{gap:8px;background:linear-gradient(180deg,var(--accent-tint),var(--bg));border-bottom:1px solid rgb(0 0 0 / .045);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.workspace-header{gap:8px;background:var(--bg);border-bottom:1px solid rgb(0 0 0 / .045);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
 .breadcrumb>span:last-child{max-width:180px}
 .welcome h1{font-size:var(--text-xl);color:var(--text);font-weight:var(--weight-strong);line-height:1.25;letter-spacing:-.025em;margin:0}}
 @media(max-width:650px){
@@ -538,7 +542,7 @@ dialog input::placeholder{color:var(--muted)}
 .composer-separator{display:none}
 .composer-team-button span{display:none}
 .mode-picker span{display:none}
-.workspace-header{padding:0 11px;background:linear-gradient(180deg,var(--accent-tint),var(--bg));border-bottom:1px solid rgb(0 0 0 / .045);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.workspace-header{padding:0 11px;background:var(--bg);border-bottom:1px solid rgb(0 0 0 / .045);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
 .breadcrumb{font-size:var(--text-xs);gap:7px}
 .breadcrumb>span:last-child{max-width:130px}
 .header-actions{gap:2px}
@@ -699,7 +703,6 @@ html:is([data-native-material="liquidGlass"],[data-native-material="vibrancy"]) 
 
 /* The same hierarchy in charcoal; yellow actions always retain dark ink. */
 #theme-toggle{margin-left:auto}
-#theme-toggle[aria-pressed="true"]{color:var(--accent-ink);background:var(--fill-selected)}
 html[data-theme="dark"]{
   color-scheme:dark;
   --bg:#1c1c1b;--sidebar:#232321;--panel:#222220;--raised:#31312e;--border:#3b3b36;
@@ -707,8 +710,8 @@ html[data-theme="dark"]{
   --accent:#ffd43b;--accent-dim:#48401e;--accent-ink:#f3d778;--focus:#e4be37;--on-accent:#29230e;--accent-tint:#29271f;--accent-tint-strong:#27261e;
   --success:#83cf9c;--danger:#ff9e96;--bamboo:#adbf86;--bamboo-art-opacity:.075;
 }
-html[data-theme="dark"] .sidebar{background:radial-gradient(ellipse at 75% -15%,rgb(var(--accent-rgb) / .11),transparent 72%) 0 0/100% 190px no-repeat,var(--sidebar)}
-html[data-theme="dark"] .workspace-header{background:linear-gradient(180deg,var(--accent-tint-strong),var(--bg));border-bottom-color:rgb(255 255 255 / .055)}
+html[data-theme="dark"] .sidebar{background:radial-gradient(ellipse at 75% -15%,rgb(var(--accent-rgb) / .06),transparent 72%) 0 0/100% 190px no-repeat,var(--sidebar)}
+html[data-theme="dark"] .workspace-header{background:var(--bg);border-bottom-color:rgb(255 255 255 / .055)}
 html[data-theme="dark"] .inspector-heading{background:linear-gradient(180deg,var(--accent-tint),var(--panel));border-bottom-color:rgb(255 255 255 / .055)}
 html[data-theme="dark"] :is(.new-task-button,.primary-button,.send-button,.commit-button:not(:disabled)),
 html[data-theme="dark"] :is(.new-task-button,.primary-button,.send-button,.commit-button:not(:disabled)):hover{color:var(--on-accent)}

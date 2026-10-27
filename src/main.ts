@@ -298,7 +298,7 @@ const SORT_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="cur
 const $app = document.querySelector<HTMLDivElement>('#app')!;
 $app.innerHTML = `<div class="workspace">
   <aside id="workspace-sidebar" class="sidebar" aria-label="Projects and tasks">
-    <div class="brand" data-tauri-drag-region><span class="brand-name" data-tauri-drag-region>PandaCode</span>${button('view-menu', 'Workspace view: Conversation', 'chat', 'view-menu', 'id="view-menu" aria-haspopup="menu" aria-expanded="false"')}</div>
+    <div class="brand" data-tauri-drag-region><span class="brand-name" data-tauri-drag-region>PandaCode</span>${button('view-menu', 'Workspace view: Conversation', 'thread', 'view-menu', 'id="view-menu" aria-haspopup="menu" aria-expanded="false"')}</div>
     <div class="sidebar-actions"><button class="new-task-button" data-action="new-task">${icon('plus')}<span>New task</span><kbd>${shortcut('N')}</kbd></button><button class="new-chat-button" data-action="new-chat" title="New chat (no project)">${icon('chat')}<span>New chat</span></button><button class="search-trigger" data-action="search">${icon('search')}<span>Search</span><kbd>${shortcut('K')}</kbd></button></div>
     <div class="sidebar-projects"><button id="project-filter" class="project-filter" data-action="filter-projects" aria-label="Filter projects" aria-haspopup="dialog" aria-expanded="false"><span data-filter-label>All projects</span>${icon('down')}</button><button id="sidebar-sort" class="icon-button sidebar-sort" data-action="sidebar-sort" aria-label="Sort and view" title="Sort and view" aria-haspopup="menu" aria-expanded="false">${SORT_ICON}</button>${button('import-conversations', 'Import conversations', 'download', 'import-trigger')}${button('add-project', 'Open project', 'plus')}</div>
     <div class="sidebar-search">${icon('search')}<input id="sidebar-filter" type="search" aria-label="Filter tasks" placeholder="Filter tasks" autocomplete="off" spellcheck="false" maxlength="200" aria-keyshortcuts="/"><button type="button" class="sidebar-search-clear" data-action="clear-sidebar-filter" tabindex="-1" aria-label="Clear filter" title="Clear filter">${icon('close')}</button></div>
@@ -309,7 +309,7 @@ $app.innerHTML = `<div class="workspace">
     <div class="sidebar-bottom">${button('support', 'Help & support', 'help', 'support-button', 'id="support-button"')}${button('agent-usage', 'Agent usage', 'activity', '', 'id="agent-usage-button"')}<button data-action="archive-view" id="archive-toggle" title="Archived tasks" aria-label="Archived tasks">${icon('archive')}</button><button data-action="settings" title="Settings (${shortcut(',')})" aria-label="Settings">${icon('settings')}</button><button data-action="toggle-theme" id="theme-toggle" aria-label="Dark mode" aria-pressed="false"></button></div>
   </aside>
   <main class="main-pane">
-    <header class="workspace-header" data-tauri-drag-region="deep"><div class="header-leading" data-tauri-drag-region>${button('toggle-sidebar', 'Hide sidebar', 'sidebar', 'sidebar-toggle', 'id="sidebar-toggle" aria-controls="workspace-sidebar" aria-expanded="true" aria-keyshortcuts="Meta+B Control+B"')}<div id="breadcrumb" class="breadcrumb" data-tauri-drag-region></div></div><div class="header-actions">${preview ? '<span class="preview-status">Browser preview · sample data</span>' : ''}<button type="button" id="update-status" class="update-status" hidden>${icon('refresh')}<span>Restart to update</span></button><button type="button" class="header-run" id="run-project-button" data-action="run-project" aria-label="Run project" title="Run pandacode-run.sh" hidden>${icon('play')}<span>Run</span></button>${button('deploy', 'Deploy', 'upload', '', 'id="deploy-button" aria-haspopup="dialog"')}<span class="header-divider" aria-hidden="true"></span>${button('moodboards', 'Project moodboards', 'images')}${button('browser', 'Open browser', 'globe', '', 'id="browser-toggle"')}${button('terminal', `Toggle terminal (${shortcut('J')})`, 'terminal', '', 'id="terminal-toggle" aria-controls="terminal-drawer" aria-expanded="false"')}<span class="header-divider" aria-hidden="true"></span>${button('toggle-inspector', `Toggle inspector (${shortcut('B', true)})`, 'panel', 'active', 'id="inspector-toggle"')}${button('task-menu', 'Task actions', 'more', '', 'id="task-menu-trigger" aria-haspopup="dialog" aria-expanded="false"')}</div></header>
+    <header class="workspace-header" data-tauri-drag-region="deep"><div class="header-leading" data-tauri-drag-region>${button('toggle-sidebar', 'Hide sidebar', 'sidebar', 'sidebar-toggle', 'id="sidebar-toggle" aria-controls="workspace-sidebar" aria-expanded="true" aria-keyshortcuts="Meta+B Control+B"')}<span id="view-divider" class="header-divider" aria-hidden="true" hidden></span><div id="breadcrumb" class="breadcrumb" data-tauri-drag-region></div></div><div class="header-actions">${preview ? '<span class="preview-status">Browser preview · sample data</span>' : ''}<button type="button" id="update-status" class="update-status" hidden>${icon('refresh')}<span>Restart to update</span></button><button type="button" class="header-run" id="run-project-button" data-action="run-project" aria-label="Run project" title="Run pandacode-run.sh" hidden>${icon('play')}<span>Run</span></button>${button('deploy', 'Deploy', 'upload', '', 'id="deploy-button" aria-haspopup="dialog"')}<span class="header-divider" aria-hidden="true"></span>${button('moodboards', 'Project moodboards', 'images')}${button('browser', 'Open browser', 'globe', '', 'id="browser-toggle"')}${button('terminal', `Toggle terminal (${shortcut('J')})`, 'terminal', '', 'id="terminal-toggle" aria-controls="terminal-drawer" aria-expanded="false"')}<span class="header-divider" aria-hidden="true"></span>${button('toggle-inspector', `Toggle inspector (${shortcut('B', true)})`, 'panel', 'active', 'id="inspector-toggle"')}${button('task-menu', 'Task actions', 'more', '', 'id="task-menu-trigger" aria-haspopup="dialog" aria-expanded="false"')}</div></header>
     <div class="work-area"><section id="project-board" class="project-board" aria-label="Project board" hidden></section><section id="github-hub" aria-label="GitHub" hidden></section><section class="conversation-pane"><div id="file-tabs" class="file-tabs" role="tablist" aria-label="Open files" hidden></div><section id="file-view" class="file-view" role="tabpanel" aria-label="Open file" hidden></section><div id="task-details-heading" class="task-details-heading" hidden></div><div id="subagents-host" class="subagents-host" hidden></div><div id="transcript" class="transcript" role="log" aria-label="Conversation" aria-live="off"></div><div id="composer-area" class="composer-area"></div><div id="composer-live" class="sr-only" role="status" aria-live="polite"></div></section></div>
     <div id="terminal-drawer" class="terminal-drawer" hidden><div class="drawer-heading"><span>${icon('terminal')}<span id="terminal-project" class="muted"></span></span><div class="terminal-tabs" role="tablist" aria-label="Terminal tabs"></div><div class="terminal-heading-actions"><button class="icon-button" data-terminal-action="new" aria-label="New terminal" title="New terminal">${icon('plus')}</button><button class="icon-button" data-terminal-action="minimize" aria-label="Minimize terminal" title="Minimize terminal">${icon('minimize')}</button><button class="icon-button" data-terminal-action="close" aria-label="Close terminal" title="Close terminal" aria-haspopup="dialog">${icon('close')}</button></div></div><div id="terminal-host"></div></div>
   </main>
@@ -1093,7 +1093,7 @@ function renderNavigation(): void {
       + `<span class="task-line task-top"><span class="task-title">${title}</span>${branch}${linkMark}${projectLabel}${providerLogo(s.provider, 'task-provider')}</span></button>`);
   };
   const single = Boolean(state.projectFilter);
-  const heading = (key: string, label: string, count: number, lead = '') => `<div class="group-heading section-heading">${lead}${label}<span class="section-count">${count}</span></div>`;
+  const heading = (key: string, label: string, count: number) => `<div class="group-heading section-heading">${label}<span class="section-count">${count}</span></div>`;
   // Active and Needs review list threads that need you; their order is their own, never dragged.
   const section = (key: 'active' | 'review', label: string, name: string, tasks: Session[]) => tasks.length
     ? `<section class="task-group sidebar-section ${key}-group" data-thread-group="${key}" aria-label="${name}">${heading(key, label, tasks.length)}<div class="task-list">${tasks.map(s => row(s, !single)).join('')}</div></section>` : '';
@@ -1122,7 +1122,7 @@ function renderNavigation(): void {
   // Projectless chats get their own group, capped like a folder; a chosen project filter hides them.
   const chats = state.projectFilter || flat ? [] : visible.filter(s => !s.pinned && chatTask(s));
   const chatList = capped('chats', chats, sidebarSort.perProject);
-  const chatGroup = chats.length ? `<section class="task-group chats-group" data-thread-group="chats" aria-label="Chats">${heading('chats', 'Chats', chats.length, icon('chat'))}<div class="task-list">${chatList.rows.map(s => row(s, false, manual)).join('')}${chatList.more}</div></section>` : '';
+  const chatGroup = chats.length ? `<section class="task-group chats-group" data-thread-group="chats" aria-label="Chats">${heading('chats', 'Chats', chats.length)}<div class="task-list">${chatList.rows.map(s => row(s, false, manual)).join('')}${chatList.more}</div></section>` : '';
   // Flat list: one list of every unpinned task (chats included), each row naming its project.
   const flatTasks = flat ? visible.filter(s => !s.pinned) : [];
   const flatGroup = flat && flatTasks.length ? `<section class="task-group flat-group" data-thread-group="all" aria-label="Tasks">${heading('all', 'Tasks', flatTasks.length)}<div class="task-list">${flatTasks.map(s => row(s, false, manual, true)).join('')}</div></section>` : '';
@@ -1158,7 +1158,7 @@ function renderNavigation(): void {
   note.innerHTML = hidden && !state.archived ? `<button class="filter-note" data-action="show-all-projects" title="Show tasks from every project"><span>${hidden} more in other projects</span><strong>Show all</strong></button>` : '';
   note.hidden = !note.innerHTML;
   const archivedRows = [...visible].sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || order(a, b));
-  const pinnedGroup = pinned.length ? `<section class="task-group pinned-group" data-thread-group="pinned" aria-label="Pinned tasks">${heading('pinned', 'Pinned', pinned.length, icon('pin'))}<div class="task-list">${pinned.map(s => row(s, !single, true)).join('')}</div></section>` : '';
+  const pinnedGroup = pinned.length ? `<section class="task-group pinned-group" data-thread-group="pinned" aria-label="Pinned tasks">${heading('pinned', 'Pinned', pinned.length)}<div class="task-list">${pinned.map(s => row(s, !single, true)).join('')}</div></section>` : '';
   const empty = filtering ? '<div class="no-tasks sidebar-no-match">No tasks match</div>' : '';
   // Morph rather than replace: unchanged rows keep their nodes, so nothing flickers.
   // Rows sit one level deeper than before (.task-row around .task-item), so morph one level deeper.
@@ -1840,7 +1840,7 @@ function renderBoardView(): void {
   $('.workspace').classList.toggle('side-thread', board || (hub && state.boardPanel));
   renderSidebarVisibility();
   const viewMenu = $('#view-menu'), current = WORKSPACE_VIEWS.find(view => view.id === state.view)!;
-  viewMenu.innerHTML = icon(current.icon);
+  viewMenu.innerHTML = `${icon(current.icon)}${icon('down')}`;
   viewMenu.setAttribute('aria-label', `Workspace view: ${current.label}`);
   viewMenu.title = `Workspace view: ${current.label}`;
   syncGithubHub(hub);
@@ -1929,6 +1929,10 @@ function renderSidebarVisibility(): void {
     else viewHost.prepend(viewMenu);
     if (focused) viewMenu.focus({ preventScroll: true });
   }
+  // In the header, a hairline sets the toggle and view menu apart from help and usage.
+  const viewDivider = $('#view-divider');
+  viewDivider.hidden = viewHost.classList.contains('brand');
+  if (viewMenu.nextElementSibling !== viewDivider) viewMenu.after(viewDivider);
   toggle.setAttribute('aria-expanded', String(!collapsed));
   const label = collapsed ? 'Show sidebar' : 'Hide sidebar';
   toggle.setAttribute('aria-label', label);
@@ -1957,9 +1961,14 @@ function toggleSidebar(): void {
   // Refits existing terminals and keeps floating menus/native browser bounds aligned.
   window.dispatchEvent(new Event('resize'));
 }
-const WORKSPACE_VIEWS: { id: WorkspaceView; label: string; icon: string }[] = [{ id: 'conversation', label: 'Conversation', icon: 'chat' }, { id: 'board', label: 'Board', icon: 'board' }, { id: 'github', label: 'GitHub', icon: 'github' }];
+const WORKSPACE_VIEWS: { id: WorkspaceView; label: string; icon: string }[] = [{ id: 'conversation', label: 'Conversation', icon: 'thread' }, { id: 'board', label: 'Board', icon: 'kanban' }, { id: 'github', label: 'GitHub', icon: 'github' }];
 async function showViewMenu(anchor: HTMLElement): Promise<void> {
-  await showChoices(anchor, { title: 'Workspace view', width: 200, items: WORKSPACE_VIEWS.filter(view => view.id !== 'github' || githubEnabled()).map(view => ({ id: view.id, label: view.label, icon: view.icon, selected: view.id === state.view })), onSelect: id => setWorkspaceView(id as WorkspaceView) });
+  // In the sidebar the menu ends at the trigger's right edge, so it stays inside the sidebar; in the header it starts at its left edge.
+  if (choiceMenuCleanup && choiceMenuAnchor === anchor) { closeChoiceMenu(); return; }
+  const width = 200, rect = anchor.getBoundingClientRect();
+  const inSidebar = Boolean(anchor.closest('.sidebar'));
+  const point = { x: inSidebar ? Math.max(8, rect.right - width) : rect.left, y: rect.bottom };
+  await showChoices(anchor, { title: 'Workspace view', width, point, items: WORKSPACE_VIEWS.filter(view => view.id !== 'github' || githubEnabled()).map(view => ({ id: view.id, label: view.label, icon: view.icon, selected: view.id === state.view })), onSelect: id => setWorkspaceView(id as WorkspaceView) });
 }
 function setWorkspaceView(view: WorkspaceView): void {
   if (state.view === view) return;
@@ -4708,7 +4717,7 @@ function showCommands(): void {
   modal('Go to anything', `<div class="command-search">${icon('search')}<input id="command-query" aria-label="Search tasks and commands" placeholder="Search tasks and commands…" autocomplete="off"></div><div id="command-results" class="command-results"></div><div class="command-footer"><span>↑ ↓ to navigate</span><span>↵ to open</span><span>esc to close</span></div>`, 'command-dialog'); renderCommands('');
 }
 function renderCommands(query: string): void {
-  const commands = [{ action: 'new-task', label: 'New task', icon: 'plus', shortcut: shortcut('N') }, { action: 'new-chat', label: 'New chat (no project)', icon: 'chat', shortcut: '' }, { action: 'add-project', label: 'Open project', icon: 'folder', shortcut: '' }, { action: 'browser', label: 'Open browser', icon: 'globe', shortcut: '' }, { action: 'terminal', label: 'Toggle terminal', icon: 'terminal', shortcut: shortcut('J') }, { action: 'settings', label: 'Settings', icon: 'settings', shortcut: shortcut(',') }, { action: 'agent-usage', label: 'Agent usage', icon: 'activity', shortcut: '' }, { action: 'bots', label: 'Bots', icon: 'bot', shortcut: '' }, { action: 'import-conversations', label: 'Import conversations', icon: 'download', shortcut: '' }, { action: 'worktree', label: 'Create worktree', icon: 'branch', shortcut: '' }, ...(githubEnabled() ? [{ action: 'github-view', label: 'GitHub', icon: 'github', shortcut: '' }] : [])].filter(c => c.label.toLowerCase().includes(query.toLowerCase()));
+  const commands = [{ action: 'new-task', label: 'New task', icon: 'plus', shortcut: shortcut('N') }, { action: 'new-chat', label: 'New chat (no project)', icon: 'chat', shortcut: '' }, { action: 'add-project', label: 'Open project', icon: 'folder', shortcut: '' }, { action: 'browser', label: 'Open browser', icon: 'globe', shortcut: '' }, { action: 'terminal', label: 'Toggle terminal', icon: 'terminal', shortcut: shortcut('J') }, { action: 'settings', label: 'Settings', icon: 'settings', shortcut: shortcut(',') }, { action: 'agent-usage', label: 'Agent usage', icon: 'activity', shortcut: '' }, { action: 'bots', label: 'Bots', icon: 'bot', shortcut: '' }, { action: 'import-conversations', label: 'Import conversations', icon: 'download', shortcut: '' }, { action: 'worktree', label: 'Create worktree', icon: 'branch', shortcut: '' }, { action: 'conversation-view', label: 'Conversation', icon: 'thread', shortcut: '' }, { action: 'board-view', label: 'Board', icon: 'kanban', shortcut: '' }, ...(githubEnabled() ? [{ action: 'github-view', label: 'GitHub', icon: 'github', shortcut: '' }] : [])].filter(c => c.label.toLowerCase().includes(query.toLowerCase()));
   const tasks = listedSessions().filter(s => s.title.toLowerCase().includes(query.toLowerCase())).slice(0, 12);
   $('#command-results').innerHTML = `${commands.length ? '<div class="command-section">Commands</div>' : ''}${commands.map(c => `<button data-action="${c.action}" data-command="true">${icon(c.icon)}<span>${c.label}</span><kbd>${c.shortcut}</kbd></button>`).join('')}${tasks.length ? '<div class="command-section">Tasks</div>' : ''}${tasks.map(s => `<button data-action="select-task" data-id="${escape(s.id)}" data-command="true">${providerLogo(s.provider)}<span>${escape(s.title)}<small>${escape(state.projects.find(p => p.id === s.projectId)?.name)} · ${shortProvider(s.provider)}</small></span></button>`).join('')}${!commands.length && !tasks.length ? '<div class="inspector-empty">No matching tasks or commands.</div>' : ''}`;
   $('#command-results').querySelector('button')?.classList.add('command-selected');
