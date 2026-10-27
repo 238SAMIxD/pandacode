@@ -1,6 +1,6 @@
 // Push notifications, native side: permission, the raw APNs/FCM device token, registration with
 // the relay, foreground presentation and tap-to-inbox. Registration is quiet about a relay that
-// predates the endpoint (docs/proposals/push-notifications.md): classifyRegister sorts 404/405
+// predates the endpoint: classifyRegister sorts 404/405
 // into 'unsupported' and this module stops trying until the next launch. No task content ever
 // leaves the phone: the register body is platform + token, nothing else.
 import * as Notifications from 'expo-notifications';
@@ -77,7 +77,7 @@ export function usePushNotifications(signedIn: boolean) {
     if (signedIn) void enrollIfGranted();
     const sub = Notifications.addNotificationResponseReceivedListener(response => {
       const url = (response.notification.request.content.data as { url?: string } | null)?.url;
-      if (typeof url === 'string' && url.startsWith('redpandacode:')) void Linking.openURL(url);
+      if (typeof url === 'string' && url.startsWith('pandacode:')) void Linking.openURL(url);
     });
     return () => sub.remove();
   }, [signedIn]);

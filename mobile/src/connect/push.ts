@@ -1,7 +1,7 @@
 // Push notification registration with the relay: pure, tested in node. src/ui/push.ts holds the
-// native side (permission, device token) and calls these. The relay endpoint does not exist yet
-// (docs/proposals/push-notifications.md); until it does, registration classifies as 'unsupported'
-// and the app stays quiet — no error surface, retry on the next launch.
+// native side (permission, device token) and calls these. A relay that predates the endpoint
+// answers 404/405; registration then classifies as 'unsupported' and the app stays quiet — no
+// error surface, retry on the next launch.
 
 export const REGISTER_PATH = '/v1/push/devices';
 
