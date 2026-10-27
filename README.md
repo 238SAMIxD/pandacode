@@ -255,7 +255,7 @@ own project or worktree.
 
 The bar above the prompt shows the project, checkout and branch. Its branch chip
 is the one place for [worktrees](docs/worktrees.md): an unstarted task moves into
-a new worktree in place, a started one spawns a sibling task, and archiving a
+a new worktree in place, a started one spawns a sibling task, and settling a
 clean worktree task offers to remove its checkout and merged branch.
 
 Choose **Board** in the header to manage tasks by status. Choose **Team** in the

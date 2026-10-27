@@ -2099,7 +2099,9 @@ mod tests {
             assert_eq!(migrated.project_id, main.id);
             assert_eq!(migrated.worktree_path.as_deref(), first_path.to_str());
             assert_eq!(migrated.title, "Keep this title");
-            assert!(migrated.archived);
+            // There is no archive: an archived task is settled when the store opens.
+            assert!(!migrated.archived);
+            assert_eq!(migrated.task_stage, "completed");
             assert_eq!(migrated.mode, "plan");
             assert_eq!(migrated.resume_id.as_deref(), Some("keep-provider-resume"));
             assert_eq!(
