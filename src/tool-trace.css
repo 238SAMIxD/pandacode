@@ -2,7 +2,7 @@
 .tool-trace>summary{gap:6px;font-size:var(--thread-font);line-height:1.5}
 .tool-trace>summary>.tool-trace-icon{width:12px;height:12px;flex:none}
 .tool-trace-verb{flex:none;color:var(--muted);font-weight:var(--weight-regular)}
-.tool-trace-chip{display:inline-flex;align-items:center;gap:4px;flex:none;max-width:22ch;padding:0 6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--raised);color:var(--text);font-size:var(--text-sm);line-height:1.55}
+.tool-trace-chip{display:inline-flex;align-items:center;gap:4px;flex:none;max-width:22ch;padding:0 6px;border-radius:var(--radius-sm);background:var(--raised);color:var(--text);font-size:var(--text-sm);line-height:1.55}
 .tool-trace-chip .icon{width:11px;height:11px;flex:none;color:var(--muted)}
 .tool-trace-chip .brand-icon{width:12px;height:12px;flex:none}
 .tool-trace-chip b{font-weight:var(--weight-medium);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -26,10 +26,9 @@
 html[data-theme="dark"]{--trace-card-fill:color-mix(in srgb,var(--text) 5%,transparent)}
 /* Measured: fill a step lighter than the page (243 on 236) with a 1px lighter top edge, dividers in the
  * page's own tone, near-flat shadow, radius 12, ~14px text on 20px lines, two-line rows ~58px. */
-.tool-trace-card{--trace-hair:color-mix(in srgb,var(--text) 6%,transparent);--trace-quiet:color-mix(in srgb,var(--text) 45%,var(--bg));display:grid;gap:0;max-width:528px;padding:0;overflow:hidden;border:1px solid var(--line-soft);border-radius:var(--radius-md);background:var(--trace-card-fill);color:var(--text);font-size:var(--thread-font);line-height:20px;box-shadow:inset 0 1px 0 rgb(255 255 255 / .55),0 1px 2px rgb(0 0 0 / .04)}
+.tool-trace-card{--trace-hair:color-mix(in srgb,var(--text) 6%,transparent);--trace-quiet:color-mix(in srgb,var(--text) 45%,var(--bg));display:grid;gap:0;max-width:528px;padding:0;overflow:hidden;border-radius:var(--radius-md);background:var(--trace-card-fill);color:var(--text);font-size:var(--thread-font);line-height:20px;box-shadow:0 1px 2px rgb(0 0 0 / .04)}
 /* Fallback bodies (no rich card) get the same section padding. */
 .tool-trace-card>:not(.tc,.trace-rows){margin:0;padding:9px 12px}
-.tool-trace-card>:not(.tc,.trace-rows)+*{border-top:1px solid var(--trace-hair)}
 .tool-trace-card-head{display:flex;align-items:center;gap:8px;min-width:0}
 .tool-trace-card-meta{margin-left:auto;flex:none;color:var(--muted);font-size:var(--thread-font)}
 .tool-trace-command{min-width:0;overflow-wrap:anywhere;font-family:var(--mono);font-size:var(--thread-font)}
@@ -37,7 +36,7 @@ html[data-theme="dark"]{--trace-card-fill:color-mix(in srgb,var(--text) 5%,trans
 .tool-trace-badge.is-failed{color:var(--danger)}
 .tool-activity .tool-trace-card pre{max-height:220px;padding:8px 12px;border:0;border-radius:0;background:var(--panel);font-size:var(--mono-size);line-height:var(--leading-code)}
 .tool-trace-list,.tool-trace-todos{display:grid;margin:0;padding:0;list-style:none}
-.tool-trace-list li{display:flex;align-items:baseline;gap:8px;min-width:0;padding:4px 0;border-top:1px solid var(--line-soft)}
+.tool-trace-list li{display:flex;align-items:baseline;gap:8px;min-width:0;padding:4px 0}
 .tool-trace-list li:first-child{border-top:0}
 .tool-trace-item-title{flex:none;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:var(--weight-strong)}
 .tool-trace-item-meta{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
@@ -57,12 +56,12 @@ html[data-theme="dark"]{--trace-card-fill:color-mix(in srgb,var(--text) 5%,trans
 .tool-trace-raw-body{display:grid;gap:8px;margin-top:4px}
 
 .tool-trace-stack{display:inline-flex;flex:none;align-items:center;gap:2px;color:var(--muted)}
-.tool-trace-stack .icon{width:12px;height:12px;padding:2px;box-sizing:content-box;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--raised)}
+.tool-trace-stack .icon{width:12px;height:12px;padding:2px;box-sizing:content-box;border-radius:var(--radius-sm);background:var(--raised)}
 .tool-group[data-running] .tool-group-label{color:var(--text)}
 /* A message's hover actions hang below it (smooth.css); short summaries must stay clickable above them. */
 .tool-group-summary{position:relative;z-index:3}
 /* The thin rail the group's rows hang off; plain --border vanishes over dark wallpapers. */
-.tool-group-body{border-left-color:color-mix(in srgb,var(--border) 55%,var(--muted))}
+.tool-group-body{border-left-color:transparent}
 
 html[data-theme="dark"] .tool-activity .tool-trace-card pre{background:var(--bg)}
 @media(prefers-contrast:more){
@@ -133,7 +132,7 @@ html[data-theme="dark"] .tool-activity .tool-trace-card pre{background:var(--bg)
 /* --- Result rows (MCP records): 16px mark, bold title + muted meta, time on the right, body below ---- */
 .tool-trace-card.is-rows{display:block}
 .trace-rows{margin:0;padding:0;list-style:none}
-.trace-row{display:grid;grid-template-columns:18px minmax(0,1fr) auto;align-items:center;column-gap:10px;row-gap:0;padding:9px 12px;border-top:1px solid var(--trace-hair);font-size:var(--thread-font);line-height:20px}
+.trace-row{display:grid;grid-template-columns:18px minmax(0,1fr) auto;align-items:center;column-gap:10px;row-gap:0;padding:9px 12px;font-size:var(--thread-font);line-height:20px}
 .trace-row:first-child{border-top:0}
 .trace-row-head{display:flex;align-items:baseline;gap:7px;min-width:0;white-space:nowrap}
 /* Sampled at 1.6 s of the reference: sender #000 at medium weight, channel ~#676767, body ~#343434, time and `+N more` ~#919191. */
@@ -150,7 +149,7 @@ html[data-theme="dark"] .tool-activity .tool-trace-card pre{background:var(--bg)
 .trace-mark[data-state="merged"],.trace-mark[data-state="done"]{color:var(--trace-done)}
 .trace-mark[data-state="closed"]{color:var(--danger)}
 .trace-mark[data-state="progress"]{color:var(--trace-progress)}
-.tool-trace-card.is-rows .tool-trace-more{display:block;color:var(--trace-quiet);padding:7px 12px 8px;border-top:1px solid var(--trace-hair);font-size:var(--thread-font);line-height:18px}
+.tool-trace-card.is-rows .tool-trace-more{display:block;color:var(--trace-quiet);padding:7px 12px 8px;font-size:var(--thread-font);line-height:18px}
 /* Status hues for records (GitHub merged, Linear in progress, unread mail), not the accent. */
 :root{--trace-done:#8250df;--trace-progress:var(--warning);--trace-unread:var(--info)}
 html[data-theme="dark"]{--trace-done:#b48cf2}

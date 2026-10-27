@@ -1,5 +1,5 @@
 /* Queued follow-ups sit directly above the composer, in the composer's width. */
-.queue-panel{margin:0 0 8px;padding:8px 10px 6px;border-radius:var(--radius-md);background:color-mix(in srgb,var(--panel) 72%,transparent);border:1px solid color-mix(in srgb,var(--border) 70%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+.queue-panel{margin:0 0 8px;padding:8px 10px 6px;border-radius:var(--radius-md);background:color-mix(in srgb,var(--panel) 72%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
 .queue-heading{display:flex;align-items:center;gap:7px;padding:0 2px 4px;font-size:var(--text-xs);color:var(--muted)}
 .queue-heading strong{font-weight:600;color:var(--text)}
 .queue-count{min-width:18px;height:18px;padding:0 5px;border-radius:var(--radius-sm);display:inline-grid;place-items:center;font-size:var(--text-2xs);font-variant-numeric:tabular-nums;background:color-mix(in srgb,var(--text) 8%,transparent);color:var(--text)}
@@ -20,8 +20,8 @@
 .queue-actions .icon{width:13px;height:13px}
 .queue-down .icon{transform:rotate(180deg)}
 .queue-row.editing{flex-direction:column;align-items:stretch;gap:6px;padding:4px}
-.queue-edit{width:100%;min-height:52px;resize:vertical;padding:7px 9px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--panel);color:var(--text);font:inherit;font-size:var(--text-sm)}
-.queue-edit:focus-visible{outline:none;border-color:var(--focus);box-shadow:0 0 0 3px color-mix(in srgb,var(--focus) 14%,transparent)}
+.queue-edit{width:100%;min-height:52px;resize:vertical;padding:7px 9px;border-radius:var(--radius-sm);background:var(--fill-hover);color:var(--text);font:inherit;font-size:var(--text-sm)}
+.queue-edit:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--focus) 14%,transparent)}
 .queue-edit-actions{display:flex;justify-content:flex-end;gap:6px}
 .queue-edit-actions button{padding:4px 12px;font-size:var(--text-xs)}
 @media(hover:none){.queue-actions{opacity:1}}

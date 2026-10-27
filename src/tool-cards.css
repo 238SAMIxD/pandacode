@@ -3,7 +3,6 @@
    right-aligned time, a second line, and a quiet `+N more` footer. Nested boxes are flat. */
 .tc{display:grid;gap:0;min-width:0;font-size:var(--thread-font);line-height:1.5;color:var(--text)}
 .tc>*{padding:8px 12px}
-.tc>*+*{border-top:1px solid var(--trace-hair,var(--border))}
 .tc>:is(.tc-rows,.tc-lines,.tc-diff,.tc-term,.tc-kv){padding:0}
 .tc b{font-weight:var(--weight-strong)}
 .tc-mark{display:inline-grid;place-items:center;flex:none;width:16px;height:16px;border-radius:var(--radius-sm);color:var(--muted)}
@@ -20,7 +19,7 @@
 .tc-count{font-variant-numeric:tabular-nums}
 
 .tc-rows{display:grid;margin:0;padding:0;list-style:none}
-.tc-row{display:flex;align-items:flex-start;gap:10px;min-width:0;padding:8px 12px;font-size:var(--thread-font);line-height:1.45;border-top:1px solid var(--trace-hair,var(--border))}
+.tc-row{display:flex;align-items:flex-start;gap:10px;min-width:0;padding:8px 12px;font-size:var(--thread-font);line-height:1.45}
 .tc-row:first-child{border-top:0}
 .tc-row>.tc-mark{margin-top:1px}
 .tc-row-main{display:grid;gap:1px;flex:1;min-width:0}
@@ -32,13 +31,13 @@
 .tc-more{color:var(--trace-quiet,var(--muted));font-size:var(--thread-font)}
 .tc>.tc-more,.tc-diff-file>.tc-more{padding:6px 12px 7px}
 .tc-rows .tc-row-body{display:block;white-space:nowrap;text-overflow:ellipsis}
-.tc-rows .tc-more{padding:6px 12px 7px;border-top:1px solid var(--trace-hair,var(--border))}
+.tc-rows .tc-more{padding:6px 12px 7px}
 .tc-excerpt,.tc-prompt,.tc-empty{margin:0;overflow-wrap:anywhere;color:var(--muted)}
 .tc-prompt span,.tc-label{margin-right:4px;color:var(--muted);font-size:var(--thread-font);font-weight:var(--weight-strong);letter-spacing:.03em;text-transform:uppercase}
-.tc-pill{flex:none;margin-left:auto;padding:0 6px;border:1px solid var(--border);border-radius:var(--radius-full);color:var(--muted);font-size:var(--thread-font);font-weight:var(--weight-strong)}
-.tc-pill[data-state="done"]{color:var(--success);border-color:color-mix(in srgb,var(--success) 35%,var(--border))}
-.tc-pill[data-state="failed"]{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 35%,var(--border))}
-.tc-pill[data-state="working"]{color:var(--accent-ink,var(--text));border-color:rgb(var(--accent-rgb) / .45)}
+.tc-pill{flex:none;margin-left:auto;padding:0 6px;background:var(--fill-hover);border-radius:var(--radius-full);color:var(--muted);font-size:var(--thread-font);font-weight:var(--weight-strong)}
+.tc-pill[data-state="done"]{color:var(--success);background:color-mix(in srgb,var(--success) 14%,var(--panel))}
+.tc-pill[data-state="failed"]{color:var(--danger);background:color-mix(in srgb,var(--danger) 14%,var(--panel))}
+.tc-pill[data-state="working"]{color:var(--accent-ink,var(--text));background:var(--accent-tint)}
 
 /* Code: numbered lines and diffs share one gutter grid. */
 .tc-lines,.tc-diff{display:grid;max-height:260px;margin:0;padding:6px 0;overflow:auto;border:0;border-radius:var(--radius-md);background:var(--panel);font-family:var(--mono);font-size:var(--mono-size);line-height:var(--leading-code)}
@@ -63,8 +62,8 @@
 /* Terminal */
 .tc-term{display:grid;overflow:hidden}
 .tc-term-head{display:flex;align-items:baseline;gap:7px;min-width:0;padding:8px 12px;font-family:var(--mono);font-size:var(--mono-size)}
-.tc-term-out{max-height:240px;margin:0;padding:8px 12px;overflow:auto;border-top:1px solid var(--trace-hair,var(--border));background:var(--panel);color:var(--muted);font-family:var(--mono);font-size:var(--mono-size);line-height:var(--leading-code);white-space:pre-wrap;overflow-wrap:anywhere}
-.tc-term .tc-earlier{padding:6px 12px 0;border-top:1px solid var(--trace-hair,var(--border));background:var(--panel);font-family:var(--mono)}
+.tc-term-out{max-height:240px;margin:0;padding:8px 12px;overflow:auto;background:var(--panel);color:var(--muted);font-family:var(--mono);font-size:var(--mono-size);line-height:var(--leading-code);white-space:pre-wrap;overflow-wrap:anywhere}
+.tc-term .tc-earlier{padding:6px 12px 0;background:var(--panel);font-family:var(--mono)}
 .tc-term .tc-earlier+.tc-term-out{border-top:0}
 .tc-dollar{flex:none;color:var(--success);font-weight:700;user-select:none}
 .tc-term.is-failed .tc-dollar{color:var(--danger)}
@@ -73,7 +72,7 @@
 .tc-badge.is-failed{color:var(--danger)}
 
 /* Search hits */
-.tc-query{padding:0 5px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--panel);font-family:var(--mono);font-size:var(--mono-size)}
+.tc-query{padding:0 5px;border-radius:var(--radius-sm);background:var(--panel);font-family:var(--mono);font-size:var(--mono-size)}
 .tc-hits{display:grid;gap:1px;margin-top:2px;font-family:var(--mono);font-size:var(--mono-size)}
 .tc-hit{display:grid;grid-template-columns:3.4ch minmax(0,1fr);gap:8px;white-space:pre}
 .tc-hit .tc-gutter:only-child{display:none}
@@ -93,7 +92,7 @@
 
 /* Key/value rows for MCP input and object results. */
 .tc-kv{display:grid;grid-template-columns:minmax(0,max-content) minmax(0,1fr);margin:0;overflow:hidden}
-.tc-kv dt,.tc-kv dd{margin:0;padding:5px 12px;border-top:1px solid var(--trace-hair,var(--border));overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tc-kv dt,.tc-kv dd{margin:0;padding:5px 12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tc-kv dt:first-of-type,.tc-kv dt:first-of-type+dd{border-top:0}
 .tc-kv{font-size:var(--thread-font)}
 .tc-kv dt{color:var(--muted)}
@@ -115,7 +114,7 @@
 /* Running: one quiet status line where the result will land, swept by the same soft band as the
    running step's header (trace-motion.css). */
 .tc-running{margin:0;color:var(--muted)}
-.tc-term>.tc-running{padding:8px 12px;border-top:1px solid var(--trace-hair,var(--border));background:var(--panel);font-size:var(--thread-font)}
+.tc-term>.tc-running{padding:8px 12px;background:var(--panel);font-size:var(--thread-font)}
 @media(prefers-reduced-motion:no-preference){
   .tc-running{-webkit-mask-image:linear-gradient(90deg,#000 0 42%,rgb(0 0 0 / .28) 50%,#000 58% 100%);mask-image:linear-gradient(90deg,#000 0 42%,rgb(0 0 0 / .28) 50%,#000 58% 100%);-webkit-mask-size:300% 100%;mask-size:300% 100%;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;animation:tc-shimmer 1.6s linear infinite}
 }
@@ -124,7 +123,7 @@
 /* Raw record: a `</>` toggle in the card's top-right corner (tool-activity.ts), shown on hover or focus
    (opacity only, so it stays in the tab order); the raw sections open below the card. */
 .tool-trace-frame{position:relative;display:grid;gap:8px;min-width:0;max-width:528px}
-.tool-activity.tool-trace .tool-trace-frame>.tool-trace-raw>summary{position:absolute;top:6px;right:6px;z-index:1;justify-content:center;width:var(--control-sm);height:var(--control-sm);min-height:0;padding:0;border:1px solid var(--trace-hair,var(--border));border-radius:var(--radius-md);background:var(--bg);color:var(--muted);opacity:0}
+.tool-activity.tool-trace .tool-trace-frame>.tool-trace-raw>summary{position:absolute;top:6px;right:6px;z-index:1;justify-content:center;width:var(--control-sm);height:var(--control-sm);min-height:0;padding:0;border-radius:var(--radius-md);background:var(--bg);color:var(--muted);opacity:0}
 .tool-activity.tool-trace .tool-trace-frame:is(:hover,:focus-within)>.tool-trace-raw>summary,.tool-activity.tool-trace .tool-trace-frame>.tool-trace-raw[open]>summary{opacity:1}
 .tool-activity.tool-trace .tool-trace-frame>.tool-trace-raw>summary:is(:hover,:focus-visible){color:var(--text)}
 .tool-activity.tool-trace[open] .tool-trace-raw>summary>.icon:last-child,.tool-activity.tool-trace[open] .tool-trace-raw[open]>summary>.icon:last-child{width:14px;height:14px;transform:none}
