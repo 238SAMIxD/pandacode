@@ -45,7 +45,7 @@ html[data-theme="dark"] .branch-chip:not(:disabled):active{background:color-mix(
 
 /* Worktree dialogs. */
 .worktree-dialog{width:min(430px,calc(100vw - 32px))}
-.worktree-dialog select{padding:9px 12px;border-radius:var(--radius-sm);background:var(--panel);font-size:var(--text-sm)}
+.worktree-dialog select{padding:9px 12px;border-radius:var(--radius-sm);background:var(--fill-hover);font-size:var(--text-sm)}
 .worktree-preview{font-family:var(--mono);font-size:var(--text-2xs);overflow-wrap:anywhere}
 .worktree-preview code,.worktree-cleanup-option code,.worktree-dialog .dialog-description code{font-family:var(--mono);font-size:.92em;background:var(--raised);border-radius:var(--radius-xs);padding:1px 4px}
 .worktree-preview-invalid{color:var(--danger)}
