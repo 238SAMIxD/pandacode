@@ -265,6 +265,18 @@ pub async fn cloud_disconnect(app: AppHandle, provider: String) -> Result<Vec<Co
     .await
 }
 
+/// The images new InstaBox machines can start from, for Settings → Cloud.
+#[tauri::command]
+pub async fn cloud_instabox_images() -> Result<super::instabox::Images> {
+    crate::blocking(super::instabox::images).await
+}
+
+/// Choose the image (`template:<id>` or `snapshot:<id>` from `cloud_instabox_images`).
+#[tauri::command]
+pub async fn cloud_instabox_set_image(image: String) -> Result<super::instabox::Images> {
+    crate::blocking(move || super::instabox::set_image(&image)).await
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Machines {
@@ -300,7 +312,7 @@ pub fn machines() -> Machines {
     }
     // Google Cloud is also a deploy-only connection; list its VMs only once a cloud-agent zone is chosen.
     let gcloud_agents = super::settings().providers.get("gcloud").is_some_and(|o| o.contains_key("zone"));
-    for provider in ["gcloud", "e2b", "modal", "vercel", "codesandbox", "runloop", "blaxel", "tensorlake", "freestyle", "boat"] {
+    for provider in ["gcloud", "e2b", "modal", "vercel", "codesandbox", "runloop", "blaxel", "tensorlake", "freestyle", "boat", "instabox"] {
         if provider == "gcloud" && !gcloud_agents { continue; }
         if let Ok(sandbox) = super::sandbox::connected(provider) {
             match sandbox.list() {

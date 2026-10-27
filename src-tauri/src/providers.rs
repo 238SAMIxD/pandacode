@@ -38,11 +38,13 @@ mod cline;
 mod commandcode;
 mod extra_models;
 mod github_copilot;
+mod devin;
 mod glm;
 mod mimo;
 mod muse;
 mod deepseek;
 mod kimi_models;
+mod kilo;
 mod launch;
 mod pi;
 mod diagnostics;
@@ -53,6 +55,7 @@ mod kimi_stream_tests;
 #[cfg(test)]
 mod slash_command_tests;
 mod limits;
+mod plan_reads;
 mod steering;
 mod subagents;
 mod text_stream;
@@ -67,7 +70,7 @@ const TOOL_INPUT_LIMIT: usize = 4096;
 const TOOL_OUTPUT_LIMIT: usize = 8192;
 const TOOL_CACHE_LIMIT: usize = 64;
 const PREVIEW_TRUNCATED: &str = "\n[Preview truncated]";
-const PROVIDERS: [(&str, &str); 15] = [
+pub(crate) const PROVIDERS: [(&str, &str); 17] = [
     ("claude", "Claude Code"),
     ("codex", "Codex"),
     ("kimi", "Kimi Code"),
@@ -80,13 +83,23 @@ const PROVIDERS: [(&str, &str); 15] = [
     ("deepseek", "DeepSeek"),
     ("commandcode", "Command Code"),
     ("cline", "Cline"),
+    ("kilo", "Kilo Code"),
     ("omp", "Oh My Pi"),
     ("github-copilot", "GitHub Copilot CLI"),
     ("muse", "Muse Code"),
+    ("devin", "Devin CLI"),
 ];
 
 /// Claude Code tools that only report back to a session that stays open after its turn.
 pub(crate) const CLAUDE_SESSION_BOUND_TOOLS: &str = "ScheduleWakeup,Monitor,CronCreate";
+
+/// Never runs an agent-reviewed task under some other policy.
+fn review_supported(provider: &str, mode: &str) -> Result<(), String> {
+    if mode == "review" && !matches!(provider, "claude" | "glm" | "mimo") {
+        return Err("Approve for me needs Claude Code's auto mode; this harness has no agent-reviewed approvals. Choose another access mode.".into());
+    }
+    Ok(())
+}
 
 /// Harnesses that take app instructions as a system prompt (`--append-system-prompt`).
 pub fn takes_system_instructions(provider: &str) -> bool {
@@ -455,14 +468,14 @@ pub fn validate_reasoning_effort(provider: &str, effort: Option<&str>) -> Result
     let valid = match (provider, effort) {
         (
             "claude" | "codex" | "kimi" | "glm" | "opencode" | "antigravity" | "grok" | "mimo"
-            | "pi" | "deepseek" | "commandcode" | "cline" | "omp" | "github-copilot" | "muse",
+            | "pi" | "deepseek" | "commandcode" | "cline" | "kilo" | "omp" | "github-copilot" | "muse" | "devin",
             None,
         ) => true,
         ("claude" | "glm" | "mimo", Some(value)) => {
             ["low", "medium", "high", "xhigh", "max"].contains(&value)
         }
         // The current app-server schema deliberately permits catalog-defined effort IDs.
-        ("codex" | "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline", Some(value)) => {
+        ("codex" | "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "kilo" | "devin", Some(value)) => {
             !value.is_empty()
                 && value.len() <= 64
                 && value
@@ -512,7 +525,7 @@ pub(crate) fn executable(name: &str) -> Option<PathBuf> {
     if let Some(path) = crate::provider_settings::executable_override(name) {
         return Some(path);
     }
-    launch::find(executable_name(name))
+    launch::find(executable_name(name)).or_else(|| if name == "devin" { devin::bundled() } else { None })
 }
 
 fn executable_name(name: &str) -> &str {
@@ -550,6 +563,13 @@ pub(crate) fn muse_sandbox_args(mode: &str) -> &'static [&'static str] {
 pub(crate) fn grok_permission_mode(mode: &str) -> &'static str {
     acp::grok_permission_mode(mode)
 }
+
+/// Devin's commands for a project, from a discovery session it deletes afterwards.
+pub(crate) async fn devin_commands(path: &Path, cwd: &Path) -> Result<Option<Value>, String> {
+    devin::commands(path, cwd).await
+}
+
+pub(crate) use devin::HIDDEN_COMMANDS as DEVIN_HIDDEN_COMMANDS;
 
 pub(crate) fn glm_arguments() -> Vec<String> {
     glm::arguments()
@@ -691,7 +711,7 @@ pub(crate) async fn list_model_catalog(provider: &str) -> Result<Vec<ModelInfo>,
     let semaphore = &model_discovery_semaphores()[index];
     let _permit = if matches!(
         provider,
-        "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "github-copilot" | "muse"
+        "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "kilo" | "github-copilot" | "muse" | "devin"
     ) {
         // Saving models refreshes both windows. Queue their bounded metadata
         // queries so one window does not cache incomplete ID-only fallbacks.
@@ -718,8 +738,10 @@ pub(crate) async fn list_model_catalog(provider: &str) -> Result<Vec<ModelInfo>,
         "deepseek" => deepseek::models(&path).await,
         "commandcode" => commandcode::models(&path).await,
         "cline" => cline::models(&path).await,
+        "kilo" => kilo::models(&path).await,
         "github-copilot" => github_copilot::models(&path).await,
         "muse" => muse::models(&path).await,
+        "devin" => devin::models(&path).await,
         _ => unreachable!(),
     }
 }
@@ -1645,7 +1667,7 @@ impl Protocol {
                     json!({"experimentalApi":true,"requestAttestation":false});
                 request
             }
-            "kimi" | "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "github-copilot" => {
+            "kimi" | "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "kilo" | "github-copilot" | "devin" => {
                 json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"pandacode","version":"0.1.0"}}})
             }
             _ => {
@@ -1684,7 +1706,8 @@ impl Protocol {
                 };
                 json!({"id":request["id"],"result":result})
             }
-            "kimi" | "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "github-copilot" => {
+            "devin" => devin::decision(&request, approved),
+            "kimi" | "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "kilo" | "github-copilot" => {
                 let options = request["params"]["options"].as_array();
                 let kinds = if approved {
                     ["allow_once", "allow_always"]
@@ -1711,7 +1734,7 @@ impl Protocol {
             "codex" => {
                 json!({"id":900,"method":"turn/interrupt","params":{"threadId":self.remote_id,"turnId":self.turn_id}})
             }
-            "kimi" | "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "github-copilot" => {
+            "kimi" | "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "kilo" | "github-copilot" | "devin" => {
                 json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":self.remote_id}})
             }
             _ => {
@@ -1741,7 +1764,7 @@ impl Protocol {
             "kimi" => self.kimi_steered(value),
             "pi" | "omp" => self.pi(value).map(|step| self.steered(step)),
             "muse" => self.muse(value),
-            "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "github-copilot" => self.acp(value),
+            "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "kilo" | "github-copilot" | "devin" => self.acp(value),
             _ => self.claude(value),
         }
     }
@@ -2436,6 +2459,10 @@ impl Protocol {
                         // touch that bot's memory, schedules and messages to its owner.
                         // Team tools only exist in team turns and only change team state.
                         step.write.push(json!({"type":"control_response","response":{"subtype":"success","request_id":value["request_id"],"response":{"behavior":"allow","updatedInput":value["request"]["input"]}}}));
+                    } else if self.config.mode == "plan" && plan_reads::plan_read_only(&name, &value["request"]["input"], &self.config.cwd) {
+                        // Plan mode investigates: reads and web lookups anywhere run;
+                        // Claude's own deny rules were applied before it asked.
+                        step.write.push(json!({"type":"control_response","response":{"subtype":"success","request_id":value["request_id"],"response":{"behavior":"allow","updatedInput":value["request"]["input"]}}}));
                     } else {
                         self.approval(
                             value,
@@ -2675,8 +2702,8 @@ fn configure_command(command: &mut Command, config: &RunConfig) {
         }
         "pi" | "omp" => pi::configure(command, config),
         "muse" => muse::configure(command, config),
-        "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" => acp::configure(command, config),
-        "github-copilot" => acp::configure(command, config),
+        "opencode" | "antigravity" | "grok" | "deepseek" | "commandcode" | "cline" | "kilo" => acp::configure(command, config),
+        "github-copilot" | "devin" => acp::configure(command, config),
         "kimi" => {
             if use_model {
                 command.args(["--model", &config.model]);
@@ -2699,6 +2726,8 @@ fn configure_command(command: &mut Command, config: &RunConfig) {
             ]);
             let permission_mode = match config.mode.as_str() {
                 "auto" => "acceptEdits",
+                // Claude Code's auto mode: its safety reviewer approves routine actions.
+                "review" => "auto",
                 "plan" => "plan",
                 "full" => "bypassPermissions",
                 _ => "default",
@@ -2751,9 +2780,11 @@ async fn run_inner(
         "deepseek",
         "commandcode",
         "cline",
+        "kilo",
         "omp",
         "github-copilot",
         "muse",
+        "devin",
     ]
     .contains(&config.provider.as_str())
     {
@@ -2762,13 +2793,14 @@ async fn run_inner(
     if !crate::storage::valid_permission_mode(&config.mode) {
         return Err("Unknown permission mode".into());
     }
+    review_supported(&config.provider, &config.mode)?;
     validate_reasoning_effort(&config.provider, config.reasoning_effort.as_deref())?;
     // A cloud task runs the same pipeline through a bridge to its machine; local MCP host
     // tools stay on this computer (docs/cloud-agents.md, step 5).
     if let Some(command) = crate::cloud_agents::transport::command(&config, |command| configure_command(command, &config)).await? {
         return run_process_with_tools(config, sink, input, command, Vec::new(), None).await;
     }
-    let connection = crate::connections::for_task(&config.session_id, &config.provider)
+    let mut connection = crate::connections::for_task(&config.session_id, &config.provider)
         .map(|connection| crate::connections::launch(&connection))
         .transpose()?;
     let path = connection
@@ -2783,6 +2815,12 @@ async fn run_inner(
     // A named connection's arguments and environment win over the global setup.
     if let Some(connection) = &connection {
         connection.apply(&mut command);
+    }
+    if config.provider == "kilo" {
+        let inline = kilo::configure_environment(&mut command, &config);
+        if let Some(connection) = &mut connection {
+            connection.secrets.push(inline);
+        }
     }
     let key = if config.provider == "glm" {
         Some(glm::configure(&mut command)?)
@@ -2826,13 +2864,25 @@ async fn run_process(
 fn optional_metadata_tool(name: &str) -> bool {
     name == crate::session_titles::TOOL || name == crate::turn_changes::TRACK_TOOL
 }
-// Preview tools are an optional transport capability, but retain their normal
-// approval requirements and transcript activity. They are not metadata tools.
+// Preview, simulator, VM, design, cloud deploy, Jev, and bot tools are optional
+// transport capabilities, but retain their normal approval requirements and transcript
+// activity. They are not metadata tools.
 fn optional_transport_tool(name: &str) -> bool {
-    optional_metadata_tool(name) || matches!(name, "pandacode_run_project" | "pandacode_preview_file")
+    optional_metadata_tool(name)
+        || matches!(
+            name,
+            "pandacode_run_project" | "pandacode_preview_file" | "pandacode_cloud_cli"
+        )
+        || name.starts_with("pandacode_simulator_")
+        || name.starts_with("pandacode_vm_")
+        || name.starts_with("pandacode_design_")
+        || name.starts_with("pandacode_jev_")
+        || name.starts_with("pandacode_bot_")
 }
 fn per_run_mcp_tool(name: &str) -> bool {
-    name.starts_with("pandacode_jev_") || optional_transport_tool(name)
+    name.starts_with("pandacode_jev_")
+        || optional_metadata_tool(name)
+        || matches!(name, "pandacode_run_project" | "pandacode_preview_file")
 }
 
 fn split_jev_host(host: Option<ToolHost>) -> (Option<ToolHost>, Option<ToolHost>) {
@@ -2917,7 +2967,7 @@ async fn run_process_with_tools(
         }
         (
             "claude" | "glm" | "mimo" | "kimi" | "opencode" | "antigravity" | "grok" | "pi"
-            | "deepseek" | "commandcode" | "cline" | "omp" | "github-copilot" | "muse",
+            | "deepseek" | "commandcode" | "cline" | "kilo" | "omp" | "github-copilot" | "muse" | "devin",
             Some(host),
         ) => (
             None,
@@ -3134,6 +3184,15 @@ mod tests {
         assert!(validate_reasoning_effort("github-copilot", Some("high")).is_err());
     }
 
+    #[test]
+    fn kilo_is_registered_with_its_cli_and_catalog_defined_efforts() {
+        assert!(PROVIDERS.contains(&("kilo", "Kilo Code")));
+        assert_eq!(executable_name("kilo"), "kilo");
+        assert!(validate_reasoning_effort("kilo", None).is_ok());
+        assert!(validate_reasoning_effort("kilo", Some("max")).is_ok());
+        assert!(validate_reasoning_effort("kilo", Some("bad\nflag")).is_err());
+    }
+
     pub(super) fn config(provider: &str) -> RunConfig {
         RunConfig {
             session_id: "local".into(),
@@ -3251,7 +3310,7 @@ mod tests {
 
     #[test]
     fn preview_tools_do_not_block_normal_acp_turns_when_http_mcp_is_unavailable() {
-        for provider in ["kimi", "opencode", "antigravity", "grok"] {
+        for provider in ["kimi", "opencode", "antigravity", "grok", "cline"] {
             let mut p = Protocol::new(config(provider));
             p.mcp_server = Some(json!({"type":"http","name":"pandacode_architect"}));
             p.mcp_required = ["pandacode_run_project", "pandacode_preview_file"].iter().any(|name| !optional_transport_tool(name));
@@ -3262,6 +3321,75 @@ mod tests {
             }
             assert_eq!(step.write[0]["method"], "session/new", "{provider}");
             assert_eq!(step.write[0]["params"]["mcpServers"], json!([]), "{provider}");
+        }
+    }
+
+    #[test]
+    fn optional_host_tools_do_not_block_normal_acp_turns_when_http_mcp_is_unavailable() {
+        for name in [
+            crate::session_titles::TOOL,
+            crate::turn_changes::TRACK_TOOL,
+            "pandacode_run_project",
+            "pandacode_preview_file",
+            "pandacode_cloud_cli",
+            "pandacode_simulator_tap",
+            "pandacode_vm_exec",
+            "pandacode_design_artboard",
+            "pandacode_jev_test",
+            "pandacode_bot_recall",
+        ] {
+            assert!(optional_transport_tool(name), "{name} should be optional transport");
+        }
+        for name in [
+            "pandacode_delegate",
+            "pandacode_send_team_message",
+            "pandacode_team_status",
+            "pandacode_read_file",
+        ] {
+            assert!(!optional_transport_tool(name), "{name} must be required");
+        }
+    }
+
+    #[test]
+    fn approve_for_me_runs_only_where_the_harness_reviews_actions() {
+        for provider in ["claude", "glm", "mimo"] {
+            assert!(review_supported(provider, "review").is_ok());
+        }
+        for provider in ["codex", "kimi", "opencode", "antigravity", "grok", "pi", "omp", "deepseek", "commandcode", "cline", "kilo", "github-copilot", "muse"] {
+            assert!(review_supported(provider, "review").unwrap_err().contains("Approve for me"), "{provider}");
+            assert!(review_supported(provider, "ask").is_ok());
+        }
+    }
+
+    #[test]
+    fn claude_plan_mode_runs_reads_and_web_lookups_but_asks_for_the_rest() {
+        let permission = |mode: &str, name: &str, input: Value| {
+            let mut cfg = config("claude");
+            cfg.mode = mode.into();
+            let mut p = Protocol::new(cfg);
+            let step = p.receive(json!({"type":"control_request","request_id":"r","request":{"subtype":"can_use_tool","tool_name":name,"input":input}})).unwrap();
+            step.write.first().map(|w| w["response"]["response"]["behavior"].clone())
+        };
+        for (name, input) in [
+            ("Read", json!({"file_path":"/Users/me/other-repo/README.md"})),
+            ("Grep", json!({"pattern":"token","path":"/opt/lib"})),
+            ("Glob", json!({"pattern":"**/*.md","path":"/Users/me/docs"})),
+            ("WebFetch", json!({"url":"https://docs.example.com","prompt":"summary"})),
+            ("WebSearch", json!({"query":"tauri updater"})),
+        ] {
+            assert_eq!(permission("plan", name, input.clone()), Some(json!("allow")), "{name}");
+            assert_eq!(permission("ask", name, input), None, "{name} keeps Standard approvals");
+        }
+        // Credentials and anything that changes state still go to the user.
+        for (name, input) in [
+            ("Read", json!({"file_path":"/Users/me/.ssh/id_ed25519"})),
+            ("Read", json!({"file_path":"/Users/me/project/.env"})),
+            ("Glob", json!({"pattern":"/Users/me/.aws/*"})),
+            ("Write", json!({"file_path":"/tmp/a.txt","content":"x"})),
+            ("Edit", json!({"file_path":"/tmp/a.txt"})),
+            ("Bash", json!({"command":"cat README.md"})),
+        ] {
+            assert_eq!(permission("plan", name, input), None, "{name}");
         }
     }
 
@@ -3677,6 +3805,7 @@ mod tests {
             for (mode, expected) in [
                 ("ask", "default"),
                 ("auto", "acceptEdits"),
+                ("review", "auto"),
                 ("plan", "plan"),
                 ("full", "bypassPermissions"),
             ] {
