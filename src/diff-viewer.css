@@ -56,7 +56,6 @@
 .diff-viewer-button[aria-pressed="true"] {
   background: var(--raised);
   color: var(--text);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 8%);
 }
 .diff-viewer-wrap[aria-pressed="true"] { color: var(--accent); background: var(--accent-dim); }
 :root[data-theme="light"] .diff-viewer-wrap[aria-pressed="true"] { color: var(--accent-ink); }

@@ -19,7 +19,6 @@
   gap: 8px;
   height: 32px;
   padding: 0 4px 0 6px;
-  border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
 .cv-scope {
@@ -55,7 +54,6 @@
   gap: 6px;
   height: 34px;
   padding: 0 6px;
-  border-bottom: 1px solid var(--border);
 }
 .cv-commit[hidden] { display: none; }
 .cv-commit-input {
@@ -84,7 +82,7 @@
   overscroll-behavior: contain;
   outline: none;
 }
-.cv-file { border-bottom: 1px solid var(--border); }
+.cv-file { }
 .cv-file-header {
   position: sticky;
   top: 0;
@@ -95,10 +93,9 @@
   height: 30px;
   padding: 0 4px 0 2px;
   background: var(--panel);
-  border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
-.cv-file.collapsed .cv-file-header { border-bottom-color: transparent; }
+.cv-file.collapsed .cv-file-header { }
 .cv-toggle { width: 20px; height: 20px; flex: 0 0 auto; border-radius: var(--radius-sm); color: var(--muted) !important; }
 .cv-toggle:hover { background: var(--raised); }
 .cv-chevron { width: 13px; height: 13px; rotate: 90deg; }

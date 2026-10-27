@@ -43,6 +43,8 @@ const SHADOW_CSS = `
   pre[data-diff] [data-code]::-webkit-scrollbar { height: 10px; background: transparent; }
   pre[data-diff] [data-code]::-webkit-scrollbar-thumb { background: color-mix(in srgb, currentColor 35%, transparent); border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }
   pre[data-diff] [data-code]::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, currentColor 55%, transparent); background-clip: content-box; }
+  [data-file-info] { border-block: 0; }
+  pre[data-diff] [data-gutter] { background-color: color-mix(in srgb, var(--diffs-fg, currentColor) 5%, var(--diffs-bg)); }
   pre[data-diff] [data-separator='metadata'] { height: 20px; }
   pre[data-diff] [data-separator='metadata'] [data-separator-wrapper] {
     font-size: .68rem; line-height: 20px; opacity: .8;
