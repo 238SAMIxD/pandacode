@@ -88,12 +88,7 @@ button .icon{pointer-events:none}
 .activity-toggle:hover{background:var(--raised)}
 .activity-toggle .icon{--icon-size:var(--icon-xs);--icon-stroke:var(--icon-stroke-xs);margin-left:auto}
 .activity-toggle[aria-expanded="false"] .icon{transform:rotate(-90deg)}
-.filter-note{display:flex;align-items:center;gap:8px;width:calc(100% - 12px);margin:18px 6px 4px;padding:8px 11px;border-radius:var(--radius-sm);background:var(--raised);font-size:var(--text-2xs);line-height:1.5;color:var(--muted);text-align:left}
-.filter-note span{margin-left:auto;color:var(--focus);font-weight:var(--weight-medium);white-space:nowrap}
-.filter-note:hover{color:var(--text)}
-.filter-note:hover span{text-decoration:underline}
 .sidebar-empty{padding:12px;line-height:1.7}
-.archive-label{font-size:var(--text-xs);color:var(--accent-ink);padding:5px 11px 16px}
 .sidebar-bottom{border-top:none;padding:10px 14px;display:flex;gap:6px;align-items:center}
 .sidebar-bottom>button{justify-content:center;padding:7px;font-size:var(--text-sm);color:var(--muted);border-radius:var(--radius-sm);width:var(--control-lg);height:var(--control-lg)}
 .sidebar-bottom>button:hover,.sidebar-bottom>button.active{background:var(--raised)}

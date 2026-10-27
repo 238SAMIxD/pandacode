@@ -106,11 +106,11 @@ test.describe('task deletion', () => {
     await expect(page.getByRole('log', { name: 'Conversation', exact: true })).not.toContainText('Search feels a little slow.');
   });
 
-  test('allows an archived task to be deleted without restoring it first', async ({ page }) => {
+  test('allows a task still archived from older data to be deleted; it shows as settled', async ({ page }) => {
     await openMain(page, "sessions[0].archived = true;");
-    await page.getByRole('button', { name: 'Archived tasks', exact: true }).click();
+    await page.getByRole('button', { name: /^Settled/ }).click();
     await taskRow(page, 'session-1').click();
-    await expect(page.locator('#composer-area')).toContainText('This task is archived.');
+    await expect(page.locator('#composer-area')).toContainText('This task is settled.');
     await openDelete(page);
     await confirmation(page).getByRole('button', { name: 'Delete task', exact: true }).click();
     await expect(taskRow(page, 'session-1')).toHaveCount(0);

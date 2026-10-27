@@ -1,31 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { REVIEW_WINDOW, readOpen, sectionOf, sidebarSections } from '../src/sidebar-sections.ts';
+import { readOpen, sectionOf, sidebarSections } from '../src/sidebar-sections.ts';
 
-const now = 10 * REVIEW_WINDOW;
+const now = 10 * 24 * 60 * 60 * 1000;
 const task = (id, extra = {}) => ({ id, projectId: 'p', createdAt: 1, updatedAt: 1, lastResponseAt: null, taskStage: 'pending', ...extra });
 const ids = list => list.map(t => t.id);
 const split = (tasks, options = {}) => sidebarSections({
-  tasks, now, active: t => Boolean(t.running), stage: t => t.taskStage, ...options,
+  tasks, active: t => Boolean(t.running), stage: t => t.taskStage, ...options,
 });
 
 test('puts every task in exactly one section', () => {
   const tasks = [
     task('run', { running: true, taskStage: 'in_progress' }),
     task('fresh', { taskStage: 'review', lastResponseAt: now - 60_000 }),
-    task('stale', { taskStage: 'review', lastResponseAt: now - REVIEW_WINDOW - 1 }),
+    task('old', { taskStage: 'review', lastResponseAt: 1 }),
     task('idea'),
     task('done', { taskStage: 'completed', completedAt: now - 5 }),
   ];
   const sections = split(tasks);
   assert.deepEqual(ids(sections.active), ['run']);
-  assert.deepEqual(ids(sections.review), ['fresh']);
-  assert.deepEqual(ids(sections.rest), ['stale', 'idea']);
+  assert.deepEqual(ids(sections.review), ['fresh', 'old']);
+  assert.deepEqual(ids(sections.rest), ['idea']);
   assert.deepEqual(ids(sections.completed), ['done']);
   assert.equal(Object.values(sections).flat().length, tasks.length);
 });
 
-test('Active lists the latest start first and Needs review the latest response, whatever the manual order', () => {
+test('Active lists the latest start first and Finished the latest response, whatever the manual order', () => {
   const tasks = [task('b', { running: true, lastPromptAt: 5 }), task('a', { running: true, lastPromptAt: 9 }), task('d', { taskStage: 'review', lastResponseAt: now - 2 }), task('c', { taskStage: 'review', lastResponseAt: now - 1 })];
   const sections = split(tasks);
   assert.deepEqual(ids(sections.active), ['a', 'b']);
@@ -55,12 +55,12 @@ test('running threads are Active even when pinned or open; pinned review work st
   assert.deepEqual(ids(placed.completed), ['pinDone']);
 });
 
-test('Needs review lists only unseen turns, and a held open thread stays there', () => {
-  const tasks = [task('seen', { taskStage: 'review', lastResponseAt: now - 1 }), task('new', { taskStage: 'review', lastResponseAt: now - 1 })];
-  const unseen = t => t.id === 'new';
-  assert.deepEqual(ids(split(tasks, { unseen }).review), ['new']);
-  assert.deepEqual(ids(split(tasks, { unseen, selectedId: 'seen', hold: 'review' }).review), ['new', 'seen']);
-  assert.deepEqual(ids(split(tasks, { unseen, selectedId: 'new' }).review), []);
+test('Finished keeps every finished task, open or not, until it is settled', () => {
+  const tasks = [task('a', { taskStage: 'review', lastResponseAt: now - 2 }), task('b', { taskStage: 'review', lastResponseAt: now - 1 })];
+  assert.deepEqual(ids(split(tasks).review), ['b', 'a']);
+  assert.deepEqual(ids(split(tasks, { selectedId: 'a' }).review), ['b', 'a']);
+  assert.deepEqual(ids(split(tasks, { selectedId: 'a', hold: 'review' }).review), ['b', 'a']);
+  assert.deepEqual(ids(split([{ ...tasks[0], taskStage: 'completed' }], { selectedId: 'other' }).completed), ['a']);
 });
 
 test('the open thread holds its section, so a click on its row never moves it; running still wins', () => {

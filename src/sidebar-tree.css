@@ -134,7 +134,7 @@ html[data-theme=dark] .sidebar .task-indicator.unread{background:var(--accent)}
 .sidebar .task-item.selected{font-weight:var(--weight-medium)}
 .sidebar .task-project{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 
-/* Sections: Active and Needs review above the tree, Completed (closed by default) below it. */
+/* Sections: Active and Finished above the tree, Settled (closed by default) below it. */
 .sidebar .sidebar-section{margin-bottom:6px}
 /* Completed docks at the bottom of the list, above the Bots bar, so running work never pushes it out
    of sight: the list is a column, the section takes the space left below the folders and sticks to the
@@ -142,16 +142,29 @@ html[data-theme=dark] .sidebar .task-indicator.unread{background:var(--accent)}
 @media(min-width:651px){.sidebar .navigation{display:flex;flex-direction:column}}
 .sidebar .navigation>*{flex:none}
 .sidebar .navigation:has(>.completed-group){padding-bottom:0}
-.sidebar .sidebar-section.completed-group{position:sticky;bottom:0;z-index:1;margin:auto -8px 0;padding:6px 8px 8px;background:color-mix(in srgb,var(--text) 3%,var(--sidebar))}
-/* Over a wallpaper the dock is frosted like the sidebar, dense enough that rows scrolling under it stay hidden. */
-.workspace[data-wallpaper] .sidebar .sidebar-section.completed-group{background:color-mix(in srgb,var(--sidebar) 96%,transparent);backdrop-filter:var(--workspace-frost);-webkit-backdrop-filter:var(--workspace-frost)}
-/* Capped so Active and Needs review keep about half the list in short windows. */
+.sidebar .sidebar-section.completed-group{position:sticky;bottom:0;z-index:1;margin:auto -8px 0;padding:6px 8px 8px;background:var(--sidebar)}
+/* Over a wallpaper the dock takes the sidebar's own frost tint, opaque: the sidebar's frost is .5–.55 over a .86
+   scrim, so this reads as the same surface (no block) while rows scrolling under it stay hidden. A nested backdrop blur
+   cannot help: the frosted sidebar is the backdrop root, so WebKit and Chrome draw the rows under it unblurred. */
+.workspace[data-wallpaper] .sidebar .sidebar-section.completed-group{background:rgb(255 255 255)}
+html[data-theme="dark"] .workspace[data-wallpaper] .sidebar .sidebar-section.completed-group{background:rgb(26 29 25)}
+/* Capped so Active and Finished keep about half the list in short windows. */
 .sidebar .completed-group>.task-list{max-height:clamp(84px,100vh - 600px,30vh);overflow-y:auto;overscroll-behavior:contain}
 .sidebar .section-heading>.section-count{margin-left:auto}
 .sidebar .section-toggle{width:100%;border-radius:var(--radius-sm);justify-content:flex-start;--press:1}
 .sidebar .section-toggle:hover{color:var(--text);background:var(--raised)}
 .sidebar .section-toggle>.icon{--icon-size:var(--icon-xs);--icon-stroke:var(--icon-stroke-xs);color:var(--muted);rotate:90deg}
 .sidebar .section-toggle[aria-expanded=false]>.icon{rotate:0deg}
+/* Active and Finished fold from a plain heading: a line runs from the label to the count, which sits at the
+   row's right edge like every other heading; on hover or focus the chevron takes the count's place. */
+.sidebar .section-fold{position:relative;width:100%;--press:1}
+.sidebar .section-fold>.section-rule{flex:1;min-width:12px;height:1px;background:var(--tree-guide)}
+.sidebar .section-fold>.section-count{margin-left:0}
+.sidebar .section-fold>.icon{position:absolute;right:9px;--icon-size:var(--icon-xs);--icon-stroke:var(--icon-stroke-xs);color:var(--muted);rotate:90deg;opacity:0}
+.sidebar .section-fold:is(:hover,:focus-visible)>.icon{opacity:1}
+.sidebar .section-fold:is(:hover,:focus-visible)>.section-count{visibility:hidden}
+.sidebar .section-fold[aria-expanded=false]>.icon{rotate:0deg}
+.sidebar .section-fold:hover{color:var(--text)}
 
 /* Row actions are the row button's siblings, over its right edge: shown on hover or focus,
    where the row's age and status step aside for them. A completed row keeps its tick. */
@@ -176,7 +189,6 @@ html[data-theme] .workspace[data-wallpaper]>.sidebar .task-row:has(>.task-item.s
 .sidebar .task-more{--press:1}
 .sidebar .task-action:hover{color:var(--text);background:color-mix(in srgb,var(--text) 8%,transparent)}
 .sidebar .task-action:disabled{opacity:.4}
-.sidebar .task-delete:not(:disabled):hover{color:var(--danger)}
 .sidebar .task-check .icon{--icon-size:var(--icon-xs);--icon-stroke:var(--icon-stroke-xs);padding:1px;border-radius:50%;box-shadow:inset 0 0 0 1.25px currentColor;box-sizing:content-box}
 .sidebar .task-check.checked .icon{background:var(--accent);color:var(--on-accent);box-shadow:none}
 .sidebar .task-check.checked:hover .icon{background:var(--accent-hover)}
@@ -187,14 +199,6 @@ html[data-theme] .workspace[data-wallpaper]>.sidebar .task-row:has(>.task-item.s
 .folder-more:hover{color:var(--text);background:var(--raised)}
 .sidebar .folder-tasks>.no-tasks{padding:5px 8px 6px;font-size:var(--text-xs)}
 .sidebar .single-project .task-list{gap:1px}
-/* "N more in other projects" sits under the list as a single quiet line. */
-.sidebar-note{flex:none;padding:4px 8px 2px}
-.sidebar-note[hidden]{display:none}
-.sidebar .sidebar-note .filter-note{display:flex;align-items:center;gap:8px;width:100%;height:28px;margin:0;padding:0 9px;border-radius:var(--radius-sm);background:transparent;font-size:var(--text-xs);line-height:1;color:var(--muted)}
-.sidebar .sidebar-note .filter-note>span{margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:inherit;font-weight:var(--weight-regular)}
-.sidebar .sidebar-note .filter-note>strong{margin-left:auto;flex:none;font-weight:var(--weight-medium);color:var(--focus)}
-.sidebar .sidebar-note .filter-note:hover{background:var(--raised);color:var(--text)}
-@media(max-width:650px){.sidebar-note{display:none}}
 
 @media(prefers-contrast:more){.sidebar{--tree-guide:var(--border)}.sidebar .task-item[data-activity=inactive] .task-title{color:var(--text)}}
 /* Icon rail on narrow windows: keep the actions square like the rest of the rail. */
@@ -248,6 +252,6 @@ html[data-theme=dark] .toast-undo{color:var(--accent)}
 /* Flat list: each row names its project after the title, while there is room. Titles come first:
    in a narrow sidebar only the project icon stays (the name is in the row's tooltip). */
 .sidebar .navigation{container:sidebar-nav / inline-size}
-.sidebar .flat-group .task-top>.task-app-icon{width:var(--icon-sm);height:var(--icon-sm)}
+.sidebar .all-group .task-top>.task-app-icon{width:var(--icon-sm);height:var(--icon-sm)}
 .sidebar .task-project-name{flex:0 1 auto;min-width:4.5em;max-width:35%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--text-2xs);color:var(--faint)}
 @container sidebar-nav (max-width:264px){.sidebar .task-project-name{display:none}}

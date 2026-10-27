@@ -1002,19 +1002,16 @@ test('chooses a project filter from its anchored menu using the keyboard', async
   await expect(page.locator('#navigation .task-item')).toHaveCount(4);
 });
 
-test('all projects: folder headings show the project icon and rows are one line without the project name', async ({ page }) => {
-  const folders = page.locator('#navigation .folder-group:not(.single-project)');
-  await expect(page.locator('#navigation .folder-heading')).toHaveCount(2);
-  await expect(page.locator('#navigation .folder-heading > .task-app-icon')).toHaveCount(2);
-  // The only drawn icon is the open/closed chevron; the project shows its own icon.
-  await expect(page.locator('#navigation .folder-heading > svg.icon:not(.folder-chevron)')).toHaveCount(0);
-  await expect(page.locator('#navigation .folder-heading > svg.folder-chevron')).toHaveCount(2);
-  await expect(folders.locator('.task-item .task-checkout')).toHaveCount(0);
-  await expect(folders.locator('.task-item .task-top .task-title').first()).toBeVisible();
+test('all projects: no folder headings; Tasks rows are one line and lead with their project icon', async ({ page }) => {
+  const tasks = page.locator('#navigation [data-thread-group="all"]');
+  await expect(page.locator('#navigation .folder-heading')).toHaveCount(0);
+  await expect(tasks.locator('.task-item .task-top > .task-app-icon').first()).toBeVisible();
+  await expect(tasks.locator('.task-item .task-checkout')).toHaveCount(0);
+  await expect(tasks.locator('.task-item .task-top .task-title').first()).toBeVisible();
   // Each row is one line, with its harness and linked PR beside the title.
-  await expect(folders.locator('.task-item .task-meta')).toHaveCount(0);
-  await expect(folders.locator('.task-item .task-top .task-provider').first()).toBeVisible();
-  for (const height of await folders.locator('.task-item').evaluateAll(rows => rows.map(row => row.getBoundingClientRect().height))) expect(height).toBeLessThan(36);
+  await expect(tasks.locator('.task-item .task-meta')).toHaveCount(0);
+  await expect(tasks.locator('.task-item .task-top .task-provider').first()).toBeVisible();
+  for (const height of await tasks.locator('.task-item').evaluateAll(rows => rows.map(row => row.getBoundingClientRect().height))) expect(height).toBeLessThan(36);
   // One project on its own is named by the filter, which shows its icon: one line per task too.
   await chooseProjectFilter(page, 'pandacode');
   await expect(page.locator('#project-filter > .task-app-icon')).toHaveCount(1);
@@ -1026,30 +1023,6 @@ test('all projects: folder headings show the project icon and rows are one line 
   for (const height of await page.locator('#navigation .task-item').evaluateAll(rows => rows.map(row => row.getBoundingClientRect().height))) expect(height).toBeLessThan(36);
   await chooseProjectFilter(page, 'All projects');
   await expect(page.locator('#project-filter > .task-app-icon')).toHaveCount(0);
-});
-
-test('says how many tasks the project filter hides and shows them all in one click', async ({ page }) => {
-  const note = page.locator('#sidebar-note .filter-note');
-  await expect(note).toHaveCount(0);
-  await expect(page.locator('#navigation .folder-heading')).toHaveCount(2);
-  await chooseProjectFilter(page, 'pandacode');
-  await expect(page.locator('#navigation .task-title')).toHaveText(['Explore the project']);
-  // The filter already names the project: no folder heading, and the note sits under the list.
-  await expect(page.locator('#navigation .folder-heading')).toHaveCount(0);
-  await expect(note).toHaveText('3 more in other projectsShow all');
-  // The note closes the task list; the Bots section and the bottom bar follow it.
-  const noteBox = (await note.boundingBox())!, below = (await page.locator('#sidebar-bots').boundingBox())!;
-  expect(noteBox.y + noteBox.height).toBeLessThanOrEqual(below.y + 1);
-  expect(below.y - (noteBox.y + noteBox.height)).toBeLessThan(24);
-  expect(noteBox.height).toBeLessThanOrEqual(36);
-  await page.getByRole('button', { name: 'Show all' }).click();
-  await expect(projectFilter(page)).toHaveText('All projects');
-  await expect(page.locator('#navigation .task-item')).toHaveCount(4);
-  await expect(note).toHaveCount(0);
-  // Opening a project narrows the sidebar to it; the note is what keeps that legible.
-  await page.locator('#navigation .task-item', { hasText: 'Explore the project' }).click();
-  await chooseProjectFilter(page, 'orbit');
-  await expect(note).toHaveText('1 more in other projectsShow all');
 });
 
 test('finds and selects projects beyond the first hundred filter options', async ({ page }) => {
@@ -2293,39 +2266,32 @@ test('saved user prompts keep old threads active until their own 24 hour boundar
     return time;
   });
   await expect(taskRow(page, 'session-4', 'active')).toBeVisible();
-  // The newest work leads: pandacode's folder now sits above orbit's.
-  await expect(page.locator('#navigation .folder-group').first()).toHaveAttribute('data-project', 'project-2');
   await page.clock.pauseAt(sentAt + 24 * 60 * 60 * 1000 - 1);
   await expect(taskRow(page, 'session-4', 'active')).toBeVisible();
   await page.clock.fastForward(1);
   await expect(taskRow(page, 'session-4', 'inactive')).toBeVisible();
 });
 
-test('groups tasks into project folders and remembers a collapsed folder', async ({ page }) => {
+test('lists pending tasks of every project in one Tasks section that folds and stays folded', async ({ page }) => {
+  // Finished work sits in Finished; pending samples are listed under Tasks.
+  await page.route('**/src/preview.ts*', async route => {
+    const response = await route.fetch();
+    await route.fulfill({ response, body: (await response.text()).replace(/const providers\s*=/, `for (const s of sessions) s.taskStage = 'pending';\n$&`) });
+  });
+  await page.reload();
   await expect(projectFilter(page)).toHaveText('All projects');
-  const orbit = page.getByRole('region', { name: 'orbit tasks', exact: true });
-  const pandacode = page.getByRole('region', { name: 'pandacode tasks', exact: true });
-  await expect(orbit.locator('.task-title')).toHaveText(['Make search feel instant', 'Refine the navigation', 'Add keyboard shortcuts']);
-  await expect(pandacode.locator('.task-title')).toHaveText(['Explore the project']);
+  const tasks = page.getByRole('region', { name: 'Tasks', exact: true });
+  await expect(tasks.locator('.task-title')).toHaveText(['Make search feel instant', 'Refine the navigation', 'Add keyboard shortcuts', 'Explore the project']);
   await expect(activeRows(page).locator('.task-title')).toHaveText(['Make search feel instant']);
-  // The folder names the project; the row keeps it for assistive technology.
+  // The row names its project, visibly once the sidebar is wide enough and always for assistive technology.
   await expect(taskRow(page, 'session-4').locator('.task-project')).toHaveText('pandacode');
-  await expect(taskRow(page, 'session-4').locator('.task-project')).not.toBeInViewport();
-  const toggle = pandacode.getByRole('button', { name: 'pandacode', exact: true });
+  const toggle = tasks.getByRole('button', { name: /^Tasks/ });
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-  await expect(pandacode.locator('.task-item:visible')).toHaveCount(0);
-  await expect(orbit.locator('.task-item:visible')).toHaveCount(3);
+  await expect(tasks.locator('.task-item')).toHaveCount(0);
   await page.reload();
-  await expect(page.getByRole('region', { name: 'pandacode tasks', exact: true }).getByRole('button', { name: 'pandacode', exact: true })).toHaveAttribute('aria-expanded', 'false');
-  // Opening a task hidden in a collapsed folder opens that folder.
-  await page.locator('.search-trigger').click();
-  await page.getByRole('textbox', { name: 'Search tasks and commands', exact: true }).fill('Explore');
-  await page.locator('#command-results [data-action="select-task"][data-id="session-4"]').click();
-  await expect(taskRow(page, 'session-4')).toHaveAttribute('aria-current', 'page');
-  await expect(pandacode.getByRole('button', { name: 'pandacode', exact: true })).toHaveAttribute('aria-expanded', 'true');
-  await expect(taskRow(page, 'session-4')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Tasks', exact: true }).getByRole('button', { name: /^Tasks/ })).toHaveAttribute('aria-expanded', 'false');
 });
 
 test('moves a task to inactive automatically at the 24 hour response boundary', async ({ page }) => {
@@ -2726,18 +2692,12 @@ for (const delayedCommand of ['add_project', 'list_projects']) {
     await expect(settings.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
     await expect(settings.getByRole('button', { name: 'Back to the workspace', exact: true })).toBeVisible();
     await page.evaluate(() => {
-      const navigation = document.querySelector('#navigation')!;
-      const observer = new MutationObserver(() => {
-        (window as any).__pandacodeFolderNavigationUpdated = true;
-        observer.disconnect();
-      });
-      observer.observe(navigation, { childList: true });
       (window as any).__pandacodeDelayFolder = false;
       (window as any).__pandacodeReleaseFolder();
       delete (window as any).__pandacodeReleaseFolder;
     });
-    await expect.poll(() => page.evaluate(() => (window as any).__pandacodeFolderNavigationUpdated)).toBe(true);
-    expect(await previewProjectNames(page)).toContain('canceled-task-folder');
+    // All projects draws no folders, so a new empty project changes nothing in the list.
+    await expect.poll(() => previewProjectNames(page)).toContain('canceled-task-folder');
     await expect(settings.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
     // The workspace behind the page is hidden from assistive technology, so read the composer directly.
     await expect(page.locator('#prompt')).toHaveAttribute('data-session-id', sessionId!);
@@ -3415,23 +3375,3 @@ test('streaming keeps the transcript at the bottom after sending and leaves a re
   expect(Math.abs(await historyOffset(anchor) - anchorY)).toBeLessThan(2);
 });
 
-test('shows a folder’s new-task button on focus and hover and starts a task in that project', async ({ page }) => {
-  const second = page.locator('#navigation .folder-group').nth(1);
-  const name = (await second.locator('.folder-heading span').last().textContent())!;
-  const add = second.locator('.folder-new-task');
-  await expect(add).toHaveCSS('opacity', '0');
-  await add.focus();
-  await expect(add).toHaveCSS('opacity', '1');
-  await page.mouse.move(0, 0);
-  await add.blur();
-  await second.locator('.folder-row').hover();
-  await expect(add).toHaveCSS('opacity', '1');
-  await add.click();
-  await expect(newTaskHeading(page)).toHaveAccessibleName(`What should we build in ${name}?`);
-  // The heading itself still only folds the project's tasks.
-  const heading = second.locator('.folder-heading');
-  const expanded = await heading.getAttribute('aria-expanded');
-  await heading.click();
-  await expect(heading).toHaveAttribute('aria-expanded', expanded === 'true' ? 'false' : 'true');
-  await expect(newTaskHeading(page)).toHaveAccessibleName(`What should we build in ${name}?`);
-});

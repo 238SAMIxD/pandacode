@@ -65,7 +65,7 @@ export function taskComparator(sort: TaskSort): (a: Session, b: Session) => numb
 export function compareStarted(a: Session, b: Session): number {
   return newest(a.lastPromptAt ?? a.createdAt, b.lastPromptAt ?? b.createdAt) || settle(a, b);
 }
-/** Needs review: the latest finished turn on top. */
+/** Finished: the latest finished turn on top. */
 export function compareResponded(a: Session, b: Session): number {
   return newest(a.lastResponseAt ?? a.createdAt, b.lastResponseAt ?? b.createdAt) || settle(a, b);
 }

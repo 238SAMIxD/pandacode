@@ -1,7 +1,7 @@
 import { decodeHandoff, historicalProvider } from './provider-handoff';
 import { bindThreadReordering, syncRovingFocus, threadGroupRows } from './thread-order';
-import { PROJECT_LIMIT, folderGroups, readCollapsed, shownTasks } from './sidebar-tree';
-import { COMPLETED_OPEN_KEY, REVIEW_WINDOW, UNREVIEWED_KEY, needsReview, readOpen, sectionOf, sidebarSections, type HeldSection } from './sidebar-sections';
+import { PROJECT_LIMIT, readCollapsed, shownTasks } from './sidebar-tree';
+import { COLLAPSED_SECTIONS_KEY, COMPLETED_OPEN_KEY, UNREVIEWED_KEY, readOpen, sectionOf, sidebarSections, type HeldSection } from './sidebar-sections';
 import { PER_PROJECT, PROJECT_ORDER_KEY, SORT_KEY, compareManual, matchesFilter, readProjectOrder, readSort, taskComparator, type SidebarSort } from './sidebar-sort';
 import './styles.css';
 import './model-picker.css';
@@ -118,7 +118,7 @@ const state = {
   projectId: '', sessionId: '', messages: [] as Message[], messagesLoading: false, messagesError: '', streams: new Map<string, Stream>(),
   view: (({ board: 'board', github: 'github' } as Record<string, 'board' | 'github'>)[localStorage.getItem('pandacode.view') ?? ''] ?? 'conversation') as WorkspaceView, boardPanel: false,
   sidebarCollapsed: localStorage.getItem('pandacode.sidebarCollapsed') === 'true',
-  query: '', archived: false, inspector: false, inspectorTab: threadDefault(inspectorTabs),
+  query: '', inspector: false, inspectorTab: threadDefault(inspectorTabs),
   projectFilter: localStorage.getItem('pandacode.projectFilter') ?? '', collapsedFolders: readCollapsed(localStorage, 'pandacode.collapsedFolders'), expandedFolders: new Set<string>(),
   /** Follow-ups typed while an agent works, per task, in delivery order; mirrored from native storage. */
   queues: new Map<string, QueuedMessage[]>(), queueHolds: new Map<string, HoldReason>(), queueEditing: '', queueBusy: new Set<string>(),
@@ -410,10 +410,9 @@ $app.innerHTML = `<div class="workspace">
     <div class="sidebar-projects"><button id="project-filter" class="project-filter" data-action="filter-projects" aria-label="Filter projects" aria-haspopup="dialog" aria-expanded="false"><span data-filter-label>All projects</span>${icon('down')}</button><button id="sidebar-sort" class="icon-button sidebar-sort" data-action="sidebar-sort" aria-label="Sort and view" title="Sort and view" aria-haspopup="menu" aria-expanded="false">${SORT_ICON}</button>${button('import-conversations', 'Import conversations', 'download', 'import-trigger')}${button('add-project', 'Open project', 'plus')}</div>
     <div class="sidebar-search">${icon('search')}<input id="sidebar-filter" type="search" aria-label="Filter tasks" placeholder="Filter tasks" autocomplete="off" spellcheck="false" maxlength="200" aria-keyshortcuts="/"><button type="button" class="sidebar-search-clear" data-action="clear-sidebar-filter" tabindex="-1" aria-label="Clear filter" title="Clear filter">${icon('close')}</button></div>
     <div id="navigation" class="navigation"></div>
-    <div id="sidebar-note" class="sidebar-note" hidden></div>
     <section id="sidebar-bots-panel" class="bots-panel" aria-label="Bots"></section>
     <div id="sidebar-bots" class="sidebar-bots"></div>
-    <div class="sidebar-bottom">${button('support', 'Help & support', 'help', 'support-button', 'id="support-button"')}${button('agent-usage', 'Agent usage', 'activity', '', 'id="agent-usage-button"')}<button data-action="archive-view" id="archive-toggle" title="Archived tasks" aria-label="Archived tasks">${icon('archive')}</button><button data-action="settings" title="Settings (${shortcut(',')})" aria-label="Settings">${icon('settings')}</button><button data-action="toggle-theme" id="theme-toggle" aria-label="Dark mode" aria-pressed="false"></button></div>
+    <div class="sidebar-bottom">${button('support', 'Help & support', 'help', 'support-button', 'id="support-button"')}${button('agent-usage', 'Agent usage', 'activity', '', 'id="agent-usage-button"')}<button data-action="settings" title="Settings (${shortcut(',')})" aria-label="Settings">${icon('settings')}</button><button data-action="toggle-theme" id="theme-toggle" aria-label="Dark mode" aria-pressed="false"></button></div>
   </aside>
   <main class="main-pane">
     <header class="workspace-header" data-tauri-drag-region="deep"><div class="header-leading" data-tauri-drag-region>${button('toggle-sidebar', 'Hide sidebar', 'sidebar', 'sidebar-toggle', 'id="sidebar-toggle" aria-controls="workspace-sidebar" aria-expanded="true" aria-keyshortcuts="Meta+B Control+B"')}<span id="view-divider" class="header-divider" aria-hidden="true" hidden></span><div id="breadcrumb" class="breadcrumb" data-tauri-drag-region></div></div><div class="header-actions">${preview ? '<span class="preview-status">Browser preview · sample data</span>' : ''}</div><div id="action-dock" class="action-dock" role="toolbar" aria-label="Workspace actions" aria-orientation="vertical" data-tauri-drag-region="false"><div class="action-dock-group" data-group="panels">${button('toggle-inspector', `Toggle inspector (${shortcut('B', true)})`, 'panel', 'active', 'id="inspector-toggle"')}${button('terminal', `Toggle terminal (${shortcut('J')})`, 'terminal', '', 'id="terminal-toggle" aria-controls="terminal-drawer" aria-expanded="false"')}${button('browser', 'Open browser', 'globe', '', 'id="browser-toggle"')}${button('moodboards', 'Project moodboards', 'images')}<button type="button" id="agents-toggle" class="agents-toggle" aria-label="Agents" aria-haspopup="dialog" aria-expanded="false" aria-controls="agents-flyout" data-dock-notip hidden>${icon('worktree')}<b class="dock-badge" aria-hidden="true" hidden></b></button></div><div class="action-dock-group" data-group="actions"><button type="button" class="header-run" id="run-project-button" data-action="run-project" aria-label="Run project" title="Run pandacode-run.sh" hidden>${icon('play')}<span>Run</span></button>${button('deploy', 'Deploy', 'upload', '', 'id="deploy-button" aria-haspopup="dialog"')}${button('task-menu', 'Task actions', 'more', '', 'id="task-menu-trigger" aria-haspopup="dialog" aria-expanded="false"')}</div><div class="action-dock-group" data-group="status"><button type="button" id="update-status" class="update-status" hidden>${icon('refresh')}<span>Restart to update</span></button></div></div><div id="agents-flyout" class="agents-flyout" data-tauri-drag-region="false" hidden><div id="subagents-host" class="subagents-host" hidden></div></div></header>
@@ -436,11 +435,10 @@ const projectRunner = new ProjectRunner({
 let sidebarDragging = false, orderingBusy = false;
 /** The open thread stays in the section it was opened from, so its row does not jump from under the click. */
 let sectionHold: { id: string; section: HeldSection } | undefined, completedOpen = readOpen(localStorage, COMPLETED_OPEN_KEY);
-/** Completed lists its newest rows first, then pages in more on request. */
+const collapsedSections = readCollapsed(localStorage, COLLAPSED_SECTIONS_KEY);
+/** Settled lists its newest rows first, then pages in more on request. */
 const COMPLETED_FIRST = 10, COMPLETED_PAGE = 25;
 let completedShown = COMPLETED_FIRST;
-/** A collapsed folder opened for this launch only because its task was selected. */
-let revealedFolder = '';
 let sidebarSort: SidebarSort = readSort(localStorage);
 let projectOrder: string[] = readProjectOrder(localStorage);
 /** "3:45 PM" from "Resets 3:45 PM"; nothing when the harness did not report a reset time. */
@@ -454,8 +452,7 @@ function branchLabel(branch: string): string {
   const chars = [...branch], tail = chars.length > 14 ? chars.slice(-8).join('') : '';
   return `<span class="task-branch-name"><span class="task-branch-head">${escape(tail ? chars.slice(0, -8).join('') : branch)}</span>${tail ? `<span class="task-branch-tail">${escape(tail)}</span>` : ''}</span>`;
 }
-function cssId(value: string): string { return value.replace(/[^A-Za-z0-9_-]/g, '_'); }
-/** Threads whose turn finished while another was open (Needs review); read on first draw. */
+/** Threads whose turn finished out of sight (shown unread until opened); read on first draw. */
 let unreviewed: Set<string> | undefined;
 function saveUnreviewed(): void { try { localStorage.setItem(UNREVIEWED_KEY, JSON.stringify([...unreviewed ?? []])); } catch { /* per-launch only */ } }
 bindThreadReordering($('#navigation'), {
@@ -558,7 +555,7 @@ const worktrees = createWorktrees({
     closeModal();
     if (current) { state.query = ''; await selectSession(created.id, true); }
   },
-  archive: async task => { await archiveTask(task, false); },
+  settle: async task => { await changeTaskStage(task, 'completed', false); },
   extraItems: task => github.menuItems(task),
   onExtra: (id, task) => github.onMenu(id, task),
 });
@@ -569,8 +566,7 @@ const attachments = mountPromptAttachments({
   blocked: taskId => {
     const task = state.sessions.find(s => s.id === taskId);
     if (!task) return 'Start a task before attaching anything.';
-    if (task.archived) return 'Restore this archived task before attaching anything.';
-    if (taskStage(task) === 'completed') return 'Reopen this completed task before attaching anything.';
+    if (taskStage(task) === 'completed') return 'Reopen this settled task before attaching anything.';
     return null;
   },
   otherImages: taskId => (state.browserAttachments.get(taskId) ?? []).filter(item => item.kind === 'screenshot').length,
@@ -947,7 +943,7 @@ function renderContextUsage(): void {
   if (indicator.textContent !== label) indicator.textContent = label;
   indicator.title = context?.detail ?? '';
   // The line keeps its place when empty, so the prompt never moves between threads.
-  indicator.parentElement!.classList.toggle('is-empty', !context && !s.archived);
+  indicator.parentElement!.classList.toggle('is-empty', !context);
 }
 function formatTime(timestamp: number): string { return new Date(timestamp < 1e12 ? timestamp * 1000 : timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
 /** The toast's Undo, while it shows; ⌘Z runs it too. */
@@ -1134,31 +1130,28 @@ function renderNavigation(): void {
   if (filterField.value !== state.query) filterField.value = state.query;
   filterField.parentElement!.classList.toggle('has-query', Boolean(state.query));
   const projectName = (s: Session) => state.projects.find(p => p.id === s.projectId)?.name ?? '';
-  const sidebarSessions = listedSessions().filter(s => s.archived === state.archived && !botProjects.has(s.projectId));
+  const sidebarSessions = listedSessions().filter(s => !botProjects.has(s.projectId));
   const inScope = sidebarSessions.filter(s => !state.projectFilter || s.projectId === state.projectFilter);
   const matching = inScope.filter(s => matchesFilter(s, state.query, projectName(s)));
-  // Opening a thread reviews it; one that no longer needs review leaves the list.
+  // Opening a thread (in view, with the window focused) clears its unread mark; settling one does too.
   const seen = unreviewed ?? (state.sessions.length ? unreviewed = readCollapsed(localStorage, UNREVIEWED_KEY) : new Set<string>());
-  const reviewed = [...seen].filter(id => { const task = state.sessions.find(s => s.id === id); return id === state.sessionId || (task ? task.archived || taskStage(task) === 'completed' : state.sessions.length > 0); });
+  const reviewed = [...seen].filter(id => { const task = state.sessions.find(s => s.id === id); return id === state.sessionId && transcriptVisible() && document.hasFocus() || (task ? taskStage(task) === 'completed' : state.sessions.length > 0); });
   if (reviewed.length) { for (const id of reviewed) seen.delete(id); saveUnreviewed(); }
   const failed = (s: Session) => FAILED_STATUS.has(s.status);
   // A held thread that starts running is held in Active from then on: after its run it stays there
   // while it is open, and goes to its folder once you open another thread, never back to (say)
-  // the Completed section it was opened from.
+  // the Settled section it was opened from.
   if (sectionHold && sectionHold.section !== 'active' && isRunning(sectionHold.id)) sectionHold = { ...sectionHold, section: 'active' };
   const order = taskComparator(sidebarSort.tasks), manual = sidebarSort.tasks === 'manual';
   const sections = sidebarSections({
-    tasks: [...matching].sort(order), now, stage: taskStage, unseen: s => seen.has(s.id),
+    tasks: [...matching].sort(order), stage: taskStage,
     // Work that needs you: running or waiting, stopped by a usage limit, or failed while you were away.
     active: s => isRunning(s.id) || limitActive(s, now) || failed(s) && seen.has(s.id),
     selectedId: state.sessionId, hold: sectionHold?.id === state.sessionId ? sectionHold.section : undefined,
   });
-  const visible = state.archived ? matching : sections.rest;
+  const visible = sections.rest;
   renderBots();
-  $('#archive-toggle').classList.toggle('active', state.archived);
-  $('#workspace-sidebar').classList.toggle('archive-view', state.archived);
-  $('#archive-toggle').setAttribute('aria-pressed', String(state.archived));
-  /** `card`: two lines (where, then what) for Active, Needs review and Pinned; otherwise one line. */
+  /** `card`: two lines (where, then what) for Active, Finished and Pinned; otherwise one line. */
   const row = (s: Session, card = false, reorderable = false, showProject = false): string => {
     const p = state.projects.find(p => p.id === s.projectId);
     const activityAt = lastActivity(s);
@@ -1188,11 +1181,9 @@ function renderNavigation(): void {
     // Row actions sit beside the row's button (buttons cannot nest), over its right edge. They
     // are not Tab stops: ⌘↩ completes and the menu key or ⇧F10 opens the menu.
     const title = escape(s.title), id = escape(s.id), busy = isRunning(s.id) || configuringSessions.has(s.id);
-    const tick = state.archived || busy ? '' : `<button class="task-action task-check${done ? ' checked' : ''}" data-action="${done ? 'sidebar-reopen' : 'sidebar-complete'}" data-task="${id}" tabindex="-1" aria-label="${done ? 'Reopen' : 'Mark complete'}: ${title}" title="${done ? 'Reopen task' : 'Mark complete'}">${icon('check')}</button>`;
-    // The archive view restores and deletes directly; elsewhere Archive and Delete sit in the row's menu.
-    const extra = state.archived
-      ? `<button class="task-action task-archive" data-action="sidebar-archive" data-task="${id}" tabindex="-1" aria-label="Restore: ${title}" title="Restore task">${icon('undo')}</button><button class="task-action task-delete" data-action="sidebar-delete" data-task="${id}" tabindex="-1" aria-label="Delete: ${title}" title="${busy ? 'Stop the agent before deleting this task' : 'Delete task…'}" ${busy ? 'disabled' : ''}>${icon('trash')}</button>`
-      : `<button class="task-action task-more" data-action="sidebar-more" data-task="${id}" tabindex="-1" aria-haspopup="menu" aria-label="Task actions: ${title}" title="Task actions">${icon('more')}</button>`;
+    const tick = busy ? '' : `<button class="task-action task-check${done ? ' checked' : ''}" data-action="${done ? 'sidebar-reopen' : 'sidebar-complete'}" data-task="${id}" tabindex="-1" aria-label="${done ? 'Reopen' : 'Settle'}: ${title}" title="${done ? 'Reopen task' : 'Settle task'}">${icon('check')}</button>`;
+    // Delete and the rest sit in the row's menu.
+    const extra = `<button class="task-action task-more" data-action="sidebar-more" data-task="${id}" tabindex="-1" aria-haspopup="menu" aria-label="Task actions: ${title}" title="Task actions">${icon('more')}</button>`;
     const wrap = (content: string) => `<div class="task-row${card ? '' : ' task-row-oneline'}" id="task-row-${id}" data-stage="${stage}">${content}<span class="task-actions">${tick}${extra}</span></div>`;
     // One line: the title, then the worktree mark, linked PR or issue, status, age and harness.
     // A flat list names each row's project: its icon first, its name after the title.
@@ -1204,23 +1195,26 @@ function renderNavigation(): void {
   };
   const single = Boolean(state.projectFilter);
   const heading = (key: string, label: string, count: number) => `<div class="group-heading section-heading">${label}<span class="section-count">${count}</span></div>`;
-  // Active and Needs review list threads that need you; their order is their own, never dragged.
-  const section = (key: 'active' | 'review', label: string, name: string, tasks: Session[]) => tasks.length
-    ? `<section class="task-group sidebar-section ${key}-group" data-thread-group="${key}" aria-label="${name}">${heading(key, label, tasks.length)}<div class="task-list">${tasks.map(s => row(s, !single)).join('')}</div></section>` : '';
-  // While filtering, every match shows: closed sections and folders open and limits lift, for
-  // this draw only (nothing is saved).
   const filtering = Boolean(state.query.trim());
+  // Active, Finished, Chats and Tasks fold from their headings (saved in collapsedSections); a line
+  // runs from the label to the count. `rows` draws only while open.
+  const section = (key: string, label: string, name: string, count: number, rows: () => string) => {
+    if (!count) return '';
+    const open = filtering || !collapsedSections.has(key);
+    return `<section class="task-group sidebar-section ${key}-group" data-thread-group="${key}" aria-label="${name}"><button class="group-heading section-heading section-fold" data-action="toggle-section" data-section="${key}" tabindex="-1" aria-expanded="${open}" aria-controls="${key}-tasks">${label}<span class="section-rule" aria-hidden="true"></span><span class="section-count">${count}</span>${icon('chevron')}</button><div id="${key}-tasks" class="task-list" ${open ? '' : 'hidden'}>${open ? rows() : ''}</div></section>`;
+  };
+  // While filtering, every match shows: closed sections open and limits lift, for this draw only
+  // (nothing is saved).
   const completedVisible = completedOpen || filtering;
   // The open (held) thread always shows, even past the first page, as in a folder.
   const completedRows = filtering ? sections.completed : shownTasks(sections.completed, false, state.sessionId, completedShown);
   const completedMore = sections.completed.length - completedRows.length;
   const completedSection = sections.completed.length
-    ? `<section class="task-group sidebar-section completed-group" data-thread-group="completed" aria-label="Completed tasks"><button class="group-heading section-heading section-toggle" data-action="toggle-completed" tabindex="-1" aria-expanded="${completedVisible}" aria-controls="completed-tasks">${icon('chevron')}Completed<span class="section-count">${sections.completed.length}</span></button><div id="completed-tasks" class="task-list" ${completedVisible ? '' : 'hidden'}>${completedVisible ? completedRows.map(s => row(s)).join('') + (completedMore ? `<button class="folder-more" data-action="completed-more" tabindex="-1">Show ${Math.min(COMPLETED_PAGE, completedMore)} more</button>` : '') : ''}</div></section>` : '';
+    ? `<section class="task-group sidebar-section completed-group" data-thread-group="completed" aria-label="Settled tasks"><button class="group-heading section-heading section-toggle" data-action="toggle-completed" tabindex="-1" aria-expanded="${completedVisible}" aria-controls="completed-tasks">${icon('chevron')}Settled<span class="section-count">${sections.completed.length}</span></button><div id="completed-tasks" class="task-list" ${completedVisible ? '' : 'hidden'}>${completedVisible ? completedRows.map(s => row(s)).join('') + (completedMore ? `<button class="folder-more" data-action="completed-more" tabindex="-1">Show ${Math.min(COMPLETED_PAGE, completedMore)} more</button>` : '') : ''}</div></section>` : '';
   const sectioned = sections.active.length + sections.review.length + sections.completed.length;
   // Pinned keeps the order you gave it, whatever the task sort.
   const pinned = visible.filter(s => s.pinned).sort(compareManual);
-  // Projectless chats get their own group; a chosen project filter hides them.
-  // "Show N more" / "Show less" under a capped list; `key` is a project id or "chats".
+  // "Show N more" / "Show less" under a capped list; `key` is a project id, "chats" or "all".
   const moreButton = (key: string, total: number, shown: number, expanded: boolean, limit: number) => !filtering && (total > shown || expanded && total > limit)
     ? `<button class="folder-more" data-action="toggle-folder-more" data-project="${escape(key)}" tabindex="-1">${expanded ? 'Show less' : `Show ${total - shown} more`}</button>` : '';
   const capped = (key: string, tasks: Session[], limit: number) => {
@@ -1228,53 +1222,36 @@ function renderNavigation(): void {
     const rows = filtering ? tasks : shownTasks(tasks, expanded, state.sessionId, limit);
     return { rows, more: moreButton(key, tasks.length, rows.length, expanded, limit) };
   };
-  const flat = sidebarSort.group === 'flat' && !single;
-  // Projectless chats get their own group, capped like a folder; a chosen project filter hides them.
-  const chats = state.projectFilter || flat ? [] : visible.filter(s => !s.pinned && chatTask(s));
-  const chatList = capped('chats', chats, sidebarSort.perProject);
-  const chatGroup = chats.length ? `<section class="task-group chats-group" data-thread-group="chats" aria-label="Chats">${heading('chats', 'Chats', chats.length)}<div class="task-list">${chatList.rows.map(s => row(s, false, manual)).join('')}${chatList.more}</div></section>` : '';
-  // Flat list: one list of every unpinned task (chats included), each row naming its project.
-  const flatTasks = flat ? visible.filter(s => !s.pinned) : [];
-  const flatGroup = flat && flatTasks.length ? `<section class="task-group flat-group" data-thread-group="all" aria-label="Tasks">${heading('all', 'Tasks', flatTasks.length)}<div class="task-list">${flatTasks.map(s => row(s, false, manual, true)).join('')}</div></section>` : '';
-  const manualFolders = sidebarSort.projects === 'manual' && !single;
-  const folders = flat ? [] : folderGroups({
-    projects: state.projectFilter ? state.projects.filter(p => p.id === state.projectFilter) : userProjects(),
-    tasks: visible.filter(s => !s.pinned), all: inScope, includeEmpty: !state.query, sort: sidebarSort.projects, manual: projectOrder,
-  });
-  const folder = ({ project, tasks }: (typeof folders)[number]): string => {
-    // A selected project is already named by the filter above: list its tasks flat, with room for more.
-    const limit = single ? PROJECT_LIMIT : sidebarSort.perProject;
-    const holdsSelected = tasks.some(s => s.id === state.sessionId);
-    const open = single || filtering || !state.collapsedFolders.has(project.id) || revealedFolder === project.id && holdsSelected;
-    const { rows, more } = capped(project.id, tasks, limit);
-    const list = rows.map(s => row(s, false, manual)).join('') || '<div class="no-tasks">No tasks yet</div>';
-    if (single) return `<section class="task-group folder-group single-project" data-thread-group="project:${escape(project.id)}" data-project="${escape(project.id)}" aria-label="${escape(project.name)} tasks"><div class="task-list">${list}${more}</div></section>`;
-    // Stable per project, so morph() keeps an open folder when folders change places.
-    const listId = `folder-tasks-${escape(cssId(project.id))}`;
-    const name = escape(project.name);
-    return `<section class="task-group folder-group" data-thread-group="project:${escape(project.id)}" data-project="${escape(project.id)}" aria-label="${name} tasks"><div class="folder-row"><button class="folder-heading ${tasks.length ? '' : 'empty'}" data-action="toggle-folder" data-project="${escape(project.id)}" tabindex="-1" draggable="${manualFolders}" ${manualFolders ? 'aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"' : ''} aria-expanded="${open}" aria-controls="${listId}" title="${escape(project.path)}">${icon('chevron', 'folder-chevron')}${projectAppIcon(project.id, project.name)}<span>${name}</span>${tasks.length ? `<small class="folder-count" aria-hidden="true">${tasks.length}</small>` : ''}</button><button class="icon-button folder-new-task" data-action="project-task" data-id="${escape(project.id)}" tabindex="-1" aria-label="New task in ${name}" title="New task">${icon('plus')}</button><button class="icon-button folder-actions" data-action="folder-menu" data-project="${escape(project.id)}" tabindex="-1" aria-haspopup="menu" aria-label="Project actions: ${name}" title="Project actions">${icon('more')}</button></div><div id="${listId}" class="task-list folder-tasks" ${open ? '' : 'hidden'}>${list}${more}</div></section>`;
+  // All projects: no folders, only sections. Projectless chats, then every other task, each row
+  // naming its project; a chosen project filter hides chats.
+  const chats = single ? [] : visible.filter(s => !s.pinned && chatTask(s));
+  const others = single ? [] : visible.filter(s => !s.pinned && !chatTask(s));
+  const listed = (key: string, tasks: Session[], showProject: boolean) => () => {
+    const { rows, more } = capped(key, tasks, sidebarSort.perProject);
+    return rows.map(s => row(s, false, manual, showProject)).join('') + more;
   };
+  const chatGroup = section('chats', 'Chats', 'Chats', chats.length, listed('chats', chats, false));
+  const tasksGroup = section('all', 'Tasks', 'Tasks', others.length, listed('all', others, true));
+  // A selected project is already named by the filter above: list its tasks flat, with room for more.
+  const project = single ? state.projects.find(p => p.id === state.projectFilter) : undefined;
+  const projectTasks = project ? visible.filter(s => !s.pinned && s.projectId === project.id) : [];
+  const projectList = project && (projectTasks.length || !filtering) ? (() => {
+    const { rows, more } = capped(project.id, projectTasks, PROJECT_LIMIT);
+    const list = rows.map(s => row(s, false, manual)).join('') || '<div class="no-tasks">No tasks yet</div>';
+    return `<section class="task-group folder-group single-project" data-thread-group="project:${escape(project.id)}" data-project="${escape(project.id)}" aria-label="${escape(project.name)} tasks"><div class="task-list">${list}${more}</div></section>`;
+  })() : '';
   const nav = $('#navigation');
   nav.setAttribute('aria-busy', String(orderingBusy));
   const menuTrigger = choiceMenuAnchor ?? pendingMenuOpen?.anchor;
   const retainedRow = menuTrigger && nav.contains(menuTrigger) && menuTrigger.matches('.task-item') ? menuTrigger : null;
   const focused = nav.contains(document.activeElement) ? document.activeElement as HTMLElement : null;
-  const focusSelector = focused?.dataset.id ? `[data-id="${CSS.escape(focused.dataset.id)}"]` : focused?.dataset.action ? `[data-action="${CSS.escape(focused.dataset.action)}"]${focused.dataset.project ? `[data-project="${CSS.escape(focused.dataset.project)}"]` : ''}${focused.dataset.task ? `[data-task="${CSS.escape(focused.dataset.task)}"]` : ''}` : '';
-  // Opening a project narrows the sidebar to it; say so, or the other tasks look lost. Chats are
-  // hidden by the filter but are not project tasks, so they are not counted.
-  const hidden = state.projectFilter ? sidebarSessions.filter(s => s.projectId !== state.projectFilter && !chatTask(s) && taskStage(s) !== 'completed').length : 0;
-  // A one-line note pinned under the list, not a card inside it.
-  const note = $('#sidebar-note');
-  note.innerHTML = hidden && !state.archived ? `<button class="filter-note" data-action="show-all-projects" title="Show tasks from every project"><span>${hidden} more in other projects</span><strong>Show all</strong></button>` : '';
-  note.hidden = !note.innerHTML;
-  const archivedRows = [...visible].sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || order(a, b));
+  const focusSelector = focused?.dataset.id ? `[data-id="${CSS.escape(focused.dataset.id)}"]` : focused?.dataset.action ? `[data-action="${CSS.escape(focused.dataset.action)}"]${focused.dataset.project ? `[data-project="${CSS.escape(focused.dataset.project)}"]` : ''}${focused.dataset.section ? `[data-section="${CSS.escape(focused.dataset.section)}"]` : ''}${focused.dataset.task ? `[data-task="${CSS.escape(focused.dataset.task)}"]` : ''}` : '';
   const pinnedGroup = pinned.length ? `<section class="task-group pinned-group" data-thread-group="pinned" aria-label="Pinned tasks">${heading('pinned', 'Pinned', pinned.length)}<div class="task-list">${pinned.map(s => row(s, !single, true)).join('')}</div></section>` : '';
   const empty = filtering ? '<div class="no-tasks sidebar-no-match">No tasks match</div>' : '';
   // Morph rather than replace: unchanged rows keep their nodes, so nothing flickers.
   // Rows sit one level deeper than before (.task-row around .task-item), so morph one level deeper.
-  morph(nav, !userProjects().length && !chats.length && !pinned.length && !(state.archived ? 0 : sectioned) ? '<div class="sidebar-empty">Open a project to get started.</div>' : state.archived
-    ? `<section class="task-group archived-group" data-thread-group="archived" aria-label="Archived tasks"><div class="group-heading section-heading">Archived<span class="section-count">${visible.length}</span></div><div class="task-list">${archivedRows.map(s => row(s, false, manual)).join('') || (filtering ? empty : '<div class="no-tasks">No archived tasks</div>')}</div></section>`
-    : `${section('active', 'Active', 'Active tasks', sections.active)}${section('review', 'Needs review', 'Tasks to review', sections.review)}${pinnedGroup}${chatGroup}${flatGroup}${folders.map(folder).join('')}${filtering && !matching.length ? empty : ''}${completedSection}`, 5);
+  morph(nav, !userProjects().length && !chats.length && !pinned.length && !sectioned ? '<div class="sidebar-empty">Open a project to get started.</div>'
+    : `${pinnedGroup}${section('active', 'Active', 'Active tasks', sections.active.length, () => sections.active.map(s => row(s, !single)).join(''))}${section('review', 'Finished', 'Finished tasks', sections.review.length, () => sections.review.map(s => row(s, !single)).join(''))}${chatGroup}${tasksGroup}${projectList}${filtering && !matching.length ? empty : ''}${completedSection}`, 5);
   if (retainedRow) {
     const replacement = nav.querySelector<HTMLElement>(`.task-item[data-id="${CSS.escape(retainedRow.dataset.id!)}"]`);
     if (replacement) {
@@ -1287,7 +1264,7 @@ function renderNavigation(): void {
       nav.dispatchEvent(new Event('scroll'));
     } else closeChoiceMenu();
   }
-  // Rows scrolled into view by the keyboard stop above the docked Completed section, not under it.
+  // Rows scrolled into view by the keyboard stop above the docked Settled section, not under it.
   // ponytail: measured per render; a window resize that changes its 40vh cap waits for the next render.
   nav.style.scrollPaddingBottom = `${nav.querySelector<HTMLElement>(':scope > .completed-group')?.offsetHeight ?? 0}px`;
   // A row action that moved its task to another section hands focus to the task's row.
@@ -1297,7 +1274,7 @@ function renderNavigation(): void {
   updateWorkTimer();
   window.clearTimeout(activityTimer);
   if (!document.hidden) {
-    const expiry = Math.min(...sections.review.map(s => s.lastResponseAt! + REVIEW_WINDOW), state.sessions.reduce((next, s) => activeTask(s, now) ? Math.min(next, lastActivity(s)! + ACTIVITY_WINDOW) : next, Infinity));
+    const expiry = Math.min(state.sessions.reduce((next, s) => activeTask(s, now) ? Math.min(next, lastActivity(s)! + ACTIVITY_WINDOW) : next, Infinity));
     if (Number.isFinite(expiry)) activityTimer = window.setTimeout(renderNavigation, Math.min(2147483647, Math.max(1, expiry - now)));
   }
 }
@@ -1910,7 +1887,7 @@ function renderComposer(): void {
   const s = session();
   if (!s) { $('#composer-area').innerHTML = ''; browserPanel?.refresh(); return; }
   syncOverlayContext({ projectId: s.projectId, provider: s.provider, model: s.model || 'default', mode: s.mode, reasoningEffort: s.reasoningEffort ?? null });
-  if (taskStage(s) === 'completed' || s.archived) { $('#composer-area').innerHTML = `<div class="board-completed-note">${s.archived ? 'This task is archived.' : 'This task is complete.'}${state.view === 'conversation' ? `<button type="button" class="secondary-button" data-action="${s.archived ? 'archive-task' : 'board-reopen'}">${s.archived ? 'Restore task' : 'Reopen task'}</button>` : s.archived ? '' : ' Reopen it above to continue.'}</div>`; browserPanel?.refresh(); return; }
+  if (taskStage(s) === 'completed') { $('#composer-area').innerHTML = `<div class="board-completed-note">This task is settled.${state.view === 'conversation' ? '<button type="button" class="secondary-button" data-action="board-reopen">Reopen task</button>' : ' Reopen it above to continue.'}</div>`; browserPanel?.refresh(); return; }
   const previous = state.drafts.get(s.id) ?? '';
   const running = isRunning(), behavior = approvalMode(s.provider, s.mode);
   // A bot's next model can be picked mid-turn; it applies from the next turn.
@@ -1921,12 +1898,12 @@ function renderComposer(): void {
     : checking ? '<button type="button" class="secondary-button remote-checking" aria-label="Checking…" disabled>Checking…</button>'
     : offline ? `<button type="button" class="secondary-button remote-composer-retry" data-action="remote-retry" aria-label="${retrying ? 'Reconnecting…' : 'Retry connection'}" ${retrying ? 'disabled' : ''}>${icon('refresh')}<span>${retrying ? 'Reconnecting…' : 'Retry'}</span></button>`
     : `<button type="submit" class="send-button" title="Send message (${shortcut('Enter')})" aria-label="Send message">${icon('arrow')}</button>`;
-  $('#composer-area').innerHTML = `<form id="composer" class="composer ${running ? 'composer-running' : ''}"><div id="attachments" class="attachments">${attachmentBar(s)}</div><textarea id="prompt" data-session-id="${escape(s.id)}" aria-label="Message your coding agent" placeholder="${running ? (team ? 'Queue a follow-up…' : 'Queue a follow-up · ⌘↩ steers now') : composerPlaceholder()}" aria-description="${running ? `Enter to queue for when the agent finishes.${team ? '' : ' Command Enter to steer the running turn.'}` : 'Enter to send. Shift Enter for a new line.'}" rows="2"></textarea><div class="composer-toolbar"><div class="composer-tools">${button('attach', 'Attach files for context', 'plus', '', 'type="button"')}<button type="button" id="model-picker-trigger" class="model-picker" data-action="model" aria-label="Choose harness and model" aria-description="${escape([modelLabel(s), teamModelLabel(s)].filter(Boolean).join(' '))}" aria-haspopup="dialog" aria-expanded="false" title="${team && !team.config.auto ? 'Choose team profile and models' : 'Choose harness and model'}" ${modelLocked ? 'disabled' : ''}>${triggerLogo(s)}<span class="model-detail" data-model-label>${escape(modelLabel(s, false))}</span><span class="model-effort" data-effort-label ${effortLabel(s) ? '' : 'hidden'}>${escape(effortLabel(s))}</span><span class="team-model-count" data-team-model-label ${teamModelLabel(s) ? '' : 'hidden'}>${teamModelLabel(s)}</span>${icon('down')}</button><span class="composer-separator"></span><button type="button" id="mode-picker-trigger" class="mode-picker" data-action="mode" data-mode="${behavior.id}" title="${escape(behavior.description)}" aria-haspopup="dialog" aria-expanded="false" ${running ? 'disabled' : ''}>${icon(behavior.icon)}<span>${escape(behavior.label)}</span>${icon('down')}</button>${teamButton(s)}${routeChip(s)}${tokenSaver.button(s.id)}</div>${running && !team ? `<button type="button" class="steer-button" data-action="steer" title="Send into the running turn (${shortcut('Enter')})" aria-label="Steer the running turn">${icon('spark')}<span>Steer</span></button>` : ''}${sendControl}</div></form>${s.archived ? '<div class="composer-footnote"><span>Archived task</span></div>' : ''}`;
+  $('#composer-area').innerHTML = `<form id="composer" class="composer ${running ? 'composer-running' : ''}"><div id="attachments" class="attachments">${attachmentBar(s)}</div><textarea id="prompt" data-session-id="${escape(s.id)}" aria-label="Message your coding agent" placeholder="${running ? (team ? 'Queue a follow-up…' : 'Queue a follow-up · ⌘↩ steers now') : composerPlaceholder()}" aria-description="${running ? `Enter to queue for when the agent finishes.${team ? '' : ' Command Enter to steer the running turn.'}` : 'Enter to send. Shift Enter for a new line.'}" rows="2"></textarea><div class="composer-toolbar"><div class="composer-tools">${button('attach', 'Attach files for context', 'plus', '', 'type="button"')}<button type="button" id="model-picker-trigger" class="model-picker" data-action="model" aria-label="Choose harness and model" aria-description="${escape([modelLabel(s), teamModelLabel(s)].filter(Boolean).join(' '))}" aria-haspopup="dialog" aria-expanded="false" title="${team && !team.config.auto ? 'Choose team profile and models' : 'Choose harness and model'}" ${modelLocked ? 'disabled' : ''}>${triggerLogo(s)}<span class="model-detail" data-model-label>${escape(modelLabel(s, false))}</span><span class="model-effort" data-effort-label ${effortLabel(s) ? '' : 'hidden'}>${escape(effortLabel(s))}</span><span class="team-model-count" data-team-model-label ${teamModelLabel(s) ? '' : 'hidden'}>${teamModelLabel(s)}</span>${icon('down')}</button><span class="composer-separator"></span><button type="button" id="mode-picker-trigger" class="mode-picker" data-action="mode" data-mode="${behavior.id}" title="${escape(behavior.description)}" aria-haspopup="dialog" aria-expanded="false" ${running ? 'disabled' : ''}>${icon(behavior.icon)}<span>${escape(behavior.label)}</span>${icon('down')}</button>${teamButton(s)}${routeChip(s)}${tokenSaver.button(s.id)}</div>${running && !team ? `<button type="button" class="steer-button" data-action="steer" title="Send into the running turn (${shortcut('Enter')})" aria-label="Steer the running turn">${icon('spark')}<span>Steer</span></button>` : ''}${sendControl}</div></form>`;
   $('#composer-area').insertAdjacentHTML('afterbegin', worktrees.contextBar(s, newTaskView()));
   // Approvals sit above everything that rides on the prompt, the context bar included.
   $('#composer-area').insertAdjacentHTML('afterbegin', '<div id="bot-failover-bar"></div>');
   $('#composer-area').insertAdjacentHTML('afterbegin', '<div id="approval-bar"></div>');
-  $('#composer').insertAdjacentHTML('beforebegin', cloudStrip(s) + remoteStartStrip(s.id) + remoteMissingNote(s) + (composerNotes.has(s.id) ? `<div class="composer-inline-note">${escape(composerNotes.get(s.id))}</div>` : '') + (running ? '' : limitBanner(s, Date.now(), limitAlternatives(s))) + queuePanel({ entries: state.queues.get(s.id) ?? [], hold: state.queueHolds.get(s.id) ?? null, running, steerable: !team && !offline, sendable: !botProjects.has(s.projectId) && !s.archived && !offline, editingId: state.queueEditing || null, busy: state.queueBusy.has(s.id), steering: steeringQueued, notSteered, agentName: botForThread()?.name ?? provider(s.provider)?.name }));
+  $('#composer').insertAdjacentHTML('beforebegin', cloudStrip(s) + remoteStartStrip(s.id) + remoteMissingNote(s) + (composerNotes.has(s.id) ? `<div class="composer-inline-note">${escape(composerNotes.get(s.id))}</div>` : '') + (running ? '' : limitBanner(s, Date.now(), limitAlternatives(s))) + queuePanel({ entries: state.queues.get(s.id) ?? [], hold: state.queueHolds.get(s.id) ?? null, running, steerable: !team && !offline, sendable: !botProjects.has(s.projectId) && !offline, editingId: state.queueEditing || null, busy: state.queueBusy.has(s.id), steering: steeringQueued, notSteered, agentName: botForThread()?.name ?? provider(s.provider)?.name }));
   renderApprovalBar(); renderBotFailover(); resizePrompt();
   $('#transcript').toggleAttribute('data-running', running);
   void github.status(s.projectId);
@@ -2025,7 +2002,7 @@ function renderBoardView(): void {
   if (!board) return;
   const boardProject = state.projectFilter || project()?.id || state.projects[0]?.id || '';
   if (boardProject) void github.status(boardProject);
-  renderTaskBoard($('#project-board'), listedSessions(), state.projects, state.boardPanel ? state.sessionId : '', state.projectFilter, state.archived, isRunning, github.connected(boardProject));
+  renderTaskBoard($('#project-board'), listedSessions(), state.projects, state.boardPanel ? state.sessionId : '', state.projectFilter, isRunning, github.connected(boardProject));
   renderTaskDetails($('#task-details-heading'), session(), project(), isRunning(), state.messagesLoading || Boolean(state.messagesError));
 }
 /** The GitHub view, mounted the first time it is shown and refreshed with the workspace. */
@@ -2110,7 +2087,7 @@ function renderSidebarVisibility(): void {
     if (utility.parentElement !== utilityHost) {
       const focused = document.activeElement === utility;
       if (board || collapsed) $('#breadcrumb').before(utility);
-      else $('#archive-toggle').before(utility);
+      else $('.sidebar-bottom [data-action="settings"]').before(utility);
       if (focused) utility.focus({ preventScroll: true });
     }
   }
@@ -2191,28 +2168,14 @@ async function saveBoardTaskForm(form: HTMLFormElement, data: FormData): Promise
   else { renderBoardView(); if (!id) notify('Task added to Pending.'); }
   renderNavigation();
 }
-/** Archive or restore a task. Archiving a worktree task first offers to remove its clean checkout. */
-async function archiveTask(s: Session, offerCleanup: boolean): Promise<void> {
-  const generation = state.generation, archived = !s.archived;
-  if (archived && offerCleanup && s.worktreePath && !isRunning(s.id)) {
-    const decision = await worktrees.cleanupOffer(s, 'archive');
-    if (!decision.proceed) return;
-    if (decision.remove) await worktrees.remove(s);
-  }
-  await call('update_session', { sessionId: s.id, archived });
-  await reloadSessions();
-  if (s.id === state.sessionId && generation === state.generation) {
-    state.archived = archived; renderComposer();
-  }
-  renderNavigation();
-}
 async function changeBoardStage(stage: 'review' | 'completed'): Promise<void> {
   const s = session(); if (s) await changeTaskStage(s, stage);
 }
-/** Complete or reopen any task. Completing a worktree task first offers to remove its clean checkout. */
-async function changeTaskStage(s: Session, stage: TaskStage): Promise<void> {
+/** Settle or reopen any task. Settling a worktree task first offers to remove its clean checkout
+ * (unless `offer` is false: the caller already dealt with it). */
+async function changeTaskStage(s: Session, stage: TaskStage, offer = true): Promise<void> {
   if (isRunning(s.id) || configuringSessions.has(s.id)) return;
-  if (stage === 'completed' && s.worktreePath) {
+  if (stage === 'completed' && offer && s.worktreePath) {
     const selected = s.id === state.sessionId;
     const decision = await worktrees.cleanupOffer(s, 'complete');
     if (!decision.proceed) return;
@@ -2221,6 +2184,8 @@ async function changeTaskStage(s: Session, stage: TaskStage): Promise<void> {
   }
   configuringSessions.add(s.id);
   try {
+    // There is no archive any more: an archived task left over (old data, a mirror) is settled, and reopening clears the flag.
+    if (stage !== 'completed' && s.archived) await call('update_session', { sessionId: s.id, archived: false });
     const changed = await call<Session>('set_task_stage', { sessionId: s.id, stage });
     const index = state.sessions.findIndex(task => task.id === s.id); if (index >= 0) state.sessions[index] = changed;
     if (s.id === state.sessionId) renderComposer();
@@ -2422,9 +2387,7 @@ async function selectSession(id: string, focusComposer = false): Promise<void> {
   if (state.view !== 'conversation') { state.boardPanel = true; fileTabs.showConversation(); }
   // A bot's conversation lives in the Bots section; it never re-points the project filter.
   if (state.projectFilter && state.projectFilter !== s.projectId && !botProjects.has(s.projectId) && !chatTask(s)) setProjectFilter(s.projectId);
-  // A collapsed folder opens for the selected task without forgetting that it was collapsed.
-  revealedFolder = state.collapsedFolders.has(s.projectId) ? s.projectId : '';
-  state.sessionId = s.id; markTraySeen(s.id); activateProject(s.projectId, false); if (changingTask) restoreThreadPanel(s); state.archived = s.archived; state.attachments = [];
+  state.sessionId = s.id; markTraySeen(s.id); activateProject(s.projectId, false); if (changingTask) restoreThreadPanel(s); state.attachments = [];
   const remembered = changingTask ? threadPages.get(id) : undefined;
   state.messages = withMirrorPrompt(id, remembered ? [...remembered.messages] : []); state.messagesLoading = !remembered; state.messagesError = ''; state.hasOlder = remembered?.hasOlder ?? false;
   const generation = ++state.generation;
@@ -3219,8 +3182,8 @@ function onAgent(event: AgentEvent): void {
     clearAgentInputs(finishing.stream);
     finishingStreams.set(event.sessionId, finishing);
     state.streams.delete(event.sessionId); if (s) s.status = 'idle';
-    // A turn that finished out of view waits in Needs review.
-    if (s && s.id !== state.sessionId) { (unreviewed ??= readCollapsed(localStorage, UNREVIEWED_KEY)).add(s.id); saveUnreviewed(); }
+    // A turn that finished out of view (another thread, the board, another app) shows unread until opened.
+    if (s && (s.id !== state.sessionId || !transcriptVisible() || !document.hasFocus())) { (unreviewed ??= readCollapsed(localStorage, UNREVIEWED_KEY)).add(s.id); saveUnreviewed(); }
     updateWorkTimer();
     // A failed or stopped run holds the queue; a clean finish sends the next queued message.
     const ending = runEndings.get(event.sessionId); runEndings.delete(event.sessionId);
@@ -4000,7 +3963,7 @@ async function showTaskMenu(anchor: HTMLElement): Promise<void> {
     { id: 'rename', label: 'Rename task', icon: 'edit' },
     { id: 'jev-tests', label: 'Browser tests with Jev', icon: 'spark' },
     ...jevDecisionsEnabled ? [{ id: 'jev-assist', label: 'Jev assistance', icon: 'spark' }] : [],
-    { id: 'archive-task', label: s.archived ? 'Restore task' : 'Archive task', icon: 'archive' },
+    taskStage(s) === 'completed' ? { id: 'board-reopen', label: 'Reopen task', icon: 'undo' } : { id: 'board-complete', label: 'Settle task', icon: 'check', disabled: isRunning(s.id) || configuringSessions.has(s.id) },
     ...s.provider === 'codex' ? [{ id: 'goal', label: 'Manage goal', icon: 'spark' }, { id: 'jobs', label: 'Background commands', icon: 'terminal' }, { id: 'usage', label: 'Codex usage', icon: 'activity' }] : [],
     { id: 'harness-console', label: 'Open harness console', icon: 'terminal' },
     { id: 'copy-path', label: s.worktreePath ? 'Copy worktree path' : 'Copy project path', icon: 'copy' },
@@ -4040,20 +4003,16 @@ async function reorderThreads(ids: string[], focus: string): Promise<void> {
   }
 }
 /** Row buttons and the row menu act on any sidebar task, not only the open one. */
-function sidebarTaskAction(kind: 'complete' | 'reopen' | 'archive' | 'delete', id: string): void {
+function sidebarTaskAction(kind: 'complete' | 'reopen' | 'delete', id: string): void {
   const task = state.sessions.find(item => item.id === id); if (!task) return;
   const current = () => state.sessions.find(item => item.id === id);
   if (kind === 'delete') showDeleteTask(task);
-  else if (kind === 'archive') run(archiveTask(task, true).then(() => {
-    const saved = current();
-    if (saved && saved.archived !== task.archived) notify(saved.archived ? 'Task archived' : 'Task restored', () => { const again = current(); if (again && again.archived === saved.archived) run(archiveTask(again, false)); });
-  }));
   else {
-    // Undo puts back exactly what completing took away: the stage and the unread mark.
+    // Undo puts back exactly what settling took away: the stage and the unread mark.
     const before = taskStage(task), unread = unreviewed?.has(id) ?? false;
     run(changeTaskStage(task, kind === 'complete' ? 'completed' : 'review').then(() => {
       const saved = current();
-      if (kind === 'complete' && saved && taskStage(saved) === 'completed') notify('Task completed', () => {
+      if (kind === 'complete' && saved && taskStage(saved) === 'completed') notify('Task settled', () => {
         const again = current(); if (!again) return;
         run(changeTaskStage(again, before).then(() => {
           if (!unread || id === state.sessionId) return;
@@ -4068,7 +4027,7 @@ async function showSidebarTaskMenu(anchor: HTMLElement, point?: { x: number; y: 
   if (!task) return;
   const ids = threadGroupRows(anchor).map(row => row.dataset.id!), index = ids.indexOf(id);
   const group = anchor.closest<HTMLElement>('[data-thread-group]')?.dataset.threadGroup ?? '';
-  // Active, Needs review and Completed keep their own order: no Move up/down there.
+  // Active, Finished and Settled keep their own order: no Move up/down there.
   const movable = !['active', 'review', 'completed'].includes(group);
   const fixed = !anchor.draggable, busy = isRunning(id) || configuringSessions.has(id), done = taskStage(task) === 'completed';
   const unread = unreviewed?.has(id) ?? false, path = task.worktreePath ?? state.projects.find(p => p.id === task.projectId)?.path ?? '';
@@ -4080,18 +4039,17 @@ async function showSidebarTaskMenu(anchor: HTMLElement, point?: { x: number; y: 
       { id: 'down', label: 'Move down', leading: icon('arrow', 'icon-down'), disabled: fixed || orderingBusy || index === ids.length - 1 },
     ] : [],
     { id: 'rename', label: 'Rename…', icon: 'edit', separator: true },
-    ...task.archived || id === state.sessionId ? [] : [{ id: 'unread', label: unread ? 'Mark as read' : 'Mark as unread', icon: 'chat' }],
+    ...id === state.sessionId ? [] : [{ id: 'unread', label: unread ? 'Mark as read' : 'Mark as unread', icon: 'chat' }],
     ...branch && !task.archived && !task.remoteDevice ? [{ id: 'branch-task', label: `New task from ${branch}…`, icon: 'worktree' }] : [],
     ...branch ? [{ id: 'copy-branch', label: 'Copy branch name', icon: 'copy', separator: true }] : [],
     ...path ? [{ id: 'copy-path', label: task.worktreePath ? 'Copy worktree path' : 'Copy project path', icon: 'copy', separator: !branch }] : [],
     { id: 'copy-id', label: 'Copy task ID', icon: 'copy', separator: !branch && !path },
-    ...task.archived ? [] : [{ id: 'stage', label: done ? 'Reopen' : 'Mark complete', icon: done ? 'undo' : 'check', disabled: busy, separator: true }],
-    { id: 'archive', label: task.archived ? 'Restore' : 'Archive', icon: task.archived ? 'undo' : 'archive', separator: Boolean(task.archived) },
+    { id: 'stage', label: done ? 'Reopen' : 'Settle', icon: done ? 'undo' : 'check', disabled: busy, separator: true },
     { id: 'delete', label: 'Delete task…', icon: 'trash', danger: true, disabled: busy || finishingStreams.has(id), description: isRunning(id) ? 'Stop the agent before deleting this task.' : undefined },
   ], onSelect: async choice => {
     closeChoiceMenu();
     if (choice === 'pin') { run(pinTask(id)); return; }
-    if (choice === 'stage' || choice === 'archive' || choice === 'delete') { sidebarTaskAction(choice === 'stage' ? done ? 'reopen' : 'complete' : choice, id); return; }
+    if (choice === 'stage' || choice === 'delete') { sidebarTaskAction(choice === 'stage' ? done ? 'reopen' : 'complete' : choice, id); return; }
     // Renames the row's task in place; the open thread stays open.
     if (choice === 'rename') { showRename(task); return; }
     if (choice === 'branch-task') { await selectSession(id); worktrees.openDialog('new'); return; }
@@ -4144,28 +4102,16 @@ function reorderFolders(ids: string[], focus: string): void {
   renderNavigation();
   $('#navigation').querySelector<HTMLElement>(`.folder-heading[data-project="${CSS.escape(focus)}"]`)?.focus({ preventScroll: true });
 }
-/** Sort and view: task and folder order, tasks per folder, and folders or one flat list. Saved per window. */
+/** Sort and view: task order and tasks per section. Saved per window. */
 async function showSidebarSort(anchor: HTMLElement): Promise<void> {
   const sort = sidebarSort;
   await showChoices(anchor, { title: 'Sort and view', width: 280, items: [
     { id: 'tasks:manual', label: 'Manual', description: 'drag to arrange', heading: 'Sort tasks', selected: sort.tasks === 'manual' },
     { id: 'tasks:recent', label: 'Recent activity', selected: sort.tasks === 'recent' },
     { id: 'tasks:created', label: 'Created', selected: sort.tasks === 'created' },
-    { id: 'projects:recent', label: 'Recent activity', heading: 'Sort projects', selected: sort.projects === 'recent' },
-    { id: 'projects:added', label: 'Added', selected: sort.projects === 'added' },
-    { id: 'projects:name', label: 'Name', selected: sort.projects === 'name' },
-    { id: 'projects:manual', label: 'Manual', description: 'drag folders', selected: sort.projects === 'manual' },
-    ...PER_PROJECT.map(count => ({ id: `perProject:${count}`, label: `${count} tasks`, short: String(count), segment: 'Show per project', selected: sort.perProject === count })),
-    { id: 'group:project', label: 'By project', heading: 'Group', selected: sort.group === 'project' },
-    { id: 'group:flat', label: 'Flat list', selected: sort.group === 'flat' },
+    ...PER_PROJECT.map(count => ({ id: `perProject:${count}`, label: `${count} tasks`, short: String(count), segment: 'Show per section', selected: sort.perProject === count })),
   ], onSelect: id => {
     const [key, value] = id.split(':');
-    // Manual starts from the folders as they are now, so nothing moves until you drag.
-    // Seeded from the data, not the DOM: a flat list, one project or a filter draws only some folders.
-    if (key === 'projects' && value === 'manual' && !projectOrder.length) {
-      const all = listedSessions().filter(s => s.archived === state.archived);
-      reorderFolders(folderGroups({ projects: userProjects(), tasks: all, includeEmpty: true, sort: sort.projects }).map(group => group.project.id), '');
-    }
     const next: SidebarSort = key === 'perProject' ? { ...sidebarSort, perProject: Number(value) } : { ...sidebarSort, [key]: value };
     sidebarSort = readSort({ getItem: () => JSON.stringify(next) });
     try { localStorage.setItem(SORT_KEY, JSON.stringify(sidebarSort)); } catch { /* per-launch preference only */ }
@@ -5307,7 +5253,6 @@ async function action(name: string, element: HTMLElement): Promise<void> {
       if (state.query.trim()) break;
       const id = element.dataset.project!;
       if (element.getAttribute('aria-expanded') === 'true') state.collapsedFolders.add(id); else state.collapsedFolders.delete(id);
-      if (revealedFolder === id) revealedFolder = '';
       saveCollapsedFolders(); renderNavigation(); break;
     }
     case 'completed-more': completedShown += COMPLETED_PAGE; renderNavigation(); break;
@@ -5316,7 +5261,6 @@ async function action(name: string, element: HTMLElement): Promise<void> {
     case 'folder-menu': { const heading = element.parentElement?.querySelector<HTMLElement>('.folder-heading'); if (heading) await showFolderMenu(heading); break; }
     case 'clear-sidebar-filter': state.query = ''; renderNavigation(); $('#sidebar-filter').focus(); break;
     case 'toggle-folder-more': { const id = element.dataset.project!; if (!state.expandedFolders.delete(id)) state.expandedFolders.add(id); renderNavigation(); break; }
-    case 'show-all-projects': setProjectFilter(''); renderNavigation(); break;
     case 'add-project': showOpenProject(); break;
     case 'browse-project': {
       const input = document.querySelector<HTMLInputElement>('#project-folder'); if (!input) break;
@@ -5329,18 +5273,22 @@ async function action(name: string, element: HTMLElement): Promise<void> {
     case 'select-task': await selectSession(element.dataset.id!); break;
     case 'sidebar-complete': sidebarTaskAction('complete', element.dataset.task!); break;
     case 'sidebar-reopen': sidebarTaskAction('reopen', element.dataset.task!); break;
-    case 'sidebar-archive': sidebarTaskAction('archive', element.dataset.task!); break;
     case 'sidebar-delete': sidebarTaskAction('delete', element.dataset.task!); break;
     case 'sidebar-more': { const row = element.closest('.task-row')?.querySelector<HTMLElement>('.task-item'); if (row) await showSidebarTaskMenu(row); break; }
+    case 'toggle-section': {
+      if (state.query.trim()) break;
+      const key = element.dataset.section!;
+      if (!collapsedSections.delete(key)) collapsedSections.add(key);
+      try { localStorage.setItem(COLLAPSED_SECTIONS_KEY, JSON.stringify([...collapsedSections])); } catch { /* per-launch preference only */ }
+      renderNavigation(); break;
+    }
     case 'toggle-completed': if (state.query.trim()) break; completedOpen = !completedOpen; completedShown = COMPLETED_FIRST; try { localStorage.setItem(COMPLETED_OPEN_KEY, String(completedOpen)); } catch { /* per-launch preference only */ } renderNavigation(); break;
     case 'select-project': await selectProject(element.dataset.id!); break;
-    case 'archive-view': state.archived = !state.archived; renderNavigation(); break;
     case 'toggle-theme': toggleTheme(); break;
     case 'colors-settings': await showColorsSettings(); break;
     case 'ui-size-decrease': changeUiScale(-1); break;
     case 'ui-size-increase': changeUiScale(1); break;
     case 'ui-size-reset': setUiScale(1); break;
-    case 'archive-task': { const s = session(); if (s) await archiveTask(s, true); break; }
     case 'delete-task': showDeleteTask(); break;
     case 'search': showCommands(); break;
     case 'retry-response': { const finishing = finishingStreams.get(state.sessionId); if (finishing) await finishResponse(state.sessionId, finishing); break; }

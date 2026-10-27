@@ -22,7 +22,6 @@ pub fn valid_permission_mode(mode: &str) -> bool {
 // selected mode, including restrictive modes chosen before this default changed.
 pub const DEFAULT_PERMISSION_MODE: &str = "full";
 
-pub const COMPLETED_ARCHIVE_DELAY_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -549,7 +548,7 @@ impl Store {
             path: path.to_path_buf(),
         };
         crate::architect::profiles::initialize(&store)?;
-        store.archive_completed(now())?;
+        store.settle_archived()?;
         Ok(store)
     }
     /// Older team releases stored scheduler prompts as user rows. Reuse their exact
@@ -1218,18 +1217,13 @@ impl Store {
         self.session(sid)
     }
 
-    /// Archive deadlines depend on completion time, never unrelated task edits.
-    /// The partial index keeps the once-per-minute sweep bounded to completed tasks.
-    pub fn archive_completed(&self, timestamp: i64) -> Result<usize> {
+    /// Archiving is retired: archived tasks become ordinary completed ones.
+    pub fn settle_archived(&self) -> Result<usize> {
         self.db
             .execute(
-                "UPDATE sessions SET archived=1,updated_at=?1
-             WHERE archived=0 AND task_stage='completed' AND completed_at<=?2
-               AND status NOT IN ('running','waiting')",
-                params![
-                    timestamp,
-                    timestamp.saturating_sub(COMPLETED_ARCHIVE_DELAY_MS)
-                ],
+                "UPDATE sessions SET archived=0,task_stage='completed',
+                 completed_at=COALESCE(completed_at,updated_at) WHERE archived=1",
+                [],
             )
             .map_err(|e| e.to_string())
     }
@@ -2088,27 +2082,6 @@ mod tests {
     }
 
     #[test]
-    fn archive_sweep_includes_completed_tasks_outside_the_recent_list() {
-        let (store, task) = empty_session();
-        store.set_task_stage(&task.id, "completed").unwrap();
-        store
-            .db
-            .execute(
-                "UPDATE sessions SET created_at=0,updated_at=0,completed_at=?2 WHERE id=?1",
-                params![task.id, now() - COMPLETED_ARCHIVE_DELAY_MS],
-            )
-            .unwrap();
-        store.db.execute("WITH RECURSIVE n(value) AS (SELECT 1 UNION ALL SELECT value+1 FROM n WHERE value<501)
-            INSERT INTO sessions(id,project_id,title,provider,model,mode,status,created_at,updated_at)
-            SELECT 'filler-'||value,?1,'Recent task','codex','default','ask','idle',1,1 FROM n", [&task.project_id]).unwrap();
-        let recent = store.sessions().unwrap();
-        assert_eq!(recent.len(), 500);
-        assert!(recent.iter().all(|item| item.id != task.id));
-        assert_eq!(store.archive_completed(now()).unwrap(), 1);
-        assert!(store.session(&task.id).unwrap().archived);
-    }
-
-    #[test]
     fn starting_a_task_claims_running_and_message_atomically() {
         let (store, task) = empty_session();
         store.db.execute_batch("CREATE TRIGGER reject_prompt BEFORE INSERT ON messages WHEN NEW.role='user' BEGIN SELECT RAISE(ABORT,'injected storage failure'); END;").unwrap();
@@ -2195,49 +2168,30 @@ mod tests {
     }
 
     #[test]
-    fn completed_archive_uses_exact_deadline_and_manual_restore_grants_another_week() {
-        let (store, task) = empty_session();
-        store.set_task_stage(&task.id, "completed").unwrap();
-        let completed_at = now() - COMPLETED_ARCHIVE_DELAY_MS;
+    fn settle_archived_completes_archived_tasks_only() {
+        let (store, review) = empty_session();
+        let done = store.create_session(&review.project_id, "codex", "default", "ask").unwrap();
+        let live = store.create_session(&review.project_id, "codex", "default", "ask").unwrap();
+        store.set_task_stage(&done.id, "completed").unwrap();
         store
             .db
-            .execute(
-                "UPDATE sessions SET completed_at=?2 WHERE id=?1",
-                params![task.id, completed_at],
-            )
+            .execute("UPDATE sessions SET archived=1,completed_at=5 WHERE id=?1", [&done.id])
             .unwrap();
         store
-            .update_task_details(&task.id, "Edited later", "Still complete")
+            .db
+            .execute("UPDATE sessions SET archived=1,task_stage='review',updated_at=9,completed_at=NULL WHERE id=?1", [&review.id])
             .unwrap();
-        assert_eq!(
-            store
-                .archive_completed(completed_at + COMPLETED_ARCHIVE_DELAY_MS - 1)
-                .unwrap(),
-            0
-        );
-        assert_eq!(
-            store
-                .archive_completed(completed_at + COMPLETED_ARCHIVE_DELAY_MS)
-                .unwrap(),
-            1
-        );
-        assert_eq!(store.archive_completed(now()).unwrap(), 0);
-        assert!(store.session(&task.id).unwrap().archived);
-        store
-            .update(&task.id, None, Some(false), None, None)
-            .unwrap();
-        let restored = store.session(&task.id).unwrap();
-        assert!(!restored.archived);
-        assert!(restored.completed_at.unwrap() > completed_at);
-        assert_eq!(store.archive_completed(now()).unwrap(), 0);
-        store.set_task_stage(&task.id, "pending").unwrap();
-        assert_eq!(
-            store
-                .archive_completed(now() + 2 * COMPLETED_ARCHIVE_DELAY_MS)
-                .unwrap(),
-            0
-        );
-        assert!(store.session(&task.id).unwrap().completed_at.is_none());
+        assert_eq!(store.settle_archived().unwrap(), 2);
+        let done = store.session(&done.id).unwrap();
+        assert!(!done.archived);
+        assert_eq!(done.completed_at, Some(5));
+        let review = store.session(&review.id).unwrap();
+        assert!(!review.archived);
+        assert_eq!(review.task_stage, "completed");
+        assert_eq!(review.completed_at, Some(9));
+        assert_eq!(review.updated_at, 9);
+        assert!(!store.session(&live.id).unwrap().archived);
+        assert_eq!(store.settle_archived().unwrap(), 0);
     }
 
     #[test]
@@ -2293,14 +2247,14 @@ mod tests {
                 .db
                 .execute(
                     "UPDATE sessions SET completed_at=?2 WHERE id=?1",
-                    params![answered, now() - COMPLETED_ARCHIVE_DELAY_MS],
+                    params![answered, now() - 8 * 24 * 60 * 60 * 1000],
                 )
                 .unwrap();
         }
         {
             let store = Store::open(&path).unwrap();
             let archived = store.session(&answered).unwrap();
-            assert!(archived.archived);
+            assert!(!archived.archived);
             assert_eq!(archived.task_stage, "completed");
             assert_eq!(archived.task_description, "Original requirements");
             assert_eq!(store.messages(&answered, None).unwrap().len(), 2);
@@ -3266,7 +3220,7 @@ mod tests {
                 .create_session(&source.id, "claude", "sonnet", "auto")
                 .unwrap();
             store
-                .update(&task.id, Some("Draft task".into()), Some(true), None, None)
+                .update(&task.id, Some("Draft task".into()), None, None, None)
                 .unwrap();
             store
                 .db

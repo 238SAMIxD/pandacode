@@ -91,15 +91,18 @@ if (typeof location !== 'undefined' && new URLSearchParams(location.search).has(
     sample('sections-limited', 'project-1', 'Profile startup time', { lastPromptAt: now - 1800000, lastResponseAt: now - 1700000, limitedAt: now - 1700000, limitedUntil: now + 3600000 }),
     sample('sections-pinned', 'project-1', 'Release checklist for 1.0', { pinned: true, sidebarOrder: 0, lastResponseAt: now - 432000000 }),
     // A long title on a worktree branch with a linked pull request.
-    sample('sections-long', 'project-2', 'Redesign the sidebar rows so long titles, branches and pull requests all fit on one line', { worktreePath: '/Users/you/Projects/pandacode-worktrees/sidebar', worktreeBranch: 'pandacode/sidebar-redesign-compact-rows', pullRequest: { kind: 'pull', number: 482, url: 'https://github.com/aicodeking/pandacode/pull/482', title: 'Compact sidebar rows', state: 'open', checkedAt: now }, lastPromptAt: now - 172000000, lastResponseAt: now - 170000000 }),
-    sample('sections-chat', 'sections-chat-project', 'Explain the borrow checker', { lastPromptAt: now - 7000000, lastResponseAt: now - 6900000 }),
-    ...['Compare two date libraries', 'Draft a short changelog', 'Name the new CLI flag'].map((title, index) => sample(`sections-chat-${index + 2}`, 'sections-chat-project', title, { lastPromptAt: now - 9000000 - index * 3600000, lastResponseAt: now - 8900000 - index * 3600000 })),
+    sample('sections-long', 'project-2', 'Redesign the sidebar rows so long titles, branches and pull requests all fit on one line', { taskStage: 'pending', worktreePath: '/Users/you/Projects/pandacode-worktrees/sidebar', worktreeBranch: 'pandacode/sidebar-redesign-compact-rows', pullRequest: { kind: 'pull', number: 482, url: 'https://github.com/aicodeking/pandacode/pull/482', title: 'Compact sidebar rows', state: 'open', checkedAt: now }, lastPromptAt: now - 172000000, lastResponseAt: now - 170000000 }),
+    sample('sections-chat', 'sections-chat-project', 'Explain the borrow checker', { taskStage: 'pending', lastPromptAt: now - 7000000, lastResponseAt: now - 6900000 }),
+    ...['Compare two date libraries', 'Draft a short changelog', 'Name the new CLI flag'].map((title, index) => sample(`sections-chat-${index + 2}`, 'sections-chat-project', title, { taskStage: 'pending', lastPromptAt: now - 9000000 - index * 3600000, lastResponseAt: now - 8900000 - index * 3600000 })),
     // Enough threads for "Show more" in a folder and paging in Completed.
-    ...['Tidy the logger', 'Rename the config keys', 'Split the router', 'Cache the icon lookups', 'Drop the legacy flag', 'Add a retry to uploads', 'Trim the bundle'].map((title, index) => sample(`sections-many-${index}`, 'project-1', title, { lastResponseAt: now - 200000000 - index * 9000000 })),
+    ...['Tidy the logger', 'Rename the config keys', 'Split the router', 'Cache the icon lookups', 'Drop the legacy flag', 'Add a retry to uploads', 'Trim the bundle'].map((title, index) => sample(`sections-many-${index}`, 'project-1', title, { taskStage: 'pending', lastResponseAt: now - 200000000 - index * 9000000 })),
     ...['Pin the Node version', 'Fix the tooltip offset', 'Translate the menus', 'Audit the CSP', 'Retire the old icons', 'Speed up cold start', 'Archive old logs', 'Bump the parser', 'Clean the fixtures'].map((title, index) => sample(`sections-old-${index}`, index % 2 ? 'project-2' : 'project-1', title, { taskStage: 'completed', lastResponseAt: now - 310000000 - index * 30000000, completedAt: now - 300000000 - index * 30000000 })),
   );
+  // Finished keeps every finished task until it is settled; the folder and chat samples are not
+  // finished (pending), so the folders and Chats still have rows to show.
+  for (const s of sessions) if (/^session-\d$/.test(s.id)) s.taskStage = 'pending';
   projects.push({ id: 'sections-chat-project', name: 'Chat', path: '/Users/you/PandaCode Chats/chat-5ec7105a' });
-  // These finished while another thread was open, so they wait in Needs review (or Active, if they failed).
+  // These finished while another thread was open, so they show unread (failed ones wait in Active).
   localStorage.setItem('pandacode.sidebar.unreviewed', JSON.stringify(['sections-review-1', 'sections-review-2', 'sections-failed']));
 }
 // Saved pins and ranks apply to every sample, the ?sections ones included.
@@ -490,12 +493,6 @@ function taskSummary(s: Session): Session {
     taskDescription += character;
   }
   return { ...s, taskDescription };
-}
-function archiveCompletedTasks(): void {
-  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  for (const s of sessions) {
-    if (!s.archived && s.taskStage === 'completed' && s.completedAt != null && s.completedAt <= cutoff && s.status !== 'running' && s.status !== 'waiting') s.archived = true;
-  }
 }
 for (const [sessionId, history] of Object.entries(messages)) {
   if (history.some(message => message.role === 'user') && history.some(message => message.role === 'assistant')) {
@@ -1080,7 +1077,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'browser_capture': result = { id: crypto.randomUUID(), name: 'Sample screenshot', path: '/sample/browser-capture.png', mimeType: 'image/png', url: browserState.url, title: browserState.title, width: 1280, height: 800, dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==' }; break;
     // Like the native rowid: projects are pushed in the order they were added.
     case 'list_projects': result = projects.map((project, index) => ({ ...project, addedOrder: index + 1 })); break;
-    case 'list_sessions': archiveCompletedTasks(); sessions.forEach(settleDraft); result = [...sessions].filter(task => !task.draft).sort(compareThreadOrder).map(taskSummary); break;
+    case 'list_sessions': sessions.forEach(settleDraft); result = [...sessions].filter(task => !task.draft).sort(compareThreadOrder).map(taskSummary); break;
     case 'set_resume_at_reset': {
       const s = session(args.sessionId);
       if (args.enabled && !(s.limitedAt && s.limitedUntil)) throw new Error('This task has no usage limit with a known reset time.');

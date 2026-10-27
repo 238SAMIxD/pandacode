@@ -18,7 +18,7 @@ export interface TreeInput {
   projects: readonly Project[];
   /** Visible, unpinned tasks already sorted in sidebar order. */
   tasks: readonly Session[];
-  /** Every task of these projects, wherever it is listed (Active, Needs review, Pinned, Completed).
+  /** Every task of these projects, wherever it is listed (Active, Finished, Pinned, Settled).
    * Folder order reads their activity, so a folder holds still when its task starts running. */
   all?: readonly Session[];
   /** Keep folders without tasks (hidden while searching). */

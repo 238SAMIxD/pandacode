@@ -5,6 +5,13 @@ const row = (page: Page, id: string) => page.locator(`#navigation .task-item[dat
 const tabStops = (page: Page) => page.locator('#navigation').evaluate(nav => [...nav.querySelectorAll<HTMLElement>('button')].filter(b => b.tabIndex >= 0 && b.getClientRects().length).map(b => b.dataset.id ?? b.dataset.action));
 
 async function open(page: Page): Promise<void> {
+  // The sample tasks have finished turns, so they would all sit in Finished; make them pending so
+  // Tasks has rows to move through.
+  await page.route('**/src/preview.ts*', async route => {
+    const response = await route.fetch();
+    const body = (await response.text()).replace(/const providers\s*=/, `for (const s of sessions) s.taskStage = 'pending';\n$&`);
+    await route.fulfill({ response, body });
+  });
   await page.goto('/');
   await expect(row(page, 'session-1')).toHaveAttribute('aria-current', 'page');
 }
@@ -18,9 +25,9 @@ test('the list is a single Tab stop and arrow keys move between rows and heading
   expect(await tabStops(page)).toEqual(['session-2']);
   await page.keyboard.press('ArrowUp');
   await page.keyboard.press('ArrowUp');
-  const heading = page.locator('.folder-heading[data-project="project-1"]');
+  const heading = page.locator('.section-fold[data-section="all"]');
   await expect(heading).toBeFocused();
-  // ← closes the folder, → opens it again; the closed state is remembered.
+  // ← closes the section, → opens it again; the closed state is remembered.
   await page.keyboard.press('ArrowLeft');
   await expect(heading).toHaveAttribute('aria-expanded', 'false');
   await page.keyboard.press('ArrowRight');
@@ -53,7 +60,7 @@ test('⌘1…9 open the nth task and ⌘⇧[ / ] step through tasks', async ({ p
   await expect(row(page, 'session-2')).toHaveAttribute('aria-current', 'page');
 });
 
-test('/ focuses the filter from the sidebar and ⌘Z undoes completing a task', async ({ page }) => {
+test('/ focuses the filter from the sidebar and ⌘Z undoes settling a task', async ({ page }) => {
   await open(page);
   await row(page, 'session-2').focus();
   await page.keyboard.press('/');
@@ -62,7 +69,7 @@ test('/ focuses the filter from the sidebar and ⌘Z undoes completing a task', 
   await row(page, 'session-3').focus();
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
   await page.keyboard.press(`${mod}+Enter`);
-  await expect(page.locator('#toast')).toContainText('Task completed');
+  await expect(page.locator('#toast')).toContainText('Task settled');
   await expect(page.locator('#navigation [data-thread-group="completed"]')).toBeVisible();
   await page.locator('#navigation').focus().catch(() => undefined);
   await page.keyboard.press(`${mod}+z`);
@@ -107,32 +114,28 @@ test('/ also works from the transcript, but not on a control outside the list, a
   expect(prevented).toBe(false);
 });
 
-test('in the sort menu ↓/↑ step over the per-project row, ←/→ move along it; focus looks like hover', async ({ page }) => {
+test('in the sort menu ↓/↑ step over the per-section row, ←/→ move along it; focus looks like hover', async ({ page }) => {
   await open(page);
   await page.getByRole('button', { name: 'Sort and view', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Sort and view', exact: true });
-  const item = (group: string, name: string) => dialog.getByRole('group', { name: group, exact: true }).getByRole('menuitemradio', { name, exact: true });
-  const segment = (name: string) => dialog.getByRole('group', { name: 'Show per project', exact: true }).getByRole('menuitemradio', { name, exact: true });
+  const item = (name: string) => dialog.getByRole('group', { name: 'Sort tasks', exact: true }).getByRole('menuitemradio', { name, exact: true });
+  const segment = (name: string) => dialog.getByRole('group', { name: 'Show per section', exact: true }).getByRole('menuitemradio', { name, exact: true });
   await expect(dialog.locator('.choice-menu-option:focus')).toHaveCount(1);
-  await page.keyboard.press('End');
-  await expect(item('Group', 'Flat list')).toBeFocused();
-  await page.keyboard.press('ArrowUp');
-  await expect(item('Group', 'By project')).toBeFocused();
   // Entering the row lands on its current choice…
-  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('End');
   await expect(segment('6 tasks')).toBeFocused();
   // …→ moves along it, and ↑/↓ leave it whole.
   await page.keyboard.press('ArrowRight');
   await expect(segment('10 tasks')).toBeFocused();
   await page.keyboard.press('ArrowUp');
-  await expect(item('Sort projects', 'Manual')).toBeFocused();
+  await expect(item('Created')).toBeFocused();
   await page.keyboard.press('ArrowDown');
   await expect(segment('6 tasks')).toBeFocused();
   await page.keyboard.press('ArrowLeft');
   await expect(segment('3 tasks')).toBeFocused();
-  await page.keyboard.press('ArrowDown');
-  await expect(item('Group', 'By project')).toBeFocused();
-  const focused = item('Group', 'By project');
+  await page.keyboard.press('ArrowUp');
+  const focused = item('Created');
+  await expect(focused).toBeFocused();
   await expect(focused).toHaveCSS('outline-style', 'none');
   await expect(focused).toHaveCSS('box-shadow', /0px 0px 0px 1px inset/);
   expect(await focused.evaluate(node => getComputedStyle(node).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');

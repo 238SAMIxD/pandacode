@@ -6,15 +6,17 @@ const group = (page: Page, name: string) => page.locator(`[data-thread-group="${
 const menu = (page: Page) => page.getByRole('dialog', { name: 'Task actions', exact: true });
 const prompt = (page: Page) => page.getByRole('textbox', { name: 'Message your coding agent', exact: true });
 const ids = (page: Page, name: string) => group(page, name).locator('.task-item').evaluateAll(nodes => nodes.map(node => (node as HTMLElement).dataset.id));
-// Unpinned tasks sit in one folder per project: orbit holds sessions 1–3, pandacode holds session 4.
-const ORBIT = 'project:project-1', PANDACODE = 'project:project-2';
+// All projects: unpinned tasks sit in one Tasks list. orbit holds sessions 1–3, pandacode session 4 (last).
+const ORBIT = 'project:project-1';
+const orbit = async (page: Page) => (await ids(page, 'all')).filter(id => id !== 'session-4');
 
 async function open(page: Page, seed = ''): Promise<void> {
   await page.route('**/src/preview.ts*', async route => {
     const response = await route.fetch(), source = await response.text();
     expect(source).toMatch(/const providers\s*=/);
     expect(source).toMatch(/switch\s*\(command\)\s*\{/);
-    const body = source.replace(/const providers\s*=/, `${seed}\nconst providers =`).replace(/switch\s*\(command\)\s*\{/, `
+    // Finished work would sit in Finished: the samples are pending so they stay in their folders.
+    const body = source.replace(/const providers\s*=/, `for (const s of sessions) s.taskStage = 'pending';\n${seed}\nconst providers =`).replace(/switch\s*\(command\)\s*\{/, `
       (window.__threadOrderCalls ??= []).push({command,args:structuredClone(args)});
       if (['pin_session','reorder_sessions'].includes(command)) {
         if (window.__holdThreadOrder) {
@@ -88,21 +90,21 @@ test.describe('thread order', () => {
 
   test('drags rows and reorders by keyboard without changing selection, then restores their order', async ({ page }) => {
     await open(page);
-    expect(await ids(page, ORBIT)).toEqual(['session-1', 'session-2', 'session-3']);
+    expect(await orbit(page)).toEqual(['session-1', 'session-2', 'session-3']);
     await dragBefore(page, 'session-3', 'session-1');
-    await expect.poll(() => ids(page, ORBIT)).toEqual(['session-3', 'session-1', 'session-2']);
+    await expect.poll(() => orbit(page)).toEqual(['session-3', 'session-1', 'session-2']);
     await expect(row(page, 'session-1')).toHaveAttribute('aria-current', 'page');
     await row(page, 'session-2').focus();
     await page.keyboard.press('Alt+ArrowUp');
-    await expect.poll(() => ids(page, ORBIT)).toEqual(['session-3', 'session-2', 'session-1']);
+    await expect.poll(() => orbit(page)).toEqual(['session-3', 'session-2', 'session-1']);
     await expect(row(page, 'session-2')).toBeFocused();
     await page.reload();
-    await expect.poll(() => ids(page, ORBIT)).toEqual(['session-3', 'session-2', 'session-1']);
+    await expect.poll(() => orbit(page)).toEqual(['session-3', 'session-2', 'session-1']);
     await row(page, 'session-3').focus();
     await page.keyboard.press('Shift+F10');
     await expect(menu(page).getByRole('menuitem', { name: 'Move up', exact: true })).toBeDisabled();
     await menu(page).getByRole('menuitem', { name: 'Move down', exact: true }).click();
-    await expect.poll(() => ids(page, ORBIT)).toEqual(['session-2', 'session-3', 'session-1']);
+    await expect.poll(() => orbit(page)).toEqual(['session-2', 'session-3', 'session-1']);
   });
 
   test('keeps hidden project tasks in their slots when reordering a filtered group', async ({ page }) => {
@@ -110,26 +112,25 @@ test.describe('thread order', () => {
     await open(page, `for (const [index,id] of ['session-1','session-4','session-2','session-3'].entries()) { session(id).lastResponseAt = now - (index + 1) * 1000; }`);
     expect(await ids(page, ORBIT)).toEqual(['session-1', 'session-2', 'session-3']);
     await expect(row(page, 'session-4')).toHaveCount(0);
-    await expect(group(page, PANDACODE)).toHaveCount(0);
+    await expect(group(page, 'all')).toHaveCount(0);
     await dragBefore(page, 'session-3', 'session-1');
     await expect.poll(() => ids(page, ORBIT)).toEqual(['session-3', 'session-1', 'session-2']);
     expect((await calls(page, 'reorder_sessions'))[0].args.sessionIds).toEqual(['session-3', 'session-1', 'session-2']);
     expect((await saved(page)).find(task => task.id === 'session-4').sidebarOrder).toBe(1);
-    await page.locator('[data-action="show-all-projects"]').click();
-    await expect.poll(() => ids(page, ORBIT)).toEqual(['session-3', 'session-1', 'session-2']);
-    expect(await ids(page, PANDACODE)).toEqual(['session-4']);
+    await page.locator('#project-filter').click();
+    await page.getByRole('dialog', { name: 'Filter projects', exact: true }).getByRole('menuitemradio', { name: 'All projects', exact: true }).click();
+    await expect.poll(() => ids(page, 'all')).toEqual(['session-3', 'session-4', 'session-1', 'session-2']);
     await expect(row(page, 'session-1')).toHaveAttribute('aria-current', 'page');
   });
 
-  test('ignores drops across pinned and project folders', async ({ page }) => {
+  test('ignores drops across pinned and Tasks', async ({ page }) => {
     await open(page);
     await choosePin(page, 'session-2');
     await row(page, 'session-3').dragTo(row(page, 'session-2'));
-    await row(page, 'session-4').dragTo(row(page, 'session-1'));
+    await row(page, 'session-2').dragTo(row(page, 'session-1'));
     expect(await calls(page, 'reorder_sessions')).toEqual([]);
     expect(await ids(page, 'pinned')).toEqual(['session-2']);
-    expect(await ids(page, ORBIT)).toEqual(['session-1', 'session-3']);
-    expect(await ids(page, PANDACODE)).toEqual(['session-4']);
+    expect(await ids(page, 'all')).toEqual(['session-1', 'session-3', 'session-4']);
     await expect(page.locator('.drop-before,.drop-after,.task-dragging')).toHaveCount(0);
   });
 
@@ -143,12 +144,12 @@ test.describe('thread order', () => {
     await row(page, 'session-3').focus();
     await page.keyboard.press('Alt+ArrowUp');
     await expect(page.locator('#navigation')).toHaveAttribute('aria-busy', 'false');
-    expect(await ids(page, ORBIT)).toEqual(['session-1', 'session-2', 'session-3']);
+    expect(await orbit(page)).toEqual(['session-1', 'session-2', 'session-3']);
     await expect(row(page, 'session-1')).toHaveAttribute('aria-current', 'page');
     await page.evaluate(() => { (window as any).__failThreadOrder = undefined; });
     await row(page, 'session-3').focus();
     await page.keyboard.press('Alt+ArrowUp');
-    await expect.poll(() => ids(page, ORBIT)).toEqual(['session-1', 'session-3', 'session-2']);
+    await expect.poll(() => orbit(page)).toEqual(['session-1', 'session-3', 'session-2']);
   });
 
   test('pin completion preserves newer streaming activity and the response DOM', async ({ page }) => {
@@ -193,7 +194,7 @@ test.describe('thread order', () => {
     await expect.poll(() => page.evaluate(() => typeof (window as any).__releaseThreadOrder)).toBe('function');
     await row(page, 'session-4').focus();
     await page.evaluate(() => (window as any).__releaseThreadOrder());
-    await expect.poll(() => ids(page, ORBIT)).toEqual(['session-1', 'session-3', 'session-2']);
+    await expect.poll(() => orbit(page)).toEqual(['session-1', 'session-3', 'session-2']);
     await expect(row(page, 'session-4')).toBeFocused();
   });
 
@@ -225,73 +226,60 @@ test.describe('thread order', () => {
     expect((await saved(page)).find(task => task.id === 'session-2').pinned).toBe(true);
   });
 
-  test('a task created after a manual reorder appears at the top of its folder', async ({ page }) => {
+  test('a task created after a manual reorder appears at the top of Tasks', async ({ page }) => {
     await open(page);
     await dragBefore(page, 'session-3', 'session-1');
-    await expect.poll(() => ids(page, ORBIT)).toEqual(['session-3', 'session-1', 'session-2']);
+    await expect.poll(() => orbit(page)).toEqual(['session-3', 'session-1', 'session-2']);
     const created = await page.evaluate(async () => {
       const preview = await import((window as any).__threadOrderUrl);
       const task = await preview.invoke('create_board_task', { projectId: 'project-1', provider: 'claude', model: 'sonnet', mode: 'full', title: 'Brand new task', description: '' });
       (window as any).__threadOrderEmit('sessions-changed', {});
       return task.id as string;
     });
-    await expect.poll(() => ids(page, ORBIT)).toEqual([created, 'session-3', 'session-1', 'session-2']);
+    await expect.poll(() => orbit(page)).toEqual([created, 'session-3', 'session-1', 'session-2']);
   });
 
   test('the sort menu orders tasks by activity or creation, turns off dragging, and is remembered', async ({ page }) => {
     await open(page, `session('session-2').createdAt = now - 400000;`);
     await dragBefore(page, 'session-3', 'session-1');
-    await expect.poll(() => ids(page, ORBIT)).toEqual(['session-3', 'session-1', 'session-2']);
+    await expect.poll(() => orbit(page)).toEqual(['session-3', 'session-1', 'session-2']);
     const sort = page.getByRole('button', { name: 'Sort and view', exact: true });
     const choose = async (group: string, label: string) => {
       await sort.click();
       await page.getByRole('dialog', { name: 'Sort and view', exact: true }).getByRole('group', { name: group, exact: true }).getByRole('menuitemradio', { name: label, exact: true }).click();
     };
     await choose('Sort tasks', 'Recent activity');
-    await expect.poll(() => ids(page, ORBIT)).toEqual(['session-1', 'session-2', 'session-3']);
+    await expect.poll(() => orbit(page)).toEqual(['session-1', 'session-2', 'session-3']);
     await expect(row(page, 'session-1')).toHaveAttribute('draggable', 'false');
     await row(page, 'session-1').click({ button: 'right' });
     await expect(menu(page).getByRole('menuitem', { name: 'Move down', exact: true })).toBeDisabled();
     await page.keyboard.press('Escape');
     await choose('Sort tasks', 'Created');
-    await expect.poll(() => ids(page, ORBIT)).toEqual(['session-2', 'session-1', 'session-3']);
-    const created = await ids(page, ORBIT);
-    await choose('Show per project', '3 tasks');
+    await expect.poll(() => orbit(page)).toEqual(['session-2', 'session-1', 'session-3']);
+    const created = await orbit(page);
+    await choose('Show per section', '3 tasks');
     await page.reload();
-    await expect.poll(() => ids(page, ORBIT)).toEqual(created);
+    await expect.poll(() => orbit(page)).toEqual(created);
     await sort.click();
     const dialog = page.getByRole('dialog', { name: 'Sort and view', exact: true });
     await expect(dialog.getByRole('group', { name: 'Sort tasks', exact: true }).getByRole('menuitemradio', { name: 'Created', exact: true })).toHaveAttribute('aria-checked', 'true');
-    await expect(dialog.getByRole('group', { name: 'Show per project', exact: true }).getByRole('menuitemradio', { name: '3 tasks', exact: true })).toHaveAttribute('aria-checked', 'true');
+    await expect(dialog.getByRole('group', { name: 'Show per section', exact: true }).getByRole('menuitemradio', { name: '3 tasks', exact: true })).toHaveAttribute('aria-checked', 'true');
     await dialog.getByRole('group', { name: 'Sort tasks', exact: true }).getByRole('menuitemradio', { name: 'Manual', exact: true }).click();
-    await expect.poll(() => ids(page, ORBIT)).toEqual(['session-3', 'session-1', 'session-2']);
+    await expect.poll(() => orbit(page)).toEqual(['session-3', 'session-1', 'session-2']);
     await expect(row(page, 'session-1')).toHaveAttribute('draggable', 'true');
   });
 
-  test('projects sort by name and keep their place when a task starts running', async ({ page }) => {
+  test('All projects lists unpinned tasks in Tasks, each naming its project; selected options show a trailing check', async ({ page }) => {
     await open(page);
-    const folders = () => page.locator('#navigation .folder-group').evaluateAll(nodes => nodes.map(node => (node as HTMLElement).dataset.project));
     await page.getByRole('button', { name: 'Sort and view', exact: true }).click();
-    await page.getByRole('group', { name: 'Sort projects', exact: true }).getByRole('menuitemradio', { name: 'Name', exact: true }).click();
-    await expect.poll(folders).toEqual(['project-1', 'project-2']);
-    await expect(page.locator('.folder-heading').first()).toContainText('orbit');
-  });
-
-  test('a flat list replaces folders and names each row’s project; selected options show a trailing check', async ({ page }) => {
-    await open(page);
-    const sort = page.getByRole('button', { name: 'Sort and view', exact: true });
-    await sort.click();
     const dialog = page.getByRole('dialog', { name: 'Sort and view', exact: true });
     const manual = dialog.getByRole('group', { name: 'Sort tasks', exact: true }).getByRole('menuitemradio', { name: 'Manual', exact: true });
     await expect(manual).toHaveAttribute('aria-checked', 'true');
     await expect(manual.locator('svg.icon').last()).toBeVisible();
-    // On, but not the highlighted row: no fill, only the check.
-    const recent = dialog.getByRole('group', { name: 'Sort projects', exact: true }).getByRole('menuitemradio', { name: 'Recent activity', exact: true });
-    await expect(recent).toHaveAttribute('aria-checked', 'true');
-    await expect(recent).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-    await expect(recent.locator('svg.icon').last()).toBeVisible();
+    await expect(dialog.getByRole('group', { name: 'Sort projects', exact: true })).toHaveCount(0);
+    await expect(dialog.getByRole('group', { name: 'Group', exact: true })).toHaveCount(0);
     expect((await dialog.boundingBox())!.width).toBe(280);
-    await dialog.getByRole('group', { name: 'Group', exact: true }).getByRole('menuitemradio', { name: 'Flat list', exact: true }).click();
+    await page.keyboard.press('Escape');
     await expect(page.locator('#navigation .folder-heading')).toHaveCount(0);
     await expect.poll(() => ids(page, 'all')).toEqual(['session-1', 'session-2', 'session-3', 'session-4']);
     // At the default width titles come first: the name hides (the tooltip keeps it), the icon stays.
@@ -303,43 +291,6 @@ test.describe('thread order', () => {
     await expect(row(page, 'session-4').locator('.task-project-name')).toHaveText('pandacode');
     const name = await row(page, 'session-4').locator('.task-project-name').evaluate(node => node.scrollWidth <= node.clientWidth);
     expect(name).toBe(true);
-    await page.reload();
-    await expect(page.locator('#navigation .folder-heading')).toHaveCount(0);
-  });
-
-  test('projects can be arranged by hand: Alt+arrows move a folder and the order is remembered', async ({ page }) => {
-    await open(page);
-    const folders = () => page.locator('#navigation .folder-heading').evaluateAll(nodes => nodes.map(node => (node as HTMLElement).dataset.project));
-    expect(await folders()).toEqual(['project-1', 'project-2']);
-    await expect(page.locator('.folder-heading').first()).toHaveAttribute('draggable', 'false');
-    await page.getByRole('button', { name: 'Sort and view', exact: true }).click();
-    await page.getByRole('group', { name: 'Sort projects', exact: true }).getByRole('menuitemradio', { name: 'Manual', exact: true }).click();
-    await expect(page.locator('.folder-heading').first()).toHaveAttribute('draggable', 'true');
-    expect(await folders()).toEqual(['project-1', 'project-2']);
-    await page.locator('.folder-heading[data-project="project-1"]').focus();
-    await page.keyboard.press('Alt+ArrowDown');
-    await expect.poll(folders).toEqual(['project-2', 'project-1']);
-    await expect(page.locator('.folder-heading[data-project="project-1"]')).toBeFocused();
-    await page.reload();
-    await expect.poll(folders).toEqual(['project-2', 'project-1']);
-    // Dragging a folder heading moves it too.
-    await page.locator('.folder-heading[data-project="project-1"]').dragTo(page.locator('.folder-heading[data-project="project-2"]'), { targetPosition: { x: 30, y: 3 } });
-    await expect.poll(folders).toEqual(['project-1', 'project-2']);
-  });
-
-  test('picking Projects: Manual from a flat list saves every project in its current order', async ({ page }) => {
-    await open(page);
-    const choose = async (group: string, name: string) => {
-      await page.getByRole('button', { name: 'Sort and view', exact: true }).click();
-      await page.getByRole('group', { name: group, exact: true }).getByRole('menuitemradio', { name, exact: true }).click();
-    };
-    await choose('Group', 'Flat list');
-    await expect(page.locator('#navigation .folder-heading')).toHaveCount(0);
-    await choose('Sort projects', 'Manual');
-    const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('pandacode.sidebar.projectOrder') ?? '[]'));
-    expect(saved).toEqual(['project-1', 'project-2']);
-    await choose('Group', 'By project');
-    await expect.poll(() => page.locator('#navigation .folder-heading').evaluateAll(nodes => nodes.map(node => (node as HTMLElement).dataset.project))).toEqual(['project-1', 'project-2']);
   });
 
   test('a right-click opens the task menu at the pointer; the … button keeps it on the row', async ({ page }) => {
@@ -354,7 +305,8 @@ test.describe('thread order', () => {
     await row(page, 'session-2').hover();
     await page.locator('#task-row-session-2 .task-more').click();
     panel = (await menu(page).boundingBox())!;
-    expect(Math.abs(panel.x - box.x)).toBeLessThan(2);
+    // At the row's left edge, kept 12px inside the window.
+    expect(Math.abs(panel.x - Math.max(box.x, 12))).toBeLessThan(2);
     expect(panel.y).toBeGreaterThanOrEqual(box.y + box.height);
   });
 

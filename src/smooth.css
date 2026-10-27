@@ -2,7 +2,7 @@
  * Nothing keeps an outline; Increase Contrast restores every line. */
 html .sidebar,html .workspace[data-wallpaper]>.sidebar{border-right:0}
 html .workspace>.inspector{border-left:0}
-html .sidebar :is(.sidebar-note,.sidebar-bots){border-top:0}
+html .sidebar .sidebar-bots{border-top:0}
 html .workspace-header,html .inspector-heading{border-bottom:0}
 /* The right sidebar's tab header is the sidebar, not a band of its own. */
 html .inspector-heading,html[data-theme] .workspace[data-wallpaper]>.inspector .inspector-heading{background:transparent}
@@ -26,7 +26,7 @@ html .drawer-heading{border-bottom:0}
 @media(prefers-contrast:more){
   html .sidebar{border-right:1px solid var(--border)}
   html .workspace>.inspector{border-left:1px solid var(--border)}
-  html .sidebar :is(.sidebar-note,.sidebar-bots){border-top:1px solid var(--border)}
+  html .sidebar .sidebar-bots{border-top:1px solid var(--border)}
   html :is(.workspace-header,.inspector-heading){border-bottom:1px solid var(--border)}
 }
 

@@ -3478,28 +3478,6 @@ pub fn run() {
             if let Err(error) = tray::setup(app.handle()) {
                 eprintln!("Menu bar item is unavailable: {error}");
             }
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                loop {
-                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                    let state = handle.state::<AppState>();
-                    if state.shutdown.load(Ordering::SeqCst) != 0 {
-                        break;
-                    }
-                    let archived = state
-                        .store
-                        .lock()
-                        .map_err(|e| e.to_string())
-                        .and_then(|store| store.archive_completed(storage::now()));
-                    match archived {
-                        Ok(count) if count > 0 => {
-                            let _ = handle.emit("sessions-changed", ());
-                        }
-                        Err(error) => eprintln!("Completed task archive failed: {error}"),
-                        _ => {}
-                    }
-                }
-            });
             if let Some(window) = app.get_webview_window("main") {
                 if let Err(error) = appearance::setup(&window) {
                     eprintln!("Native appearance setup failed: {error}");
