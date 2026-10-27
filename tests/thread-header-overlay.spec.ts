@@ -65,4 +65,35 @@ test.describe('thread header overlay', () => {
     expect((await box(page, '#transcript .message')).top).toBeLessThan(bar.bottom);
     await expect(trigger).toBeVisible();
   });
+
+  test('find in thread lands every match below the header, its fade, the team bar and the find bar', async ({ page }) => {
+    await openThread(page);
+    await page.getByRole('button', { name: 'Team', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Open workers', exact: true })).toBeVisible();
+    const transcript = page.locator('#transcript');
+    // Room to scroll, then put the first "search" match just under the header, inside the fade.
+    await page.locator('#stream-region').evaluate(node => { node.style.minHeight = '900px'; });
+    const headerBottom = (await box(page, '.workspace-header')).bottom;
+    await transcript.evaluate((node, y) => { node.scrollTop += node.querySelector('.user-message')!.getBoundingClientRect().top - y; }, headerBottom + 6);
+    // Let the scroll event land, so the transcript stops following the bottom.
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await page.keyboard.press('ControlOrMeta+f');
+    const find = page.getByRole('search');
+    const input = find.getByRole('searchbox', { name: 'Find in thread', exact: true });
+    await input.fill('search');
+    const count = find.locator('.thread-find-count');
+    await expect(count).toHaveText(/^\d+ of \d+$/);
+    const total = Number((await count.textContent())!.split(' of ')[1]);
+    const current = () => page.evaluate(() => { const [range] = [...(CSS as any).highlights.get('thread-find-current')] as Range[]; return range.getBoundingClientRect().toJSON() as DOMRect; });
+    const limit = Math.max(headerBottom + 32, (await box(page, '.architect-trigger')).bottom, (await find.boundingBox())!.y + (await find.boundingBox())!.height);
+    const bottom = (await box(page, '#transcript')).bottom;
+    // The fresh search skips the covered match; stepping back to it, then through every match,
+    // must bring each fully into the clear area.
+    for (const [index, key] of ['', 'Shift+Enter', ...Array(total).fill('Enter')].entries()) {
+      if (key) await input.press(key);
+      const rect = await current();
+      expect(rect.top, `step ${index}`).toBeGreaterThanOrEqual(limit);
+      expect(rect.bottom, `step ${index}`).toBeLessThanOrEqual(bottom);
+    }
+  });
 });

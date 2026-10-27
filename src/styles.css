@@ -106,20 +106,28 @@ button .icon{pointer-events:none}
    short band past the bar's edge where a mask fades it out, so content dissolves instead of
    being cut. The band is a pseudo-element so the header's own box (and drag region) is unchanged. */
 .workspace-header::before{content:"";position:absolute;inset:0 0 calc(-1 * var(--header-fade));z-index:-1;pointer-events:none;background:var(--header-glass);backdrop-filter:var(--header-blur);-webkit-backdrop-filter:var(--header-blur);mask-image:linear-gradient(#000 calc(100% - var(--header-fade)),transparent);-webkit-mask-image:linear-gradient(#000 calc(100% - var(--header-fade)),transparent)}
-.main-pane{--header-fade:18px;--header-glass:color-mix(in srgb,var(--bg) 76%,transparent);--header-blur:blur(16px) saturate(1.15)}
+.main-pane{--header-fade:32px;--header-glass:color-mix(in srgb,var(--bg) 84%,transparent);--header-blur:blur(16px) saturate(1.15)}
 /* Conversation view: the transcript starts under the header (pulled up by its height) and pads
    its content back down, so nothing is hidden at rest. Anything in flow above the transcript
-   (file tabs, details, JEV activity) keeps the old stacked layout. */
+   (file tabs, details, JEV activity) keeps the old stacked layout. The first row clears the fade too,
+   and scroll-padding keeps focus and scrollIntoView below the header, its fade and any floating bar
+   (the bars sit inside the fade's band, so the larger of the two counts). */
 .workspace:not(.board-view,.github-view)>.main-pane>.work-area{overflow:visible}
-.workspace:not(.board-view,.github-view) .conversation-pane:not(.new-task-page):not(:has(>:is(.file-tabs,.task-details-heading,.jev-activity):not([hidden]))){--header-under:var(--titlebar-height)}
-.conversation-pane>.transcript{margin-top:calc(-1 * var(--header-under,0px));padding-top:calc(var(--transcript-top,28px) + var(--header-under,0px));scroll-padding-top:calc(var(--header-under,0px) + 12px)}
+.workspace:not(.board-view,.github-view) .conversation-pane:not(.new-task-page):not(:has(>:is(.file-tabs,.task-details-heading,.jev-activity):not([hidden]))){--header-under:var(--titlebar-height);--header-fade-under:var(--header-fade)}
+.conversation-pane>.transcript{margin-top:calc(-1 * var(--header-under,0px));padding-top:calc(max(var(--transcript-top,28px),var(--header-fade-under,0px)) + var(--header-under,0px));scroll-padding-top:calc(var(--header-under,0px) + max(var(--header-fade-under,0px),var(--floating-bars,0px)) + 12px)}
 /* The team and subagent triggers float over the thread's top right, under the header, instead of
    taking an in-flow row (which drew an empty band across the pane); the transcript pads for them.
    The pane itself starts below the header; only the transcript is pulled up under it. */
 .workspace:not(.side-thread) .conversation-pane>:is(.architect-host,.subagents-host){position:absolute;top:0;left:0;right:0}
 .workspace:not(.side-thread) .conversation-pane:has(>.architect-host:not([hidden]))>.subagents-host{top:36px}
-.workspace:not(.side-thread) .conversation-pane:not(.new-task-page):has(>.architect-host:not([hidden]),>.subagents-host:not([hidden])>.subagents-trigger:not([hidden])){--transcript-top:48px}
-.workspace:not(.side-thread) .conversation-pane:not(.new-task-page):has(>.architect-host:not([hidden])):has(>.subagents-host:not([hidden])>.subagents-trigger:not([hidden])){--transcript-top:84px}
+.workspace:not(.side-thread) .conversation-pane:not(.new-task-page):has(>.architect-host:not([hidden]),>.subagents-host:not([hidden])>.subagents-trigger:not([hidden])){--transcript-top:48px;--floating-bars:36px}
+.workspace:not(.side-thread) .conversation-pane:not(.new-task-page):has(>.architect-host:not([hidden])):has(>.subagents-host:not([hidden])>.subagents-trigger:not([hidden])){--transcript-top:84px;--floating-bars:72px}
+/* Floating triggers: a denser glass with a soft lift so they hold their own over bubbles (no edge). */
+.workspace:not(.side-thread) .conversation-pane>.subagents-host>.subagents-trigger:not(:hover,[aria-expanded=true]){background:color-mix(in srgb,var(--panel) 88%,transparent)}
+.workspace:not(.side-thread) .conversation-pane>.subagents-host>.subagents-trigger{backdrop-filter:blur(16px) saturate(1.15);-webkit-backdrop-filter:blur(16px) saturate(1.15);box-shadow:var(--floating-bar-shadow)}
+:root{--floating-bar-shadow:0 4px 18px rgb(0 0 0 / .08)}
+html[data-theme="dark"]{--floating-bar-shadow:0 4px 18px rgb(0 0 0 / .32)}
+@media(prefers-reduced-transparency:reduce),(prefers-contrast:more){.workspace:not(.side-thread) .conversation-pane>.subagents-host>.subagents-trigger:not(:hover,[aria-expanded=true]){background:var(--panel)}.workspace:not(.side-thread) .conversation-pane>.subagents-host>.subagents-trigger{backdrop-filter:none;-webkit-backdrop-filter:none}}
 .breadcrumb{display:flex;align-items:center;gap:var(--space-2);min-width:0;overflow:hidden;color:var(--muted);font-size:var(--text-sm)}
 .breadcrumb>.icon{--icon-size:var(--icon-sm);--icon-stroke:var(--icon-stroke-sm)}
 .breadcrumb>button{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--text);font-size:var(--text-sm);white-space:nowrap;font-weight:var(--weight-medium)}
