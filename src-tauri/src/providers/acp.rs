@@ -25,9 +25,10 @@ fn transport_error(pipe: &Pipe, stage: &str) -> String {
 /// Shown when Grok Build has no usable cached credentials.
 pub(super) const GROK_SIGN_IN: &str =
     "Grok Build is not signed in. Run `grok login` in a terminal, then send again.";
-/// Grok Build has no read-only session mode over ACP; plan mode is enforced by
-/// declining state-changing permission requests and telling the model up front.
-pub(super) const GROK_PLAN_PREFIX: &str = "Plan mode is on for this session: work read-only. Investigate with read-only tools, then reply with a concrete, step-by-step plan. Do not edit files or run commands that change state; requests to do so will be declined.";
+/// For ACP harnesses with no read-only session mode (Grok Build, DeepSeek, Muse,
+/// Hermes): plan mode is enforced by declining state-changing permission requests
+/// and telling the model up front with this prefix.
+pub(super) const READ_ONLY_PLAN_PREFIX: &str = "Plan mode is on for this session: work read-only. Investigate with read-only tools, then reply with a concrete, step-by-step plan. Do not edit files or run commands that change state; requests to do so will be declined.";
 
 /// DeepSeek Harness serves ACP from its `acp` profile.
 pub(super) const DEEPSEEK_ARGS: [&str; 2] = ["--profile", "acp"];
@@ -71,6 +72,7 @@ pub(super) fn configure(command: &mut Command, config: &RunConfig) {
         "cline" => super::cline::configure(command, config),
         "kilo" => super::kilo::configure(command),
         "devin" => super::devin::configure(command),
+        "hermes" => super::hermes::configure(command, config),
         _ => {
             #[cfg(target_os = "linux")]
             command.arg("--uid=");
@@ -189,6 +191,24 @@ impl Protocol {
             }
             if self.config.provider == "devin" && value["error"]["code"] == -32000 {
                 return Err(super::devin::SIGN_IN.into());
+            }
+            if self.config.provider == "hermes" {
+                let err_str = value["error"]["data"].as_str()
+                    .or_else(|| value["error"]["data"]["details"].as_str())
+                    .or_else(|| value["error"]["message"].as_str())
+                    .unwrap_or("");
+                if err_str.contains("No LLM provider configured") || err_str.contains("ProviderNotConfiguredError") {
+                    return Err("Hermes Agent has no inference provider configured. Run `hermes model` or set model.provider in ~/.hermes/config.yaml (e.g. 'openrouter'), then retry.".into());
+                }
+                if err_str.contains("No endpoints found that support tool use") {
+                    return Err("The configured Hermes Agent model does not support tool use. Run `hermes model` to select a model that supports function calling, then retry.".into());
+                }
+                if err_str.contains("Key limit exceeded") {
+                    return Err("Hermes Agent inference failed: API key quota or credit limit exceeded. Check your provider account credits/limits or choose a free model with `hermes model`.".into());
+                }
+                if err_str.contains("storage_unavailable") || value["error"]["code"] == -32000 {
+                    return Err("Hermes Agent is not configured with a default model. Run `hermes model` or `hermes acp --setup` in a terminal (or set model.default in ~/.hermes/config.yaml), then retry.".into());
+                }
             }
             if value["error"]["code"] == -32000 {
                 return Err(format!("{} requires authentication. Sign in using its own CLI or official extension, then retry.", self.config.provider));
@@ -422,6 +442,21 @@ impl Protocol {
                 }
                 return Ok(step);
             }
+            if self.config.provider == "hermes" && self.config.mode == "plan" {
+                let tool = &value["params"]["toolCall"];
+                let kind = field(tool, "kind");
+                let read_only = matches!(kind, "read" | "search" | "fetch" | "think");
+                let wanted = if read_only { "allow_once" } else { "reject_once" };
+                let choice = options.and_then(|values| values.iter().find(|entry| entry["kind"] == wanted));
+                if let Some(selected) = choice {
+                    if wanted == "reject_once" {
+                        let title = model_text(tool["title"].as_str().or_else(|| self.tools.get(field(tool, "toolCallId")).map(|t| t.name.as_str())), "a state-changing action", 200);
+                        step.events.push(self.event("status", format!("Plan mode declined: {title}"), None));
+                    }
+                    step.write.push(json!({"jsonrpc":"2.0","id":value["id"],"result":{"outcome":{"outcome":"selected","optionId":selected["optionId"]}}}));
+                    return Ok(step);
+                }
+            }
             if self.config.provider == "devin" {
                 return self.devin_permission(value, step);
             }
@@ -563,6 +598,12 @@ impl Protocol {
             &[super::kilo::mode_id(&self.config.mode)]
         } else if self.config.provider == "devin" {
             &[super::devin::mode_id(&self.config.mode)]
+        } else if self.config.provider == "hermes" {
+            match self.config.mode.as_str() {
+                "auto" => &["accept_edits", "default"],
+                "full" => &["dont_ask", "default"],
+                _ => &["default"],
+            }
         } else if self.config.provider == "cline" {
             // Cline has Plan and Act; approvals ride on permission requests.
             &[if self.config.mode == "plan" { "plan" } else { "act" }]
@@ -1670,7 +1711,7 @@ mod tests {
     #[test]
     fn grok_plan_mode_prefixes_the_prompt_and_declines_state_changing_permissions() {
         let (mut p, text) = grok_ready("plan");
-        assert!(text.starts_with(GROK_PLAN_PREFIX));
+        assert!(text.starts_with(READ_ONLY_PLAN_PREFIX));
         assert!(text.ends_with("Explain this project"));
         let step = p.receive(grok_permission("edit", false)).unwrap();
         assert_eq!(step.write[0]["result"]["outcome"]["optionId"], "reject-once");
@@ -1979,6 +2020,159 @@ mod tests {
         let mut c = Command::new("agy_acp_server.par");
         configure(&mut c, &config("antigravity"));
         assert!(!c.as_std().get_args().any(|arg| arg == "acp"));
+        let mut c_hermes = Command::new("hermes");
+        configure(&mut c_hermes, &config("hermes"));
+        assert!(c_hermes.as_std().get_args().any(|arg| arg == "acp"));
+    }
+
+    #[test]
+    fn hermes_storage_unavailable_reports_setup_and_model_guidance() {
+        let mut p = Protocol::new(config("hermes"));
+        assert_eq!(p.initial()["method"], "initialize");
+        let step = p.receive(capabilities()).unwrap();
+        assert_eq!(step.write[0]["method"], "session/new");
+        let error = p.receive(json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "error": {
+                "code": -32603,
+                "message": "Internal error",
+                "data": { "details": "storage_unavailable" }
+            }
+        })).err().unwrap();
+        assert!(error.contains("Hermes Agent is not configured with a default model"));
+        assert!(error.contains("hermes model"));
+    }
+
+    #[test]
+    fn hermes_provider_not_configured_reports_provider_guidance() {
+        let mut p = Protocol::new(config("hermes"));
+        assert_eq!(p.initial()["method"], "initialize");
+        let step = p.receive(capabilities()).unwrap();
+        assert_eq!(step.write[0]["method"], "session/new");
+        let error = p.receive(json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "error": {
+                "code": -32603,
+                "message": "Internal error",
+                "data": "admitted_turn_failed\nagent.auxiliary_unavailable.ProviderNotConfiguredError: No LLM provider configured."
+            }
+        })).err().unwrap();
+        assert!(error.contains("Hermes Agent has no inference provider configured"));
+        assert!(error.contains("model.provider"));
+    }
+
+    #[test]
+    fn hermes_full_access_sets_yolo_env_and_selects_dont_ask_mode() {
+        let mut cfg = config("hermes");
+        cfg.mode = "full".into();
+        let mut c = Command::new("hermes");
+        configure(&mut c, &cfg);
+        assert_eq!(c.as_std().get_envs().find(|(k, _)| *k == "HERMES_YOLO_MODE").unwrap().1.unwrap(), "1");
+
+        let mut p = Protocol::new(cfg);
+        assert_eq!(p.initial()["method"], "initialize");
+        p.receive(capabilities()).unwrap();
+        let session = json!({
+            "sessionId": "hermes-123",
+            "modes": {
+                "availableModes": [
+                    { "id": "default", "name": "Default" },
+                    { "id": "accept_edits", "name": "Accept Edits" },
+                    { "id": "dont_ask", "name": "Don't Ask" }
+                ],
+                "currentModeId": "default"
+            }
+        });
+        let step = p.receive(response(2, session)).unwrap();
+        assert_eq!(step.write[0]["method"], "session/set_mode");
+        assert_eq!(step.write[0]["params"]["modeId"], "dont_ask");
+    }
+
+    #[test]
+    fn hermes_specific_errors_not_masked_by_code_32000() {
+        let mut p = Protocol::new(config("hermes"));
+        assert_eq!(p.initial()["method"], "initialize");
+        let step = p.receive(capabilities()).unwrap();
+        assert_eq!(step.write[0]["method"], "session/new");
+        let error = p.receive(json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "error": {
+                "code": -32000,
+                "message": "Server error",
+                "data": "agent.auxiliary_unavailable.ProviderNotConfiguredError: No LLM provider configured."
+            }
+        })).err().unwrap();
+        assert!(error.contains("Hermes Agent has no inference provider configured"), "{error}");
+
+        let mut p2 = Protocol::new(config("hermes"));
+        p2.receive(capabilities()).unwrap();
+        let error2 = p2.receive(json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "error": {
+                "code": -32000,
+                "message": "Key limit exceeded",
+                "data": "Key limit exceeded (total limit)"
+            }
+        })).err().unwrap();
+        assert!(error2.contains("API key quota or credit limit exceeded"), "{error2}");
+    }
+
+    #[test]
+    fn hermes_plan_mode_declines_state_changing_tools_and_allows_reads() {
+        let mut cfg = config("hermes");
+        cfg.mode = "plan".into();
+        cfg.prompt = "Audit the codebase".into();
+        let mut p = Protocol::new(cfg);
+        p.remote_id = "hermes-session-plan".into();
+        let mut prompt_step = Step::default();
+        p.kimi_prompt(&mut prompt_step);
+        let prompt_text = prompt_step.write[0]["params"]["prompt"][0]["text"].as_str().unwrap();
+        assert!(prompt_text.starts_with(READ_ONLY_PLAN_PREFIX));
+
+        let edit_req = json!({
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": "hermes-session-plan",
+                "toolCall": {
+                    "toolCallId": "call-1",
+                    "title": "Edit src/main.rs",
+                    "kind": "edit"
+                },
+                "options": [
+                    { "optionId": "allow", "kind": "allow_once" },
+                    { "optionId": "reject", "kind": "reject_once" }
+                ]
+            }
+        });
+        let edit_step = p.receive(edit_req).unwrap();
+        assert_eq!(edit_step.write[0]["result"]["outcome"]["optionId"], "reject");
+        assert!(edit_step.events.iter().any(|e| e.kind == "status" && e.text.contains("Plan mode declined")));
+
+        let read_req = json!({
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": "hermes-session-plan",
+                "toolCall": {
+                    "toolCallId": "call-2",
+                    "title": "Read Cargo.toml",
+                    "kind": "read"
+                },
+                "options": [
+                    { "optionId": "allow", "kind": "allow_once" },
+                    { "optionId": "reject", "kind": "reject_once" }
+                ]
+            }
+        });
+        let read_step = p.receive(read_req).unwrap();
+        assert_eq!(read_step.write[0]["result"]["outcome"]["optionId"], "allow");
     }
     #[test]
     fn glm_explicit_model_remains_a_cli_override_and_default_is_real_glm() {
@@ -2046,7 +2240,7 @@ mod tests {
         assert_eq!(prompt["id"], 3);
         assert_eq!(prompt["params"]["sessionId"], p.remote_id);
         let text = prompt["params"]["prompt"][0]["text"].as_str().unwrap();
-        assert!(text.starts_with(GROK_PLAN_PREFIX) && text.ends_with("use the parser\n\nand add tests"), "{text}");
+        assert!(text.starts_with(READ_ONLY_PLAN_PREFIX) && text.ends_with("use the parser\n\nand add tests"), "{text}");
         let delivered: Vec<_> = steer_statuses(&step).into_iter().map(|(id, status, _)| (id, status)).collect();
         assert_eq!(delivered, [("s1".into(), "delivered".into()), ("s2".into(), "delivered".into())]);
 

@@ -864,7 +864,7 @@ mod tests {
         assert_eq!(writes[3]["params"]["mode"], "denyUnmatched");
         assert_eq!(writes[4]["params"]["model"]["modelId"], "muse-wonder-1.0");
         // Plan mode also tells the model to stay read-only.
-        assert!(writes[5]["params"]["input"][0]["text"].as_str().unwrap().starts_with(acp::GROK_PLAN_PREFIX));
+        assert!(writes[5]["params"]["input"][0]["text"].as_str().unwrap().starts_with(acp::READ_ONLY_PLAN_PREFIX));
     }
 
     #[test]

@@ -412,6 +412,7 @@ fn known_provider(provider: &str) -> bool {
             | "muse"
             | "devin"
             | "zcode"
+            | "hermes"
     )
 }
 

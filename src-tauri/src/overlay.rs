@@ -165,6 +165,7 @@ fn validate_selection(selection: &ModelSelection) -> Result<()> {
         "muse",
         "devin",
         "zcode",
+        "hermes",
     ]
     .contains(&selection.provider.as_str())
         || selection.model.trim().is_empty()
@@ -1763,6 +1764,7 @@ mod tests {
             "muse",
             "devin",
             "zcode",
+            "hermes",
         ] {
             for mode in [None, Some("ask"), Some("auto"), Some("plan"), Some("full")] {
                 let mut saved = serde_json::json!({"provider":provider,"model":"default"});

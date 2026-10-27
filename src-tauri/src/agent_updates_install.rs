@@ -51,6 +51,7 @@ pub(super) fn docs(provider: &str) -> Option<&'static str> {
         "cline" => "https://docs.cline.bot/usage/cli-overview",
         "antigravity" => "https://antigravity.google/docs/ide/extensions",
         "devin" => "https://docs.devin.ai/cli",
+        "hermes" => "https://hermes-agent.org",
         _ => return None,
     })
 }
