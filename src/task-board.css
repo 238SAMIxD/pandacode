@@ -1,9 +1,5 @@
-.view-switch{display:flex;gap:2px;padding:4px;border-radius:var(--radius-sm);background:var(--panel);margin-right:8px;align-items:center}
-.view-switch button{height:24px;padding:0 9px;gap:5px;color:var(--muted);border-radius:var(--radius-xs);font-size:var(--text-sm)}
-.view-switch .icon{width:var(--icon-sm);height:var(--icon-sm)}
 .workspace.board-view{grid-template-columns:minmax(0,1fr) var(--inspector-width,302px)}
 .workspace.board-view.inspector-closed{grid-template-columns:minmax(0,1fr)}
-.view-switch button[aria-pressed=true]{background:var(--raised);color:var(--text);box-shadow:none}
 .work-area{display:flex;flex:1;min-height:0;min-width:0;position:relative;overflow:hidden}
 .project-board{position:relative;isolation:isolate;flex:1;min-width:0;display:flex;flex-direction:column;background:var(--panel);padding:28px 24px 12px;overflow:hidden}
 .board-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:var(--space-6)}
@@ -100,7 +96,7 @@ html[data-native-platform=macos] .board-view .workspace-header{padding-left:var(
 @media(max-width:1100px){.workspace.board-view{grid-template-columns:minmax(0,1fr) var(--inspector-width,270px)}}
 @media(max-width:920px){.workspace.board-view{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:1200px){.side-thread .conversation-pane{position:absolute;inset:8px 8px 8px auto;margin:0;width:min(570px,calc(100% - 16px));max-width:calc(100% - 16px)}.board-view .board-columns{grid-template-columns:repeat(4,minmax(185px,1fr))}}
-@media(max-width:700px){.project-board{padding:20px 12px 10px}.board-heading h1{font-size:var(--text-xl)}.view-switch button{padding:0 5px}.view-switch button span{display:none}.side-thread .task-details-heading{padding:0 18px}.side-thread .transcript{padding-left:18px;padding-right:18px}}
+@media(max-width:700px){.project-board{padding:20px 12px 10px}.board-heading h1{font-size:var(--text-xl)}.side-thread .task-details-heading{padding:0 18px}.side-thread .transcript{padding-left:18px;padding-right:18px}}
 @media(prefers-reduced-motion:reduce){.board-view .conversation-pane{animation:none}.board-card:hover{transform:none}}
 
 .board-completed-note .secondary-button{display:block;margin:9px auto 0;font-size:var(--text-xs);padding:5px 10px}

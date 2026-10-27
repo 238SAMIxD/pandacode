@@ -1,4 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
+// The workspace view (Conversation, Board, GitHub) is picked from the sidebar's view menu.
+const showView = async (page: Page, name: string) => { await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name, exact: true }).click(); };
 
 const board = (page: Page) => page.getByRole('region', { name: 'Project board', exact: true });
 const column = (page: Page, name: string) => board(page).getByRole('region', { name, exact: true });
@@ -45,7 +47,7 @@ async function storedMessages(page: Page, sessionId: string): Promise<any[]> {
 }
 
 async function openBoard(page: Page): Promise<void> {
-  await page.getByRole('button', { name: 'Board view', exact: true }).click();
+  await showView(page, 'Board');
   await expect(board(page)).toBeVisible();
 }
 
@@ -72,13 +74,13 @@ test.describe('project board', () => {
     await prompt(page).fill('Keep this unsent conversation draft');
     await openBoard(page);
     for (const name of ['Pending', 'In progress', 'Review', 'Completed']) await expect(column(page, name)).toBeVisible();
-    await page.getByRole('button', { name: 'Conversation view', exact: true }).click();
+    await showView(page, 'Conversation');
     await expect(board(page)).toBeHidden();
     await expect(prompt(page)).toHaveValue('Keep this unsent conversation draft');
     await openBoard(page);
     await page.reload();
     await expect(board(page)).toBeVisible();
-    await page.getByRole('button', { name: 'Conversation view', exact: true }).click();
+    await showView(page, 'Conversation');
     await page.reload();
     await expect(board(page)).toBeHidden();
     await expect(prompt(page)).toBeVisible();
@@ -112,7 +114,7 @@ test.describe('project board', () => {
     await expect(archived).toHaveAttribute('aria-pressed', 'false');
     await expect(card(page, 'Explore the project')).toBeVisible();
 
-    await page.getByRole('button', { name: 'Conversation view', exact: true }).click();
+    await showView(page, 'Conversation');
     await expect(sidebar).toBeVisible();
     await expect.poll(async () => (await main.boundingBox())!.x).toBeGreaterThan(0);
     await expect(sidebar.getByRole('button', { name: 'Filter projects', exact: true })).toContainText('pandacode');
@@ -172,7 +174,7 @@ test.describe('project board', () => {
     await details(page).getByRole('button', { name: 'Reopen task', exact: true }).click();
     await expect(column(page, 'Review').getByRole('button', { name: `Open task: ${title}`, exact: true })).toBeVisible();
     expect(await savedTask(page, title)).toMatchObject({ taskStage: 'review', completedAt: null, archived: false });
-    await page.getByRole('button', { name: 'Conversation view', exact: true }).click();
+    await showView(page, 'Conversation');
     await expect(page.locator(`.task-item[data-id="${task.id}"]`)).toBeVisible();
     expect((await calls(page, 'start_task')).length).toBe(1);
   });
@@ -201,7 +203,7 @@ test.describe('project board', () => {
     await page.reload();
     await openBoard(page);
     await column(page, 'Completed').getByRole('button', { name: 'Open task: Refine the navigation', exact: true }).click();
-    await page.getByRole('button', { name: 'Conversation view', exact: true }).click();
+    await showView(page, 'Conversation');
     await page.getByRole('button', { name: 'Reopen task', exact: true }).click();
     await expect(prompt(page)).toBeEnabled();
     expect(await savedTask(page, 'Refine the navigation')).toMatchObject({ taskStage: 'review', completedAt: null });
@@ -351,3 +353,32 @@ test.describe('project board', () => {
     await expect(details(page)).toContainText('Saved task details');
   });
 });
+
+test('the sidebar view menu switches views, marks the current one and stays reachable', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#navigation .task-item').first().waitFor();
+  const trigger = page.getByRole('button', { name: 'Workspace view: Conversation', exact: true });
+  await expect(page.locator('.sidebar .brand')).toContainText('PandaCode');
+  await expect(page.locator('.sidebar .brand #view-menu')).toBeVisible();
+  await expect(trigger).toHaveAttribute('aria-haspopup', 'menu');
+  await expect(page.locator('.workspace-header .view-switch')).toHaveCount(0);
+  await trigger.click();
+  const items = page.getByRole('menuitemradio');
+  await expect(items).toHaveText(['Conversation', 'Board', 'GitHub']);
+  await expect(page.getByRole('menuitemradio', { name: 'Conversation', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click();
+  await expect(page.locator('.workspace')).toHaveClass(/\bboard-view\b/);
+  // The board hides the sidebar, so the menu moves into the header.
+  const boardTrigger = page.locator('.header-leading #view-menu');
+  await expect(boardTrigger).toBeVisible();
+  await expect(boardTrigger).toHaveAttribute('aria-label', 'Workspace view: Board');
+  await boardTrigger.click();
+  await expect(page.getByRole('menuitemradio', { name: 'Board', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await page.keyboard.press('Escape');
+  await showView(page, 'Conversation');
+  await expect(page.locator('.sidebar .brand #view-menu')).toBeVisible();
+  // The narrow rail keeps it under the sidebar toggle.
+  await page.setViewportSize({ width: 620, height: 800 });
+  await expect(page.locator('.sidebar .brand #view-menu')).toBeVisible();
+});
+

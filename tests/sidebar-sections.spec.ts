@@ -331,4 +331,41 @@ test.describe('sidebar sections', () => {
     await expect(dialog).toBeHidden();
     expect(await page.evaluate(() => JSON.parse(localStorage.getItem('pandacode.sidebar.sort')!).perProject)).toBe(10);
   });
+
+  test('Completed docks at the bottom of the list while 30 running threads scroll above it', async ({ page }) => {
+    await page.route('**/src/preview.ts*', async route => {
+      const response = await route.fetch();
+      const body = (await response.text()).replace(/switch\s*\(command\)\s*\{/, `if (!window.__manyRunning) { window.__manyRunning = true; for (let i = 0; i < 30; i++) sessions.push({ ...sessions[0], id: 'many-running-' + i, title: 'Running task ' + i, status: 'running', taskStage: 'in_progress', lastPromptAt: Date.now() - i * 60000, pinned: false, sidebarOrder: null }); }
+$&`);
+      await route.fulfill({ response, body });
+    });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await open(page);
+    await expect(section(page, 'active').locator('.task-item')).toHaveCount(34);
+    const nav = page.locator('#navigation');
+    const heading = toggle(page);
+    const inView = async () => {
+      const [h, n] = await Promise.all([heading.boundingBox(), nav.boundingBox()]);
+      return h!.y >= n!.y && h!.y + h!.height <= n!.y + n!.height;
+    };
+    expect(await inView()).toBe(true);
+    await nav.evaluate(node => { node.scrollTop = 0; });
+    expect(await inView()).toBe(true);
+    // Open, its rows scroll in their own capped panel; the list above still scrolls.
+    await heading.click();
+    await expect(section(page, 'completed').locator('.task-item')).toHaveCount(10);
+    const list = section(page, 'completed').locator('.task-list');
+    const capped = await list.evaluate(node => node.getBoundingClientRect().height <= innerHeight * 0.4 + 1);
+    expect(capped).toBe(true);
+    expect(await nav.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true);
+    expect(await inView()).toBe(true);
+    // ↑/↓ cross between the list above and the docked section.
+    await heading.focus();
+    await page.keyboard.press('ArrowUp');
+    expect(await page.evaluate(() => Boolean(document.activeElement?.closest('[data-thread-group="completed"]')))).toBe(false);
+    await page.keyboard.press('ArrowDown');
+    await expect(heading).toBeFocused();
+    await page.keyboard.press('ArrowDown');
+    await expect(section(page, 'completed').locator('.task-item').first()).toBeFocused();
+  });
 });

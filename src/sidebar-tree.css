@@ -136,7 +136,14 @@ html[data-theme=dark] .sidebar .task-indicator.unread{background:var(--accent)}
 
 /* Sections: Active and Needs review above the tree, Completed (closed by default) below it. */
 .sidebar .sidebar-section{margin-bottom:6px}
-.sidebar .sidebar-section.completed-group{margin:6px 0 0}
+/* Completed docks at the bottom of the list, above the Bots bar, so running work never pushes it out
+   of sight: the list is a column, the section takes the space left below the folders and sticks to the
+   bottom while the rows above scroll. Open, its rows scroll on their own inside a capped panel. */
+@media(min-width:651px){.sidebar .navigation{display:flex;flex-direction:column}}
+.sidebar .navigation>*{flex:none}
+.sidebar .navigation:has(>.completed-group){padding-bottom:0}
+.sidebar .sidebar-section.completed-group{position:sticky;bottom:0;z-index:1;margin:auto -10px 0;padding:6px 10px 8px;border-top:1px solid var(--border);background:var(--sidebar)}
+.sidebar .completed-group>.task-list{max-height:40vh;overflow-y:auto;overscroll-behavior:contain}
 .sidebar .section-heading>.section-count{margin-left:auto}
 .sidebar .section-toggle{width:100%;border-radius:var(--radius-sm);justify-content:flex-start;--press:1}
 .sidebar .section-toggle:hover{color:var(--text);background:var(--raised)}

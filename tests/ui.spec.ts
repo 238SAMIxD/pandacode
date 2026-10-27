@@ -1,5 +1,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { openInspectorTab } from './inspector-tab-helper';
+// The workspace view (Conversation, Board, GitHub) is picked from the sidebar's view menu.
+const showView = async (page: Page, name: string) => { await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name, exact: true }).click(); };
 
 // Vite may add an HMR timestamp to the app's module URL. Reuse that exact
 // instance so assertions and injected events reach the application's store.
@@ -326,7 +328,7 @@ for (const view of ['conversation', 'board'] as const) {
   test(`keeps ${view} streaming and the reading position while earlier history is loaded`, async ({ page }) => {
     await installHistoryFixture(page, 151);
     if (view === 'board') {
-      await page.getByRole('button', { name: 'Board view', exact: true }).click();
+      await showView(page, 'Board');
       await page.getByRole('button', { name: 'Open task: Explore the project', exact: true }).click();
     }
     await scrollHistoryTop(page);
@@ -447,7 +449,7 @@ for (const theme of ['light', 'dark']) {
     await page.reload();
     await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
     await expect(page.locator('html')).toHaveCSS('color-scheme', theme);
-    await expect(page.getByRole('button', { name: 'Board view', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#view-menu')).toHaveAttribute('aria-label', 'Workspace view: Board');
     await expect(page.locator('body')).toHaveClass(/compact/);
     expect(await page.evaluate(keys => Object.fromEntries(keys.map(key => [key, localStorage.getItem(`pandacode.${key}`)])), Object.keys(preferences))).toEqual(preferences);
     expect(await page.evaluate(() => localStorage.getItem('another-app.theme'))).toBe('unrelated');

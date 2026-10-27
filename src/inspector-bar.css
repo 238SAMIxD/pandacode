@@ -3,6 +3,8 @@
 .inspector-strip{display:flex;align-items:center;gap:4px;flex:none;height:var(--titlebar-height);padding:0 4px 0 6px;border-bottom:1px solid var(--border)}
 html[data-theme] .workspace>.inspector .inspector-strip>.inspector-tabs{display:flex;flex:0 1 auto;flex-wrap:nowrap;align-items:center;gap:2px;min-width:0;height:100%;min-height:0;padding:0;border-radius:0;background:transparent;box-shadow:none;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;overscroll-behavior-x:contain}
 .inspector-strip>.inspector-tabs::-webkit-scrollbar{display:none}
+/* One surface with the panel below: the wallpaper rules' tinted fill for the old segmented tabs would cover only the tabs' width. */
+html[data-theme] .workspace[data-wallpaper]>.inspector .inspector-strip>.inspector-tabs{background:transparent}
 .inspector-tabs>.segment-thumb{display:none}
 .inspector-tab{position:relative;display:flex;align-items:center;flex:none;height:var(--control);border-radius:var(--radius-sm);color:var(--muted)}
 .inspector-tab:hover{color:var(--text);background:color-mix(in srgb,var(--text) 5%,transparent)}

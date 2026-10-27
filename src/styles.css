@@ -36,6 +36,10 @@ button .icon{pointer-events:none}
 .sidebar{position:relative;isolation:isolate;display:flex;flex-direction:column;background:radial-gradient(ellipse at 75% -15%,rgb(var(--accent-rgb) / .27),transparent 72%) 0 0/100% 190px no-repeat,var(--sidebar);border-right:1px solid var(--border);min-height:0;overflow:hidden}
 .brand{height:var(--titlebar-height);display:flex;align-items:center;gap:9px;padding:0 20px;user-select:none;font-size:inherit;font-weight:var(--weight-strong);letter-spacing:0;justify-content:flex-end}
 .brand-name{font-size:var(--text-sm);font-weight:var(--weight-medium);letter-spacing:-.015em;color:var(--muted)}
+/* The workspace view menu (Conversation, Board, GitHub) sits beside the name, or in the header while the sidebar is hidden. */
+.sidebar>.brand>.brand-name{margin-left:auto}
+.icon-button.view-menu{flex:none;width:28px;height:28px;--press:1}
+.view-menu .icon{--icon-size:var(--icon-md);--icon-stroke:var(--icon-stroke-md)}
 .sidebar-actions{container-type:inline-size;container-name:sidebar-actions;padding:var(--space-3);display:grid;gap:var(--space-1)}
 .sidebar-actions button>span{white-space:nowrap}
 @container sidebar-actions (max-width:14em){.sidebar-actions kbd{display:none}}
@@ -96,7 +100,6 @@ button .icon{pointer-events:none}
 .status-dot{width:5px;height:5px;background:var(--success);border-radius:50%;display:inline-block;flex-shrink:0}
 .main-pane{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg)}
 .workspace-header{container-type:inline-size;container-name:workspace-header;height:var(--titlebar-height);border-bottom:1px solid rgb(0 0 0 / .045);display:flex;align-items:center;justify-content:space-between;padding:0 19px 0 26px;gap:20px;flex-shrink:0;background:linear-gradient(180deg,var(--accent-tint),var(--bg));backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
-@container workspace-header (max-width:760px){.view-switch button span{display:none}.view-switch button{padding:0 4px}}
 .breadcrumb{display:flex;align-items:center;gap:var(--space-2);min-width:0;overflow:hidden;color:var(--muted);font-size:var(--text-sm)}
 .breadcrumb>.icon{--icon-size:var(--icon-sm);--icon-stroke:var(--icon-stroke-sm)}
 .breadcrumb>button{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--text);font-size:var(--text-sm);white-space:nowrap;font-weight:var(--weight-medium)}
@@ -521,6 +524,7 @@ dialog input::placeholder{color:var(--muted)}
 .workspace,.workspace.inspector-closed{grid-template-columns:58px minmax(0,1fr)}
 .brand{padding:0;justify-content:center;height:65px}
 .brand-name{display:none}
+.workspace .sidebar>.brand{flex-direction:column;gap:2px}
 .sidebar-actions{padding:8px;gap:10px}
 .sidebar-actions button{padding:0;justify-content:center;width:40px;height:35px}
 .sidebar-actions button>span,.sidebar-actions kbd{display:none}
