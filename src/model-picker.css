@@ -24,7 +24,7 @@ html[data-theme] .model-menu-search input{flex:1;min-width:0;height:100%;padding
 .model-menu-count{color:var(--faint);font-size:var(--text-xs);font-variant-numeric:tabular-nums}
 .model-menu-count:empty{display:none}
 .model-menu-tab:hover{background:var(--fill-hover)}
-.model-menu-tab[aria-selected="true"]{background:var(--fill-selected);color:var(--text)}
+.model-menu-tab[aria-selected="true"]{background:var(--fill-active);color:var(--text)}
 .model-menu-tab.is-dim{opacity:.45}
 
 .model-menu-group-heading{display:flex;align-items:center;gap:var(--space-2);height:var(--row);padding:0 var(--space-2);color:var(--muted)}

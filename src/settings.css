@@ -107,3 +107,11 @@ html[data-native-platform=macos] .settings-nav-head{padding-left:72px}
 .settings-page-root .vsix-choice{flex:1;justify-content:flex-start;text-align:left}
 .settings-page-root .project-path{overflow-wrap:anywhere}
 .settings-page-root .project-row-actions{display:flex;gap:.5rem}
+
+/* Narrow windows: the nav narrows, rows wrap their control under the label, the shortcut field fills its row. */
+@media(max-width:700px){
+  .settings-page-root{grid-template-columns:150px minmax(0,1fr)}
+  .settings-page-root .setting-row{grid-template-columns:minmax(0,1fr)}
+  .settings-page-root .setting-row>:is(.text-size-controls,.settings-row-actions,.settings-select){justify-self:start}
+  .settings-page-root .overlay-shortcut-controls>input{min-width:0;width:100%;flex:1 1 100%}
+}

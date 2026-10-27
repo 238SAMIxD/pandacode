@@ -39,7 +39,10 @@ const REFETCH_GAP = 1_000;
 // sits alone on a row), and hunk headers are one slim muted line.
 const SHADOW_CSS = `
   pre[data-diff][data-overflow='wrap'] [data-line] { white-space: pre-wrap; word-break: break-all; overflow-wrap: anywhere; }
-  pre[data-diff] [data-code] { scrollbar-width: thin; }
+  pre[data-diff] [data-code] { scrollbar-gutter: stable; }
+  pre[data-diff] [data-code]::-webkit-scrollbar { height: 10px; background: transparent; }
+  pre[data-diff] [data-code]::-webkit-scrollbar-thumb { background: color-mix(in srgb, currentColor 35%, transparent); border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }
+  pre[data-diff] [data-code]::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, currentColor 55%, transparent); background-clip: content-box; }
   pre[data-diff] [data-separator='metadata'] { height: 20px; }
   pre[data-diff] [data-separator='metadata'] [data-separator-wrapper] {
     font-size: .68rem; line-height: 20px; opacity: .8;
