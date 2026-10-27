@@ -258,6 +258,8 @@ fn broadcast_presence(state: &mut RelayState) {
 
 async fn serve(tcp: tokio::net::TcpStream, state: Arc<Mutex<RelayState>>) {
     let mut device = String::new();
+    // tungstenite fixes this callback's error type; it cannot be boxed.
+    #[allow(clippy::result_large_err)]
     let callback = |request: &WsRequest, response: WsResponse| -> Result<WsResponse, ErrorResponse> {
         device = request.headers().get("authorization").and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).unwrap_or_default().to_owned();
         Ok(response)
