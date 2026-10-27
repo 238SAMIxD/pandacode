@@ -1,0 +1,81 @@
+/* The floating action dock (src/action-dock.ts). A vertical glass pill below the header at the
+ * conversation's right edge: the main pane's edge, so it sits left of an open inspector and at the
+ * window edge when it is closed. Narrow windows, the board and the GitHub view put it back in the
+ * header as a plain row. Motion is @keyframes and the Web Animations API only (never transitions);
+ * reduced motion turns both off and the end states below apply at once. */
+.workspace{--dock-clear:54px;--dock-item:34px}
+.action-dock{position:absolute;top:calc(100% + 10px);right:10px;z-index:7;display:flex;flex-direction:column;align-items:center;gap:10px;padding:5px;border-radius:calc(var(--dock-item) / 2 + 5px);
+  background:var(--glass-warm);backdrop-filter:blur(26px) saturate(1.45);-webkit-backdrop-filter:blur(26px) saturate(1.45);box-shadow:var(--floating-bar-shadow)}
+.workspace[data-wallpaper] .action-dock{background:var(--header-glass);backdrop-filter:blur(22px) saturate(1.25);-webkit-backdrop-filter:blur(22px) saturate(1.25)}
+.action-dock-group{display:flex;flex-direction:inherit;align-items:center;gap:2px}
+.action-dock-group:not(:has(>button:not([hidden]))){display:none}
+
+/* Items: 34px tiles. ::before is the active fill, ::after the hover fill; the icon lifts. */
+html .workspace .action-dock button{position:relative;display:inline-grid;place-items:center;width:var(--dock-item);height:var(--dock-item);padding:0;border-radius:calc(var(--dock-item) / 2 - 4px);background:transparent;color:var(--muted);font-size:0;flex-shrink:0;--press:1}
+.action-dock button::before,.action-dock button::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;opacity:0}
+.action-dock button::before{background:rgb(var(--accent-rgb) / .22)}
+.action-dock button::after{background:color-mix(in srgb,var(--text) 9%,transparent);scale:.7}
+.action-dock button>.icon{position:relative;z-index:1;--icon-size:var(--icon-md);--icon-stroke:var(--icon-stroke-md)}
+.action-dock button>span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+html .workspace .action-dock button:is([data-hover],:focus-visible){color:var(--text)}
+.action-dock button[data-hover]::after{opacity:1;scale:1}
+html .workspace .action-dock button.active{color:var(--accent-ink)}
+html[data-theme="dark"] .workspace .action-dock button.active{color:var(--accent)}
+.action-dock button.active::before{opacity:1;animation:dock-fill-in var(--spring-bounce-duration) var(--spring-bounce) both}
+.action-dock button:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+.action-dock button:disabled{opacity:.55}
+@media(prefers-reduced-motion:no-preference){
+  .action-dock button[data-hover]>.icon{scale:1.12;translate:0 -1px}
+  .action-dock button[data-press]{scale:.88}
+  .action-dock button[aria-haspopup][data-press]{scale:1}
+  .action-dock button[aria-haspopup][data-press]>.icon{scale:.86;translate:0}
+  .action-dock button[data-press]::after{opacity:1;scale:1}
+}
+@keyframes dock-fill-in{from{opacity:0;scale:.45}}
+/* An item leaving keeps its box while the animation collapses it. */
+.action-dock button[hidden][data-leaving]{display:inline-grid!important;pointer-events:none}
+
+/* The update prompt: an accent tile with a dot; Later is a small close tile beneath it. */
+html .workspace .action-dock .update-status{color:var(--accent-ink);background:var(--accent-dim)}
+html .workspace .action-dock .update-status::after{background:color-mix(in srgb,var(--accent) 30%,transparent)}
+html .workspace .action-dock .update-later{height:calc(var(--dock-item) - 10px)}
+.action-dock .update-later::after{background:color-mix(in srgb,var(--text) 9%,transparent)}
+.action-dock .update-later::before{opacity:1;inset:50% auto auto 50%;width:12px;height:12px;translate:-50% -50%;background:currentColor;border-radius:0;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round'%3E%3Cpath d='M6 6l12 12M18 6 6 18'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round'%3E%3Cpath d='M6 6l12 12M18 6 6 18'/%3E%3C/svg%3E") center/contain no-repeat}
+
+/* Label bubbles pop out to the dock's left (below it in a row). */
+.action-dock-tip{position:absolute;z-index:2;padding:5px 9px;border-radius:var(--radius-sm);background:color-mix(in srgb,var(--text) 94%,transparent);color:var(--bg);font-size:var(--text-xs);line-height:1.35;white-space:nowrap;pointer-events:none;box-shadow:0 10px 28px -10px rgb(0 0 0 / .45)}
+.action-dock-tip[data-side="left"]{transform-origin:right center}
+.action-dock-tip[hidden]{display:none}
+
+/* The text column stays clear of the dock; the floating team bars sit left of it. */
+.workspace:not(.board-view,.github-view) .conversation-pane:not(.new-task-page)>.transcript{margin-right:var(--dock-clear)}
+/* The composer centres on the same column as the transcript. A new task's page keeps both centred:
+ * its heading and composer sit below the dock. */
+.workspace:not(.board-view,.github-view) .conversation-pane:not(.new-task-page)>.composer-area{width:calc(100% - var(--dock-clear));margin-left:max(0px,(100% - var(--dock-clear) - 950px) / 2);margin-right:auto}
+.workspace:not(.board-view,.github-view) .conversation-pane>.file-view{right:var(--dock-clear)}
+.workspace:not(.side-thread) .conversation-pane>:is(.architect-host,.subagents-host){right:var(--dock-clear)}
+
+/* Short windows: smaller tiles, so the dock stays above the composer. */
+@media(max-height:640px){.workspace{--dock-item:28px}.action-dock{gap:6px;padding:4px}}
+/* A narrow window's inspector overlays the pane, so the dock moves to its left. */
+@media(max-width:920px) and (min-width:651px){.workspace:not(.inspector-closed) .action-dock{right:min(var(--inspector-width,300px) + 10px,100% - var(--dock-item) - 20px)}}
+
+/* Header row: narrow windows, the board and the GitHub view. */
+@media(max-width:650px){
+  .workspace{--dock-clear:0px}
+  .action-dock{position:static;flex-direction:row;gap:6px;padding:0;background:none;backdrop-filter:none;-webkit-backdrop-filter:none;box-shadow:none;border-radius:0}
+  .workspace{--dock-item:28px}
+}
+.workspace:is(.board-view,.github-view){--dock-clear:0px;--dock-item:28px}
+.workspace:is(.board-view,.github-view) .action-dock{position:static;flex-direction:row;gap:6px;padding:0;background:none;backdrop-filter:none;-webkit-backdrop-filter:none;box-shadow:none;border-radius:0}
+
+@media(prefers-reduced-transparency:reduce){
+  html .workspace .action-dock:not(:is(.board-view,.github-view) *){background:var(--panel);backdrop-filter:none;-webkit-backdrop-filter:none}
+}
+@media(prefers-contrast:more){
+  html .workspace .action-dock:not(:is(.board-view,.github-view) *){background:var(--bg);backdrop-filter:none;-webkit-backdrop-filter:none;outline:1px solid var(--text)}
+  .action-dock button.active::before{background:rgb(var(--accent-rgb) / .45)}
+  .action-dock-tip{outline:1px solid var(--bg)}
+}
+@media(max-width:650px){@media(prefers-reduced-transparency:reduce),(prefers-contrast:more){html .workspace .action-dock{background:none;outline:0}}}
+@media(forced-colors:active){.action-dock{border:1px solid CanvasText}.action-dock button.active{outline:2px solid Highlight}}

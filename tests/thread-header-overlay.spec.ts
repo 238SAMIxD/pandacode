@@ -53,6 +53,8 @@ test.describe('thread header overlay', () => {
     const bar = await box(page, '.architect-trigger');
     const pane = await box(page, '.conversation-pane');
     expect(bar.left).toBeGreaterThanOrEqual(pane.left);
+    // The action dock floats beside it, so the bar stops at the dock's left.
+    expect(bar.right).toBeLessThanOrEqual((await box(page, '#action-dock')).left);
     expect(bar.top).toBeGreaterThanOrEqual((await box(page, '.workspace-header')).bottom);
     // Its left edge (the team icon) is what the pointer hits there, not a strip or the header.
     const hit = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('.architect-trigger') !== null, { x: bar.left + 6, y: bar.top + bar.height / 2 });

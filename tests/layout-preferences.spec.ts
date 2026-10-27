@@ -23,7 +23,7 @@ for (const [platform, modifier, key] of [['MacIntel', '⌘', 'Meta'], ['Win32', 
     await open(page);
     await expect(page.locator('.new-task-button kbd')).toHaveText(`${modifier} N`);
     await expect(page.locator('.search-trigger kbd')).toHaveText(`${modifier} K`);
-    await expect(page.locator('[data-action="terminal"]').first()).toHaveAttribute('title', `Toggle terminal (${modifier} J)`);
+    await expect(page.locator('[data-action="terminal"]').first()).toHaveAttribute('aria-label', `Toggle terminal (${modifier} J)`);
     await expect(page.locator('.send-button')).toHaveAttribute('title', `Send message (${modifier} Enter)`);
     await page.keyboard.press(`${key}+b`);
     await expect(page.locator('.workspace')).toHaveClass(/sidebar-collapsed/);
@@ -320,12 +320,14 @@ test('layout preferences keep controls readable at 160 percent in wide and narro
     await expect.poll(() => rootSize(page)).toBeCloseTo(22.4, 2);
     await expect.poll(() => sidebarWidth(page)).toBe(190);
     const breadcrumb = await page.locator('.breadcrumb').boundingBox();
-    const actions = await page.locator('.header-actions').boundingBox();
+    const actions = await page.locator('#action-dock').boundingBox();
     const header = await page.locator('.workspace-header').boundingBox();
     expect(breadcrumb).not.toBeNull();
     expect(actions).not.toBeNull();
     expect(header).not.toBeNull();
-    expect(breadcrumb!.x + breadcrumb!.width).toBeLessThanOrEqual(actions!.x + .5);
+    // The action dock floats below the header here; in a header row it would follow the breadcrumb.
+    if (actions!.y < header!.y + header!.height) expect(breadcrumb!.x + breadcrumb!.width).toBeLessThanOrEqual(actions!.x + .5);
+    else expect(actions!.y).toBeGreaterThanOrEqual(header!.y + header!.height);
     expect(actions!.x + actions!.width).toBeLessThanOrEqual(header!.x + header!.width + .5);
     expect(actions!.x + actions!.width).toBeLessThanOrEqual(width + .5);
     const projectLabel = page.locator('.breadcrumb > button');
@@ -374,7 +376,7 @@ test('layout preferences keep controls readable at 160 percent in wide and narro
   await expect.poll(() => sidebarWidth(page)).toBe(430);
   await expect(page.locator('.brand #view-menu')).toBeVisible();
   await expect(page.locator('.header-leading #view-menu')).toHaveCount(0);
-  const compactActions = (await page.locator('.header-actions').boundingBox())!;
+  const compactActions = (await page.locator('#action-dock').boundingBox())!;
   const compactHeader = (await page.locator('.workspace-header').boundingBox())!;
   expect(compactActions.x).toBeGreaterThanOrEqual(compactHeader.x);
   expect(compactActions.x + compactActions.width).toBeLessThanOrEqual(760);
@@ -501,7 +503,7 @@ test('layout preferences reserve Mac window controls when the sidebar is collaps
     await expect.poll(() => rootSize(page)).toBeCloseTo(22.4, 2);
     const header = (await page.locator('.workspace-header').boundingBox())!;
     const bounds = (await toggle.boundingBox())!;
-    const actions = (await page.locator('.header-actions').boundingBox())!;
+    const actions = (await page.locator('#action-dock').boundingBox())!;
     expect(bounds.x - header.x).toBeGreaterThanOrEqual(104);
     expect(bounds.x + bounds.width).toBeLessThanOrEqual(actions.x);
     expect(actions.x + actions.width).toBeLessThanOrEqual(width);

@@ -3285,8 +3285,8 @@ test('keeps the worktree terminal open when the previous checkout terminal fails
 test('the interface is instant: no transitions, no entrance motion, and presses keep a button in place', async ({ page }) => {
   await page.locator('.sidebar-projects').getByRole('button', { name: 'Open project', exact: true }).click();
   await expect(page.locator('#dialog')).toBeVisible();
-  // The modal is fully there at once: nothing is animating it in.
-  expect(await page.evaluate(() => document.getAnimations().filter(animation => animation.playState === 'running' && animation.timeline instanceof DocumentTimeline).length)).toBe(0);
+  // The modal is fully there at once: nothing is animating it in (the action dock is the one animated surface).
+  expect(await page.evaluate(() => document.getAnimations().filter(animation => animation.playState === 'running' && animation.timeline instanceof DocumentTimeline && !((animation.effect as KeyframeEffect | null)?.target as Element | null)?.closest('#action-dock')).length)).toBe(0);
   await expect(page.locator('.dialog-plate')).toHaveCSS('opacity', '1');
   await expect(page.locator('#dialog .primary-button')).toHaveCSS('transition-duration', '0s');
   await page.keyboard.press('Escape');
