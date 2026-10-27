@@ -45,7 +45,7 @@ html[data-theme] .workspace[data-wallpaper]>.inspector .inspector-tabs button.se
 
 /* Tint the surfaces, never their text. Only floating UI needs a blur layer. */
 .workspace[data-wallpaper] .conversation-pane{
-  --thread-surface:rgb(255 255 255 / .5);
+  --thread-surface:rgb(255 255 255 / .68);
   --thread-floating:rgb(255 255 255 / .56);
   --thread-inset:rgb(246 246 239 / .4);
   --thread-hover:rgb(214 214 201 / .36);
@@ -55,7 +55,7 @@ html[data-theme] .workspace[data-wallpaper]>.inspector .inspector-tabs button.se
   --thread-frost:blur(18px) saturate(1.1);
 }
 html[data-theme="dark"] .workspace[data-wallpaper] .conversation-pane{
-  --thread-surface:rgb(32 33 30 / .55);
+  --thread-surface:rgb(32 33 30 / .72);
   --thread-floating:rgb(32 33 30 / .56);
   --thread-inset:rgb(57 59 51 / .32);
   --thread-hover:rgb(141 145 125 / .16);

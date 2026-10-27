@@ -144,7 +144,7 @@ html[data-theme=dark] .sidebar .task-indicator.unread{background:var(--accent)}
 .sidebar .navigation:has(>.completed-group){padding-bottom:0}
 .sidebar .sidebar-section.completed-group{position:sticky;bottom:0;z-index:1;margin:auto -8px 0;padding:6px 8px 8px;border-top:1px solid var(--border);background:var(--sidebar)}
 /* Over a wallpaper the dock is frosted like the sidebar, dense enough that rows scrolling under it stay hidden. */
-.workspace[data-wallpaper] .sidebar .sidebar-section.completed-group{background:color-mix(in srgb,var(--sidebar) 94%,transparent);backdrop-filter:var(--workspace-frost);-webkit-backdrop-filter:var(--workspace-frost)}
+.workspace[data-wallpaper] .sidebar .sidebar-section.completed-group{background:linear-gradient(var(--workspace-frost-surface),var(--workspace-frost-surface)),color-mix(in srgb,var(--sidebar) 45%,transparent);backdrop-filter:var(--workspace-frost);-webkit-backdrop-filter:var(--workspace-frost)}
 /* Capped so Active and Needs review keep about half the list in short windows. */
 .sidebar .completed-group>.task-list{max-height:clamp(84px,100vh - 600px,30vh);overflow-y:auto;overscroll-behavior:contain}
 .sidebar .section-heading>.section-count{margin-left:auto}
