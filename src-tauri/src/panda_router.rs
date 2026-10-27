@@ -6,6 +6,10 @@
 mod cards;
 mod heuristic;
 mod matcher;
+#[cfg(panda_onnx)]
+mod onnx;
+#[cfg(not(panda_onnx))]
+#[path = "panda_router/onnx_stub.rs"]
 mod onnx;
 mod profile;
 #[cfg(test)]
@@ -18,6 +22,9 @@ use serde::{Deserialize, Serialize};
 
 use matcher::Demand;
 use onnx::OnnxProfiler;
+
+/// Whether this build carries the ONNX profiler (see `panda_onnx` in build.rs).
+pub const ONNX_AVAILABLE: bool = cfg!(panda_onnx);
 use profile::{TaskProfile, CATEGORIES};
 
 /// Model files downloaded into the router directory: (file name, sha256 hex).

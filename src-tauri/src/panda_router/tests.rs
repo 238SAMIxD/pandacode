@@ -87,6 +87,10 @@ fn card_model(id: &str) -> PoolModel {
 }
 
 fn assets() -> Option<PathBuf> {
+    if !crate::panda_router::ONNX_AVAILABLE {
+        eprintln!("note: this target builds without ONNX Runtime; skipping ONNX parity tests");
+        return None;
+    }
     match std::env::var_os("PANDA_ROUTER_ASSETS") {
         Some(dir) => Some(PathBuf::from(dir)),
         // CI fetches the assets (.github/workflows/ci.yml); there a skip would hide a broken profiler.

@@ -13,14 +13,26 @@ fn main() {
         println!("cargo:rustc-link-arg=delayimp.lib");
     }
 
+    panda_onnx();
     link_compiler_rt();
     tauri_build::build()
+}
+
+/// `cfg(panda_onnx)`: targets that link Panda Router's ONNX profiler; the same predicate gates `ort` and
+/// `tokenizers` in Cargo.toml.
+fn panda_onnx() {
+    println!("cargo:rustc-check-cfg=cfg(panda_onnx)");
+    let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    if matches!((os.as_str(), arch.as_str()), ("macos", "aarch64") | ("linux", "aarch64") | ("windows", _)) {
+        println!("cargo:rustc-cfg=panda_onnx");
+    }
 }
 
 /// ONNX Runtime's prebuilt CoreML objects call `__isPlatformVersionAtLeast` (`@available`), which
 /// lives in clang's compiler-rt; rustc links with `-nodefaultlibs`, so release builds fail without it.
 fn link_compiler_rt() {
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") || std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() != Ok("aarch64") {
         return;
     }
     let Ok(output) = std::process::Command::new("xcrun").args(["clang", "--print-resource-dir"]).output() else {

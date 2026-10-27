@@ -278,6 +278,9 @@ fn background_download(rt: &'static Runtime) -> Option<tauri::async_runtime::Joi
 /// The bundled ONNX Runtime is built for macOS 13.4; older systems keep the keyword heuristic and
 /// never download or load the profiler.
 fn unsupported_os() -> Option<String> {
+    if !panda_router::ONNX_AVAILABLE {
+        return Some("This build of PandaCode has no ONNX profiler (Intel Mac and x86_64 Linux); routing uses the keyword heuristic.".into());
+    }
     #[cfg(target_os = "macos")]
     {
         static SUPPORTED: OnceLock<bool> = OnceLock::new();
