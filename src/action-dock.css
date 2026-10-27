@@ -4,21 +4,23 @@
  * Narrow windows, the board and the GitHub view put it back in the header as a plain row. Motion is
  * @keyframes and the Web Animations API only (never transitions); reduced motion turns both off and
  * the end states below apply at once. */
-.workspace{--dock-clear:54px;--dock-item:34px;--dock-pad:5px;--dock-rule:5px}
+.workspace{--dock-clear:58px;--dock-item:38px;--dock-pad:5px;--dock-rule:5px}
 .action-dock{position:absolute;top:calc(100% + 12px);right:10px;z-index:7;display:flex;flex-direction:column;align-items:center;padding:var(--dock-pad);border-radius:calc(var(--dock-item) / 2 + var(--dock-pad));
-  background:var(--glass-warm);backdrop-filter:blur(16px) saturate(1.15);-webkit-backdrop-filter:blur(16px) saturate(1.15);box-shadow:var(--floating-bar-shadow)}
+  background:var(--glass-warm);backdrop-filter:var(--header-blur);-webkit-backdrop-filter:var(--header-blur);box-shadow:var(--floating-bar-shadow)}
 .workspace[data-wallpaper] .action-dock{background:var(--header-glass)}
 .action-dock-group{display:flex;flex-direction:inherit;align-items:center;gap:2px}
 .action-dock-group:not(:has(>button:not([hidden]),>button[data-leaving])){display:none}
 /* Groups are told apart by spacing and a short rounded bar (a fill, not a border). */
-.action-dock-group+.action-dock-group::before{content:"";flex:none;width:16px;height:2px;margin:var(--dock-rule) 0;border-radius:1px;background:var(--fill-active)}
+.action-dock-group+.action-dock-group::before{content:"";flex:none;width:20px;height:2px;margin:var(--dock-rule) 0;border-radius:1px;background:color-mix(in srgb,var(--text) 20%,transparent)}
 
 /* The shared hover pill: one tinted shape that springs along the dock to the item under the
  * pointer or keyboard focus. Active panels keep their own accent fill (::before). */
 .action-dock-indicator{position:absolute;top:0;left:0;z-index:0;width:var(--dock-item);height:var(--dock-item);border-radius:calc(var(--dock-item) / 2 - 4px);background:var(--fill-active);pointer-events:none;opacity:0;scale:.8}
 .action-dock-indicator[data-on]{opacity:1;scale:1}
+/* Over an active item's accent fill the pill dissolves as it arrives (it would hide under it). */
+.action-dock-indicator[data-on][data-muted]{opacity:0}
 
-/* Items: 34px tiles over the pill. ::before is the active fill. */
+/* Items: 38px tiles over the pill. ::before is the active fill. */
 html .workspace .action-dock button{position:relative;z-index:1;display:inline-grid;place-items:center;width:var(--dock-item);height:var(--dock-item);padding:0;border-radius:calc(var(--dock-item) / 2 - 4px);background:transparent;color:var(--muted);font-size:0;flex-shrink:0;--press:1}
 .action-dock button::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;opacity:0;background:rgb(var(--accent-rgb) / .22)}
 .action-dock button>.icon{position:relative;z-index:1;--icon-size:var(--icon-md);--icon-stroke:var(--icon-stroke-md)}
@@ -45,7 +47,7 @@ html .workspace .action-dock .update-later{height:calc(var(--dock-item) - 10px)}
 
 /* Label bubbles: the same glass, beside the dock (below the row). They live in the header, outside
  * the dock, so their own backdrop blur sees the thread. */
-.action-dock-tip{position:absolute;z-index:8;box-sizing:border-box;overflow:hidden;padding:5px 10px;border-radius:var(--radius-md);background:var(--glass-warm);backdrop-filter:blur(16px) saturate(1.15);-webkit-backdrop-filter:blur(16px) saturate(1.15);box-shadow:var(--floating-bar-shadow);color:var(--text);font-size:var(--text-xs);line-height:1.35;white-space:nowrap;pointer-events:none}
+.action-dock-tip{position:absolute;z-index:8;box-sizing:border-box;overflow:hidden;padding:5px 10px;border-radius:var(--radius-md);background:var(--glass-warm);backdrop-filter:var(--header-blur);-webkit-backdrop-filter:var(--header-blur);box-shadow:var(--floating-bar-shadow);color:var(--text);font-size:var(--text-xs);line-height:1.35;white-space:nowrap;pointer-events:none}
 .workspace[data-wallpaper] .action-dock-tip{background:var(--header-glass)}
 .action-dock-tip[data-side="left"]{transform:translateY(-50%);transform-origin:right center}
 .action-dock-tip[data-side="below"]{transform:translateX(-50%);transform-origin:center top}
@@ -71,11 +73,11 @@ html .workspace .action-dock .update-later{height:calc(var(--dock-item) - 10px)}
 @media(max-width:650px){
   .workspace{--dock-clear:0px;--dock-item:28px;--dock-pad:0px;--dock-rule:0px}
   .action-dock{position:relative;top:auto;right:auto;flex-direction:row;background:none;backdrop-filter:none;-webkit-backdrop-filter:none;box-shadow:none;border-radius:0}
-  .action-dock-group+.action-dock-group::before{width:2px;height:16px;margin:0 5px}
+  .action-dock-group+.action-dock-group::before{width:2px;height:20px;margin:0 5px}
 }
 .workspace:is(.board-view,.github-view){--dock-clear:0px;--dock-item:28px;--dock-pad:0px;--dock-rule:0px}
 .workspace:is(.board-view,.github-view) .action-dock{position:relative;top:auto;right:auto;flex-direction:row;background:none;backdrop-filter:none;-webkit-backdrop-filter:none;box-shadow:none;border-radius:0}
-.workspace:is(.board-view,.github-view) .action-dock-group+.action-dock-group::before{width:2px;height:16px;margin:0 5px}
+.workspace:is(.board-view,.github-view) .action-dock-group+.action-dock-group::before{width:2px;height:20px;margin:0 5px}
 
 @media(prefers-reduced-transparency:reduce){
   html .workspace .action-dock:not(:is(.board-view,.github-view) *),html .workspace .action-dock-tip{background:var(--panel);backdrop-filter:none;-webkit-backdrop-filter:none}

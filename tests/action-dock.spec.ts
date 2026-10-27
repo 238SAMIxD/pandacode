@@ -32,7 +32,7 @@ test.describe('action dock', () => {
       expect(Math.abs(items[index].left - items[0].left)).toBeLessThan(1);
       expect(items[index].top).toBeGreaterThanOrEqual(items[index - 1].bottom);
     }
-    for (const item of items) { expect(item.width).toBeGreaterThanOrEqual(32); expect(item.width).toBeLessThanOrEqual(36); }
+    for (const item of items) { expect(item.width).toBe(38); expect(item.height).toBe(38); }
 
     const box = await rect(page, '#action-dock');
     const header = await rect(page, '.workspace-header');
@@ -130,16 +130,23 @@ test.describe('action dock', () => {
   });
 
   test('a fresh session plays a quick staggered entrance', async ({ page }) => {
-    await page.addInitScript(() => localStorage.setItem('pandacode.wallpapers', 'false'));
+    // Record every animation as it starts, so the check never races the (short) entrance itself.
+    await page.addInitScript(() => {
+      localStorage.setItem('pandacode.wallpapers', 'false');
+      const started: { delay: number; duration: number }[] = ((window as any).__dockEntrance = []);
+      const animate = Element.prototype.animate;
+      Element.prototype.animate = function (this: Element, keyframes: Keyframe[] | PropertyIndexedKeyframes | null, options?: number | KeyframeAnimationOptions) {
+        const animation = animate.call(this, keyframes, options);
+        if (this.matches('#action-dock button') && typeof options === 'object' && options.fill === 'backwards') started.push({ delay: Number(options.delay ?? 0), duration: Number(options.duration) });
+        return animation;
+      };
+    });
     await page.goto('/');
-    await expect.poll(() => dockAnimations(page), { timeout: 2000 }).toBeGreaterThan(0);
-    const timing = await page.evaluate(() => document.getAnimations()
-      .filter(animation => !(animation instanceof CSSAnimation) && ((animation.effect as KeyframeEffect | null)?.target as Element | null)?.closest('#action-dock button'))
-      .map(animation => animation.effect!.getTiming()).map(({ delay, duration }) => ({ delay: Number(delay), duration: Number(duration) })));
-    expect(timing.length).toBeGreaterThan(3);
+    await expect.poll(() => page.evaluate(() => (window as any).__dockEntrance.length as number), { timeout: 3000 }).toBeGreaterThan(3);
+    const timing: { delay: number; duration: number }[] = await page.evaluate(() => (window as any).__dockEntrance);
     const delays = timing.map(entry => entry.delay).sort((a, b) => a - b);
     expect(delays[1] - delays[0]).toBe(16);
-    for (const { duration } of timing) { expect(duration).toBeGreaterThan(180); expect(duration).toBeLessThan(320); }
+    for (const { duration } of timing) { expect(duration).toBeGreaterThan(240); expect(duration).toBeLessThan(300); }
   });
 
   test('one shared pill slides between hovered items and fades out on leave', async ({ page }) => {
@@ -171,10 +178,19 @@ test.describe('action dock', () => {
   test('the tooltip waits on hover, then follows instantly, resizing to each label', async ({ page }) => {
     await open(page);
     const tip = page.locator('.action-dock-tip');
+    // Time the delay in the page, from the pointer reaching the item to the bubble appearing.
+    await page.evaluate(() => {
+      const timing = ((window as any).__tipDelay = { over: 0, shown: 0 });
+      document.querySelector('#browser-toggle')!.addEventListener('pointerover', () => { timing.over ||= performance.now(); });
+      new MutationObserver(() => { if (!document.querySelector<HTMLElement>('#action-dock-tip')!.hidden) timing.shown ||= performance.now(); })
+        .observe(document.querySelector('#action-dock-tip')!, { attributes: true, attributeFilter: ['hidden'] });
+    });
     await page.locator('#browser-toggle').hover();
-    await page.waitForTimeout(150);
-    await expect(tip).toBeHidden();
     await expect(tip).toHaveText('Open browser');
+    await expect(tip).toBeVisible();
+    const delay = await page.evaluate(() => { const { over, shown } = (window as any).__tipDelay; return shown - over; });
+    expect(delay).toBeGreaterThanOrEqual(340);
+    expect(delay).toBeLessThan(600);
     const short = (await rect(page, '.action-dock-tip')).width;
     expect((await rect(page, '.action-dock-tip')).right).toBeLessThanOrEqual((await rect(page, '#action-dock')).left);
     expect(await tip.evaluate(node => getComputedStyle(node).backdropFilter)).toContain('blur');
@@ -254,6 +270,49 @@ test.describe('action dock', () => {
     expect(await run.evaluate(node => node.hasAttribute('data-leaving'))).toBe(false);
     await expect(run).toBeHidden();
     expect(await dockAnimations(page)).toBe(0);
+  });
+
+  test('the pill dissolves into an active item instead of hiding under its fill', async ({ page }) => {
+    await open(page);
+    const pill = page.locator('.action-dock-indicator');
+    const opacity = () => pill.evaluate(node => getComputedStyle(node).opacity);
+    await page.locator('#terminal-toggle').hover();
+    await expect.poll(opacity).toBe('1');
+    // The inspector toggle is active: the pill glides there and fades out over the accent fill.
+    await page.locator('#inspector-toggle').hover();
+    await expect(pill).toHaveAttribute('data-muted', '');
+    await expect.poll(opacity).toBe('0');
+    const inspector = await rect(page, '#inspector-toggle');
+    await expect.poll(async () => Math.round((await rect(page, '.action-dock-indicator')).top)).toBe(Math.round(inspector.top));
+    // A panel turning off under the pointer brings the pill back (toggled in place: closing the
+    // real inspector moves the dock to the window edge, away from the pointer).
+    await page.locator('#inspector-toggle').evaluate(node => node.classList.remove('active'));
+    await expect(pill).not.toHaveAttribute('data-muted', '');
+    await expect.poll(opacity).toBe('1');
+  });
+
+  test('a lone group folds its separator with its item', async ({ page }) => {
+    await open(page);
+    await page.mouse.click(5, 300);
+    const update = page.locator('#update-status');
+    const group = page.locator('.action-dock-group[data-group="status"]');
+    await expect(group).toBeHidden();
+    const before = (await rect(page, '#action-dock')).height;
+    await update.evaluate(node => { (node as HTMLElement).hidden = false; });
+    const separator = () => group.evaluate(node => node.getAnimations({ subtree: false }).length + document.getAnimations().filter(animation => (animation.effect as KeyframeEffect).pseudoElement === '::before' && (animation.effect as KeyframeEffect).target === node).length);
+    expect(await separator()).toBeGreaterThan(0);
+    await expect.poll(() => dockAnimations(page)).toBe(0);
+    const grown = await rect(page, '#action-dock');
+    expect(grown.height).toBeGreaterThan(before + 38);
+    // Re-centred around its new height, still clear of header and composer.
+    expect(grown.top - (await rect(page, '.workspace-header')).bottom).toBeGreaterThanOrEqual(12);
+    expect((await rect(page, '#composer-area')).top - grown.bottom).toBeGreaterThanOrEqual(12);
+    await update.evaluate(node => { (node as HTMLElement).hidden = true; });
+    // The group stays laid out until its separator and item have folded away.
+    await expect(group).toBeVisible();
+    expect(await separator()).toBeGreaterThan(0);
+    await expect(group).toBeHidden();
+    await expect.poll(async () => Math.round((await rect(page, '#action-dock')).height)).toBe(Math.round(before));
   });
 
   test('moves into the header as a row on narrow windows and the board', async ({ page }) => {

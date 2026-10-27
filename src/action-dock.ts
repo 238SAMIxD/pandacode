@@ -8,11 +8,18 @@ import { reducedMotion, springEasing, type Spring } from './motion';
  * modules keep owning the buttons: they toggle `hidden`, `active` and `title`, and the observer
  * here animates whatever changed. */
 
-/** One spring for everything: quick, with a hint of overshoot (settles in about 267 ms). */
+/** One spring for items, bubbles and placement: quick, with a hint of overshoot (about 267 ms).
+ * The hover pill travels further, so it gets a slightly softer one (about 367 ms). */
 export const DOCK_SPRING: Spring = { damping: 0.85, response: 0.2 };
+export const PILL_SPRING: Spring = { damping: 0.85, response: 0.28 };
 const STAGGER = 16, TIP_DELAY = 350, TIP_WARM = 300, GAP = 12;
-let curveCache: { easing: string; duration: number } | undefined;
-const curve = () => curveCache ??= springEasing(DOCK_SPRING) ?? { easing: 'cubic-bezier(.2,.9,.3,1.05)', duration: 260 };
+type Curve = { easing: string; duration: number };
+const curves = new Map<Spring, Curve>();
+const curve = (spring = DOCK_SPRING): Curve => {
+  let found = curves.get(spring);
+  if (!found) { found = springEasing(spring) ?? { easing: 'cubic-bezier(.2,.9,.3,1.05)', duration: spring === DOCK_SPRING ? 260 : 360 }; curves.set(spring, found); }
+  return found;
+};
 const still = (): boolean => document.hidden || reducedMotion();
 /** Startup renders (the first layout, restored panels) settle without motion; anything after the
  * first press or key is animated. */
@@ -29,13 +36,13 @@ const cancel = (element: Element, pseudo = '') => running.get(element)?.get(pseu
 
 /** Animates `element` from what is on screen now to the state `change()` leaves in CSS. Reads
  * before the change, so an interrupted motion continues from where it was. */
-function morph(element: Element, props: string[], change: () => void): void {
+function morph(element: Element, props: string[], change: () => void, spring = DOCK_SPRING): void {
   const style = getComputedStyle(element);
   const before = Object.fromEntries(props.map(prop => [prop, style.getPropertyValue(prop)]));
   cancel(element);
   change();
   if (still() || typeof element.animate !== 'function') return;
-  const { easing, duration } = curve();
+  const { easing, duration } = curve(spring);
   track(element, element.animate([{ ...before, offset: 0 }], { duration, easing }));
 }
 
@@ -61,14 +68,18 @@ function indicator(dock: HTMLElement) {
   pill.className = 'action-dock-indicator'; pill.setAttribute('aria-hidden', 'true');
   dock.prepend(pill);
   let target: HTMLElement | undefined;
-  const to = (item?: HTMLElement) => {
-    if (item === target) return;
+  const to = (item?: HTMLElement, force = false) => {
+    if (item === target && !force) return;
     target = item;
-    if (!item) { morph(pill, ['opacity', 'scale'], () => pill.removeAttribute('data-on')); return; }
-    const place = () => { pill.style.translate = `${item.offsetLeft}px ${item.offsetTop}px`; pill.style.height = `${item.offsetHeight}px`; };
-    // From nothing it appears in place; while shown (or still fading) it slides along.
-    if (Number(getComputedStyle(pill).opacity) < 0.05) { cancel(pill); place(); }
-    morph(pill, ['translate', 'height', 'opacity', 'scale'], () => { place(); pill.setAttribute('data-on', ''); });
+    if (!item) { morph(pill, ['opacity', 'scale'], () => pill.removeAttribute('data-on'), PILL_SPRING); return; }
+    const place = () => {
+      pill.style.translate = `${item.offsetLeft}px ${item.offsetTop}px`; pill.style.height = `${item.offsetHeight}px`;
+      pill.setAttribute('data-on', ''); pill.toggleAttribute('data-muted', item.classList.contains('active'));
+    };
+    // From nothing it appears in place; while shown (even dissolved over an active item, or still
+    // fading out) it glides along.
+    if (!pill.hasAttribute('data-on') && Number(getComputedStyle(pill).opacity) < 0.05) { cancel(pill); place(); pill.removeAttribute('data-on'); }
+    morph(pill, ['translate', 'height', 'opacity', 'scale'], place, PILL_SPRING);
   };
   return { to, get target() { return target; } };
 }
@@ -142,18 +153,33 @@ function press(item: HTMLElement, on: boolean): void {
 
 /** The slot an item collapses from or grows into: its height in a column, its width in a row. */
 const slot = (dock: HTMLElement): Keyframe => vertical(dock) ? { height: '0px', marginBlock: '-2px' } : { width: '0px', marginInline: '-1px' };
+/** A group's separator folds with it: its length across the dock's axis and its margins. */
+const rule = (dock: HTMLElement): Keyframe => vertical(dock) ? { opacity: 0, height: '0px', marginBlock: '0px' } : { opacity: 0, width: '0px', marginInline: '0px' };
+/** True when `item` is the only shown item of a group that has a separator (not the first group). */
+const lone = (item: HTMLElement): HTMLElement | undefined => {
+  const group = item.parentElement;
+  if (!group?.matches('.action-dock-group+.action-dock-group')) return undefined;
+  const others = [...group.querySelectorAll<HTMLButtonElement>(':scope>button')].filter(other => other !== item && !other.hidden);
+  return others.length ? undefined : group;
+};
+const LEAVE = 'cubic-bezier(.4,0,.6,1)';
 function appear(dock: HTMLElement, item: HTMLButtonElement): void {
   cancel(item);
   item.removeAttribute('data-leaving'); item.removeAttribute('aria-hidden'); item.inert = false;
   if (still() || typeof item.animate !== 'function') return;
   const { easing, duration } = curve();
   track(item, item.animate([{ opacity: 0, scale: 0.5, ...slot(dock), offset: 0 }], { duration, easing }));
+  const group = lone(item);
+  if (group) track(group, group.animate([{ ...rule(dock), offset: 0 }], { duration, easing, pseudoElement: '::before' }), '::before');
 }
 function disappear(dock: HTMLElement, item: HTMLButtonElement): void {
   if (still() || typeof item.animate !== 'function') return;
   item.setAttribute('data-leaving', ''); item.setAttribute('aria-hidden', 'true'); item.inert = true;
-  const animation = track(item, item.animate([{ opacity: 0, scale: 0.5, ...slot(dock) }], { duration: curve().duration * 0.7, easing: 'cubic-bezier(.4,0,.6,1)', fill: 'forwards' }));
-  animation.onfinish = () => { item.removeAttribute('data-leaving'); item.removeAttribute('aria-hidden'); item.inert = false; animation.cancel(); };
+  const duration = curve().duration * 0.7, group = lone(item);
+  const animation = track(item, item.animate([{ opacity: 0, scale: 0.5, ...slot(dock) }], { duration, easing: LEAVE, fill: 'forwards' }));
+  // The group stays laid out (it still holds a leaving item) while its separator folds away.
+  const separator = group && track(group, group.animate([rule(dock)], { duration, easing: LEAVE, fill: 'forwards', pseudoElement: '::before' }), '::before');
+  animation.onfinish = () => { item.removeAttribute('data-leaving'); item.removeAttribute('aria-hidden'); item.inert = false; animation.cancel(); separator?.cancel(); };
 }
 
 /** The staggered entrance, once per app session (a remount or reload in the same window skips it). */
@@ -173,9 +199,10 @@ export function enterDock(dock: HTMLElement): void {
  * composer, clamped `GAP` from both; a short pane pins it under the header. */
 function placement(dock: HTMLElement, ready: () => void) {
   const header = dock.parentElement!;
-  let frame = 0, placed = false;
+  let frame = 0, placed = false, follow = false;
   const place = () => {
     frame = 0;
+    const following = follow; follow = false;
     if (!floating(dock)) { dock.style.top = ''; placed = false; ready(); return; }
     const pane = document.querySelector<HTMLElement>('.conversation-pane');
     const composer = document.querySelector<HTMLElement>('#composer-area');
@@ -192,10 +219,13 @@ function placement(dock: HTMLElement, ready: () => void) {
     const shift = placed && previous ? parseFloat(previous) - (y - top.top) : 0;
     dock.style.top = next; placed = true;
     // A move (the composer grew, the terminal opened) springs from where the dock was.
-    if (shift && interacted && !still() && typeof dock.animate === 'function') { const { easing, duration } = curve(); track(dock, dock.animate([{ translate: `0 ${shift}px`, offset: 0 }], { duration, easing }), 'move'); }
+    if (following) cancel(dock, 'move');
+    if (shift && !following && interacted && !still() && typeof dock.animate === 'function') { const { easing, duration } = curve(); track(dock, dock.animate([{ translate: `0 ${shift}px`, offset: 0 }], { duration, easing }), 'move'); }
   };
   const schedule = () => { if (!frame) frame = requestAnimationFrame(place); };
-  const observer = new ResizeObserver(schedule);
+  // While the dock itself grows or shrinks (an item springing in or out) the centring follows it
+  // frame by frame, so it needs no spring of its own.
+  const observer = new ResizeObserver(entries => { if (entries.some(entry => entry.target === dock)) follow = true; schedule(); });
   const watch = () => {
     observer.disconnect();
     for (const selector of ['.conversation-pane', '#composer-area', '#file-tabs', '.main-pane']) { const node = document.querySelector(selector); if (node) observer.observe(node); }
@@ -226,6 +256,7 @@ export function mountActionDock(dock: HTMLElement): void {
       } else if (record.attributeName === 'class') {
         const was = ` ${record.oldValue ?? ''} `.includes(' active '), now = item.classList.contains('active');
         // The accent fill grows in with the spring and fades out from full.
+        if (was !== now && pill.target === item) pill.to(item, true);
         if (was === now || !interacted || still() || typeof item.animate !== 'function') continue;
         if (now) track(item, item.animate([{ opacity: 0, scale: 0.6, offset: 0 }], { ...curve(), pseudoElement: '::before' }), '::before');
         else track(item, item.animate([{ opacity: 1, scale: 1, offset: 0 }], { duration: 150, easing: 'ease-out', pseudoElement: '::before' }), '::before');
