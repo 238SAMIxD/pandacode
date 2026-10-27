@@ -17,7 +17,10 @@ use tokio::io::AsyncWriteExt;
 use crate::panda_router::{self, Mode, PoolModel, Preferences, Route, Router, TaskContext};
 
 const SETTINGS_FILE: &str = "model-routing.json";
-const ASSET_DIR: &str = "panda-router/v2";
+/// Profiler files of earlier releases, removed once the current ones load.
+const OLD_ASSET_DIRS: &[&str] = &["panda-router/v2"];
+/// Settings files without `version` predate v4, whose default bar is 0.5 rather than 0.8.
+const SETTINGS_VERSION: u32 = 2;
 const MAX_TEXT: usize = 64 * 1024;
 pub(crate) const MAX_POOL: usize = 1000;
 /// Settings' Try it waits this long for the download; team routes never wait.
@@ -35,20 +38,26 @@ pub struct Settings {
     pub enabled: bool,
     pub mode: Mode,
     pub min_p: f64,
+    /// Missing (0) in files saved before v4.
+    #[serde(default)]
+    pub version: u32,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        // Upstream's default policy is cheapest_above_threshold at 0.75; a failed worker costs a
-        // review round, so the bar is higher. A saved settings file keeps its own values.
-        Self { enabled: true, mode: Mode::Cheapest, min_p: 0.8 }
+        // Upstream v4's defaults: max_utility, and cheapest-mode's bar on the P lower bound at 0.5. A
+        // failed worker escalates up the ladder, so the bar no longer has to carry the retry cost.
+        Self { enabled: true, mode: Mode::Balanced, min_p: 0.5, version: SETTINGS_VERSION }
     }
 }
 
 impl Settings {
     fn clamped(self) -> Self {
-        let min_p = if self.min_p.is_finite() { self.min_p.clamp(0.5, 0.95) } else { 0.8 };
-        Self { min_p, ..self }
+        // v2's untouched default was 0.8 on calibrated P; v4 compares the lower bound, so 0.8 would
+        // leave cheapest mode almost always relaxed. A deliberate other value is kept.
+        let old_default = self.version < SETTINGS_VERSION && self.min_p == 0.8;
+        let min_p = if self.min_p.is_finite() && !old_default { self.min_p.clamp(0.3, 0.9) } else { 0.5 };
+        Self { min_p, version: SETTINGS_VERSION, ..self }
     }
     pub fn preferences(&self, mode: Option<Mode>) -> Preferences {
         Preferences { mode: mode.unwrap_or(self.mode), min_p: self.min_p }
@@ -115,7 +124,7 @@ impl Runtime {
         self.settings.lock().map(|s| *s).unwrap_or_default()
     }
     fn assets(&self) -> PathBuf {
-        self.root.join(ASSET_DIR)
+        self.root.join(panda_router::ASSET_DIR)
     }
     fn error(&self) -> Option<String> {
         if let Some(reason) = self.unusable.get() {
@@ -152,6 +161,16 @@ impl Runtime {
 /// Settings → model routing switch; false before setup (tests), so nothing changes there.
 pub fn enabled() -> bool {
     RUNTIME.get().is_some_and(|rt| rt.settings().enabled)
+}
+
+/// The saved routing mode (the Team menu's Cheap/Balanced/Best); the default before setup.
+pub fn mode() -> Mode {
+    RUNTIME.get().map_or_else(|| Settings::default().mode, |rt| rt.settings().mode)
+}
+
+/// The saved minimum P(success) lower bound for Cheap; the default before setup.
+pub fn min_p() -> f64 {
+    RUNTIME.get().map_or_else(|| Settings::default().min_p, |rt| rt.settings().min_p)
 }
 
 pub fn assets_present(dir: &Path) -> bool {
@@ -340,7 +359,12 @@ async fn router(rt: &'static Runtime, wait: bool) -> Arc<Router> {
         })
         .await;
     match loaded {
-        Ok(router) => router.clone(),
+        Ok(router) => {
+            for old in OLD_ASSET_DIRS {
+                let _ = std::fs::remove_dir_all(rt.root.join(old));
+            }
+            router.clone()
+        }
         // `read_verified` reports bad or unreadable files this way; anything else is ONNX Runtime.
         Err(error) if error.contains("sha256") || error.contains("cannot read") => {
             // Corrupt or stale files: remove them so Retry downloads fresh copies, but not on
@@ -474,6 +498,7 @@ pub fn model_routing_configure(enabled: Option<bool>, mode: Option<Mode>, min_p:
             enabled: enabled.unwrap_or(settings.enabled),
             mode: mode.unwrap_or(settings.mode),
             min_p: min_p.unwrap_or(settings.min_p),
+            version: SETTINGS_VERSION,
         }
         .clamped();
         write_settings(&rt.root.join(SETTINGS_FILE), &next)?;
@@ -555,12 +580,18 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(SETTINGS_FILE);
         assert_eq!(read_settings(&path), Settings::default());
-        assert_eq!(Settings::default(), Settings { enabled: true, mode: Mode::Cheapest, min_p: 0.8 });
-        let saved = Settings { enabled: false, mode: Mode::Balanced, min_p: 0.7 };
+        assert_eq!(Settings::default(), Settings { enabled: true, mode: Mode::Balanced, min_p: 0.5, version: SETTINGS_VERSION });
+        let saved = Settings { enabled: false, mode: Mode::Cheapest, min_p: 0.7, version: SETTINGS_VERSION };
         write_settings(&path, &saved).unwrap();
         assert_eq!(read_settings(&path), saved);
-        std::fs::write(&path, r#"{"enabled":true,"mode":"quality","minP":2}"#).unwrap();
-        assert_eq!(read_settings(&path), Settings { enabled: true, mode: Mode::Quality, min_p: 0.95 });
+        // Saved choices survive, a chosen 0.8 included; only v2's untouched 0.8 moves to v4's 0.5.
+        write_settings(&path, &Settings { min_p: 0.8, ..saved }).unwrap();
+        assert_eq!(read_settings(&path).min_p, 0.8);
+        let v2 = |json: &str| { std::fs::write(&path, json).unwrap(); read_settings(&path) };
+        assert_eq!(v2(r#"{"enabled":true,"mode":"cheapest","minP":0.8}"#), Settings { mode: Mode::Cheapest, ..Settings::default() });
+        assert_eq!(v2(r#"{"enabled":true,"mode":"cheapest","minP":0.7}"#).min_p, 0.7);
+        assert_eq!(v2(r#"{"enabled":true,"mode":"quality","minP":2}"#), Settings { mode: Mode::Quality, min_p: 0.9, ..Settings::default() });
+        assert_eq!(v2(r#"{"minP":0.1}"#).min_p, 0.3);
         std::fs::write(&path, "not json").unwrap();
         assert_eq!(read_settings(&path), Settings::default());
         let json = serde_json::to_value(RoutingStatus { enabled: true, mode: Mode::Balanced, min_p: 0.8, profiler: "missing", error: None }).unwrap();
@@ -670,18 +701,33 @@ mod tests {
             ("Write a release script that bumps the version in package.json, Cargo.toml and tauri.conf.json, then tags the commit.", 4),
         ];
         let mode = match std::env::var("PANDA_ROUTER_MODE").as_deref() {
-            Ok("balanced") => Some(Mode::Balanced),
+            Ok("cheapest") => Some(Mode::Cheapest),
             Ok("quality") => Some(Mode::Quality),
             _ => None,
         };
         let prefs = Settings::default().preferences(mode);
         let langs = vec!["typescript".to_string(), "rust".to_string()];
+        let short = |m: &panda_router::Routed| format!("{}:{}", m.provider, m.model);
         for (text, files) in tasks {
             let ctx = TaskContext { files_in_scope: (files > 0).then_some(files), repo_languages: langs.clone(), requires_tools: true };
             let r = router.route(text, &ctx, &pool, &prefs, &[]).unwrap();
-            let pick = r.pick.as_ref().map_or("none".into(), |p| format!("{}:{} P{:.2} ${:.4}", p.provider, p.model, p.p_success, p.est_cost_usd));
-            let alts: Vec<_> = r.ranking.iter().skip(1).take(3).map(|m| format!("{}:{}", m.provider, m.model)).collect();
-            println!("[{} d{} {:.0}ms] {} -> {pick} | alt {}", r.profiler, r.difficulty, r.latency_ms, &text[..48.min(text.len())], alts.join(", "));
+            let pick = r.pick.as_ref().map_or("none".into(), |p| format!("{} P{:.2}/{:.2} ${:.4}", short(p), p.p_success, p.p_success_lower, p.est_cost_usd));
+            let ladder: Vec<_> = r.ladder.iter().map(short).collect();
+            // What a fresh `profileId: "auto"` worker gets (architect::routing::staff).
+            let opener = if prefs.mode == Mode::Quality { r.pick.as_ref() } else { r.ladder.first().or(r.pick.as_ref()) };
+            println!("[{} d{} {} {:.0}ms] {}\n  opener {} | policy pick {pick} ({})\n  ladder {}", r.profiler, r.difficulty, r.category, r.latency_ms, &text[..60.min(text.len())], opener.map_or("none".into(), short), r.decided_by, ladder.join(" > "));
+            // Escalation: fail the staffed model, then each escalation pick, as a team replacing failed workers would.
+            let mut failed: Vec<PoolModel> = Vec::new();
+            let mut last = opener.cloned();
+            for _ in 0..2 {
+                let Some(p) = last else { break };
+                failed.push(PoolModel { provider: p.provider, model: p.model, name: p.name });
+                let e = router.route(text, &ctx, &pool, &prefs, &failed).unwrap();
+                let names: Vec<_> = failed.iter().map(|m| format!("{}:{}", m.provider, m.model)).collect();
+                println!("  after {} failed -> {} ({}, d{})", names.join(", "), e.pick.as_ref().map_or("none".into(), short), e.decided_by, e.difficulty);
+                assert!(e.pick.as_ref().is_none_or(|p| !failed.iter().any(|f| f.provider == p.provider && f.model == p.model)));
+                last = e.pick;
+            }
             assert_eq!(r.profiler, "onnx");
             assert!(r.unrated.is_empty() || r.unrated.iter().all(|m| m.provider == "pi"), "{:?}", r.unrated);
         }

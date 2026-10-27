@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use super::profile::{py_space, TaskProfile, N_DIFFICULTY, N_SKILL_LEVELS, SKILL_AXES};
+use super::profile::{py_space, TaskProfile, N_CHECKLIST, N_DIFFICULTY, N_SKILL_LEVELS, SKILL_AXES};
 use super::TaskContext;
 
 fn rx(words: &[&str]) -> Regex {
@@ -24,6 +24,8 @@ struct Rules {
     vague: Regex,
     security: Regex,
     stakes: Regex,
+    criteria: Regex,
+    concurrency: Regex,
     code_hint: Regex,
 }
 
@@ -72,6 +74,8 @@ static RULES: LazyLock<Rules> = LazyLock::new(|| Rules {
     security: rx(&["security", "auth", "password", "secret", "token", "crypto", "permission", "oauth", "jwt", "xss",
                    "csrf", "injection"]),
     stakes: rx(&["production", r"prod\b", "customer", "payment", "billing", "data loss", "outage", "money"]),
+    criteria: rx(&["should return", "must", "acceptance", "expected output", "so that", "passes?", "given .* when"]),
+    concurrency: Regex::new(r"(?i)concurren|distributed|race condition|deadlock|lock-?free").expect("concurrency regex"),
     code_hint: Regex::new(r"(?i)`|\bdef |\bclass |\bfunction\b|\.py\b|\.ts\b|\.js\b|\.go\b|\.rs\b|\{|\}|=>|::")
         .expect("code hint regex"),
 });
@@ -95,6 +99,17 @@ const CATEGORY_AXES: [&[(&str, f64)]; 13] = [
 const OUT_P50: [f64; 13] = [3.3, 3.0, 3.4, 3.3, 2.9, 3.1, 3.0, 3.1, 3.4, 3.0, 3.0, 2.9, 2.3];
 const MATH: usize = 11;
 const CHAT: usize = 12;
+const IMPL: usize = 0;
+const BUGFIX: usize = 1;
+const REFACTOR: usize = 2;
+const TESTS: usize = 3;
+const REVIEW: usize = 4;
+const RESEARCH: usize = 5;
+const PLANNING: usize = 6;
+const DOCS: usize = 7;
+const UI: usize = 8;
+const DATA: usize = 9;
+const DEVOPS: usize = 10;
 
 fn discrete_gaussian<const N: usize>(center: f64, sigma: f64, start: f64) -> [f64; N] {
     let mut w = [0.0; N];
@@ -110,7 +125,7 @@ fn sigmoid(x: f64) -> f64 {
 }
 
 /// Python's `round(x, n)`: correctly rounded, half to even (Rust's float formatting rounds the same way).
-fn py_round(x: f64, n: usize) -> f64 {
+pub(super) fn py_round(x: f64, n: usize) -> f64 {
     format!("{x:.n$}").parse().unwrap_or(x)
 }
 
@@ -174,10 +189,39 @@ pub fn profile(text: &str, ctx: &TaskContext) -> TaskProfile {
         if words_vague { 0.7 } else { 0.15 },
         if files > 3 { 0.9 } else if r.multi.is_match(text) { 0.65 } else { 0.1 },
         if r.web.is_match(text) { 0.75 } else { 0.05 },
+    ];
+
+    // Taxonomy checklist order.
+    let code_cats = cp[IMPL] + cp[BUGFIX] + cp[REFACTOR] + cp[TESTS] + cp[UI] + cp[DEVOPS];
+    let checklist: [f64; N_CHECKLIST] = [
+        (code_cats + 0.3 * b(codey)).min(0.98),
+        flags[5],
+        cp[IMPL] + 0.5 * cp[UI],
+        cp[BUGFIX],
+        cp[BUGFIX] * (0.4 + 0.1 * (d - 4.0).max(0.0)),
+        flags[0],
+        flags[6],
+        flags[1],
+        if tokens > 50_000 { 0.95 } else { 0.05 },
+        if r.concurrency.is_match(text) { 0.8 } else { 0.05 },
+        if r.security.is_match(text) { 0.8 } else { 0.05 },
+        cp[MATH],
+        if d >= 7.0 { 0.5 } else { 0.15 },
+        if r.criteria.is_match(text) { 0.7 } else { 0.3 },
+        flags[4] * 0.7,
+        cp[PLANNING] + 0.3 * b(d >= 7.0),
+        cp[UI],
+        cp[DOCS] + cp[RESEARCH] * 0.6 + cp[CHAT] * 0.8 + cp[PLANNING] * 0.5,
+        cp[DATA],
+        cp[DEVOPS],
+        (0.1 + 0.1 * (d - 4.0).max(0.0) + cp[PLANNING]).min(0.95),
+        cp[REVIEW],
+        if d <= 2.0 { 0.8 } else if d <= 3.0 { 0.3 } else { 0.05 },
+        if r.stakes.is_match(text) { 0.7 } else { 0.1 },
     ]
-    .map(|v| py_round(v, 4));
+    .map(|v| py_round(v.clamp(0.0, 1.0), 4));
 
     let p50: f64 = cp.iter().zip(OUT_P50).map(|(p, o)| p * o).sum::<f64>() + 0.08 * (d - 5.0);
-    TaskProfile { category: cp, difficulty, skills, flags, out_p50: py_round(p50, 3) }
+    TaskProfile { category: cp, difficulty, skills, flags: flags.map(|v| py_round(v, 4)), checklist, out_p50: py_round(p50, 3) }
 }
 

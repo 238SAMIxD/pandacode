@@ -92,7 +92,14 @@ test('a named agent team is a choice in the model picker and lists only its mode
   expect(configured.architect).toMatchObject({ provider: leadWorker.provider, model: leadWorker.model });
   await expect(modelButton(page)).toContainText('Reviewers');
   await expect(modelButton(page)).toContainText('2 models');
-  await expect(page.getByRole('button', { name: 'Team', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  // The Team button names the agent team, and its menu checks it.
+  await expect(page.locator('#team-trigger')).toHaveAccessibleName('Reviewers');
+  await expect(page.locator('#team-trigger')).toHaveAttribute('data-on', '');
+  await page.locator('#team-trigger').click();
+  await expect(page.getByRole('menuitemradio', { checked: true })).toHaveText(/Reviewers/);
+  await expect(page.getByRole('menuitemradio', { name: 'Reviewers', exact: true })).toHaveAccessibleDescription('Agent team');
+  for (const kind of ['Cheap team', 'Balanced team', 'Best team']) await expect(page.getByRole('menuitemradio', { name: kind, exact: true })).toHaveAccessibleDescription('Replaces Reviewers');
+  await page.keyboard.press('Escape');
 
   // The picker marks the team, not the lead's plain model, as current.
   await modelButton(page).click();
@@ -102,7 +109,28 @@ test('a named agent team is a choice in the model picker and lists only its mode
   await picker(page).locator('.model-menu-option:not(.model-menu-team):not([disabled])').first().click();
   await expect(picker(page)).toBeHidden();
   expect((await calls(page, 'architect_configure')).at(-1).args).toMatchObject({ config: null });
-  await expect(page.getByRole('button', { name: 'Team', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('#team-trigger')).toHaveAccessibleName('Team');
+  await expect(page.locator('#team-trigger')).not.toHaveAttribute('data-on');
+  await expect(modelButton(page)).not.toContainText('Reviewers');
+  // No team in the Team menu removes an agent team too.
+  await modelButton(page).click();
+  await picker(page).getByRole('button', { name: 'Agent team · Reviewers', exact: true }).click();
+  await expect(page.locator('#team-trigger')).toHaveAccessibleName('Reviewers');
+  await page.locator('#team-trigger').click();
+  await page.getByRole('menuitemradio', { name: 'No team', exact: true }).click();
+  await expect(page.locator('#team-trigger')).toHaveAccessibleName('Team');
+  expect((await calls(page, 'architect_configure')).at(-1).args).toMatchObject({ config: null });
+  await expect(modelButton(page)).not.toContainText('Reviewers');
+  // A team kind replaces the named team with an automatic one.
+  await modelButton(page).click();
+  await picker(page).getByRole('button', { name: 'Agent team · Reviewers', exact: true }).click();
+  await expect(page.locator('#team-trigger')).toHaveAccessibleName('Reviewers');
+  await page.locator('#team-trigger').click();
+  await page.getByRole('menuitemradio', { name: 'Best team', exact: true }).click();
+  await expect(page.locator('#team-trigger')).toHaveAccessibleName('Best team');
+  const replaced = (await calls(page, 'architect_configure')).at(-1).args.config;
+  expect(replaced.auto).toBe(true);
+  expect(replaced.rosterOnly).toBeFalsy();
   await expect(modelButton(page)).not.toContainText('Reviewers');
 });
 

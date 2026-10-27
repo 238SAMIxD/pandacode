@@ -264,8 +264,9 @@ test.describe('turn changes', () => {
 
   test('completed worker conversations show their own changed files and request their snapshot', async ({ page }) => {
     await page.clock.install(); await install(page); await selectFixture(page);
-    await page.getByRole('button', { name: 'Team', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Team', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await page.locator('#team-trigger').click();
+    await page.getByRole('menuitemradio', { name: 'Balanced team', exact: true }).click();
+    await expect(page.locator('#team-trigger')).toHaveAttribute('data-on', '');
     await page.locator('#prompt').fill('Demonstrate the worker change review'); await page.locator('#prompt').press('Enter');
     await page.getByRole('button', { name: 'Open workers', exact: true }).click();
     await page.clock.runFor(8000);

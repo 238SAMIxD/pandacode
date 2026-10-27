@@ -26,6 +26,14 @@ harness and the user's account. PandaCode does not supply inference or API credi
 
 In an automatic team the lead can set `profileId: "auto"` on an assignment, and
 PandaCode picks the worker's model locally from every installed harness's models.
+The prompt box's Team menu chooses how: *Cheap team*, *Balanced team* or *Best team*,
+one global mode that a running automatic team also follows. In Cheap and Balanced a
+new worker starts on the ladder's first, cheapest safe rung. The lead verifies each
+routed result (tests, typecheck or review); when a worker fails, or completes with a
+result that fails that check, the lead dispatches a replacement with
+`replaces: <worker ID>` and `profileId: "auto"`. The old worker counts as abandoned
+and the router escalates to a stronger model than every model that failed the
+assignment, for at most 2 retries; after that the lead reports the failure.
 See [model routing](model-routing.md).
 
 ## Saved setups and profiles

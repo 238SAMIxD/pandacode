@@ -1,4 +1,4 @@
-//! Parity with the Python reference (`data/parity.json`, dumped from PandaOrchestrator f53f30e by a
+//! Parity with the Python reference (`data/parity.json`, dumped from PandaOrchestrator 83e408c (v4.3) by a
 //! script kept outside the repo). ONNX tests need `PANDA_ROUTER_ASSETS` pointing at a directory with
 //! model.int8.onnx + tokenizer.json and are skipped without it (they fail instead when `CI` is set). See `strict()` for numeric parity.
 
@@ -13,7 +13,6 @@ use super::*;
 #[derive(Deserialize)]
 struct Fixture {
     pool: Vec<String>,
-    min_p: f64,
     tasks: Vec<FixtureTask>,
 }
 
@@ -32,6 +31,8 @@ struct FixtureContext {
     #[serde(default)]
     repo_languages: Vec<String>,
     files_in_scope: Option<u32>,
+    #[serde(default)]
+    requires_tools: bool,
 }
 
 #[derive(Deserialize)]
@@ -40,6 +41,7 @@ struct FixtureProfile {
     difficulty: Vec<f64>,
     skills: Vec<Vec<f64>>,
     flags: Vec<f64>,
+    checklist: Vec<f64>,
     out_p50: f64,
 }
 
@@ -53,24 +55,32 @@ struct FixtureRoutes {
 struct ModeRoutes {
     balanced: FixtureRoute,
     cheapest: FixtureRoute,
+    cheapest75: FixtureRoute,
     quality: FixtureRoute,
-    escalate: FixtureRoute,
+    /// Two escalations from `balanced`: each fails the previous pick.
+    escalate: Vec<FixtureRoute>,
 }
 
 #[derive(Deserialize)]
 struct FixtureRoute {
     failed: Option<String>,
     pick: Option<String>,
+    decided_by: String,
     difficulty: u8,
     category: String,
+    distribution: Vec<f64>,
     ranking: Vec<FixtureRow>,
+    ladder: Vec<String>,
 }
 
+/// Upstream rounds the response: p to 4 places, costs to 6, latency to 1.
 #[derive(Deserialize)]
 struct FixtureRow {
     id: String,
     p: f64,
+    p_lo: f64,
     cost: f64,
+    exp_cost: f64,
     latency: f64,
 }
 
@@ -79,7 +89,7 @@ fn fixture() -> Fixture {
 }
 
 fn ctx(c: &FixtureContext) -> TaskContext {
-    TaskContext { repo_languages: c.repo_languages.clone(), files_in_scope: c.files_in_scope, requires_tools: false }
+    TaskContext { repo_languages: c.repo_languages.clone(), files_in_scope: c.files_in_scope, requires_tools: c.requires_tools }
 }
 
 fn card_model(id: &str) -> PoolModel {
@@ -107,34 +117,46 @@ fn close(label: &str, got: f64, want: f64, tol: f64) {
 }
 
 fn check_profile(label: &str, got: &TaskProfile, want: &FixtureProfile, tol: f64) {
-    for (i, w) in want.category.iter().enumerate() {
-        close(&format!("{label} category[{i}]"), got.category[i], *w, tol);
-    }
-    for (i, w) in want.difficulty.iter().enumerate() {
-        close(&format!("{label} difficulty[{i}]"), got.difficulty[i], *w, tol);
+    let pairs: [(&str, &[f64], &[f64]); 4] = [
+        ("category", &got.category, &want.category),
+        ("difficulty", &got.difficulty, &want.difficulty),
+        ("flags", &got.flags, &want.flags),
+        ("checklist", &got.checklist, &want.checklist),
+    ];
+    for (name, g, w) in pairs {
+        assert_eq!(g.len(), w.len(), "{label} {name} length");
+        for (i, (g, w)) in g.iter().zip(w).enumerate() {
+            close(&format!("{label} {name}[{i}]"), *g, *w, tol);
+        }
     }
     for (k, axis) in want.skills.iter().enumerate() {
         for (i, w) in axis.iter().enumerate() {
             close(&format!("{label} skills[{k}][{i}]"), got.skills[k][i], *w, tol);
         }
     }
-    for (i, w) in want.flags.iter().enumerate() {
-        close(&format!("{label} flags[{i}]"), got.flags[i], *w, tol);
-    }
     close(&format!("{label} out_p50"), got.out_p50, want.out_p50, tol);
 }
 
+/// `p_tol` on top of upstream's rounding (half a unit in the last kept place).
 fn check_route(label: &str, got: &Route, want: &FixtureRoute, p_tol: f64) {
     assert_eq!(got.pick.as_ref().map(|r| r.card_id.as_str()), want.pick.as_deref(), "{label} pick");
+    assert_eq!(got.decided_by, want.decided_by, "{label} decided_by");
     assert_eq!(got.difficulty, want.difficulty, "{label} difficulty");
     assert_eq!(got.category, want.category, "{label} category");
     let ids: Vec<&str> = got.ranking.iter().map(|r| r.card_id.as_str()).collect();
     let want_ids: Vec<&str> = want.ranking.iter().map(|r| r.id.as_str()).collect();
     assert_eq!(ids, want_ids, "{label} ranking");
+    let ladder: Vec<&str> = got.ladder.iter().map(|r| r.card_id.as_str()).collect();
+    assert_eq!(ladder, want.ladder, "{label} ladder");
+    for (i, (g, w)) in got.distribution.iter().zip(&want.distribution).enumerate() {
+        close(&format!("{label} distribution[{i}]"), *g, *w, 5e-7 + p_tol);
+    }
     for (g, w) in got.ranking.iter().zip(&want.ranking) {
-        close(&format!("{label} {} p", w.id), g.p_success, w.p, p_tol);
-        close(&format!("{label} {} cost", w.id), g.est_cost_usd, w.cost, 1e-6 + 1e-3 * w.cost);
-        close(&format!("{label} {} latency", w.id), g.est_latency_ms, w.latency, 1e-3 * w.latency);
+        close(&format!("{label} {} p", w.id), g.p_success, w.p, 5e-5 + p_tol);
+        close(&format!("{label} {} p_lo", w.id), g.p_success_lower, w.p_lo, 5e-5 + p_tol);
+        close(&format!("{label} {} cost", w.id), g.est_cost_usd, w.cost, 5e-7 + 1e-3 * w.cost);
+        close(&format!("{label} {} expected cost", w.id), g.expected_cost_usd, w.exp_cost, 5e-7 + 1e-3 * w.exp_cost);
+        close(&format!("{label} {} latency", w.id), g.est_latency_ms, w.latency, 0.05 + 1e-3 * w.latency);
     }
 }
 
@@ -149,7 +171,7 @@ fn strict() -> bool {
 fn check_well_formed(label: &str, got: &TaskProfile) {
     close(&format!("{label} category sum"), got.category.iter().sum(), 1.0, 1e-6);
     close(&format!("{label} difficulty sum"), got.difficulty.iter().sum(), 1.0, 1e-6);
-    assert!(got.flags.iter().all(|f| (0.0..=1.0).contains(f)), "{label} flags out of range");
+    assert!(got.flags.iter().chain(&got.checklist).all(|f| (0.0..=1.0).contains(f)), "{label} flags out of range");
 }
 
 fn check_routes(router: &Router, fx: &Fixture, pick: impl Fn(&FixtureRoutes) -> &ModeRoutes, p_tol: f64) {
@@ -157,15 +179,28 @@ fn check_routes(router: &Router, fx: &Fixture, pick: impl Fn(&FixtureRoutes) -> 
     for (n, task) in fx.tasks.iter().enumerate() {
         let routes = pick(&task.routes);
         let c = ctx(&task.context);
-        for (mode, want) in [(Mode::Balanced, &routes.balanced), (Mode::Cheapest, &routes.cheapest), (Mode::Quality, &routes.quality)] {
-            let prefs = Preferences { mode, min_p: fx.min_p };
-            let got = router.route(&task.text, &c, &pool, &prefs, &[]).unwrap();
-            check_route(&format!("task {n} {mode:?}"), &got, want, p_tol);
+        let modes = [
+            ("balanced", Mode::Balanced, 0.5, &routes.balanced),
+            ("cheapest", Mode::Cheapest, 0.5, &routes.cheapest),
+            ("cheapest75", Mode::Cheapest, 0.75, &routes.cheapest75),
+            ("quality", Mode::Quality, 0.5, &routes.quality),
+        ];
+        for (name, mode, min_p, want) in modes {
+            let got = router.route(&task.text, &c, &pool, &Preferences { mode, min_p }, &[]).unwrap();
+            check_route(&format!("task {n} {name}"), &got, want, p_tol);
         }
-        let failed = [card_model(routes.escalate.failed.as_deref().unwrap())];
-        let prefs = Preferences { mode: Mode::Balanced, min_p: fx.min_p };
-        let got = router.route(&task.text, &c, &pool, &prefs, &failed).unwrap();
-        check_route(&format!("task {n} escalate"), &got, &routes.escalate, p_tol);
+        // The chain both ways: `escalate` step by step, and `route` with every failure at once.
+        let prefs = Preferences::default();
+        let mut prev = router.route(&task.text, &c, &pool, &prefs, &[]).unwrap();
+        let mut failed = Vec::new();
+        for (k, want) in routes.escalate.iter().enumerate() {
+            let m = card_model(want.failed.as_deref().unwrap());
+            prev = router.escalate(&task.text, &c, &pool, &prefs, &prev, std::slice::from_ref(&m)).unwrap();
+            check_route(&format!("task {n} escalate {k}"), &prev, want, p_tol);
+            failed.push(m);
+            let all = router.route(&task.text, &c, &pool, &prefs, &failed).unwrap();
+            check_route(&format!("task {n} route failed={k}"), &all, want, p_tol);
+        }
     }
 }
 
@@ -245,7 +280,7 @@ fn heuristic_profiles_match_python() {
 
 #[test]
 fn heuristic_routes_match_python() {
-    check_routes(&Router::heuristic(), &fixture(), |r| &r.heuristic, 2e-6);
+    check_routes(&Router::heuristic(), &fixture(), |r| &r.heuristic, 0.0);
 }
 
 #[test]
@@ -321,7 +356,7 @@ fn onnx_routes_are_fast() {
 
 #[test]
 fn requires_tools_matches_python() {
-    // Python (f53f30e): format_input / HeuristicProfiler / OnnxProfiler on the same task.
+    // Python (83e408c): format_input / HeuristicProfiler / OnnxProfiler on the same task.
     let c = TaskContext { repo_languages: vec!["rust".into(), "typescript".into()], files_in_scope: Some(3), requires_tools: true };
     assert_eq!(format_input("  Fix bug ", &c), "[ctx] langs=rust,typescript files_in_scope=3 requires_tools\n[task] Fix bug");
     let text = "Fix the flaky test in queue.rs and run the suite";
@@ -330,8 +365,8 @@ fn requires_tools_matches_python() {
     let Some(dir) = assets() else { return };
     let got = Router::load(&dir).unwrap().profile(text, &c).unwrap();
     if strict() {
-        close("onnx needs_tools", got.flags[profile::FLAG_NEEDS_TOOLS], 0.9953379353753514, 1e-4);
-        close("onnx bugfix", got.category[1], 0.9675274655819881, 1e-4);
+        close("onnx needs_tools", got.flags[profile::FLAG_NEEDS_TOOLS], 0.9952313216327713, 1e-4);
+        close("onnx bugfix", got.category[1], 0.9209576043029076, 1e-4);
     } else {
         assert!(got.flags[profile::FLAG_NEEDS_TOOLS] > 0.5 && got.category[1] > 0.5, "tool-using bugfix");
     }
@@ -387,3 +422,4 @@ fn every_harness_map_entry_names_a_card() {
         assert!(resolve_card(provider, model, "").is_some(), "{provider} {model}");
     }
 }
+

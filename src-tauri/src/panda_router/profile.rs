@@ -14,20 +14,28 @@ pub const N_DIFFICULTY: usize = 10;
 pub const N_SKILL_LEVELS: usize = 11;
 pub const FLAG_NEEDS_TOOLS: usize = 0;
 pub const FLAG_NEEDS_VISION: usize = 1;
+pub const FLAG_AMBIGUOUS_SPEC: usize = 4;
+pub const N_CHECKLIST: usize = 24;
 
 const MAX_CHARS: usize = 6000;
 
-/// What the matcher needs from a profiler. Checklist outputs are not used for routing and are skipped.
+/// What the matcher and the v4 success head need from a profiler.
 #[derive(Clone, Debug)]
 pub struct TaskProfile {
     pub category: [f64; 13],
     pub difficulty: [f64; N_DIFFICULTY],
     pub skills: [[f64; N_SKILL_LEVELS]; 10],
     pub flags: [f64; 7],
+    /// Taxonomy checklist order (`schemas/taxonomy.json`).
+    pub checklist: [f64; N_CHECKLIST],
     pub out_p50: f64,
 }
 
 impl TaskProfile {
+    pub fn expected_skill(&self, axis: usize) -> f64 {
+        self.skills[axis].iter().enumerate().map(|(lvl, p)| lvl as f64 * p).sum()
+    }
+
     /// First maximum wins, like Python's `max(dict.items())`.
     pub fn top_category(&self) -> usize {
         let mut best = 0;

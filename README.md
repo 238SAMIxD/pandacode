@@ -42,8 +42,10 @@ embedded editor engine.
 - **Agent teams.** An [architect and up to three workers](docs/architect-workers.md),
   mixing harnesses and models, or named team profiles. Each spawned worker is one
   line in the turn that started it; click it to open the worker.
-- **Model routing.** In automatic teams the lead can let a local router pick each
-  worker's model, in about 10–25 ms and without sending the task anywhere. See
+- **Model routing.** In automatic teams (Cheap, Balanced or Best, from the Team
+  button) the lead can let a local router pick each worker's model, in about 10–25 ms
+  and without sending the task anywhere; a failed worker's replacement escalates to a
+  stronger model. See
   [model routing](docs/model-routing.md).
 - **Bots.** Put an agent behind Telegram, Slack, Discord, WhatsApp or a local web
   chat; each conversation is an ordinary task. The sidebar's **Bots** view lists

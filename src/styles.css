@@ -265,10 +265,8 @@ mark{background:color-mix(in srgb,var(--accent) 45%,transparent);color:inherit;b
 /* The Team button is rendered by the composer, so its look must not wait for the lazily loaded architect module. */
 .composer-team-button{font-size:.77rem;color:var(--muted);gap:6px;padding:5px 7px;border-radius:3px;white-space:nowrap;flex-shrink:0}
 .composer-team-button .icon{width:15px;height:15px}
-.composer-team-button[aria-pressed=true]{color:var(--accent-ink);background:color-mix(in srgb,var(--accent) 9%,transparent)}
-.route-picker{font-size:.77rem;color:var(--muted);gap:5px;padding:5px 6px;border-radius:3px;white-space:nowrap;flex-shrink:0}
-.route-picker>.icon:first-child{width:15px;height:15px}
-.route-picker>.icon:last-child{width:10px;height:10px}
+.composer-team-button>.icon:last-child:not(:first-child){width:10px;height:10px;margin-left:-1px}
+.composer-team-button:is([aria-pressed=true],[data-on]){color:var(--accent-ink);background:color-mix(in srgb,var(--accent) 9%,transparent)}
 .send-button{width:31px;height:31px;background:var(--accent);color:var(--on-accent);border-radius:4px;flex-shrink:0}
 .send-button .icon{width:15px;height:15px;stroke-width:2}
 .send-button:hover:not(:disabled){background:var(--accent-hover);color:var(--on-accent);transform:none}
@@ -530,7 +528,7 @@ dialog input::placeholder{color:var(--muted)}
 .composer-tools{gap:6px}
 .composer-separator{display:none}
 .composer-team-button span{display:none}
-.route-picker{gap:3px}.route-picker>.icon:last-child{width:8px;height:8px}
+.composer-team-button{gap:3px}.composer-team-button>.icon:last-child:not(:first-child){width:8px;height:8px}
 .mode-picker span{display:none}
 .workspace-header{padding:0 11px;background:linear-gradient(180deg,#fffbee,#ffffff);border-bottom:1px solid rgb(0 0 0 / .045);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
 .breadcrumb{font-size:0.714286rem;gap:7px}
@@ -702,8 +700,8 @@ html[data-theme="dark"] .choice-menu-option:focus-visible{background:color-mix(i
 .settings-select>.provider-logo{width:19px;height:19px}
 .settings-select>.icon:last-child{width:13px;height:13px;color:var(--muted)}
 .wallpaper-customize{margin-top:12px}
-.project-filter[aria-expanded="true"],.model-picker[aria-expanded="true"],.mode-picker[aria-expanded="true"],.route-picker[aria-expanded="true"],.composer-project[aria-expanded="true"],.settings-select[aria-expanded="true"]{background:var(--accent-tint);box-shadow:inset 0 0 0 1px rgb(var(--accent-rgb) / .18)}
-.project-filter:not(:disabled):active,.model-picker:not(:disabled):active,.mode-picker:not(:disabled):active,.route-picker:not(:disabled):active,.composer-project:not(:disabled):active,.settings-select:not(:disabled):active{background:color-mix(in srgb,var(--accent) 52%,var(--bg));transition:none}
+.project-filter[aria-expanded="true"],.model-picker[aria-expanded="true"],.mode-picker[aria-expanded="true"],#team-trigger[aria-expanded="true"],.composer-project[aria-expanded="true"],.settings-select[aria-expanded="true"]{background:var(--accent-tint);box-shadow:inset 0 0 0 1px rgb(var(--accent-rgb) / .18)}
+.project-filter:not(:disabled):active,.model-picker:not(:disabled):active,.mode-picker:not(:disabled):active,#team-trigger:not(:disabled):active,.composer-project:not(:disabled):active,.settings-select:not(:disabled):active{background:color-mix(in srgb,var(--accent) 52%,var(--bg));transition:none}
 .model-picker,.mode-picker,.composer-project{padding:6px;border-radius:3px}
 @media(prefers-reduced-transparency:reduce){.floating-menu{background:#fffefb;backdrop-filter:none;-webkit-backdrop-filter:none}.model-menu-search,.project-menu-search,.choice-menu-search{background:transparent}}
 @media(prefers-contrast:more){.floating-menu{background:#fff;border-color:#77746a;backdrop-filter:none;-webkit-backdrop-filter:none;box-shadow:0 6px 20px rgb(0 0 0 / .18)}.model-menu-search,.project-menu-search,.choice-menu-search,.project-menu-footer{border-color:#97978e}.model-menu-option.model-menu-current,.project-menu-option[aria-selected="true"],.choice-menu-option[aria-checked="true"]{outline:1px solid var(--focus);outline-offset:-1px}.project-menu-path,.choice-menu-description{color:var(--text)}}
@@ -798,8 +796,8 @@ html[data-theme="dark"] :is(.model-menu-option,.project-menu-option,.choice-menu
 html[data-theme="dark"] :is(.model-menu-option.model-menu-current,.project-menu-option[aria-selected="true"])>.icon:last-child{background:var(--accent);color:var(--on-accent)}
 html[data-theme="dark"] .project-menu-path{color:var(--muted)}
 html[data-theme="dark"] .settings-select{background:linear-gradient(#33332e,#2b2b27);border-color:#4a4a42;box-shadow:0 1px 3px rgb(0 0 0 / .1)}
-html[data-theme="dark"] :is(.project-filter,.model-picker,.mode-picker,.route-picker,.composer-project,.settings-select)[aria-expanded="true"]{background:var(--accent-dim);box-shadow:inset 0 0 0 1px rgb(var(--accent-rgb) / .14)}
-html[data-theme="dark"] :is(.project-filter,.model-picker,.mode-picker,.route-picker,.composer-project,.settings-select):not(:disabled):active{background:color-mix(in srgb,var(--accent) 35%,var(--bg))}
+html[data-theme="dark"] :is(.project-filter,.model-picker,.mode-picker,#team-trigger,.composer-project,.settings-select)[aria-expanded="true"]{background:var(--accent-dim);box-shadow:inset 0 0 0 1px rgb(var(--accent-rgb) / .14)}
+html[data-theme="dark"] :is(.project-filter,.model-picker,.mode-picker,#team-trigger,.composer-project,.settings-select):not(:disabled):active{background:color-mix(in srgb,var(--accent) 35%,var(--bg))}
 
 html[data-theme="dark"]:is([data-native-material="liquidGlass"],[data-native-material="vibrancy"]) .main-pane{background:var(--bg)}
 html[data-theme="dark"]:is([data-native-material="liquidGlass"],[data-native-material="vibrancy"]) .sidebar{

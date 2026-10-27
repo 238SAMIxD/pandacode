@@ -9,7 +9,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokenizers::{Tokenizer, TruncationDirection, TruncationParams, TruncationStrategy};
 
-use super::profile::{TaskProfile, N_DIFFICULTY, N_SKILL_LEVELS};
+use super::profile::{TaskProfile, N_CHECKLIST, N_DIFFICULTY, N_SKILL_LEVELS};
 
 const INTRA_THREADS: usize = 2;
 const PAD_TOKEN: &str = "[PAD]";
@@ -27,6 +27,7 @@ struct Temperatures {
     difficulty: f64,
     skills: [f64; 10],
     flags: f64,
+    checklist: f64,
 }
 
 pub(super) static HEADS: LazyLock<Heads> = LazyLock::new(|| {
@@ -119,12 +120,14 @@ impl OnnxProfiler {
         };
         let (category, difficulty) = (head("category", 13)?, head("difficulty", N_DIFFICULTY - 1)?);
         let (skills, flags, out_tokens) = (head("skills", 100)?, head("flags", 7)?, head("out_tokens", 3)?);
+        let checklist = head("checklist", N_CHECKLIST)?;
         Ok((0..batch)
             .map(|i| decode(
                 &category[i * 13..][..13],
                 &difficulty[i * 9..][..9],
                 &skills[i * 100..][..100],
                 &flags[i * 7..][..7],
+                &checklist[i * N_CHECKLIST..][..N_CHECKLIST],
                 out_tokens[i * 3 + 1],
             ))
             .collect())
@@ -148,7 +151,7 @@ fn corn<const K: usize>(logits: &[f64], temp: f64) -> [f64; K] {
     probs.map(|p| p / total)
 }
 
-fn decode(category: &[f64], difficulty: &[f64], skills: &[f64], flags: &[f64], out_p50: f64) -> TaskProfile {
+fn decode(category: &[f64], difficulty: &[f64], skills: &[f64], flags: &[f64], checklist: &[f64], out_p50: f64) -> TaskProfile {
     let t = &HEADS.temperatures;
     let scaled: Vec<f64> = category.iter().map(|x| x / t.category).collect();
     let max = scaled.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
@@ -159,6 +162,7 @@ fn decode(category: &[f64], difficulty: &[f64], skills: &[f64], flags: &[f64], o
         difficulty: corn::<N_DIFFICULTY>(difficulty, t.difficulty),
         skills: std::array::from_fn(|k| corn::<N_SKILL_LEVELS>(&skills[k * 10..][..10], t.skills[k])),
         flags: std::array::from_fn(|i| sigmoid(flags[i] / t.flags)),
+        checklist: std::array::from_fn(|i| sigmoid(checklist[i] / t.checklist)),
         out_p50,
     }
 }

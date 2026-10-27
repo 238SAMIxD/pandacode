@@ -494,6 +494,7 @@ async fn wait(answer: Answer) -> Result<Value, String> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn read_loop<S: Stream<Item = Result<Message, tungstenite::Error>> + Unpin>(
     mut read: S,
     me: String,
@@ -1414,7 +1415,7 @@ impl Writer {
                 0 => match self.rng.next() % 30 {
                     0 => format!("    Finished `test` profile [unoptimized + debuginfo] target(s) in {}.{:02}s", self.rng.next() % 90, self.rng.next() % 100),
                     1 => format!("thread '{}::{}' panicked at {}:{}:{}:\n{}", self.word(), self.ident(), self.path(), self.rng.next() % 900, self.rng.next() % 80, self.sentence()),
-                    _ => format!("test {}::{}::{} ... {}", self.word(), self.word(), self.ident(), if self.rng.next() % 40 == 0 { "FAILED" } else { "ok" }),
+                    _ => format!("test {}::{}::{} ... {}", self.word(), self.word(), self.ident(), if self.rng.next().is_multiple_of(40) { "FAILED" } else { "ok" }),
                 },
                 1 => match self.rng.next() % 6 {
                     0 => format!("warning: unused variable: `{}`\n  --> {}:{}:{}", self.ident(), self.path(), self.rng.next() % 900, self.rng.next() % 80),

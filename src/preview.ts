@@ -105,7 +105,7 @@ if (typeof location !== 'undefined' && new URLSearchParams(location.search).has(
 loadThreadOrder();
 let id = 10;
 const ROUTING_KEY = 'pandacode.preview.routing';
-let previewRouting = { enabled: true, mode: 'cheapest', minP: 0.8, profiler: 'missing', error: null as string | null };
+let previewRouting = { enabled: true, mode: 'balanced', minP: 0.5, profiler: 'missing', error: null as string | null };
 try { previewRouting = { ...previewRouting, ...JSON.parse(localStorage.getItem(ROUTING_KEY) ?? '{}') }; } catch { /* Defaults. */ }
 const saveRouting = () => { try { localStorage.setItem(ROUTING_KEY, JSON.stringify(previewRouting)); } catch { /* Kept in memory only. */ } };
 /** Deterministic stand-in for Panda Router: longer text reads as harder, later pool entries as pricier and stronger. */
@@ -957,7 +957,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     }
     case 'turn_change_diff': result = turnChanges.diff(args.sessionId, args.changeId, args.path); break;
     case 'model_routing_status': result = { ...previewRouting }; break;
-    case 'model_routing_configure': previewRouting = { ...previewRouting, ...(args.enabled != null ? { enabled: Boolean(args.enabled) } : {}), ...(args.mode ? { mode: args.mode } : {}), ...(args.minP != null ? { minP: Math.min(0.95, Math.max(0.5, Number(args.minP))) } : {}) }; saveRouting(); result = { ...previewRouting }; break;
+    case 'model_routing_configure': previewRouting = { ...previewRouting, ...(args.enabled != null ? { enabled: Boolean(args.enabled) } : {}), ...(args.mode ? { mode: args.mode } : {}), ...(args.minP != null ? { minP: Math.min(0.9, Math.max(0.3, Number(args.minP))) } : {}) }; saveRouting(); result = { ...previewRouting }; break;
     case 'model_routing_prepare': previewRouting = { ...previewRouting, profiler: 'ready', error: null }; saveRouting(); result = { ...previewRouting }; break;
     case 'model_routing_route': result = previewRoute(String(args.text), args.pool as any[]); break;
     case 'architect_get': result = architect.get(args.sessionId); break;

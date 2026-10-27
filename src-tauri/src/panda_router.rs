@@ -1,17 +1,20 @@
-//! Panda Router: picks the model for a task, in process. A native port of PandaOrchestrator
-//! (github.com/aicodeking/PandaOrchestrator @ f53f30e): an int8 ONNX task profiler (or a keyword heuristic
-//! when the model files are not installed) and a deterministic card matcher. Nothing here touches the
-//! network; `model_routing` downloads the profiler and owns the process-wide router.
+//! Panda Router: picks the model for a task, in process. A native port of PandaOrchestrator v4.3
+//! (github.com/aicodeking/PandaOrchestrator @ 83e408c): an int8 ONNX task profiler (or a keyword heuristic
+//! when the model files are not installed), the learned success head, and the v4 policy with its
+//! escalation ladder. Nothing here touches the network; `model_routing` downloads the profiler and owns
+//! the process-wide router.
 
 mod cards;
 mod heuristic;
 mod matcher;
+mod policy;
 #[cfg(panda_onnx)]
 mod onnx;
 #[cfg(not(panda_onnx))]
 #[path = "panda_router/onnx_stub.rs"]
 mod onnx;
 mod profile;
+mod success;
 #[cfg(test)]
 mod tests;
 
@@ -20,19 +23,20 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
-use matcher::Demand;
 use onnx::OnnxProfiler;
 
 /// Whether this build carries the ONNX profiler (see `panda_onnx` in build.rs).
 pub const ONNX_AVAILABLE: bool = cfg!(panda_onnx);
-use profile::{TaskProfile, CATEGORIES};
+use profile::{TaskProfile, CATEGORIES, N_DIFFICULTY};
 
 /// Model files downloaded into the router directory: (file name, sha256 hex).
 pub const ASSETS: &[(&str, &str)] = &[
-    ("model.int8.onnx", "f88d53898082580340c21724de47cbe2e7900ca90b2962bdeb953b1778a6bffa"),
+    ("model.int8.onnx", "b52d463905808efd892c91917e3010985359e259fe7a514ae083967c98fa2216"),
     ("tokenizer.json", "ca870c678352403d107496dc78899fa666ed0f56fef63e88ae398fafe5d78c45"),
 ];
-pub const ASSET_BASE_URL: &str = "https://raw.githubusercontent.com/aicodeking/PandaOrchestrator/f53f30e9712867b353de223460a0b172e7e927b3/artifacts/panda-router-v2/";
+pub const ASSET_BASE_URL: &str = "https://raw.githubusercontent.com/aicodeking/PandaOrchestrator/83e408c794ef1d09b6d13b6ad8734e984f552402/artifacts/panda-router-v4/";
+/// Directory (under app data) for the files in `ASSETS`; versioned so v2 files are never reused.
+pub const ASSET_DIR: &str = "panda-router/v4";
 
 const TOP_K: usize = 5;
 
@@ -51,7 +55,7 @@ pub enum Mode {
     /// Upstream `max_utility`.
     #[default]
     Balanced,
-    /// Upstream `cheapest_above_threshold`.
+    /// Upstream `cheapest_above_threshold` (min expected cost with P lower bound >= min_p; none -> `:relaxed`).
     Cheapest,
     /// Upstream `max_quality`.
     Quality,
@@ -66,7 +70,7 @@ pub struct Preferences {
 
 impl Default for Preferences {
     fn default() -> Self {
-        Self { mode: Mode::Cheapest, min_p: 0.8 }
+        Self { mode: Mode::Balanced, min_p: 0.5 }
     }
 }
 
@@ -85,8 +89,13 @@ pub struct Routed {
     pub model: String,
     pub name: String,
     pub card_id: String,
+    /// Calibrated P(pass) (what upstream displays).
     pub p_success: f64,
+    /// Lower confidence bound of P; the policy decides on this.
+    pub p_success_lower: f64,
     pub est_cost_usd: f64,
+    /// Cost plus the failure term (1 - P)·(next step + retry penalty).
+    pub expected_cost_usd: f64,
     pub est_latency_ms: f64,
 }
 
@@ -94,10 +103,20 @@ pub struct Routed {
 #[serde(rename_all = "camelCase")]
 pub struct Route {
     pub pick: Option<Routed>,
+    /// Upstream `choice.decided_by`: `policy:<mode>[:relaxed|:equal_p_cheaper]`, `escalation_ladder`,
+    /// `escalation:stronger`, `escalation:strongest_left` or `none:all_filtered`.
+    pub decided_by: String,
     /// Best first, at most 5.
     pub ranking: Vec<Routed>,
+    /// Upstream `escalation_ladder`: try in order, escalate on failure (empty when nothing qualifies).
+    pub ladder: Vec<Routed>,
+    /// Models that already failed on this task, in order (escalation input).
+    pub failed: Vec<PoolModel>,
+    /// Decision difficulty over levels 1..10, rounded like upstream's response (escalation prior).
+    pub distribution: Vec<f64>,
     /// Pool entries with no card.
     pub unrated: Vec<PoolModel>,
+    /// Most likely level of `distribution`.
     pub difficulty: u8,
     pub category: String,
     /// "onnx" or "heuristic".
@@ -143,6 +162,9 @@ impl Router {
         }
     }
 
+    /// Upstream `route`, then one upstream `escalate` per entry of `failed`, in order (a chain: each
+    /// failure updates the previous route's difficulty and follows its ladder). Failed models that are not
+    /// a rated pool entry are ignored here; `escalate` refuses them.
     pub fn route(
         &self,
         text: &str,
@@ -152,82 +174,166 @@ impl Router {
         failed: &[PoolModel],
     ) -> Result<Route, String> {
         let start = Instant::now();
-        let mut profile = self.profile(text, ctx)?;
-        // Upstream: needs_tools = max(flag, 1 if requires_tools) > 0.5.
-        if ctx.requires_tools {
-            profile.flags[profile::FLAG_NEEDS_TOOLS] = 1.0;
+        let profile = self.profile(text, ctx)?;
+        let rated = Rated::new(pool)?;
+        let mut route = self.decide(&profile, text, ctx, &rated, prefs, None, &[], &[], start);
+        for m in failed {
+            if rated.position(m).is_some() {
+                route = self.escalate_once(&profile, text, ctx, &rated, prefs, &route, m, start)?;
+            }
         }
-        self.match_profile(&profile, text, pool, prefs, failed, start)
+        Ok(route)
     }
 
-    fn match_profile(
+    /// Upstream `escalate`: `previous` (a route for the same task, pool and preferences) was tried and
+    /// each model in `failed` failed, in order. The difficulty becomes the Bayes posterior given the
+    /// failure, failed models are excluded, and the pick never steps down: the next rung of `previous.ladder`
+    /// still at least as strong as the strongest failed model, else `escalation:stronger`, else
+    /// `escalation:strongest_left`. Errors when `failed` is empty or names a model not rated in `pool`.
+    // Production escalates through `route(.., failed)` (no saved Route across turns); tests prove both agree.
+    #[cfg(test)]
+    pub fn escalate(
+        &self,
+        text: &str,
+        ctx: &TaskContext,
+        pool: &[PoolModel],
+        prefs: &Preferences,
+        previous: &Route,
+        failed: &[PoolModel],
+    ) -> Result<Route, String> {
+        let start = Instant::now();
+        if failed.is_empty() {
+            return Err("escalate needs at least one failed model".into());
+        }
+        let profile = self.profile(text, ctx)?;
+        let rated = Rated::new(pool)?;
+        let mut route = previous.clone();
+        for m in failed {
+            if rated.position(m).is_none() {
+                return Err(format!("failed model {} is not a rated pool entry", m.name));
+            }
+            route = self.escalate_once(&profile, text, ctx, &rated, prefs, &route, m, start)?;
+        }
+        Ok(route)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn escalate_once(
         &self,
         profile: &TaskProfile,
         text: &str,
-        pool: &[PoolModel],
+        ctx: &TaskContext,
+        rated: &Rated,
         prefs: &Preferences,
-        failed: &[PoolModel],
+        previous: &Route,
+        failed: &PoolModel,
         start: Instant,
     ) -> Result<Route, String> {
-        let catalog = cards::catalog()?;
-        let resolve = |m: &PoolModel| catalog.resolve(&m.provider, &m.model, &m.name);
+        let i = rated.position(failed).ok_or("failed model is not in the pool")?;
+        let prior: [f64; N_DIFFICULTY] = match previous.distribution.as_slice().try_into() {
+            Ok(d) => matcher::normalized(&d),
+            Err(_) => matcher::normalized(&profile.difficulty),
+        };
+        let post = matcher::Demand::new(profile).after_failure(&prior, rated.card(i));
+        let mut failed_list: Vec<usize> = previous.failed.iter().filter_map(|m| rated.position(m)).collect();
+        failed_list.push(i);
+        let ladder: Vec<usize> = previous.ladder.iter().filter_map(|r| rated.by_card_id(&r.card_id)).collect();
+        Ok(self.decide(profile, text, ctx, rated, prefs, Some(post), &failed_list, &ladder, start))
+    }
 
-        // Resolve the pool; the first entry for a card wins.
-        let mut rated: Vec<(&PoolModel, usize)> = Vec::new();
-        let mut unrated = Vec::new();
-        for m in pool {
-            match resolve(m) {
-                Some(card) if rated.iter().all(|(_, c)| *c != card) => rated.push((m, card)),
-                Some(_) => {}
-                None => unrated.push(m.clone()),
-            }
-        }
-
-        // Escalation: each failure is evidence the task is harder than that model's ability.
-        let failed_cards: Vec<usize> = failed.iter().filter_map(resolve).collect();
-        let demand = Demand::new(profile);
-        let mut difficulty = matcher::normalized(&profile.difficulty);
-        for &card in &failed_cards {
-            difficulty = demand.after_failure(&difficulty, &catalog.cards[card]);
-        }
-        let excluded: Vec<bool> =
-            rated.iter().map(|(m, card)| failed_cards.contains(card) || failed.contains(m)).collect();
-
-        let cards: Vec<&cards::Card> = rated.iter().map(|(_, c)| &catalog.cards[*c]).collect();
-        let decision = matcher::decide(
+    #[allow(clippy::too_many_arguments)]
+    fn decide(
+        &self,
+        profile: &TaskProfile,
+        text: &str,
+        ctx: &TaskContext,
+        rated: &Rated,
+        prefs: &Preferences,
+        difficulty: Option<[f64; N_DIFFICULTY]>,
+        failed: &[usize],
+        prev_ladder: &[usize],
+        start: Instant,
+    ) -> Route {
+        let cards: Vec<&cards::Card> = (0..rated.entries.len()).map(|i| rated.card(i)).collect();
+        let difficulty = difficulty.unwrap_or(profile.difficulty);
+        let d = matcher::decide(&matcher::Request {
             profile,
-            &difficulty,
-            &cards,
-            &excluded,
-            text.chars().count(),
-            prefs.mode,
-            prefs.min_p,
-        );
+            text,
+            difficulty: &difficulty,
+            pool: &cards,
+            failed,
+            prev_ladder,
+            requires_tools: ctx.requires_tools,
+            mode: prefs.mode,
+            min_p: prefs.min_p,
+        });
         let routed = |i: usize| {
-            let (m, card) = rated[i];
-            let s = &decision.scored[i];
+            let (m, card) = &rated.entries[i];
+            let s = &d.scored[i];
             Routed {
                 provider: m.provider.clone(),
                 model: m.model.clone(),
                 name: m.name.clone(),
-                card_id: catalog.cards[card].id.clone(),
+                card_id: rated.catalog.cards[*card].id.clone(),
                 p_success: s.p,
+                p_success_lower: s.p_lo,
                 est_cost_usd: s.cost,
+                expected_cost_usd: s.expected_cost,
                 est_latency_ms: s.latency,
             }
         };
-        let level = difficulty
-            .iter()
-            .enumerate()
-            .fold(0, |best, (i, p)| if *p > difficulty[best] { i } else { best });
-        Ok(Route {
-            pick: decision.chosen.map(routed),
-            ranking: decision.order.iter().take(TOP_K).map(|&i| routed(i)).collect(),
-            unrated,
+        let level = d.difficulty.iter().enumerate().fold(0, |best, (i, p)| if *p > d.difficulty[best] { i } else { best });
+        let mut failed_models: Vec<PoolModel> = failed.iter().map(|&i| rated.entries[i].0.clone()).collect();
+        failed_models.dedup();
+        Route {
+            pick: d.chosen.map(routed),
+            decided_by: d.decided_by,
+            ranking: d.order.iter().take(TOP_K).map(|&i| routed(i)).collect(),
+            ladder: d.ladder.iter().map(|&i| routed(i)).collect(),
+            failed: failed_models,
+            distribution: d.difficulty.iter().map(|x| heuristic::py_round(*x, 6)).collect(),
+            unrated: rated.unrated.clone(),
             difficulty: level as u8 + 1,
             category: CATEGORIES[profile.top_category()].to_string(),
             profiler: self.profiler_name(),
             latency_ms: start.elapsed().as_secs_f64() * 1000.0,
-        })
+        }
+    }
+}
+
+/// The pool resolved to cards; the first entry for a card wins.
+struct Rated<'a> {
+    catalog: &'static cards::Catalog,
+    entries: Vec<(&'a PoolModel, usize)>,
+    unrated: Vec<PoolModel>,
+}
+
+impl<'a> Rated<'a> {
+    fn new(pool: &'a [PoolModel]) -> Result<Self, String> {
+        let catalog = cards::catalog()?;
+        let mut entries: Vec<(&PoolModel, usize)> = Vec::new();
+        let mut unrated = Vec::new();
+        for m in pool {
+            match catalog.resolve(&m.provider, &m.model, &m.name) {
+                Some(card) if entries.iter().all(|(_, c)| *c != card) => entries.push((m, card)),
+                Some(_) => {}
+                None => unrated.push(m.clone()),
+            }
+        }
+        Ok(Self { catalog, entries, unrated })
+    }
+
+    fn card(&self, i: usize) -> &'static cards::Card {
+        &self.catalog.cards[self.entries[i].1]
+    }
+
+    /// The rated entry for a model (by its card, so a duplicate entry maps to the kept one).
+    fn position(&self, m: &PoolModel) -> Option<usize> {
+        let card = self.catalog.resolve(&m.provider, &m.model, &m.name)?;
+        self.entries.iter().position(|(_, c)| *c == card)
+    }
+
+    fn by_card_id(&self, id: &str) -> Option<usize> {
+        self.entries.iter().position(|(_, c)| self.catalog.cards[*c].id == id)
     }
 }

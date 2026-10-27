@@ -30,6 +30,10 @@ async function openAgents(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await settings(page).getByRole('tab', { name: 'Agent teams', exact: true }).click();
 }
+async function closeSettings(page: Page): Promise<void> {
+  await settings(page).getByRole('button', { name: 'Back to the workspace', exact: true }).click();
+  await expect(settings(page)).toBeHidden();
+}
 
 test('the section renders, settings persist and the profiler downloads', async ({ page }) => {
   await install(page);
@@ -37,24 +41,32 @@ test('the section renders, settings persist and the profiler downloads', async (
   const toggle = settings(page).getByRole('checkbox', { name: 'Pick worker models with Panda Router', exact: true });
   await expect(toggle).toBeChecked();
   await expect(settings(page).getByText('Not downloaded', { exact: true })).toBeVisible();
-  await expect(settings(page).getByRole('radio', { name: 'Cheapest that passes' })).toHaveAttribute('aria-checked', 'true');
-  await settings(page).getByRole('radio', { name: 'Balanced' }).click();
-  await expect(settings(page).getByRole('spinbutton', { name: /Minimum chance/ })).toBeHidden();
+  await expect(settings(page).getByRole('radio', { name: 'Balanced' })).toHaveAttribute('aria-checked', 'true');
+  const minP = settings(page).getByRole('spinbutton', { name: /Minimum chance/ });
+  await expect(minP).toBeHidden();
+  await settings(page).getByRole('radio', { name: 'Cheap' }).click();
+  await expect(minP).toBeVisible();
+  await settings(page).getByRole('radio', { name: 'Cheap' }).press('ArrowRight');
+  await expect(minP).toBeHidden();
   await settings(page).getByRole('radio', { name: 'Balanced' }).press('ArrowLeft');
-  await expect(settings(page).getByRole('spinbutton', { name: /Minimum chance/ })).toBeVisible();
+  await expect(minP).toBeVisible();
   await toggle.uncheck();
   await settings(page).getByRole('button', { name: 'Download', exact: true }).click();
   await expect(settings(page).getByText('Ready', { exact: true })).toBeVisible();
-  const minP = settings(page).getByRole('spinbutton', { name: /Minimum chance/ });
-  await expect(minP).toHaveValue('80');
+  await expect(minP).toHaveValue('50');
+  await expect(minP).toHaveAttribute('min', '30');
+  await expect(minP).toHaveAttribute('max', '90');
   await minP.fill('99'); await minP.blur();
-  await expect(minP).toHaveValue('95');
+  await expect(minP).toHaveValue('90');
+  await minP.fill('10'); await minP.blur();
+  await expect(minP).toHaveValue('30');
   // Reopen: the preview keeps the configuration.
   await page.reload();
   await page.locator('.task-item[data-id="session-2"]').click();
   await openAgents(page);
   await expect(settings(page).getByRole('checkbox', { name: 'Pick worker models with Panda Router', exact: true })).not.toBeChecked();
-  await expect(settings(page).getByRole('radio', { name: 'Cheapest that passes' })).toHaveAttribute('aria-checked', 'true');
+  await expect(settings(page).getByRole('radio', { name: 'Cheap' })).toHaveAttribute('aria-checked', 'true');
+  await expect(settings(page).getByRole('spinbutton', { name: /Minimum chance/ })).toHaveValue('30');
   await expect(settings(page).getByRole('textbox', { name: 'Task to route' })).toBeDisabled();
   await expect(settings(page).getByText('Ready', { exact: true })).toBeVisible();
 });
@@ -95,16 +107,6 @@ test('the catalog keeps every harness and long shared prefixes', async ({ page }
   expect(result.rosterInCatalog).toBe(true);
 });
 
-test('turning Team on sends the uncapped catalog and prepares routing', async ({ page }) => {
-  await install(page);
-  await page.getByRole('button', { name: 'Team', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Team', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  const { config } = (await calls(page, 'architect_configure')).at(-1).args;
-  expect(config.workers.length).toBeLessThanOrEqual(24);
-  expect(config.catalog.length).toBeGreaterThan(config.workers.length);
-  await expect.poll(async () => (await calls(page, 'model_routing_prepare')).length).toBeGreaterThan(0);
-});
-
 test('the cap keeps every harness represented', async ({ page }) => {
   await install(page);
   const providers = await page.evaluate(async () => {
@@ -116,100 +118,179 @@ test('the cap keeps every harness represented', async ({ page }) => {
   expect(providers).toEqual({ count: 1000, glm: 3 });
 });
 
-const chip = (page: Page) => page.locator('#route-picker-trigger');
-const teamOn = async (page: Page) => {
-  await page.getByRole('button', { name: 'Team', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Team', exact: true })).toHaveAttribute('aria-pressed', 'true');
-};
+// The composer's Team button opens No team · Cheap · Balanced · Best; the kind is Panda Router's global mode.
+const teamButton = (page: Page) => page.locator('#team-trigger');
+const kind = (page: Page, name: string) => page.getByRole('menuitemradio', { name, exact: true });
+async function pickTeam(page: Page, name: string): Promise<void> {
+  await teamButton(page).click();
+  await kind(page, name).click();
+  await expect(kind(page, name)).toBeHidden();
+}
 
-test('the composer picks the worker-model mode beside Team and remembers it', async ({ page }) => {
+test('Team opens a menu of team kinds, turns the team on with the uncapped catalog and prepares routing', async ({ page }) => {
   await install(page);
-  await expect(chip(page)).toBeHidden();
-  await teamOn(page);
-  await expect(chip(page)).toHaveAccessibleName('Worker models: Cheapest that passes');
-  await expect(chip(page)).toHaveText('Cheapest');
-  await chip(page).click();
-  await expect(page.getByRole('menuitemradio', { name: 'Cheapest that passes' })).toHaveAttribute('aria-checked', 'true');
+  await expect(teamButton(page)).toHaveAccessibleName('Team');
+  await expect(teamButton(page)).toHaveAttribute('aria-haspopup', 'dialog');
+  await expect(teamButton(page)).not.toHaveAttribute('data-on');
+  await teamButton(page).click();
+  await expect(teamButton(page)).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByRole('menuitemradio')).toHaveText([/No team/, /Cheap team/, /Balanced team/, /Best team/]);
+  await expect(kind(page, 'No team')).toHaveAttribute('aria-checked', 'true');
+  await kind(page, 'Cheap team').click();
+  await expect(teamButton(page)).toHaveAccessibleName('Cheap team');
+  await expect(teamButton(page)).toHaveAttribute('data-on', '');
+  expect((await calls(page, 'model_routing_configure')).at(-1).args).toEqual({ enabled: true, mode: 'cheapest' });
+  const { config } = (await calls(page, 'architect_configure')).at(-1).args;
+  expect(config.auto).toBe(true);
+  expect(config.workers.length).toBeLessThanOrEqual(24);
+  expect(config.catalog.length).toBeGreaterThan(config.workers.length);
+  await expect.poll(async () => (await calls(page, 'model_routing_prepare')).length).toBeGreaterThan(0);
+  // Another kind only changes the mode; the team stays as it is.
+  const configures = (await calls(page, 'architect_configure')).length;
+  await teamButton(page).click();
+  await expect(kind(page, 'Cheap team')).toHaveAttribute('aria-checked', 'true');
   await page.keyboard.press('ArrowDown');
-  await page.getByRole('menuitemradio', { name: 'Balanced' }).press('Enter');
-  await expect(chip(page)).toHaveAccessibleName('Worker models: Balanced');
-  expect((await calls(page, 'model_routing_configure')).at(-1).args).toEqual({ mode: 'balanced' });
-  // Picking the current mode only closes the menu.
-  const configures = (await calls(page, 'model_routing_configure')).length;
-  await chip(page).click();
-  await page.getByRole('menuitemradio', { name: 'Balanced' }).click();
-  await expect(page.getByRole('menuitemradio', { name: 'Balanced' })).toBeHidden();
-  expect(await calls(page, 'model_routing_configure')).toHaveLength(configures);
+  await kind(page, 'Best team').press('Enter');
+  await expect(teamButton(page)).toHaveAccessibleName('Best team');
+  expect(await calls(page, 'architect_configure')).toHaveLength(configures);
+  // Picking the current kind only closes the menu.
+  const modes = (await calls(page, 'model_routing_configure')).length;
+  await pickTeam(page, 'Best team');
+  expect(await calls(page, 'model_routing_configure')).toHaveLength(modes);
+  // No team turns the team off and leaves the mode for next time.
+  await pickTeam(page, 'No team');
+  await expect(teamButton(page)).toHaveAccessibleName('Team');
+  await expect(teamButton(page)).not.toHaveAttribute('data-on');
+  expect((await calls(page, 'architect_configure')).at(-1).args.config).toBeNull();
+  expect(await calls(page, 'model_routing_configure')).toHaveLength(modes);
+});
+
+test('the last team kind is remembered for new tasks and across reloads, and follows Settings both ways', async ({ page }) => {
+  await install(page);
+  await pickTeam(page, 'Best team');
+  await page.locator('.task-item[data-id="session-1"]').click();
+  await expect(teamButton(page)).toHaveAccessibleName('Team');
+  await teamButton(page).click();
+  await expect(kind(page, 'Best team')).toHaveAttribute('aria-checked', 'false');
+  await expect(page.getByRole('menuitemradio', { checked: true })).toHaveText(/No team/);
+  await page.keyboard.press('Escape');
   await page.reload();
   await page.locator('.task-item[data-id="session-2"]').click();
-  await expect(chip(page)).toHaveAccessibleName('Worker models: Balanced');
+  await expect(teamButton(page)).toHaveAccessibleName('Best team');
   await openAgents(page);
-  await expect(settings(page).getByRole('radio', { name: 'Balanced' })).toHaveAttribute('aria-checked', 'true');
-  // A change in Settings reaches the chip without a reload.
-  await settings(page).getByRole('radio', { name: 'Best quality' }).click();
-  // The modal makes the composer inert, so read the label itself.
-  await expect(chip(page)).toHaveAttribute('aria-label', 'Worker models: Best quality');
-  await expect(chip(page)).toHaveText('Best');
+  await expect(settings(page).getByRole('radio', { name: 'Best' })).toHaveAttribute('aria-checked', 'true');
+  // A change in Settings reaches the button without a reload; the modal makes the composer inert, so read its text.
+  await settings(page).getByRole('radio', { name: 'Balanced' }).click();
+  await expect(teamButton(page)).toHaveText('Balanced team');
+  // With routing off the lead picks models, and the button says only Team.
   await settings(page).getByRole('checkbox', { name: 'Pick worker models with Panda Router', exact: true }).uncheck();
-  await expect(chip(page)).toBeHidden();
+  await expect(teamButton(page)).toHaveText('Team');
+  await closeSettings(page);
+  await teamButton(page).click();
+  await expect(kind(page, 'Team')).toHaveAttribute('aria-checked', 'true');
+  // A kind turns routing back on.
+  await kind(page, 'Cheap team').click();
+  await expect(teamButton(page)).toHaveAccessibleName('Cheap team');
+  expect((await calls(page, 'model_routing_configure')).at(-1).args).toEqual({ enabled: true, mode: 'cheapest' });
+  await openAgents(page);
+  await expect(settings(page).getByRole('checkbox', { name: 'Pick worker models with Panda Router', exact: true })).toBeChecked();
+  await expect(settings(page).getByRole('radio', { name: 'Cheap' })).toHaveAttribute('aria-checked', 'true');
 });
 
-test('routing off at load keeps the chip hidden', async ({ page }) => {
-  await install(page, () => localStorage.setItem('pandacode.preview.routing', JSON.stringify({ enabled: false })));
-  await teamOn(page);
-  await expect(chip(page)).toBeHidden();
-});
-
-test('a remote task never shows the chip', async ({ page }) => {
+test('a remote task never shows the Team menu', async ({ page }) => {
   await install(page);
-  await teamOn(page);
-  await expect(chip(page)).toBeVisible();
+  await expect(teamButton(page)).toBeVisible();
   await page.evaluate(() => (window as any).__previewMirrorTeam());
   await page.locator('.task-item[data-id="mirror-team"]').click();
   await expect(page.locator('#prompt')).toHaveAttribute('data-session-id', 'mirror-team');
-  await expect(chip(page)).toBeHidden();
+  await expect(teamButton(page)).toHaveCount(0);
 });
 
-test('an unknown mode shows a neutral label and checks nothing', async ({ page }) => {
+test('an unknown mode reads Team and checks no kind', async ({ page }) => {
   await install(page, () => localStorage.setItem('pandacode.preview.routing', JSON.stringify({ mode: 'fastest' })));
-  await teamOn(page);
-  await expect(chip(page)).toHaveAccessibleName('Worker models: Panda Router');
-  await chip(page).click();
-  await expect(page.getByRole('menuitemradio', { checked: true })).toHaveCount(0);
-  await expect(page.getByRole('menuitemradio')).toHaveCount(3);
+  await teamButton(page).click();
+  await kind(page, 'No team').click();
+  await expect(kind(page, 'No team')).toBeHidden();
+  await teamButton(page).click();
+  await expect(page.getByRole('menuitemradio', { checked: true })).toHaveText(/No team/);
+  await expect(page.getByRole('menuitemradio')).toHaveCount(4);
 });
 
-test('a refused change shows the menu error and keeps the chip', async ({ page }) => {
+test('a refused mode change after the team turned on shows the menu error and keeps the team on', async ({ page }) => {
   await install(page);
-  await teamOn(page);
   await page.evaluate(() => { (window as any).__routingFail = { model_routing_configure: 'Routing settings could not be saved.' }; });
-  await chip(page).click();
-  await page.getByRole('menuitemradio', { name: 'Balanced' }).click();
+  await teamButton(page).click();
+  await kind(page, 'Cheap team').click();
   await expect(page.locator('.choice-menu-error')).toHaveText('Routing settings could not be saved.');
-  await expect(chip(page)).toHaveAccessibleName('Worker models: Cheapest that passes');
+  // The team turned on first; the mode stays Balanced.
+  expect((await calls(page, 'architect_configure')).at(-1).args.config.auto).toBe(true);
+  await expect(teamButton(page)).toHaveAttribute('data-on', '');
+  await expect(teamButton(page)).toHaveText('Balanced team');
+});
+
+test('a team that cannot turn on leaves the global mode alone', async ({ page }) => {
+  await install(page);
+  await page.evaluate(() => { (window as any).__routingFail = { architect_configure: 'The team could not be saved.' }; });
+  await teamButton(page).click();
+  await kind(page, 'Best team').click();
+  await expect(page.locator('.choice-menu-error')).toHaveText('The team could not be saved.');
+  expect(await calls(page, 'model_routing_configure')).toHaveLength(0);
+  await expect(teamButton(page)).toHaveAccessibleName('Team');
+  await expect(teamButton(page)).not.toHaveAttribute('data-on');
+});
+
+test('with routing off the menu offers a lead-picks team, and kinds say they turn routing on', async ({ page }) => {
+  await install(page, () => localStorage.setItem('pandacode.preview.routing', JSON.stringify({ enabled: false })));
+  await teamButton(page).click();
+  await expect(page.getByRole('menuitemradio')).toHaveText([/No team/, /Team/, /Cheap team/, /Balanced team/, /Best team/]);
+  // The kinds keep their own details; the group heading says they turn routing on.
+  await expect(page.getByRole('group', { name: 'Worker models for every team · turns routing on' })).toBeVisible();
+  await expect(kind(page, 'Cheap team')).toHaveAccessibleDescription('Cheapest model likely to pass');
+  await expect(kind(page, 'Best team')).toHaveAccessibleDescription('Strongest model for each worker');
+  await expect(kind(page, 'Team')).toHaveAccessibleDescription('The lead picks models');
+  // The lead-picks team leaves routing off.
+  await kind(page, 'Team').click();
+  await expect(teamButton(page)).toHaveAttribute('data-on', '');
+  await expect(teamButton(page)).toHaveAccessibleName('Team');
+  expect(await calls(page, 'model_routing_configure')).toHaveLength(0);
+  // A kind turns routing on, keeping the team.
+  const configures = (await calls(page, 'architect_configure')).length;
+  await pickTeam(page, 'Cheap team');
+  await expect(teamButton(page)).toHaveAccessibleName('Cheap team');
+  expect((await calls(page, 'model_routing_configure')).at(-1).args).toEqual({ enabled: true, mode: 'cheapest' });
+  expect(await calls(page, 'architect_configure')).toHaveLength(configures);
+  await teamButton(page).click();
+  await expect(kind(page, 'Team')).toHaveCount(0);
+  await expect(kind(page, 'Balanced team')).toHaveAccessibleDescription('Best value for the cost');
 });
 
 test('a status read during a pending change never overrides it', async ({ page }) => {
   await install(page);
-  await teamOn(page);
+  await pickTeam(page, 'Cheap team');
   await page.evaluate(() => { (window as any).__routingDelay = { model_routing_configure: 800 }; });
-  await chip(page).click();
-  await page.getByRole('menuitemradio', { name: 'Balanced' }).click();
+  await teamButton(page).click();
+  await kind(page, 'Balanced team').click();
   // The read starts after the change and answers first, with the old mode.
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await expect(chip(page)).toHaveAccessibleName('Worker models: Balanced');
+  await expect(teamButton(page)).toHaveAccessibleName('Balanced team');
   await page.waitForTimeout(300);
-  await expect(chip(page)).toHaveAccessibleName('Worker models: Balanced');
+  await expect(teamButton(page)).toHaveAccessibleName('Balanced team');
   await page.evaluate(() => { delete (window as any).__routingDelay; window.dispatchEvent(new Event('focus')); });
-  await expect(chip(page)).toHaveAccessibleName('Worker models: Balanced');
+  await expect(teamButton(page)).toHaveAccessibleName('Balanced team');
 });
 
-test('a failed status load recovers on the next render or focus', async ({ page }) => {
+test('without a routing status the menu still offers every choice, and recovers on the next render or focus', async ({ page }) => {
   await install(page, () => { (window as any).__routingFail = { model_routing_status: 'Router unavailable.' }; });
-  await teamOn(page);
-  await expect(chip(page)).toBeHidden();
+  await teamButton(page).click();
+  await expect(page.getByRole('menuitemradio')).toHaveText([/No team/, /Team/, /Cheap team/, /Balanced team/, /Best team/]);
+  await expect(page.getByRole('group', { name: 'Worker models for every team · turns routing on' })).toBeVisible();
+  await kind(page, 'Team').click();
+  await expect(teamButton(page)).toHaveAccessibleName('Team');
+  await expect(teamButton(page)).toHaveAttribute('data-on', '');
+  expect((await calls(page, 'architect_configure')).at(-1).args.config.auto).toBe(true);
+  expect(await calls(page, 'model_routing_configure')).toHaveLength(0);
   await page.evaluate(() => { delete (window as any).__routingFail; window.dispatchEvent(new Event('focus')); });
-  await expect(chip(page)).toHaveAccessibleName('Worker models: Cheapest that passes');
+  await expect(teamButton(page)).toHaveAccessibleName('Balanced team');
   // A render recovers too, and once loaded renders ask nothing.
   await page.evaluate(() => { (window as any).__routingFail = { model_routing_status: 'Router unavailable.' }; });
   await page.reload();
@@ -220,47 +301,45 @@ test('a failed status load recovers on the next render or focus', async ({ page 
   await page.waitForTimeout(3100);
   await page.locator('.task-item[data-id="session-1"]').click();
   await page.locator('.task-item[data-id="session-2"]').click();
-  await expect(chip(page)).toBeVisible();
+  await expect(teamButton(page)).toHaveAccessibleName('Balanced team');
   const loads = (await calls(page, 'model_routing_status')).length;
   await page.locator('.task-item[data-id="session-1"]').click();
   await page.locator('.task-item[data-id="session-2"]').click();
-  await expect(chip(page)).toBeVisible();
+  await expect(teamButton(page)).toHaveAccessibleName('Balanced team');
   expect(await calls(page, 'model_routing_status')).toHaveLength(loads);
 });
 
 test('a routing change keeps the prompt focus and caret', async ({ page }) => {
   await install(page);
-  await teamOn(page);
-  await expect(chip(page)).toBeVisible();
+  await pickTeam(page, 'Cheap team');
   const prompt = page.locator('#prompt');
   await prompt.fill('hello world'); await prompt.focus();
   await prompt.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(5, 5));
-  await page.evaluate(() => window.dispatchEvent(new CustomEvent('pandacode:routing', { detail: { enabled: true, mode: 'quality', minP: 0.8, profiler: 'ready', error: null } })));
-  await expect(chip(page)).toHaveAccessibleName('Worker models: Best quality');
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('pandacode:routing', { detail: { enabled: true, mode: 'quality', minP: 0.5, profiler: 'ready', error: null } })));
+  await expect(teamButton(page)).toHaveAccessibleName('Best team');
   expect(await prompt.evaluate((el: HTMLTextAreaElement) => [document.activeElement === el, el.selectionStart, el.value])).toEqual([true, 5, 'hello world']);
 });
 
-test('the chip keeps its label and fits the toolbar from wide to the narrowest window', async ({ page }) => {
+test('the Team button keeps its label and fits the toolbar from wide to the narrowest window', async ({ page }) => {
   await install(page);
-  await teamOn(page);
-  await expect(chip(page)).toBeVisible();
+  await pickTeam(page, 'Balanced team');
   for (const theme of ['light', 'dark']) {
     if (await page.locator('html').getAttribute('data-theme') !== theme) await page.locator('[data-action="toggle-theme"]').click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
-    // 860 is the app's minimum window width (tauri.conf.json); 600 is the browser preview's narrow layout.
+    // 860 is the app's minimum window width (tauri.conf.json); 600 is the browser preview's narrow layout (icon only).
     for (const width of [1280, 860, 600]) {
       await page.setViewportSize({ width, height: 800 });
       const layout = await page.evaluate(() => {
         const toolbar = document.querySelector('.composer-toolbar')!, tools = document.querySelector('.composer-tools')!.getBoundingClientRect();
-        const button = document.querySelector('#route-picker-trigger')!, box = button.getBoundingClientRect(), team = document.querySelector('.composer-team-button')!.getBoundingClientRect();
+        const button = document.querySelector('#team-trigger')!, box = button.getBoundingClientRect(), mode = document.querySelector('#mode-picker-trigger')!.getBoundingClientRect();
         const label = button.querySelector('span')!;
-        return { toolsRight: tools.right, right: box.right, overflow: toolbar.scrollWidth - toolbar.clientWidth, height: box.height, teamHeight: team.height, top: box.top, teamTop: team.top, label: label.offsetWidth > 0 && label.scrollWidth <= label.clientWidth };
+        return { toolsRight: tools.right, right: box.right, overflow: toolbar.scrollWidth - toolbar.clientWidth, center: box.top + box.height / 2, modeCenter: mode.top + mode.height / 2, shown: label.offsetWidth > 0, fits: label.scrollWidth <= label.clientWidth };
       });
-      expect(layout.label).toBe(true);
+      expect(layout.shown).toBe(width > 650);
+      expect(layout.fits).toBe(true);
       expect(layout.right).toBeLessThanOrEqual(layout.toolsRight);
       expect(layout.overflow).toBeLessThanOrEqual(0);
-      expect(Math.abs(layout.height - layout.teamHeight)).toBeLessThanOrEqual(2);
-      expect(Math.abs(layout.top - layout.teamTop)).toBeLessThanOrEqual(2);
+      expect(Math.abs(layout.center - layout.modeCenter)).toBeLessThanOrEqual(2);
     }
   }
 });

@@ -268,6 +268,7 @@ impl Viewer {
     }
 
     /// What to save: each changed host's epoch and positions.
+    #[allow(clippy::type_complexity)]
     fn unsaved(&mut self) -> Vec<(String, String, Vec<(String, u64)>)> {
         let dirty = std::mem::take(&mut self.dirty);
         dirty.into_iter().filter_map(|device| {
