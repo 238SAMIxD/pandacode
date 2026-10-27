@@ -811,6 +811,7 @@ test('retries unavailable model metadata and keeps custom model IDs usable', asy
   await trigger.click();
   const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
   await expect(picker.locator('.model-menu-catalog-error')).toBeVisible();
+  await expect(picker.locator('.model-menu-catalog-error')).toContainText('Model service unavailable');
   await expect(picker.getByRole('option', { name: 'Claude Code · Claude Sonnet', exact: true })).toBeVisible();
   await picker.getByRole('combobox').fill('my-proxy/model_42');
   await picker.getByRole('option', { name: 'Use "my-proxy/model_42" with Claude Code', exact: true }).click();
