@@ -107,7 +107,11 @@ pub(crate) fn begin(provider: &str, path: &Path) -> Option<Discovery> {
 }
 
 pub(crate) fn store(discovery: Option<Discovery>, metadata: &Value) {
-    store_models(discovery, acp::parse_models(metadata));
+    let Some(discovery) = discovery else {
+        return;
+    };
+    let models = acp::parse_models_for(&discovery.key.provider, metadata);
+    store_models(Some(discovery), models);
 }
 
 /// For harnesses whose catalog takes more than one `session/new` result (Devin).
@@ -156,6 +160,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    static GLOBAL_CACHE_TEST: Mutex<()> = Mutex::new(());
+
     #[test]
     fn positive_catalog_is_bounded_expires_and_follows_executable_identity() {
         let now = Instant::now();
@@ -184,6 +190,42 @@ mod tests {
         assert_eq!(cache.0.len(), LIMIT);
     }
 
+    #[test]
+    fn deepseek_cached_efforts_cover_api_and_account_models_only() {
+        let _guard = GLOBAL_CACHE_TEST.lock().unwrap();
+        let path = std::env::temp_dir().join(format!("deepseek-catalog-{}", uuid::Uuid::new_v4()));
+        let api = "[\"deepseek-official\",\"deepseek-v4-flash\"]";
+        let account = "[\"deepseek-account\",\"DeepSeek-V4.1-Flash\"]";
+        let pro = "[\"deepseek-account\",\"DeepSeek-V4-Pro\"]";
+        let metadata = json!({"configOptions":[
+            {"id":"model","category":"model","type":"select","currentValue":api,"options":[
+                {"group":"deepseek-official","options":[{"value":api}]},
+                {"group":"deepseek-account","options":[{"value":account},{"value":pro}]}]},
+            {"id":"reasoning_effort","category":"thought_level","type":"select","currentValue":"high","options":[
+                {"value":"off"},{"value":"low"},{"value":"high"},{"value":"max"}]}]});
+        // Both model discovery and command discovery populate this cache.
+        for provider in ["deepseek", "kilo"] {
+            store(begin(provider, &path), &metadata);
+            let models = get(provider, &path).unwrap();
+            assert_eq!(models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["default", api, account, pro]);
+            assert!(models[0].reasoning_efforts.is_empty());
+            for model in models.iter().skip(1) {
+                if provider == "deepseek" || model.id == api {
+                    assert_eq!(model.reasoning_efforts.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["off", "low", "high", "max"]);
+                    assert_eq!(model.default_reasoning_effort.as_deref(), Some("high"));
+                } else {
+                    assert!(model.reasoning_efforts.is_empty());
+                    assert!(model.default_reasoning_effort.is_none());
+                }
+            }
+        }
+        let mut without_effort = metadata;
+        without_effort["configOptions"].as_array_mut().unwrap().pop();
+        store(begin("deepseek", &path), &without_effort);
+        assert!(get("deepseek", &path).unwrap().iter().all(|m| m.reasoning_efforts.is_empty() && m.default_reasoning_effort.is_none()));
+        cache().lock().unwrap().0.retain(|key, _| key.path != path);
+    }
+
     #[tokio::test]
     async fn refresh_lock_coalesces_one_executable_without_blocking_another() {
         let path = Path::new("/fixture/coalescing");
@@ -207,6 +249,7 @@ mod tests {
 
     #[test]
     fn explicit_refresh_invalidates_only_the_requested_provider() {
+        let _guard = GLOBAL_CACHE_TEST.lock().unwrap();
         let provider = format!("fixture-{}", uuid::Uuid::new_v4());
         let other = format!("other-{}", uuid::Uuid::new_v4());
         let path = Path::new("/fixture/refresh");

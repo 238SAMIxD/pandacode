@@ -512,6 +512,14 @@ descriptions only; MiMo publishes no per-plan entitlements, so no context or eff
 metadata is claimed and custom IDs stay usable. Endpoints and models verified against
 the MiMo docs on 2026-09-22.
 
+## DeepSeek Harness
+
+DeepSeek Harness reports one `reasoning_effort` option in ACP's `thought_level`
+category. PandaCode offers those reported choices for every named DeepSeek model,
+including API-key and DeepSeek Account models. The picker preserves each model's
+full invocation ID. Before prompting, PandaCode selects the model, then applies
+the effort from the session's updated `configOptions`.
+
 ## Grok Build
 
 xAI's Grok Build CLI (`grok`, installed with `curl -fsSL https://x.ai/cli/install.sh | bash`)

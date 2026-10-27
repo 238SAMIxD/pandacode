@@ -836,6 +836,10 @@ pub(super) async fn models(path: &Path) -> Result<Vec<ModelInfo>, String> {
     Ok(parse_models(&metadata))
 }
 pub(crate) fn parse_models(metadata: &Value) -> Vec<ModelInfo> {
+    parse_models_for("antigravity", metadata)
+}
+
+pub(crate) fn parse_models_for(provider: &str, metadata: &Value) -> Vec<ModelInfo> {
     let mut models = vec![ModelInfo::default_choice()];
     if let Some(option) = options(metadata, "model") {
         for choice in choices(option) {
@@ -868,13 +872,16 @@ pub(crate) fn parse_models(metadata: &Value) -> Vec<ModelInfo> {
             });
         }
     }
-    // Reasoning options describe the current model, never claim they apply to all.
+    // dsh shares its effort option across models. Other ACP harnesses report
+    // choices for the current model only.
     let current = options(metadata, "model")
         .map(|option| field(option, "currentValue"))
         .unwrap_or_else(|| field(&metadata["models"], "currentModelId"));
     if let Some(effort) = options(metadata, "thought_level").or_else(|| options(metadata, "effort"))
     {
-        if let Some(model) = models.iter_mut().find(|model| model.id == current) {
+        for model in models.iter_mut().filter(|model| {
+            model.id == current || (provider == "deepseek" && model.id != "default")
+        }) {
             model.reasoning_efforts = choices(effort)
                 .into_iter()
                 .filter_map(|choice| {
