@@ -2886,8 +2886,7 @@ test('browses a file and includes its contents as attached message context', asy
   const chip = page.locator('.user-message').last().locator('.message-attachments .prompt-chip');
   await expect(chip).toHaveText(/package\.json\s*Project file/);
   await chip.click();
-  await expect(page.locator('#file-view')).toContainText('"name": "orbit"');
-  await page.locator('#file-tabs').getByRole('tab', { name: 'Conversation', exact: true }).click();
+  await expect(page.locator('#inspector #file-view')).toContainText('"name": "orbit"');
   await expect(page.locator('#attachments')).toBeEmpty();
   await expect(prompt(page)).toBeEnabled();
 });
@@ -3100,7 +3099,8 @@ test('routes worktree files, Git, and terminals by task and retains each checkou
   for (const command of ['git_status', 'list_files', 'git_diff', 'read_file', 'start_terminal']) {
     expect(calls).toContainEqual(expect.objectContaining({ command, args: expect.objectContaining({ projectId: 'project-1', sessionId: taskId }) }));
   }
-  expect(calls.filter((call: any) => call.command === 'read_file' && call.args.sessionId === taskId)).toHaveLength(2);
+  // Opened, attached, and re-read at run end because the file stays on screen in the inspector.
+  expect(calls.filter((call: any) => call.command === 'read_file' && call.args.sessionId === taskId)).toHaveLength(3);
   await page.locator('.task-item[data-id="session-1"]').click();
   await expect(page.locator('#terminal-drawer')).toBeVisible();
   await expect.poll(() => page.evaluate(() => (window as any).__pandacodeWorktreeCalls.filter((call: any) => call.command === 'close_terminal').length)).toBe(0);

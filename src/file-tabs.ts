@@ -1,6 +1,5 @@
-// Editor tabs above the conversation: files opened from the Files tree, search, or file links
-// each get a tab beside Conversation, kept per task. The file view covers the conversation
-// (which stays mounted and inert) so switching back keeps the transcript's scroll position.
+// Editor tabs in the inspector: files opened from the Files tree, search, or file links each get
+// a tab in the inspector's Open files view, kept per task, so the conversation stays in sight.
 import './file-tabs.css';
 import { renderDocument } from './document-viewer';
 import { escape, fileIcon, icon } from './dom';
@@ -31,10 +30,12 @@ type Deps = {
   report(error: unknown): void;
   /** Where focus goes when the last file tab closes from the keyboard. */
   focusConversation(): void;
+  /** The shown task's last tab closed, so the host can leave the Open files view. */
+  emptied(): void;
 };
 
 export function createFileTabs(deps: Deps) {
-  const pane = document.querySelector<HTMLElement>('.conversation-pane')!;
+  const pane = document.querySelector<HTMLElement>('#file-panel')!;
   const strip = pane.querySelector<HTMLElement>('#file-tabs')!;
   const view = pane.querySelector<HTMLElement>('#file-view')!;
   const threads = new Map<string, Thread>();
@@ -62,15 +63,13 @@ export function createFileTabs(deps: Deps) {
     view.dataset.path = active?.path ?? '';
     disposeOffice(); disposeOffice = () => {};
     strip.hidden = !entry?.tabs.length;
-    pane.classList.toggle('showing-file', Boolean(active));
-    for (const child of pane.children) if (child !== strip && child !== view) (child as HTMLElement).inert = Boolean(active);
     view.hidden = !active;
     if (!entry?.tabs.length) { strip.innerHTML = ''; view.innerHTML = ''; return; }
     const tabButton = (path: string, label: string, glyph: string) => {
-      const selected = (entry.active || '') === path;
-      return `<div class="file-tab${selected ? ' selected' : ''}" role="presentation" data-tab="${escape(path)}"><button role="tab" aria-selected="${selected}" aria-controls="${path ? 'file-view' : 'transcript'}" tabindex="${selected ? 0 : -1}" data-file-tab="select" title="${escape(path || label)}">${glyph}<span>${escape(label)}</span></button>${path ? `<button class="icon-button" tabindex="-1" data-file-tab="close" aria-label="Close ${escape(label)}" title="Close (Delete)">${icon('close')}</button>` : ''}</div>`;
+      const selected = entry.active === path;
+      return `<div class="file-tab${selected ? ' selected' : ''}" role="presentation" data-tab="${escape(path)}"><button role="tab" aria-selected="${selected}" aria-controls="file-view" tabindex="${selected ? 0 : -1}" data-file-tab="select" title="${escape(path)}">${glyph}<span>${escape(label)}</span></button><button class="icon-button" tabindex="-1" data-file-tab="close" aria-label="Close ${escape(label)}" title="Close (Delete)">${icon('close')}</button></div>`;
     };
-    strip.innerHTML = tabButton('', 'Conversation', icon('chat')) + entry.tabs.map(tab => tabButton(tab.path, name(tab.path), fileIcon(name(tab.path), false))).join('');
+    strip.innerHTML = entry.tabs.map(tab => tabButton(tab.path, name(tab.path), fileIcon(name(tab.path), false))).join('');
     if (!active) { view.innerHTML = ''; return; }
     const attach = deps.canAttach(active.context) ? `<button data-file-tab="attach">${icon('attach')} Attach</button>` : '';
     const preview = isPreviewableFile(active.path) ? `<button class="icon-button" data-file-tab="preview" aria-label="Preview in browser" title="Preview in browser">${icon('globe')}</button>` : '';
@@ -125,7 +124,9 @@ export function createFileTabs(deps: Deps) {
     const index = entry.tabs.findIndex(tab => tab.path === path); if (index < 0) return;
     entry.tabs = entry.tabs.filter(tab => tab.path !== path);
     if (entry.active === path) entry.active = (entry.tabs[index] ?? entry.tabs[index - 1])?.path ?? '';
-    if (entry === thread()) { render(); const tab = current(); if (tab) void load(tab); }
+    if (entry !== thread()) return;
+    if (!entry.tabs.length) deps.emptied();
+    render(); const tab = current(); if (tab) void load(tab);
   }
 
   strip.addEventListener('click', event => {
@@ -143,15 +144,15 @@ export function createFileTabs(deps: Deps) {
     if (!entry || !['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Delete'].includes(event.key) || !(event.target as Element).matches('[role="tab"]')) return;
     event.preventDefault();
     if (event.key === 'Delete') { if (entry.active) close(entry.active); return; }
-    const order = ['', ...entry.tabs.map(tab => tab.path)], index = order.indexOf(entry.active);
+    const order = entry.tabs.map(tab => tab.path), index = order.indexOf(entry.active);
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? order.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + order.length) % order.length;
     activate(order[next]);
   });
   view.addEventListener('click', event => {
     const action = (event.target as Element).closest<HTMLElement>('[data-file-tab]')?.dataset.fileTab, tab = current();
     if (!action || !tab) return;
-    // Attaching is the first step of writing about the file, so the conversation comes forward.
-    if (action === 'attach') { deps.attach(tab.path); activate(''); deps.focusConversation(); }
+    // Attaching is the first step of writing about the file, so focus goes to the prompt beside it.
+    if (action === 'attach') { deps.attach(tab.path); deps.focusConversation(); }
     if (action === 'preview') void deps.preview(tab.path, tab.context).catch(deps.report);
     if (action === 'copy' && typeof tab.content === 'string') void navigator.clipboard.writeText(tab.content).then(() => deps.notify('File copied'), deps.report);
   });
@@ -180,8 +181,8 @@ export function createFileTabs(deps: Deps) {
     /** Re-reads the file on screen, e.g. after an agent run may have changed it. */
     // Documents can be tens of megabytes, so they are re-read only when their tab is opened again.
     reload(): void { const tab = current(); if (tab && (tab.source || !officeKind(tab.path))) void load(tab); },
-    showConversation(): void { if (thread()?.active) activate(''); },
     forget(id: string): void { threads.delete(id); if (id === key) render(); },
     get active(): string { return thread()?.active ?? ''; },
+    get count(): number { return thread()?.tabs.length ?? 0; },
   };
 }

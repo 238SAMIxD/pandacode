@@ -114,8 +114,8 @@ button .icon{pointer-events:none}
    own header row would otherwise sit under the workspace header. scroll-padding keeps focus and
    scrollIntoView below the fade. */
 .workspace:not(.board-view,.github-view)>.main-pane>.work-area{overflow:visible}
-.workspace:not(.board-view,.github-view) .conversation-pane:not(.new-task-page,.channel-thread):not(:has(>:is(.file-tabs,.task-details-heading,.jev-activity):not([hidden]))){--header-under:var(--titlebar-height);--header-fade-under:var(--header-fade);--transcript-top:var(--header-fade)}
-.workspace.sidebar-collapsed:not(.board-view,.github-view) .conversation-pane:not(.new-task-page,.channel-thread):not(:has(>:is(.file-tabs,.task-details-heading,.jev-activity):not([hidden]))){--header-fade-under:var(--titlebar-height);--transcript-top:var(--titlebar-height)}
+.workspace:not(.board-view,.github-view) .conversation-pane:not(.new-task-page,.channel-thread):not(:has(>:is(.task-details-heading,.jev-activity):not([hidden]))){--header-under:var(--titlebar-height);--header-fade-under:var(--header-fade);--transcript-top:var(--header-fade)}
+.workspace.sidebar-collapsed:not(.board-view,.github-view) .conversation-pane:not(.new-task-page,.channel-thread):not(:has(>:is(.task-details-heading,.jev-activity):not([hidden]))){--header-fade-under:var(--titlebar-height);--transcript-top:var(--titlebar-height)}
 .conversation-pane>.transcript{margin-top:calc(-1 * var(--header-under,0px));padding-top:var(--transcript-top,28px);scroll-padding-top:calc(var(--header-fade-under,0px) + 12px)}
 :root{--floating-bar-shadow:0 1px 3px rgb(0 0 0 / .08),0 6px 20px rgb(0 0 0 / .12)}
 html[data-theme="dark"]{--floating-bar-shadow:0 1px 3px rgb(0 0 0 / .4),0 8px 24px rgb(0 0 0 / .35)}

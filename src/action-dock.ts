@@ -206,9 +206,8 @@ function placement(dock: HTMLElement, ready: () => void) {
     if (!floating(dock)) { dock.style.top = ''; placed = false; ready(); return; }
     const pane = document.querySelector<HTMLElement>('.conversation-pane');
     const composer = document.querySelector<HTMLElement>('#composer-area');
-    const tabs = document.querySelector<HTMLElement>('#file-tabs:not([hidden])');
     const top = header.getBoundingClientRect(), height = dock.offsetHeight;
-    const start = Math.max(top.bottom, tabs?.getBoundingClientRect().bottom ?? 0) + GAP;
+    const start = top.bottom + GAP;
     const composerTop = composer && composer.getClientRects().length ? composer.getBoundingClientRect().top : pane?.getBoundingClientRect().bottom ?? innerHeight;
     // The entrance waits for the composer, so the dock arrives where it stays.
     if (composer?.offsetHeight) ready();
@@ -228,7 +227,7 @@ function placement(dock: HTMLElement, ready: () => void) {
   const observer = new ResizeObserver(entries => { if (entries.some(entry => entry.target === dock)) follow = true; schedule(); });
   const watch = () => {
     observer.disconnect();
-    for (const selector of ['.conversation-pane', '#composer-area', '#file-tabs', '.main-pane']) { const node = document.querySelector(selector); if (node) observer.observe(node); }
+    for (const selector of ['.conversation-pane', '#composer-area', '.main-pane']) { const node = document.querySelector(selector); if (node) observer.observe(node); }
     observer.observe(dock);
   };
   watch();

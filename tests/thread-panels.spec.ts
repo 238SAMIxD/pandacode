@@ -89,35 +89,55 @@ test.describe('thread panels', () => {
     await expect(entry('favicon.svg')).toHaveCount(0);
   });
 
-  test('files open as tabs beside the conversation, switch back and forth, and close', async ({ page }) => {
+  test('files open as tabs in the inspector beside the conversation, switch back and forth, and close', async ({ page }) => {
     await open(page);
     const transcript = page.locator('#transcript');
     await transcript.evaluate(element => { element.scrollTop = 40; });
     const scrolled = await transcript.evaluate(element => element.scrollTop);
     await openInspectorTab(page, 'Files');
-    await page.getByRole('button', { name: 'Files', exact: true }).click();
+    const files = page.getByRole('button', { name: 'Files', exact: true });
+    await files.click();
     await page.locator('.file-row').getByRole('button', { name: 'README.md', exact: true }).click();
+    const openFiles = page.locator('.file-panel-tab .inspector-tab-button');
+    await expect(openFiles).toHaveAttribute('aria-current', 'true');
+    await files.click();
+    await expect(openFiles).not.toHaveAttribute('aria-current', 'true');
     await page.locator('.file-row').getByRole('button', { name: 'package.json', exact: true }).click();
-    const tab = (name: string) => page.locator('#file-tabs').getByRole('tab', { name, exact: true });
+    const tab = (name: string) => page.locator('#inspector #file-tabs').getByRole('tab', { name, exact: true });
     await expect(tab('package.json')).toHaveAttribute('aria-selected', 'true');
-    await expect(page.locator('.file-view-path')).toHaveText('package.json');
-    await expect(page.locator('#composer-area')).toHaveJSProperty('inert', true);
-    await tab('README.md').click();
-    await expect(page.locator('.file-view-path')).toHaveText('README.md');
-    await tab('Conversation').click();
-    await expect(page.locator('#file-view')).toBeHidden();
+    await expect(page.locator('#inspector .file-view-path')).toHaveText('package.json');
+    // The conversation stays on screen and usable, with its scroll position.
+    await expect(transcript).toBeVisible();
+    await expect(page.locator('#composer-area')).toHaveJSProperty('inert', false);
     await expect(page.getByRole('textbox', { name: 'Message your coding agent' })).toBeEnabled();
     expect(await transcript.evaluate(element => element.scrollTop)).toBe(scrolled);
-    await tab('Conversation').press('ArrowRight');
-    await expect(tab('README.md')).toBeFocused();
+    await tab('README.md').click();
     await expect(page.locator('.file-view-path')).toHaveText('README.md');
+    await tab('README.md').press('ArrowRight');
+    await expect(tab('package.json')).toBeFocused();
+    await tab('package.json').press('ArrowLeft');
+    await expect(tab('README.md')).toBeFocused();
     await page.getByRole('button', { name: 'Close README.md', exact: true }).click();
     await expect(page.locator('.file-view-path')).toHaveText('package.json');
     await expect(tab('package.json')).toBeFocused();
     await page.keyboard.press('Delete');
+    // The last tab closing leaves Open files for the view underneath.
     await expect(page.locator('#file-tabs')).toBeHidden();
+    await expect(page.locator('.file-panel-tab')).toBeHidden();
+    await expect(page.locator('.file-row').first()).toBeVisible();
     await expect(page.getByRole('textbox', { name: 'Message your coding agent' })).toBeFocused();
-    await expect(page.locator('#composer-area')).toHaveJSProperty('inert', false);
+  });
+
+  test('closing the Open files tab closes every file tab', async ({ page }) => {
+    await open(page);
+    await openInspectorTab(page, 'Files');
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
+    await page.locator('.file-row').getByRole('button', { name: 'README.md', exact: true }).click();
+    await expect(page.locator('#inspector .file-view-path')).toHaveText('README.md');
+    await page.getByRole('button', { name: 'Close open files', exact: true }).click();
+    await expect(page.locator('.file-panel-tab')).toBeHidden();
+    await expect(page.locator('#file-panel')).toBeHidden();
+    await expect(page.locator('.file-row').first()).toBeVisible();
   });
 
   test('keeps folder, selected file, tab, and closed state separate for same-project tasks', async ({ page }) => {
@@ -128,6 +148,7 @@ test.describe('thread panels', () => {
     await page.locator('.file-row').getByRole('button', { name: 'src', exact: true }).click();
     await page.locator('.file-row').getByRole('button', { name: 'main.ts', exact: true }).click();
     await expect(page.locator('.file-view-path')).toHaveText('src/main.ts');
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
     await select(page, 'session-2');
     await expect(page.locator('#file-tabs')).toBeHidden();
     await expect(inspector(page)).toBeVisible();
@@ -138,8 +159,10 @@ test.describe('thread panels', () => {
     await page.locator('#inspector-toggle').click();
     await select(page, 'session-1');
     await expect(inspector(page)).toBeVisible();
-    await expect(page.locator('.file-view-path')).toHaveText('src/main.ts');
     expect((await calls(page, 'read_file')).at(-1).args).toMatchObject({sessionId:'session-1',path:'src/main.ts'});
+    await page.locator('.file-panel-tab .inspector-tab-button').click();
+    await expect(page.locator('.file-view-path')).toHaveText('src/main.ts');
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
     await expect(page.locator('.file-row').getByRole('button', { name: 'src', exact: true })).toHaveAttribute('aria-expanded', 'true');
     await expect(page.locator('.file-row').getByRole('button', { name: 'main.ts', exact: true })).toBeVisible();
     await select(page, 'session-2');
@@ -279,7 +302,7 @@ test.describe('thread panels', () => {
     await page.locator('.file-row').getByRole('button', { name:'src',exact:true }).click();
     await page.locator('.file-row').getByRole('button', { name:'main.ts',exact:true }).click();
     await expect(page.locator('.file-view-path')).toHaveText('src/main.ts');
-    await page.getByRole('tab', { name:'Conversation',exact:true }).click();
+    await page.getByRole('button', { name:'Files',exact:true }).click();
     await page.evaluate(() => { (window as any).__holdPanelProject = true; });
     await page.getByRole('button', { name:'Change task project',exact:true }).first().click();
     await page.getByRole('dialog', { name:'Choose project',exact:true }).getByRole('option', {name:/^pandacode — /}).click();
