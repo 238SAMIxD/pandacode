@@ -247,7 +247,7 @@ test.describe('conversation message actions', () => {
 
   test('forks at the first user message inside the board without opening the general conversation view', async ({ page }) => {
     await install(page);
-    await page.getByRole('button', { name: 'Board view', exact: true }).click();
+    await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click();
     const board = page.getByRole('region', { name: 'Project board', exact: true });
     await board.getByRole('button', { name: 'Open task: Message action fixture', exact: true }).click();
     await expect(action(page, 201, 'fork')).toBeVisible();

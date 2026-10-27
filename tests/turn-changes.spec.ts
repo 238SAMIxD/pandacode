@@ -63,7 +63,7 @@ test.describe('turn changes', () => {
   for (const view of ['conversation', 'board']) test(`shows one compact completed-turn card after streaming in ${view}`, async ({ page }) => {
     await page.clock.install(); await install(page);
     if (view === 'board') {
-      await page.getByRole('button', { name: 'Board view', exact: true }).click();
+      await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click();
       await page.getByRole('region', { name: 'Project board', exact: true }).getByRole('button', { name: 'Add task', exact: true }).click();
       await page.getByRole('textbox', { name: 'Task title', exact: true }).fill('Sample change with a saved diff');
       await page.getByRole('button', { name: 'Add to pending', exact: true }).click();

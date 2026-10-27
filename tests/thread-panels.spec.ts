@@ -192,7 +192,7 @@ test.describe('thread panels', () => {
 
   test('restores task panels through board and launcher navigation and clears them on deletion', async ({ page }) => {
     await open(page); await navigate(page, 'http://localhost:3000/kept');
-    await page.getByRole('button', { name: 'Board view', exact: true }).click();
+    await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click();
     await expect(inspector(page)).toBeHidden();
     await page.getByRole('button', { name: 'Open task: Refine the navigation', exact: true }).click();
     await expect(inspector(page)).toBeHidden();

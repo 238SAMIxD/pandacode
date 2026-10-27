@@ -80,7 +80,7 @@ test.describe('team inheritance', () => {
   test('board tasks and worktrees inherit the automatic team without adding worker tasks', async ({ page }) => {
     await install(page); await turnOn(page);
     const before = await read(page, 'list_sessions');
-    await page.getByRole('button', { name: 'Board view', exact: true }).click();
+    await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click();
     const board = page.getByRole('region', { name: 'Project board', exact: true });
     await board.getByRole('button', { name: 'Add task', exact: true }).click();
     const form = page.locator('#dialog');
@@ -90,7 +90,7 @@ test.describe('team inheritance', () => {
     await expect(card).toBeVisible();
     const boardId = (await card.getAttribute('data-id'))!;
     await assertAutoDefault(page, boardId, await read(page, 'get_task', { sessionId: boardId }));
-    await page.getByRole('button', { name: 'Conversation view', exact: true }).click();
+    await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Conversation', exact: true }).click();
     // A started conversation spawns a sibling worktree task; an unstarted one would convert in place.
     await page.locator('.task-item[data-id="session-1"]').click();
     await expect(page.locator('.task-item.selected')).toHaveAttribute('data-id', 'session-1');

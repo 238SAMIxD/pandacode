@@ -155,7 +155,7 @@ test.describe('architect teams', () => {
       }, theme);
       await installArchitect(page, { 'session-2': team('session-2') });
       await seedHistory(page, 'session-2', 'build', '**Search is ready.** The index now reuses its cached entries.\n\n```ts\nconst index = cachedIndex;\n```');
-      if (view === 'board') { await page.getByRole('button', { name: 'Board view', exact: true }).click(); await selectTask(page, 'session-2', view); }
+      if (view === 'board') { await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click(); await selectTask(page, 'session-2', view); }
       await expect(page.locator('.workspace')).toHaveAttribute('data-wallpaper', 'mon-morning');
       await openWorkers(page).click();
       await expect(panel(page)).toBeVisible();
@@ -348,7 +348,7 @@ test.describe('architect teams', () => {
     await expect(transcript(page)).toContainText('Sample architect review');
     await expect(page.locator('#prompt')).toBeEnabled();
     await panel(page).getByRole('button', { name: 'Close workers', exact: true }).click();
-    await page.getByRole('button', { name: 'Board view', exact: true }).click();
+    await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click();
     await expect(page.locator('[data-action="board-open"]')).toHaveCount(visibleTasks);
   });
 
@@ -461,7 +461,7 @@ test.describe('architect teams', () => {
   for (const view of ['conversation', 'board'] as const) {
     test(`renders internal coordination as neutral Team status and preserves real user JSON in ${view}`, async ({ page }) => {
       await installArchitect(page, { 'session-2': team('session-2') }, { 'session-2': coordinationHistory('session-2') });
-      if (view === 'board') { await page.getByRole('button', { name: 'Board view', exact: true }).click(); await selectTask(page, 'session-2', view); }
+      if (view === 'board') { await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click(); await selectTask(page, 'session-2', view); }
       const verify = async () => {
         const status = transcript(page).locator('.coordination-status[aria-label="Team status"]');
         await expect(status).toHaveCount(2);
@@ -504,7 +504,7 @@ test.describe('architect teams', () => {
         { id: 302, sessionId: 'session-2', role: 'assistant', content: 'Implementation and review are delegated to the workers.', createdAt: 3000 },
       ] });
       await seedHistory(page, 'session-2', 'review', 'Accessibility review is underway.');
-      if (view === 'board') { await page.getByRole('button', { name: 'Board view', exact: true }).click(); await selectTask(page, 'session-2', view); }
+      if (view === 'board') { await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click(); await selectTask(page, 'session-2', view); }
       const progress = transcript(page).locator('.team-progress[aria-label="Team progress"]');
       const builder = progress.locator('.team-progress-worker[data-worker-id="build"]');
       const reviewer = progress.locator('.team-progress-worker[data-worker-id="review"]');
@@ -597,7 +597,7 @@ test.describe('architect teams', () => {
       await seedHistory(page, 'session-2', 'build', 'Builder saved response.');
       await seedHistory(page, 'session-2', 'review', 'Reviewer saved response.');
       await selectTask(page, 'session-3');
-      if (view === 'board') await page.getByRole('button', { name: 'Board view', exact: true }).click();
+      if (view === 'board') { await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click(); }
       await page.evaluate(() => (window as any).__architectTest.publishOverlay({ sessionId: 'session-2', workerId: 'review', workerSessionId: 'worker-review' }));
       await expect(page.locator('#prompt')).toHaveAttribute('data-session-id', 'session-2');
       await expect(panel(page)).toBeVisible();
@@ -627,7 +627,7 @@ test.describe('architect teams', () => {
         fixture.subagents['session-2'] = [{ ...child, name: 'Parent reviewer', response: 'Parent child must stay separate.' }];
       });
       await selectTask(page, 'session-3');
-      if (view === 'board') await page.getByRole('button', { name: 'Board view', exact: true }).click();
+      if (view === 'board') { await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click(); }
       await page.evaluate(() => (window as any).__architectTest.publishOverlay({ sessionId: 'session-2', workerId: 'build', workerSessionId: 'worker-build', subagentId: 'shared-child' }));
       const childPanel = page.locator('#worker-subagents-panel');
       await expect(page.locator('#prompt')).toHaveAttribute('data-session-id', 'session-2');
@@ -657,7 +657,7 @@ test.describe('architect teams', () => {
     test(`streams two workers independently with stable controls in ${view}`, async ({ page }) => {
       await installArchitect(page, { 'session-2': team('session-2') });
       await seedHistory(page, 'session-2', 'build'); await seedHistory(page, 'session-2', 'review');
-      if (view === 'board') { await page.getByRole('button', { name: 'Board view', exact: true }).click(); await selectTask(page, 'session-2', view); }
+      if (view === 'board') { await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click(); await selectTask(page, 'session-2', view); }
       await openWorkers(page).click();
       await expect(row(page, 'build')).toContainText('Builder'); await expect(row(page, 'review')).toContainText('Reviewer');
       await row(page, 'build').click();

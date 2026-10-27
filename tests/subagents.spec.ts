@@ -85,7 +85,7 @@ async function selectTask(page: Page, index: number, view: View): Promise<void> 
 
 async function useView(page: Page, view: View): Promise<void> {
   if (view === 'board') {
-    await page.getByRole('button', { name: 'Board view', exact: true }).click();
+    await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click();
     await selectTask(page, 1, view);
   }
 }
@@ -179,7 +179,7 @@ test.describe('subagents', () => {
         'session-1': [child('shared', 'First task child', { response: 'Do not show the previous task child.' })],
         'session-2': [child('other', 'Other child', { response: 'Unselected child response.' }), child('shared', 'Selected reviewer', { response: 'Saved target child response.' })],
       });
-      if (view === 'board') await page.getByRole('button', { name: 'Board view', exact: true }).click();
+      if (view === 'board') { await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click(); }
       await page.evaluate(() => (window as any).__subagents.publishOverlay({ sessionId: 'session-2', subagentId: 'shared' }));
       await expect(page.locator('#prompt')).toHaveAttribute('data-session-id', 'session-2');
       await expect(panel(page)).toBeVisible();

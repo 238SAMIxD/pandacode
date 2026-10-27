@@ -150,10 +150,10 @@ test('layout preferences retain the chosen width through narrow windows and the 
   expect(await storedWidth(page)).toBe(stored);
   await page.setViewportSize({ width: 1440, height: 940 });
   await expect.poll(() => sidebarWidth(page)).toBeCloseTo(420, 0);
-  await page.getByRole('button', { name: 'Board view', exact: true }).click();
+  await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click();
   await expect(separator(page)).toBeHidden();
   await expect(page.locator('.sidebar')).toBeHidden();
-  await page.getByRole('button', { name: 'Conversation view', exact: true }).click();
+  await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Conversation', exact: true }).click();
   await expect(separator(page)).toBeVisible();
   await expect.poll(() => sidebarWidth(page)).toBeCloseTo(420, 0);
   expect(await storedWidth(page)).toBe(stored);
@@ -372,7 +372,8 @@ test('layout preferences keep controls readable at 160 percent in wide and narro
   await separator(page).focus();
   await page.keyboard.press('End');
   await expect.poll(() => sidebarWidth(page)).toBe(430);
-  await expect(page.locator('.view-switch button > span').first()).toBeHidden();
+  await expect(page.locator('.brand #view-menu')).toBeVisible();
+  await expect(page.locator('.header-leading #view-menu')).toHaveCount(0);
   const compactActions = (await page.locator('.header-actions').boundingBox())!;
   const compactHeader = (await page.locator('.workspace-header').boundingBox())!;
   expect(compactActions.x).toBeGreaterThanOrEqual(compactHeader.x);
@@ -427,11 +428,11 @@ test('layout preferences sidebar shortcuts survive board roundtrips and hide the
   await page.keyboard.press('Meta+b');
   await expect(page.locator('.sidebar')).toBeHidden();
   await expect(prompt(page)).toBeFocused();
-  await page.getByRole('button', { name: 'Board view', exact: true }).click();
+  await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click();
   await expect(page.locator('#sidebar-toggle')).toBeHidden();
   await page.keyboard.press('Control+b');
   expect(await page.evaluate(() => localStorage.getItem('pandacode.sidebarCollapsed'))).toBe('true');
-  await page.getByRole('button', { name: 'Conversation view', exact: true }).click();
+  await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Conversation', exact: true }).click();
   await expect(page.locator('#sidebar-toggle')).toHaveAccessibleName('Show sidebar');
   await expect(page.locator('.sidebar')).toBeHidden();
   await page.keyboard.press('Control+b');
@@ -674,14 +675,14 @@ test('layout preferences keep a resized right sidebar within collapsed, board, a
   await expect(page.getByRole('textbox', { name: 'Browser URL', exact: true })).toBeVisible();
   await checkGeometry();
   await page.screenshot({ path: testInfo.outputPath('right-sidebar-browser-collapsed.png'), animations: 'disabled' });
-  await page.getByRole('button', { name: 'Board view', exact: true }).click();
+  await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click();
   await expect(inspectorSeparator(page)).toBeHidden();
   await page.getByRole('button', { name: 'Open browser', exact: true }).click();
   await expect(page.getByRole('textbox', { name: 'Browser URL', exact: true })).toBeVisible();
   await expect(inspectorSeparator(page)).toBeVisible();
   await expect.poll(() => inspectorWidth(page)).toBeCloseTo(620, 0);
   await checkGeometry();
-  await page.getByRole('button', { name: 'Conversation view', exact: true }).click();
+  await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Conversation', exact: true }).click();
   await page.locator('#sidebar-toggle').click();
   await expect(page.locator('.sidebar')).toBeVisible();
 
@@ -750,7 +751,7 @@ for (const width of [2048, 1440, 1100, 960, 760, 620]) {
         await expect(inspector).toBeHidden();
         await checkGeometry();
       }
-      await page.getByRole('button', { name: 'Board view', exact: true }).click();
+      await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click();
       await page.getByRole('button', { name: 'Open browser', exact: true }).click();
       await expect(page.getByRole('textbox', { name: 'Browser URL', exact: true })).toBeVisible();
       await checkGeometry();

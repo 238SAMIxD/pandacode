@@ -77,7 +77,7 @@ async function installControlledStreaming(page: Page): Promise<void> {
 
 async function startTurn(page: Page, view: View, expandActivity = true): Promise<string> {
   if (view === 'board') {
-    await page.getByRole('button', { name: 'Board view', exact: true }).click();
+    await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click();
     const board = page.getByRole('region', { name: 'Project board', exact: true });
     await board.getByRole('button', { name: 'Add task', exact: true }).click();
     await page.locator('#dialog').getByRole('textbox', { name: 'Task title', exact: true }).fill('Controlled streaming response');
@@ -517,7 +517,7 @@ test.describe('streamed responses', () => {
     const id = await startTurn(page, 'conversation');
     await push(page, id, 'First stream segment. ');
     await expect(live(page)).toContainText('First stream segment.');
-    await page.getByRole('button', { name: 'Board view', exact: true }).click();
+    await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click();
     await push(page, id, 'Arrived with the panel closed. ');
     await page.locator(`[data-action="board-open"][data-id="${id}"]`).click();
     await expect(live(page)).toContainText('First stream segment. Arrived with the panel closed.');
@@ -525,7 +525,7 @@ test.describe('streamed responses', () => {
     await push(page, id, 'Arrived in the background. ');
     await expect(transcript(page)).not.toContainText('First stream segment.');
     await expect(transcript(page)).toContainText('The project is a small native workspace');
-    await page.getByRole('button', { name: 'Conversation view', exact: true }).click();
+    await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Conversation', exact: true }).click();
     await page.locator(`.task-item[data-id="${id}"]`).click();
     await expect(live(page)).toContainText('First stream segment. Arrived with the panel closed. Arrived in the background.');
     await push(page, id, 'Final segment.');

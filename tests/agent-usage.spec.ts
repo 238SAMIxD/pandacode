@@ -239,7 +239,7 @@ test('Agent usage remains reachable in the sidebar, collapsed header, and board 
   await openApp(page);
   for (const mode of ['sidebar', 'collapsed', 'board']) {
     if (mode === 'collapsed') await page.getByRole('button', { name: 'Hide sidebar', exact: true }).click();
-    if (mode === 'board') await page.getByRole('button', { name: 'Board view', exact: true }).click();
+    if (mode === 'board') { await page.getByRole('button', { name: /^Workspace view: / }).click(); await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click(); }
     await expect(usageButton(page)).toHaveCount(1);
     await expect(usageButton(page)).toBeVisible();
     await expect(usageButton(page)).toHaveAttribute('id', 'agent-usage-button');
