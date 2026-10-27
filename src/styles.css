@@ -101,7 +101,25 @@ button .icon{pointer-events:none}
 .sidebar-bottom>button kbd{margin-left:auto}
 .status-dot{width:5px;height:5px;background:var(--success);border-radius:50%;display:inline-block;flex-shrink:0}
 .main-pane{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg)}
-.workspace-header{container-type:inline-size;container-name:workspace-header;height:var(--titlebar-height);display:flex;align-items:center;justify-content:space-between;padding:0 19px 0 26px;gap:20px;flex-shrink:0;background:var(--bg);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.workspace-header{container-type:inline-size;container-name:workspace-header;height:var(--titlebar-height);display:flex;align-items:center;justify-content:space-between;padding:0 19px 0 26px;gap:20px;flex-shrink:0;position:relative;z-index:6;background:transparent}
+/* The header is glass the thread scrolls under: a translucent --bg fill over a blur, running a
+   short band past the bar's edge where a mask fades it out, so content dissolves instead of
+   being cut. The band is a pseudo-element so the header's own box (and drag region) is unchanged. */
+.workspace-header::before{content:"";position:absolute;inset:0 0 calc(-1 * var(--header-fade));z-index:-1;pointer-events:none;background:var(--header-glass);backdrop-filter:var(--header-blur);-webkit-backdrop-filter:var(--header-blur);mask-image:linear-gradient(#000 calc(100% - var(--header-fade)),transparent);-webkit-mask-image:linear-gradient(#000 calc(100% - var(--header-fade)),transparent)}
+.main-pane{--header-fade:18px;--header-glass:color-mix(in srgb,var(--bg) 76%,transparent);--header-blur:blur(16px) saturate(1.15)}
+/* Conversation view: the transcript starts under the header (pulled up by its height) and pads
+   its content back down, so nothing is hidden at rest. Anything in flow above the transcript
+   (file tabs, details, JEV activity) keeps the old stacked layout. */
+.workspace:not(.board-view,.github-view)>.main-pane>.work-area{overflow:visible}
+.workspace:not(.board-view,.github-view) .conversation-pane:not(.new-task-page):not(:has(>:is(.file-tabs,.task-details-heading,.jev-activity):not([hidden]))){--header-under:var(--titlebar-height)}
+.conversation-pane>.transcript{margin-top:calc(-1 * var(--header-under,0px));padding-top:calc(var(--transcript-top,28px) + var(--header-under,0px));scroll-padding-top:calc(var(--header-under,0px) + 12px)}
+/* The team and subagent triggers float over the thread's top right, under the header, instead of
+   taking an in-flow row (which drew an empty band across the pane); the transcript pads for them.
+   The pane itself starts below the header; only the transcript is pulled up under it. */
+.workspace:not(.side-thread) .conversation-pane>:is(.architect-host,.subagents-host){position:absolute;top:0;left:0;right:0}
+.workspace:not(.side-thread) .conversation-pane:has(>.architect-host:not([hidden]))>.subagents-host{top:36px}
+.workspace:not(.side-thread) .conversation-pane:not(.new-task-page):has(>.architect-host:not([hidden]),>.subagents-host:not([hidden])>.subagents-trigger:not([hidden])){--transcript-top:48px}
+.workspace:not(.side-thread) .conversation-pane:not(.new-task-page):has(>.architect-host:not([hidden])):has(>.subagents-host:not([hidden])>.subagents-trigger:not([hidden])){--transcript-top:84px}
 .breadcrumb{display:flex;align-items:center;gap:var(--space-2);min-width:0;overflow:hidden;color:var(--muted);font-size:var(--text-sm)}
 .breadcrumb>.icon{--icon-size:var(--icon-sm);--icon-stroke:var(--icon-stroke-sm)}
 .breadcrumb>button{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--text);font-size:var(--text-sm);white-space:nowrap;font-weight:var(--weight-medium)}
@@ -499,7 +517,7 @@ dialog input::placeholder{color:var(--muted)}
 .command-footer{display:flex;justify-content:flex-end;gap:14px;padding:12px 6px;color:var(--muted);font-size:0.642857rem}
 .compact .message{margin-bottom:18px}
 .compact .message-content{line-height:1.65}
-.compact .conversation-pane:not(.new-task-page) .transcript{padding-top:20px}
+.compact .conversation-pane:not(.new-task-page){--transcript-top:20px}
 ::-webkit-scrollbar{width:5px;height:5px}
 ::-webkit-scrollbar-thumb{background:#cdcdc6;border-radius:var(--radius-xs)}
 ::-webkit-scrollbar-track{background:transparent}
@@ -518,12 +536,12 @@ dialog input::placeholder{color:var(--muted)}
 .composer-area{padding-left:20px;padding-right:20px}
 .brand{padding-left:18px}
 .task-item{font-size:var(--text-xs);padding-left:18px}
-.workspace-header{padding-left:22px;background:var(--bg);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}}
+.workspace-header{padding-left:22px}}
 @media(max-width:920px){
 .workspace{--sidebar-default-width:195px;--conversation-min-width:330px;grid-template-columns:var(--sidebar-width,var(--sidebar-default-width)) minmax(var(--conversation-min-width),1fr);transition:none}
 .workspace.inspector-closed{grid-template-columns:var(--sidebar-width,var(--sidebar-default-width)) minmax(var(--conversation-min-width),1fr)}
 .inspector{position:absolute;right:0;top:55px;bottom:28px;width:var(--inspector-width,300px);z-index:8;box-shadow:-20px 0 40px rgb(0 0 0 / .07);animation:none;background:var(--sidebar)}
-.workspace-header{gap:8px;background:var(--bg);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.workspace-header{gap:8px}
 .breadcrumb>span:last-child{max-width:180px}
 .welcome h1{font-size:var(--text-xl);color:var(--text);font-weight:var(--weight-strong);line-height:1.25;letter-spacing:-.025em;margin:0}}
 @media(max-width:650px){
@@ -544,7 +562,7 @@ dialog input::placeholder{color:var(--muted)}
 .composer-separator{display:none}
 .composer-team-button span{display:none}
 .mode-picker span{display:none}
-.workspace-header{padding:0 11px;background:var(--bg);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.workspace-header{padding:0 11px}
 .breadcrumb{font-size:var(--text-xs);gap:7px}
 .breadcrumb>span:last-child{max-width:130px}
 .header-actions{gap:2px}
@@ -576,11 +594,13 @@ button:not(:disabled):active{background-color:var(--accent-dim);transition:none}
 .change-row:focus-within .stage-button,.file-row:focus-within .file-attach,.change-group:focus-within .change-group-title button{opacity:1}
 @media (prefers-reduced-transparency: reduce) {
 .workspace-header, .dialog-plate, .toast { background: #fff; backdrop-filter: none; -webkit-backdrop-filter: none; }
+.workspace-header::before { content: none; }
 .dialog-scrim { backdrop-filter: none; -webkit-backdrop-filter: none; background: rgb(35 35 30 / .3); }
 }
 @media (prefers-contrast: more) {
 :root { --muted: #454540; --faint: #50504a; --border: #85857c; }
 .workspace-header, .dialog-plate, .toast { background: #fff; backdrop-filter: none; -webkit-backdrop-filter: none; }
+.workspace-header::before { content: none; }
 .workspace-header, .inspector-heading, .composer { border-color: #85857c; }
 .dialog-plate, .toast, dialog input, dialog select, .secondary-button, .commit-form textarea { border: 1px solid #85857c; }
 .task-item.selected { outline: 1px solid var(--focus); outline-offset: -1px; }
@@ -712,7 +732,6 @@ html[data-theme="dark"]{
   --accent:#ffd43b;--accent-dim:#48401e;--accent-ink:#f3d778;--focus:#e4be37;--on-accent:#29230e;--accent-tint:#29271f;--accent-tint-strong:#27261e;
   --success:#83cf9c;--danger:#ff9e96;--bamboo:#adbf86;--bamboo-art-opacity:.075;
 }
-html[data-theme="dark"] .workspace-header{background:var(--bg)}
 html[data-theme="dark"] .inspector-heading{background:var(--sidebar)}
 html[data-theme="dark"] :is(.new-task-button,.primary-button,.send-button,.commit-button:not(:disabled)),
 html[data-theme="dark"] :is(.new-task-button,.primary-button,.send-button,.commit-button:not(:disabled)):hover{color:var(--on-accent)}

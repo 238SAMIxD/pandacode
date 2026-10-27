@@ -72,7 +72,7 @@
 .architect-setup-popover .architect-profile-heading input { background: transparent; }
 .architect-setup-popover :is(input, button, summary):focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .architect-host { position: relative; flex-shrink: 0; display: flex; justify-content: flex-end; padding: 7px 24px 0; z-index: 5; pointer-events: none; }
-.architect-trigger { pointer-events: auto; display: flex; align-items: center; gap: 8px; font-size: var(--text-2xs); color: var(--muted); padding: 7px 10px; border-radius: var(--radius-md); background: var(--panel); }
+.architect-trigger { pointer-events: auto; display: flex; align-items: center; gap: 8px; font-size: var(--text-2xs); color: var(--muted); padding: 7px 10px; border-radius: var(--radius-md); background: color-mix(in srgb, var(--panel) 72%, transparent); -webkit-backdrop-filter: blur(16px) saturate(1.15); backdrop-filter: blur(16px) saturate(1.15); }
 .architect-trigger .icon { width: 13px; height: 13px; }
 .architect-trigger .icon:last-child { width: 10px; }
 .architect-trigger small { color: var(--text); font-size: var(--text-2xs); font-variant-numeric: tabular-nums; }
@@ -115,7 +115,7 @@ html[data-theme="dark"] .architect-worker-state[data-tone=accent] { color: var(-
 .side-thread .architect-host { padding-top: 0; padding-bottom: 8px; }
 .side-thread .architect-panel { max-height: min(620px, calc(100dvh - 300px)); }
 @media(max-width:700px) { .architect-host { padding-right: 16px; } }
-@media(prefers-reduced-transparency:reduce), (prefers-contrast:more) { .workspace[data-wallpaper] .architect-trigger { background: var(--panel); -webkit-backdrop-filter: none; backdrop-filter: none; } }
+@media(prefers-reduced-transparency:reduce), (prefers-contrast:more) { .architect-trigger, .workspace[data-wallpaper] .architect-trigger { background: var(--panel); -webkit-backdrop-filter: none; backdrop-filter: none; } }
 
 .architect-worker-checkpoint { margin: 0 0 14px; font-size: var(--text-xs); color: var(--muted); }
 .architect-worker-checkpoint summary { display: flex; align-items: center; gap: 7px; cursor: pointer; padding: 7px 0; }

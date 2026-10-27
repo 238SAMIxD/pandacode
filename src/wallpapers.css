@@ -16,6 +16,8 @@ html .workspace[data-wallpaper] :is(.main-pane,.sidebar,.inspector){--muted:#505
 .workspace[data-wallpaper] .board-card-start{background:color-mix(in srgb,var(--raised) 58%,transparent)}
 .workspace[data-wallpaper] .board-card-start:is(:hover,:active){background:color-mix(in srgb,var(--accent-dim) 66%,transparent)}
 html .workspace[data-wallpaper]>.main-pane>.workspace-header{background:transparent;border:0;backdrop-filter:none;-webkit-backdrop-filter:none}
+/* Over a wallpaper the header glass is the sidebar's frost, so the bar reads as one material with it. */
+.workspace[data-wallpaper]>.main-pane{--header-glass:var(--workspace-frost-surface);--header-blur:var(--workspace-frost)}
 html[data-theme="dark"] .workspace-wallpaper::after{background:rgb(28 28 27 / var(--wallpaper-scrim-center,.856))}
 html[data-theme="dark"] .workspace[data-wallpaper] :is(.main-pane,.sidebar,.inspector){--muted:#d0cfc5;--faint:#c4c3b8}
 
