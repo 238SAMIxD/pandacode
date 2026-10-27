@@ -9,7 +9,7 @@
 .recipe-description,.recipe-empty,.recipe-message{color:var(--muted);margin:0 0 8px}
 .recipe-steps{width:100%;border-collapse:collapse;margin-bottom:10px}
 .recipe-steps th{text-align:left;color:var(--muted);font-weight:var(--weight-medium);font-size:var(--text-xs)}
-.recipe-steps th,.recipe-steps td{padding:4px 8px 4px 0;vertical-align:top;border-bottom:1px solid color-mix(in srgb,var(--text) 9%,transparent)}
+.recipe-steps th,.recipe-steps td{padding:4px 8px 4px 0;vertical-align:top}
 .recipe-text{max-width:22ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .recipe-reason{color:var(--muted)}
 .recipe-status{font-weight:var(--weight-strong)}

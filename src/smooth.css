@@ -1,5 +1,5 @@
 /* Seamless chrome: panels meet without divider lines and read apart by their tones.
- * Cards, inputs and menus keep their outlines; Increase Contrast restores every line. */
+ * Nothing keeps an outline; Increase Contrast restores every line. */
 html .sidebar,html .workspace[data-wallpaper]>.sidebar{border-right:0}
 html .workspace>.inspector{border-left:0}
 html .sidebar :is(.sidebar-note,.sidebar-bots){border-top:0}
