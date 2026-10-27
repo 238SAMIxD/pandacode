@@ -8,7 +8,7 @@ import { createPreviewArchitect } from './preview-architect';
 import { createPreviewCloud, createPreviewVm } from './preview-vm';
 import { createPreviewTurnChanges } from './preview-turn-changes';
 // Bundled with the preview, not lazily imported: a late module load during a paused test clock stalled startup.
-import { invokeBots } from './preview-bots';
+import { invokeBots, previewBotBusy } from './preview-bots';
 import { invokeRemote } from './preview-remote';
 import { createPreviewDesign } from './preview-design';
 import { createPreviewSkills } from './preview-skills';
@@ -403,6 +403,8 @@ let browserHistory: string[] = [], browserIndex = -1;
 let browserState: BrowserStatus = { url: '', title: '', loading: false, canGoBack: false, canGoForward: false, picking: false };
 function browserChanged(): void { browserState.canGoBack = browserIndex > 0; browserState.canGoForward = browserIndex < browserHistory.length - 1; emit('browser-state', { ...browserState }); }
 function emit(name: string, event: unknown) { listeners.get(name)?.forEach(fn => fn(event)); }
+// Tests: deliver a native event, e.g. a background refresh of the open channel.
+(window as any).__previewEmit = emit;
 export function listen(name: string, callback: (event: any) => void): () => void { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name)!.add(callback); return () => listeners.get(name)?.delete(callback); }
 /** What the native picker "returns" in the browser preview, so attach flows can be exercised. */
 export function samplePick(kind: 'files' | 'folder'): string[] {
@@ -897,7 +899,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     }
     case 'steer_task': {
       const s = session(args.sessionId);
-      if (!timers.has(s.id) && s.status !== 'running') throw new Error('The agent is not running; the message stays queued.');
+      if (!timers.has(s.id) && s.status !== 'running' && !previewBotBusy(s.id)) throw new Error('The agent is not running; the message stays queued.');
       // Claude-family, Codex, Pi and Muse take it live; others hold it for the next turn of the same run.
       const text = String(args.text).trim(), steerId = `steer-${++id}`;
       const mode = ['claude', 'glm', 'mimo', 'codex', 'pi', 'muse'].includes(s.provider) ? 'live' : 'next-turn';
@@ -908,6 +910,8 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
         if (text.includes('[steer-fails]')) return report('failed');
         (messages[s.id] ??= []).push({ id: ++id, sessionId: s.id, role: 'user', content: text, createdAt: Date.now() });
         report('delivered');
+        // A sample bot shown as working has no preview run to answer it, so it answers here.
+        if (previewBotBusy(s.id)) agent({ sessionId: s.id, kind: 'text', text: 'Got it, I will fold that in. (browser preview)' });
       }, mode === 'live' ? 900 : 1500);
       result = { steered: true, id: steerId, mode }; break;
     }

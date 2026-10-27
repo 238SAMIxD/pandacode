@@ -2,7 +2,6 @@ import { escape, icon } from './dom';
 import { infoMark } from './tooltip';
 import type { Activity, BotDetail, Channel, Schedule } from './bots';
 import { channelGuide, connectChange, connectClick, connectSection, connectSubmit, kindLabel } from './bots-connect';
-import { age } from './bots';
 
 export type Tab = 'conversations' | 'memory' | 'schedules' | 'channels' | 'rules' | 'activity';
 export interface PanelContext {
@@ -18,6 +17,17 @@ export interface PanelContext {
 }
 
 const ACTIVITY_ICONS: Record<string, string> = { inbound: 'chat', reply: 'arrow', notify: 'spark', scheduled: 'refresh', approval: 'unlock', memory: 'leaf', schedule: 'refresh', channel: 'globe', pairing: 'check', rule: 'select', error: 'alert', stopped: 'stop', created: 'plus', updated: 'edit', reset: 'reset' };
+
+/** "5 min. ago", "in 2 hr.": short relative times for lists. */
+export function age(at: number | null, now = Date.now()): string {
+  if (!at) return '';
+  const minutes = Math.round((at - now) / 60000);
+  const format = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto', style: 'short' });
+  if (Math.abs(minutes) < 1) return at > now ? 'in a moment' : 'just now';
+  if (Math.abs(minutes) < 60) return format.format(minutes, 'minute');
+  if (Math.abs(minutes) < 1440) return format.format(Math.round(minutes / 60), 'hour');
+  return format.format(Math.round(minutes / 1440), 'day');
+}
 
 let scheduleKind: Schedule['kind'] = 'daily';
 

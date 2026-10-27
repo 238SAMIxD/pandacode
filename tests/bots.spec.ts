@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 /* Bots: a bot's conversations are ordinary task threads (same transcript, streaming and
  * composer, with the model picker), and its settings live in a modal. */
-const bots = (page: Page) => page.getByRole('dialog', { name: 'Bots' });
+const bots = (page: Page) => page.getByRole('dialog', { name: /^(Bots|New bot)$/ });
 const panel = (page: Page, name = 'Scout') => page.getByRole('dialog', { name: `${name} settings` });
 const tab = (page: Page, name: string) => panel(page).getByRole('tab', { name, exact: false });
 const crumb = (page: Page) => page.locator('#breadcrumb .bot-crumb');
@@ -33,18 +33,21 @@ async function showTasksView(page: Page): Promise<void> {
 async function openBots(page: Page): Promise<void> {
   await page.goto('/');
   await showBotsView(page);
-  await sidebar(page).getByRole('button', { name: 'Add bot', exact: true }).click();
+  await sidebar(page).getByRole('button', { name: 'Add bot or channel' }).click();
+  await sidebar(page).getByRole('menu', { name: 'Create' }).getByRole('menuitem', { name: 'New bot' }).click();
   await expect(bots(page)).toBeVisible();
 }
 
-/** Creates a bot from the Researcher template; it opens straight into its conversation. */
+/** Creates a bot with only a name; it opens to the bot-specific welcome. */
 async function newBot(page: Page, name = 'Scout'): Promise<void> {
   await openBots(page);
-  await bots(page).getByRole('button', { name: /Researcher/ }).click();
   await bots(page).getByRole('textbox', { name: 'Name' }).fill(name);
   await bots(page).getByRole('button', { name: 'Create bot' }).click();
   await expect(bots(page)).toBeHidden();
   await expect(crumb(page)).toContainText(name);
+  await expect(page.locator('#transcript .bot-welcome h1')).toHaveText(`${name} is ready.`);
+  await expect(page.locator('#transcript .user-message, #transcript .agent-message')).toHaveCount(0);
+  await expect(page.locator('#composer .stop-button')).toHaveCount(0);
 }
 
 async function openSettings(page: Page, section?: string, name = 'Scout'): Promise<void> {
@@ -70,7 +73,7 @@ test.describe('bots', () => {
     await expect(row.locator('time')).toBeVisible();
     const search = sidebar(page).getByRole('searchbox', { name: 'Search bots' });
     await search.fill('nobody');
-    await expect(sidebar(page).locator('.bots-panel-empty')).toHaveText('No bots match.');
+    await expect(sidebar(page).locator('.bots-panel-empty')).toHaveText('No bots or channels match.');
     await search.fill('sco');
     await expect(row).toBeVisible();
     await expect(search).toBeFocused();
@@ -86,22 +89,25 @@ test.describe('bots', () => {
 
   test('a new bot opens its conversation in the task view, with the bot in the header', async ({ page }) => {
     await openBots(page);
-    await expect(bots(page).getByRole('heading', { name: 'New bot' })).toBeVisible();
-    await expect(bots(page).getByText('No bots yet.')).toBeVisible();
-    await bots(page).getByRole('button', { name: /Researcher/ }).click();
-    await expect(bots(page).getByRole('textbox', { name: 'Job' })).toHaveValue('Digs into questions and reports back');
-    await bots(page).getByRole('textbox', { name: 'Name' }).fill('');
+    const form = bots(page).getByRole('form', { name: 'New bot' });
+    await expect(form).toBeVisible();
+    await bots(page).getByRole('region', { name: 'Suggestions' }).getByRole('button', { name: /Researcher/ }).click();
+    await expect(form.getByRole('textbox', { name: 'What should this bot help with?' })).toHaveValue(/^Research the questions/);
+    await form.getByRole('textbox', { name: 'Name' }).fill('');
     await bots(page).getByRole('button', { name: 'Create bot' }).click();
-    await expect(bots(page).getByRole('alert')).toHaveText('Give the bot a name.');
-    await bots(page).getByRole('textbox', { name: 'Name' }).fill('Scout');
+    await expect(form.locator('#bc-name-error')).toHaveText('Give the bot a name.');
+    await form.getByRole('textbox', { name: 'Name' }).fill('Scout');
     await bots(page).getByRole('button', { name: 'Create bot' }).click();
     await expect(bots(page)).toBeHidden();
     // The ordinary conversation pane, not a separate bot page.
     await expect(page.locator('.conversation-pane')).toBeVisible();
     await expect(page.locator('#bot-page')).toHaveCount(0);
     await expect(crumb(page)).toContainText('Scout');
+    // The brief stays in profile instructions; the new thread starts with bot-specific welcome.
+    await expect(page.locator('#transcript .bot-welcome h1')).toHaveText('Scout is ready.');
+    await expect(page.locator('#transcript .user-message, #transcript .agent-message')).toHaveCount(0);
+    await expect(page.locator('#transcript')).not.toContainText('What would you like to do?');
     await expect(crumb(page).locator('.bot-crumb-state')).toHaveText('Ready');
-    await expect(page.locator('#transcript').getByRole('heading', { name: 'Chat with Scout' })).toBeVisible();
     // The task composer, model picker included; bots own their workspace, so no project bar.
     await expect(page.locator('#prompt')).toHaveAttribute('placeholder', 'Message Scout…');
     await expect(page.getByRole('button', { name: 'Choose harness and model', exact: true })).toBeVisible();
@@ -116,14 +122,14 @@ test.describe('bots', () => {
     await showTasksView(page);
     await page.locator('#navigation .task-item', { hasText: 'Explore the project' }).click();
     await expect(crumb(page)).toHaveCount(0);
+    await showBotsView(page);
     await sidebar(page).getByRole('button', { name: 'Chat with Scout' }).click();
     await expect(crumb(page)).toContainText('Scout');
   });
 
   test('chatting with a bot streams like any task and keeps its brief out of the transcript', async ({ page }) => {
     await newBot(page);
-    await page.locator('#transcript').getByRole('button', { name: /What can you help me with/ }).click();
-    await expect(page.locator('#prompt')).toHaveValue('What can you help me with?');
+    await page.locator('#prompt').fill('What can you help me with?');
     await page.locator('#prompt').press('Enter');
     const sent = page.locator('#transcript .user-message').last();
     await expect(sent).toContainText('What can you help me with?');
@@ -150,6 +156,7 @@ test.describe('bots', () => {
     await showTasksView(page);
     await page.locator('#navigation .task-item', { hasText: 'Explore the project' }).click();
     await expect(page.locator('#composer')).not.toContainText('bot-thread-model');
+    await showBotsView(page);
     await sidebar(page).getByRole('button', { name: 'Chat with Scout' }).click();
     await expect(page.locator('#composer')).toContainText('bot-thread-model');
     await expect(crumb(page)).toContainText('Scout');
@@ -164,13 +171,21 @@ test.describe('bots', () => {
     const model = form.locator('select[name=model]');
     await expect(model).toHaveValue('default');
     await expect(model.locator('option[value="default"]')).toHaveText('Default');
-    await expect(form.locator('select[name=mode] option[value="auto"]')).toHaveCount(0);
-    await expect(form.locator('select[name=mode] option')).toHaveCount(3);
-
     await form.getByRole('textbox', { name: 'Name' }).fill('Copilot bot');
     await bots(page).getByRole('button', { name: 'Create bot', exact: true }).click();
     await expect(bots(page)).toBeHidden();
     await expect(crumb(page)).toContainText('Copilot bot');
+    await expect(page.locator('#transcript .bot-welcome h1')).toHaveText('Copilot bot is ready.');
+    await expect(page.locator('#transcript .user-message, #transcript .agent-message')).toHaveCount(0);
+    await expect(page.locator('#composer .stop-button')).toHaveCount(0);
+    // Copilot has no workspace-only rule, so it offers Ask first and Full access.
+    await openSettings(page, undefined, 'Copilot bot');
+    const rules = panel(page, 'Copilot bot').getByRole('radiogroup', { name: 'Rules' });
+    await expect(rules.getByRole('radio')).toHaveCount(2);
+    await expect(rules.getByRole('radio', { name: 'Workspace only' })).toHaveCount(0);
+    await expect(rules.getByRole('radio', { name: 'Ask first' })).toHaveAttribute('aria-checked', 'true');
+    await page.keyboard.press('Escape');
+    await expect(panel(page, 'Copilot bot')).toBeHidden();
     await expect(page.locator('#composer .provider-logo[data-provider="github-copilot"]')).toBeVisible();
 
     await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
@@ -180,15 +195,14 @@ test.describe('bots', () => {
     await expect(choice).toHaveAttribute('aria-current', 'true');
   });
 
-  test('the header pauses the bot and the welcome opens the right settings', async ({ page }) => {
+  test('the header pauses the bot and opens the right settings', async ({ page }) => {
     await newBot(page);
     await page.locator('#breadcrumb').getByRole('button', { name: 'Pause Scout' }).click();
     await expect(crumb(page).locator('.bot-crumb-state')).toHaveText('Paused');
     await expect(sidebar(page).getByRole('button', { name: 'Chat with Scout (paused)' })).toBeVisible();
     await page.locator('#breadcrumb').getByRole('button', { name: 'Resume Scout' }).click();
     await expect(crumb(page).locator('.bot-crumb-state')).toHaveText('Ready');
-    const setup = page.getByRole('group', { name: 'Set up Scout' });
-    await setup.getByRole('button', { name: 'Schedules' }).click();
+    await openSettings(page, 'Schedules');
     await expect(tab(page, 'Schedules')).toHaveAttribute('aria-selected', 'true');
     await page.keyboard.press('Escape');
     await expect(panel(page)).toBeHidden();
@@ -230,7 +244,7 @@ test.describe('bots', () => {
   test('Telegram setup walks through BotFather, catches a bad token, and pairs the first sender', async ({ page }) => {
     await captureOutside(page);
     await newBot(page);
-    await openSettings(page, 'Channels');
+    await openSettings(page, 'Connections');
     await panel(page).getByRole('button', { name: /^Telegram/ }).click();
     const form = panel(page).locator('.bots-connect');
     await expect(form.locator('.bots-steps > li')).toHaveCount(3);
@@ -254,7 +268,7 @@ test.describe('bots', () => {
     await expect.poll(async () => (await opened(page)).at(-1)).toBe('https://t.me/preview_pandacode_bot');
     const pending = panel(page).locator('.bots-pairing.pending');
     await expect(pending).toContainText('4821');
-    await expect(tab(page, 'Channels')).toContainText('1');
+    await expect(tab(page, 'Connections')).toContainText('1');
     await pending.getByRole('button', { name: 'Approve' }).click();
     await expect(panel(page).locator('.bots-pairing')).toContainText('approved');
     await expect(card.locator('details.bots-guide')).not.toHaveAttribute('open', '');
@@ -266,7 +280,7 @@ test.describe('bots', () => {
   test('Slack setup creates the app from a prefilled manifest and spots swapped tokens', async ({ page }) => {
     await captureOutside(page);
     await newBot(page);
-    await openSettings(page, 'Channels');
+    await openSettings(page, 'Connections');
     await panel(page).getByRole('button', { name: /^Slack/ }).click();
     const form = panel(page).locator('.bots-connect');
     await form.getByRole('button', { name: 'Create Slack app' }).click();
@@ -287,7 +301,7 @@ test.describe('bots', () => {
     await expect(panel(page).getByRole('alert').first()).toContainText('swapped');
     // Typed values survive the panel re-rendering.
     await tab(page, 'Memory').click();
-    await tab(page, 'Channels').click();
+    await tab(page, 'Connections').click();
     await expect(form.getByLabel('Bot token')).toHaveValue('xapp-1-A');
     await form.getByLabel('Bot token').fill('xoxb-1-B');
     await form.getByLabel('App-level token').fill('xapp-1-A');
@@ -299,7 +313,7 @@ test.describe('bots', () => {
   test('Discord setup offers the server invite and warns when Message Content is off', async ({ page }) => {
     await captureOutside(page);
     await newBot(page);
-    await openSettings(page, 'Channels');
+    await openSettings(page, 'Connections');
     await panel(page).getByRole('button', { name: /^Discord/ }).click();
     const form = panel(page).locator('.bots-connect');
     await expect(form.locator('.bots-steps > li')).toHaveCount(4);
@@ -317,7 +331,7 @@ test.describe('bots', () => {
   test('WhatsApp setup ends with copyable webhook details built from the tunnel address', async ({ page }) => {
     await captureOutside(page);
     await newBot(page);
-    await openSettings(page, 'Channels');
+    await openSettings(page, 'Connections');
     await panel(page).getByRole('button', { name: /^WhatsApp/ }).click();
     const form = panel(page).locator('.bots-connect');
     await expect(form.locator('.bots-steps > li')).toHaveCount(5);
@@ -335,7 +349,10 @@ test.describe('bots', () => {
     await guide.getByPlaceholder('https://….trycloudflare.com').fill('http://not-secure.example');
     await guide.getByRole('button', { name: 'Save' }).click();
     await expect(panel(page).getByRole('alert').first()).toContainText('https://');
-    await guide.getByPlaceholder('https://….trycloudflare.com').fill('https://quiet-river.trycloudflare.com/');
+    const address = guide.getByPlaceholder('https://….trycloudflare.com');
+    await address.fill('');
+    await address.fill('https://quiet-river.trycloudflare.com/');
+    await expect(address).toHaveValue('https://quiet-river.trycloudflare.com/');
     await guide.getByRole('button', { name: 'Save' }).click();
     const callback = guide.locator('code', { hasText: '/whatsapp/' });
     await expect(callback).toHaveText(/^https:\/\/quiet-river\.trycloudflare\.com\/whatsapp\/[0-9a-f-]{36}$/);
@@ -344,7 +361,7 @@ test.describe('bots', () => {
   test('web chat is one click, and phone access builds a private phone link', async ({ page }) => {
     await captureOutside(page);
     await newBot(page);
-    await openSettings(page, 'Channels');
+    await openSettings(page, 'Connections');
     await panel(page).getByRole('button', { name: /^Web chat/ }).click();
     await panel(page).getByRole('button', { name: 'Turn on web chat' }).click();
     const card = panel(page).locator('.bots-channel');
@@ -361,7 +378,7 @@ test.describe('bots', () => {
     await card.getByRole('button', { name: 'New link' }).click();
     await panel(page).getByRole('alertdialog', { name: 'Create a new web chat link?' }).getByRole('button', { name: 'New link' }).click();
     await expect(page.locator('#toast')).toHaveText('New link copied');
-    await expect(tab(page, 'Channels')).toContainText('1');
+    await expect(tab(page, 'Connections')).toContainText('1');
     await tab(page, 'Activity').click();
     await expect(panel(page).getByRole('button', { name: 'Open web chat' })).toBeVisible();
   });
@@ -390,17 +407,17 @@ test.describe('bots', () => {
     await expect(tab(page, 'Profile')).toHaveAttribute('aria-selected', 'true');
     // Sections are a vertical list, like Settings, and arrow keys move through it.
     await expect(panel(page).getByRole('tablist', { name: 'Bot settings' })).toHaveAttribute('aria-orientation', 'vertical');
-    await expect(panel(page).getByRole('tab')).toHaveText([/^Profile/, /^Channels/, /^Schedules/, /^Memory/, /^Activity/]);
+    await expect(panel(page).getByRole('tab')).toHaveText([/^Profile/, /^Connections/, /^Schedules/, /^Memory/, /^Activity/]);
     await tab(page, 'Profile').focus();
     await page.keyboard.press('ArrowDown');
-    await expect(tab(page, 'Channels')).toHaveAttribute('aria-selected', 'true');
-    await expect(tab(page, 'Channels')).toBeFocused();
-    await expect(panel(page).getByRole('tabpanel').getByRole('heading', { name: 'Channels', level: 2 })).toBeVisible();
+    await expect(tab(page, 'Connections')).toHaveAttribute('aria-selected', 'true');
+    await expect(tab(page, 'Connections')).toBeFocused();
+    await expect(panel(page).getByRole('tabpanel').getByRole('heading', { name: 'Connections', level: 2 })).toBeVisible();
     await page.keyboard.press('Home');
     await expect(tab(page, 'Profile')).toHaveAttribute('aria-selected', 'true');
     await expect(panel(page).getByRole('button', { name: 'Cancel' })).toHaveCount(0);
-    await panel(page).getByRole('textbox', { name: 'Job' }).fill('Finds answers');
-    await panel(page).getByRole('button', { name: 'Save' }).click();
+    await panel(page).getByRole('textbox', { name: 'Title' }).fill('Finds answers');
+    await expect(panel(page).locator('.bs-saved')).toHaveText('Saved');
     await expect(panel(page).locator('.bp-meta')).toContainText('Finds answers');
     await tab(page, 'Activity').click();
     await expect(panel(page).locator('.bots-activity')).toContainText('Settings changed');
@@ -415,7 +432,7 @@ test.describe('bots', () => {
     await panel(page).getByRole('menuitem', { name: 'Delete bot' }).click();
     await panel(page).getByRole('alertdialog', { name: 'Delete Scout?' }).getByRole('button', { name: 'Delete', exact: true }).click();
     await expect(panel(page)).toBeHidden();
-    await expect(sidebar(page).getByRole('button', { name: 'Add a bot' })).toBeVisible();
+    await expect(sidebar(page).getByRole('button', { name: 'Create your first bot' })).toBeVisible();
     await expect(crumb(page)).toHaveCount(0);
   });
 
@@ -435,6 +452,104 @@ test.describe('bots', () => {
     await page.locator('.search-trigger').click();
     await page.getByRole('textbox', { name: 'Search tasks and commands' }).fill('bots');
     await page.locator('#command-results').getByRole('button', { name: 'Bots' }).click();
+    await expect(bots(page)).toBeVisible();
+  });
+
+  test('the sidebar marks each bot\'s state: waiting first, then working and usage limits; paused bots fold under Hidden', async ({ page }) => {
+    await page.goto('/?bots=sample');
+    await showBotsView(page);
+    const row = (name: string) => sidebar(page).locator('.bot-card', { hasText: name });
+    const needs = sidebar(page).getByRole('group', { name: 'Needs you' });
+    await expect(needs.locator('.bot-card')).toHaveCount(1);
+    await expect(needs).toContainText('Scout');
+    await expect(row('Scout').locator('.bot-badge.waiting')).toHaveAttribute('aria-label', 'Needs approval');
+    await expect(row('Scout').locator('.bot-chip.waiting')).toHaveText('Review');
+    await expect(row('Writer').locator('.bot-badge.working i')).toHaveCount(3);
+    await expect(row('Ledger').locator('.bot-badge.limited')).toHaveAttribute('aria-label', /^Usage limit · Resets /);
+    await expect(row('Ledger').locator('.bot-chip.limited')).toHaveAttribute('title', /^Usage limit · Resets /);
+    await expect(row('Ledger').locator('.bot-chip.limited')).not.toContainText('Resets');
+    await expect(row('Ledger').locator('.bot-chip.limited svg')).toHaveCount(1);
+    await expect(row('Research').locator('.bot-role-tag')).toHaveCount(0);
+    await expect(row('Research').locator('.bot-card-preview')).toContainText('Research');
+    // Paused bots are hidden until the group is opened, and look asleep.
+    const hidden = sidebar(page).getByRole('button', { name: 'Hidden (1)' });
+    await expect(hidden).toHaveAttribute('aria-expanded', 'false');
+    await expect(row('Dozy')).toHaveCount(0);
+    await hidden.click();
+    await expect(row('Dozy')).toHaveClass(/paused/);
+    await expect(row('Dozy').locator('.bot-card-preview')).toContainText('Paused since');
+  });
+
+  test('right-click pins, hides, restores, duplicates and deletes a bot', async ({ page }) => {
+    await page.goto('/?bots=sample');
+    await showBotsView(page);
+    const row = (name: string) => sidebar(page).locator('.bot-card', { hasText: name });
+    const menu = (name: string) => page.getByRole('dialog', { name: `${name} actions` });
+    await row('Writer').click();
+    await expect(page.locator('#breadcrumb .bot-crumb')).toContainText('Writer');
+    await expect(page.locator('#transcript .history-notice')).toHaveCount(0);
+    await row('Writer').click({ button: 'right' });
+    await menu('Writer').getByRole('menuitem', { name: 'Pin' }).click();
+    await expect(sidebar(page).getByRole('group', { name: 'Pinned' })).toContainText('Writer');
+    // Pins are this device's view of the list (preview bots get new ids on reload, so check the store).
+    const writerId = await row('Writer').getAttribute('data-bot-row');
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('pandacode.botsPinned') ?? '[]'))).toEqual([writerId]);
+    await row('Writer').click({ button: 'right' });
+    await menu('Writer').getByRole('menuitem', { name: 'Unpin' }).click();
+    await expect(sidebar(page).getByRole('group', { name: 'Pinned' })).toHaveCount(0);
+    // Hide pauses the bot; Restore brings it back.
+    await row('Writer').click({ button: 'right' });
+    await menu('Writer').getByRole('menuitem', { name: 'Hide (pause)' }).click();
+    await expect(sidebar(page).getByRole('button', { name: 'Hidden (2)' })).toBeVisible();
+    await sidebar(page).getByRole('button', { name: 'Hidden (2)' }).click();
+    await row('Writer').click({ button: 'right' });
+    await menu('Writer').getByRole('menuitem', { name: 'Restore' }).click();
+    await expect(sidebar(page).getByRole('button', { name: 'Hidden (1)' })).toBeVisible();
+    await row('Ledger').click({ button: 'right' });
+    await menu('Ledger').getByRole('menuitem', { name: 'Duplicate bot' }).click();
+    await expect(row('Ledger copy')).toBeVisible();
+    await row('Ledger copy').click({ button: 'right' });
+    await menu('Ledger copy').getByRole('menuitem', { name: 'Edit bot' }).click();
+    const duplicate = panel(page, 'Ledger copy');
+    await expect(duplicate.locator('input[name="color"]')).toHaveValue('#14b8a6');
+    await expect(duplicate.locator('select[name="reasoningEffort"]')).toHaveValue('high');
+    await expect(duplicate.locator('input[name="backupModels"]')).toHaveValue('[{"provider":"codex","model":"gpt-5"}]');
+    await expect(duplicate.getByLabel('Switching to a backup')).toHaveValue('auto');
+    await expect(duplicate.getByLabel('Notifications')).not.toBeChecked();
+    await expect(duplicate.getByLabel('While working')).toHaveValue('steer');
+    await expect(duplicate.getByLabel('Show the plan before long tasks')).toBeChecked();
+    await page.keyboard.press('Escape');
+    await expect(duplicate).toBeHidden();
+    await row('Ledger copy').click({ button: 'right' });
+    await menu('Ledger copy').getByRole('menuitem', { name: 'Delete bot…' }).click();
+    await page.getByRole('dialog', { name: 'Delete Ledger copy?' }).getByRole('button', { name: 'Delete bot' }).click();
+    await expect(row('Ledger copy')).toHaveCount(0);
+    await row('Ledger').click({ button: 'right' });
+    await menu('Ledger').getByRole('menuitem', { name: 'Edit bot' }).click();
+    await expect(panel(page, 'Ledger')).toBeVisible();
+  });
+
+  test('rows drag to reorder, and the order is saved', async ({ page }) => {
+    await page.goto('/?bots=sample');
+    await showBotsView(page);
+    const names = () => sidebar(page).getByRole('group', { name: 'Other bots' }).locator('.bot-row-name').allTextContents();
+    await expect.poll(names).toHaveLength(2);
+    const [first, second] = await names();
+    await sidebar(page).locator('.bot-card', { hasText: second }).dragTo(sidebar(page).locator('.bot-card', { hasText: first }));
+    await expect.poll(names).toEqual([second, first]);
+    const ids = await sidebar(page).locator('[data-bot-row]').evaluateAll(rows => rows.map(row => (row as HTMLElement).dataset.botRow));
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('pandacode.botsOrder') ?? '[]'))).toEqual(ids);
+  });
+
+  test('loading shows skeleton rows, then the empty state offers to create a bot', async ({ page }) => {
+    await page.goto('/?botsDelay=4000', { waitUntil: 'commit' });
+    await showBotsView(page);
+    await expect(sidebar(page).getByRole('status', { name: 'Loading bots' })).toBeVisible();
+    await expect(sidebar(page).locator('.bot-row-skeleton')).toHaveCount(3);
+    await expect(sidebar(page).getByText('No bots yet')).toBeVisible({ timeout: 10_000 });
+    await expect(sidebar(page).locator('.bot-row-skeleton')).toHaveCount(0);
+    await sidebar(page).getByRole('button', { name: 'Create your first bot or channel' }).click();
+    await sidebar(page).getByRole('menu', { name: 'Create' }).getByRole('menuitem', { name: 'New bot' }).click();
     await expect(bots(page)).toBeVisible();
   });
 });

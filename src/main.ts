@@ -10,6 +10,8 @@ import './motion.css';
 import './sidebar-tree.css';
 import './inspector-bar.css';
 import './message-queue.css';
+import './bot-shared-channels.css';
+import './bots.css';
 import './usage-limit.css';
 import './document-viewer.css';
 import './tool-trace.css';
@@ -29,6 +31,8 @@ import { call, chooseFolder, preview, subscribe } from './bridge';
 import { jjChip, showJjPanel, type JjStatus } from './jj';
 import { $, button, escape, fileIcon, fileIconsReady, icon, markdown, morph } from './dom';
 import { botAvatarHtml } from './bot-avatars';
+import * as botThread from './bot-thread';
+import type { Activity as BotActivity, FailoverAsk } from './bots';
 import { mountExternalLinks } from './external-links';
 import { bindMessageActions, messageActionsHtml } from './message-actions';
 import { providerLogo } from './provider-logos';
@@ -55,7 +59,8 @@ import type { RemoteHost, RemoteRepoCheck, RemoteStatus, RemoteTarget } from './
 import { LOCAL, behindDialog, behindText, computerControl, computerItems } from './remote-target';
 import './cloud-agents.css';
 import { SETUP_CHOICE, cloudActionItems, cloudIcon, cloudProvider, cloudStrip, deleteMachineDialog, harnessRefusal, type CloudStage, type CloudTarget } from './cloud-agents';
-import { botsBarHtml, botsListHtml, botsPanelHeadHtml, storedSidebarView, storeSidebarView, syncSeen, type SidebarView } from './sidebar-bots';
+import { botsBarHtml, botsListHtml, botsPanelHeadHtml, markAllBotsRead, moveBot, pinnedBots, setBotPinned, storedSidebarView, storeSidebarView, syncSeen, type BotSignals, type SidebarView } from './sidebar-bots';
+import { sharedChannelActionsHtml, sharedChannelComposerHtml, sharedChannelThreadHtml, type SharedChannelDetail, type SharedChannelSummary, type SharedChannelUiOptions } from './bot-shared-channels';
 import { connectAgentUiActions, type AgentUiAction } from './agent-ui-actions';
 import { createAgentInput, type AgentInput } from './agent-input';
 import { mountSlashCommands, type SlashCommand } from './slash-commands';
@@ -100,6 +105,8 @@ const state = {
   browserAttachments: new Map<string, BrowserAttachment[]>(),
   moodboardAttachments: new Map<string, { id: string; projectId: string; name: string }[]>(),
   generation: 0, hasOlder: false,
+  sharedChannelId: '', sharedChannelDetail: null as SharedChannelDetail | null, sharedChannelRequest: 0,
+  sharedChannelDrafts: new Map<string, string>(), sharedChannelLimits: new Map<string, number>(), sharedChannelFromBottom: null as number | null, sharedChannelScrollTop: 0, sharedChannelAtBottom: true, sharedChannelPosting: new Set<string>(),
 };
 let renderFrame = 0;
 let navigationFrame = 0;
@@ -132,6 +139,7 @@ let creatingTask = false;
 let openingSupport = false;
 let activityTimer = 0;
 let workTimer = 0;
+let channelWorkingLabelTimer = 0;
 let browserPanel: BrowserPanel | undefined, browserWanted = false;
 let simulatorPanel: ReturnType<typeof import('./simulator').mountSimulator> | undefined, simulatorLoading: Promise<void> | undefined;
 let vmPanel: ReturnType<typeof import('./vm-panel').mountVmPanel> | undefined, vmLoading: Promise<void> | undefined;
@@ -792,7 +800,8 @@ function closeChoiceMenu(): void { cancelPendingMenu(); const close = choiceMenu
 function closeMenus(): void { ++architectSetupRequest; ++jevTestRequest; jevTestCleanup?.(); architectSetupCleanup?.(); closeModelPicker(); closeProjectPicker(); closeChoiceMenu(); }
 function closeContentMenus(): void {
   // Header/browser controls survive transcript and composer updates.
-  if (!jevTestCleanup && (choiceMenuAnchor ?? pendingMenuOpen?.anchor)?.id !== 'task-menu-trigger') closeMenus();
+  const anchor = choiceMenuAnchor ?? pendingMenuOpen?.anchor;
+  if (!jevTestCleanup && anchor?.id !== 'task-menu-trigger' && !anchor?.closest('#sidebar-bots-panel')) closeMenus();
 }
 function beginMenuOpen(anchor: HTMLElement): { epoch: number; release: () => void } {
   cancelPendingMenu();
@@ -1028,6 +1037,13 @@ function renderHeader(): void {
   projectRunner.paint();
   const fresh = newTaskView(), bot = botForThread(), chat = chatTask(session());
   $('.conversation-pane').classList.toggle('new-task-page', fresh);
+  $('.conversation-pane').classList.toggle('channel-thread', Boolean(state.sharedChannelId));
+  document.body.classList.toggle('shared-channel-thread', Boolean(state.sharedChannelId));
+  if (state.sharedChannelId) {
+    const channel = state.sharedChannelDetail;
+    $('#breadcrumb').innerHTML = `<button class="channel-back" data-action="close-shared-channel" aria-label="Back to conversation">${icon('chevron')}</button><span>${escape(channel ? `#${channel.name}` : 'Shared channel')}</span>`;
+    return;
+  }
   // A chat has no project: no project bar, deploy or run script.
   document.body.classList.toggle('chat-thread', chat);
   $('.conversation-pane').classList.toggle('bot-thread', Boolean(bot));
@@ -1041,21 +1057,14 @@ function renderHeader(): void {
 }
 /** What the empty prompt invites: a task, or a message to the bot whose thread this is. */
 function composerPlaceholder(): string { const bot = botForThread(); return bot ? `Message ${escape(bot.name)}…` : chatTask(session()) ? 'Ask anything…' : 'Describe a task…'; }
-/** A bot thread's header: who you're talking to, its state, and its settings. */
+/** A bot thread's header: who you're talking to, where the thread comes from, and its settings. */
 function botCrumb(bot: import('./bots').Bot): string {
   const s = session();
   const working = state.sessions.some(task => task.projectId === bot.projectId && isRunning(task.id));
-  const status = bot.paused ? 'Paused' : working ? 'Working' : 'Ready';
   // Channel threads and scheduled work name where they come from; the bot's own chat needs no label.
   const where = s && s.id !== bot.desktopSession ? s.title.split(' · ').slice(1).join(' · ') : '';
-  return `<span class="bot-crumb">${botAvatarHtml(bot.avatar, bot.name, 'bot-crumb-avatar')}<strong>${escape(bot.name)}</strong>${where ? `<span class="bot-crumb-where">${escape(where)}</span>` : ''}<span class="bot-crumb-state" data-state="${status.toLowerCase()}">${status}</span></span><button class="icon-button bot-crumb-action" data-action="bot-pause" data-bot="${escape(bot.id)}" aria-label="${bot.paused ? 'Resume' : 'Pause'} ${escape(bot.name)}" title="${bot.paused ? 'Resume: schedules, check-ins and channels continue' : 'Pause: stop work and hold schedules and messages'}" aria-pressed="${bot.paused}">${icon(bot.paused ? 'play' : 'pause')}</button><button class="bot-crumb-settings" data-action="bot-settings" data-bot="${escape(bot.id)}" aria-label="${escape(bot.name)} settings" title="Profile, memory, schedules, channels and rules">${icon('settings')}<span>Settings</span></button>`;
-}
-/** An empty bot conversation: who it is, a few things to ask, and the settings that make it useful. */
-function botWelcome(bot: import('./bots').Bot): string {
-  const asks = ['What can you help me with?', 'Remember that I prefer short, direct answers.', 'Every weekday at 9, send me a summary of what changed.'];
-  const setup = ([['profile', 'edit', 'Instructions'], ['memory', 'leaf', 'Memory'], ['schedules', 'refresh', 'Schedules'], ['channels', 'globe', 'Channels']] as const)
-    .map(([tab, glyphName, label]) => `<button data-action="bot-settings" data-bot="${escape(bot.id)}" data-tab="${tab}">${icon(glyphName)}${label}</button>`).join('');
-  return `<div class="new-task-welcome bot-welcome">${botAvatarHtml(bot.avatar, bot.name, 'bot-welcome-avatar')}<h1>Chat with ${escape(bot.name)}</h1><p>${escape(bot.role || 'Your bot remembers, works on a schedule and answers you here or in your channels.')}</p><div class="prompt-suggestions">${asks.map(text => `<button data-action="suggest" data-text="${escape(text)}">${escape(text)} ${icon('chevron')}</button>`).join('')}</div><div class="bot-welcome-setup" role="group" aria-label="Set up ${escape(bot.name)}">${setup}</div></div>`;
+  const next = s && isRunning(s.id) ? botThread.nextModel(s.id) : undefined;
+  return botThread.crumbHtml(bot, { where, status: bot.paused ? 'Paused' : working ? 'Working' : 'Ready', nextModel: s && next ? { running: modelLabel(s), next: next.label } : undefined });
 }
 /** Where a turn's spawned workers appear: right after what the architect said in that turn. */
 function workerSlot(turn: { user?: Message; coordination?: Message }): string {
@@ -1097,7 +1106,25 @@ function renderTranscript(preservePosition = false): void {
   transcript.removeAttribute('aria-busy');
   const toolViews = captureTools(transcript), groupViews = captureToolGroups(transcript), turnViews = captureTurns(transcript), changeViews = captureChangeCards(transcript), scrollTop = transcript.scrollTop;
   const readingTool = readingTranscriptTool();
+  if (state.sharedChannelId) {
+    const channel = state.sharedChannelDetail;
+    transcript.innerHTML = channel ? sharedChannelThreadHtml(channel, sidebarBots) : '<p class="history-notice" role="status">Loading channel…</p>';
+    if (channel) {
+      for (const node of transcript.querySelectorAll<HTMLElement>('.bc-message-text[data-message-id]')) {
+        const message = channel.messages.find(item => item.id === node.dataset.messageId);
+        if (message) void markdown(node, message.text, transcript).catch(report);
+      }
+      const history = transcript.querySelector<HTMLElement>('.bc-history');
+      if (history) {
+        // After "Show earlier messages", the rows the user was reading stay where they were.
+        history.scrollTop = state.sharedChannelFromBottom !== null ? history.scrollHeight - state.sharedChannelFromBottom : state.sharedChannelAtBottom ? history.scrollHeight : state.sharedChannelScrollTop;
+        state.sharedChannelFromBottom = null;
+      }
+    }
+    return;
+  }
   const s = session();
+  botThread.noteThread(s?.id ?? '');
   if (!s) { transcript.innerHTML = `<div class="welcome"><span class="welcome-mark" aria-hidden="true">${icon('bamboo')}</span><h1>${project() ? 'No task selected' : 'Choose a project'}</h1><button class="primary-button" data-action="${project() ? 'new-task' : 'add-project'}">${icon('plus')}${project() ? 'Start a task' : 'Open a project'}</button></div>`; return; }
   if ((state.messagesLoading || state.messagesError) && !state.streams.has(s.id) && !finishingStreams.has(s.id)) { transcript.innerHTML = `<p class="history-notice" role="status">${state.messagesError ? 'Unable to load this task. Select it again to retry.' : 'Loading conversation…'}</p>`; return; }
   if (state.view === 'board' && newTaskView()) {
@@ -1105,12 +1132,17 @@ function renderTranscript(preservePosition = false): void {
     return;
   }
   const bot = botForThread();
-  if (newTaskView() && bot) { transcript.innerHTML = `${botWelcome(bot)}<div id="stream-region"></div>`; return; }
+  if (newTaskView() && bot && !isRunning(s.id)) {
+    transcript.innerHTML = `${botThread.welcomeHtml(bot)}<div id="stream-region"></div>`;
+    botThread.decorateTranscript(transcript, bot, s.id, state.messages, botSwitches.get(s.id) ?? [], botMessages.get(s.id) ?? []);
+    if (!botThreadMetaLoaded.has(s.id)) void refreshBotThreadMeta(bot, s.id);
+    return;
+  }
   if (newTaskView() && chatTask(s)) {
     transcript.innerHTML = `<div class="new-task-welcome chat-welcome"><span class="new-task-mark" aria-hidden="true">${icon('bamboo')}</span><h1>What’s on your mind?</h1><button id="welcome-project" class="welcome-project" data-action="change-task-project" aria-haspopup="dialog" aria-expanded="false">Move to project…</button></div><div id="stream-region"></div>`;
     return;
   }
-  if (newTaskView()) {
+  if (newTaskView() && !bot) {
     const name = project()?.name ?? 'this project';
     transcript.innerHTML = `<div class="new-task-welcome"><span class="new-task-mark" aria-hidden="true">${icon('bamboo')}</span><h1 aria-label="What should we build in ${escape(name)}?">What should we build in <button id="welcome-project" class="welcome-project" data-action="change-task-project" aria-label="Change task project" aria-haspopup="dialog" aria-expanded="false" title="${escape(project()?.path)}" ${s.worktreePath ? 'disabled' : ''}>${escape(name)}</button>?</h1></div><div id="stream-region"></div>`;
     return;
@@ -1118,7 +1150,7 @@ function renderTranscript(preservePosition = false): void {
   const turns = groupTurns(visibleMessages());
   const previousMarkdown = new Map([...transcript.querySelectorAll<HTMLElement>('[data-markdown]')]
     .map(node => [node.dataset.markdown!, node]));
-  transcript.innerHTML = `${state.messages.length ? '' : '<div class="empty-conversation"><h2>What would you like to do?</h2><div class="prompt-suggestions"><button data-action="suggest" data-text="Explore this project and explain its architecture.">Explore this project '+icon('chevron')+'</button><button data-action="suggest" data-text="Review the current changes for bugs and suggest improvements.">Review my changes '+icon('chevron')+'</button></div></div>'}${turns.map(turn => (turn.user ? messageHtml(turn.user) : '') + (turn.handoff ? messageHtml(turn.handoff) : '') + (turn.coordination ? renderCoordination(turn.coordination) : '') + (turn.activity.length ? activityHtml(turn.key, turnLabel(turn.durationMs, turn.estimated), savedActivityHtml(turn.activity)) : '') + turn.errors.map(messageHtml).join('') + (turn.final ? messageHtml(turn.final) : '') + workerSlot(turn) + changesRow(s.id, turn.changes)).join('')}<div id="stream-region"></div><div id="team-progress-host" class="turn-changes-row" hidden></div>`;
+  transcript.innerHTML = `${state.messages.length === 0 && !bot ? '<div class="empty-conversation"><h2>What would you like to do?</h2><div class="prompt-suggestions"><button data-action="suggest" data-text="Explore this project and explain its architecture.">Explore this project '+icon('chevron')+'</button><button data-action="suggest" data-text="Review the current changes for bugs and suggest improvements.">Review my changes '+icon('chevron')+'</button></div></div>' : ''}${turns.map(turn => (turn.user ? messageHtml(turn.user) : '') + (turn.handoff ? messageHtml(turn.handoff) : '') + (turn.coordination ? renderCoordination(turn.coordination) : '') + (turn.activity.length ? activityHtml(turn.key, turnLabel(turn.durationMs, turn.estimated), savedActivityHtml(turn.activity)) : '') + turn.errors.map(messageHtml).join('') + (turn.final ? messageHtml(turn.final) : '') + workerSlot(turn) + changesRow(s.id, turn.changes)).join('')}<div id="stream-region"></div><div id="team-progress-host" class="turn-changes-row" hidden></div>`;
   const byId = new Map(state.messages.map(message => [String(message.id), message]));
   transcript.querySelectorAll<HTMLElement>('[data-markdown]').forEach(el => {
     const message = byId.get(el.dataset.markdown!);
@@ -1143,6 +1175,10 @@ function renderTranscript(preservePosition = false): void {
   if (restoreAnchor) restoreAnchor();
   else if (readingTool) transcript.scrollTop = scrollTop;
   else followTranscript();
+  if (bot) {
+    botThread.decorateTranscript(transcript, bot, s.id, state.messages, botSwitches.get(s.id) ?? [], botMessages.get(s.id) ?? []);
+    if (!botThreadMetaLoaded.has(s.id)) void refreshBotThreadMeta(bot, s.id);
+  }
 }
 function savedActivityHtml(messages: Message[]): string {
   return groupToolRuns(messages, message => message.role === 'tool' ? savedToolKey(message) : undefined)
@@ -1206,7 +1242,7 @@ function messageHtml(m: Message): string {
 }
 // Context appended at send time (files, documents, folders, GitHub, browser, images) folds
 // behind one summary so the transcript reads as what you said, with the payload a click away.
-const CONTEXT_BOUNDARY = /\n\n(?=(?:File|Document|Folder|GitHub|Browser element) context[ :(]|Attached (?:browser screenshot|image|mockup)[ :]|Bot brief:\n|Response style \(PandaCode token saver)/;
+const CONTEXT_BOUNDARY = /\n\n(?=(?:File|Document|Folder|GitHub|Browser element) context[ :(]|Attached (?:browser screenshot|image|mockup)[ :]|Bot brief:\n|Your ongoing role is:|Response style \(PandaCode token saver)/;
 function userContent(content: string): string {
   const index = content.search(CONTEXT_BOUNDARY);
   if (index < 0) return escape(content);
@@ -1258,6 +1294,8 @@ function renderStream(): void {
   // A final text frame can run while the saved transcript is loading. Retain
   // its tool controls until renderTranscript can transfer their reading state.
   if (!current) { updateWorkTimer(); return; }
+  // A bot's welcome is for an idle, empty thread; its first live event (an approval, say) replaces it.
+  if (isRunning() && region.parentElement?.querySelector('.bot-welcome-setup')) { renderTranscript(); return; }
   const transcript = $('#transcript');
   const scrollTop = transcript.scrollTop, readingTool = readingTranscriptTool();
   if (region.dataset.sessionId !== state.sessionId || !region.querySelector('.live-text')) {
@@ -1284,6 +1322,8 @@ function renderStream(): void {
   const status = region.querySelector<HTMLElement>('.live-status')!;
   const label = current.status || 'Working…'; if (status.textContent !== label) status.textContent = label;
   status.hidden = Boolean(finishing) || current.approvals.size > 0 || current.inputs.size > 0;
+  const bot = botForThread(), sessionId = state.sessionId;
+  if (bot) botThread.paintWorking(region, bot, provider()?.name || 'the agent', () => state.streams.get(sessionId), Boolean(finishing));
   updateWorkTimer();
   if (readingTool) transcript.scrollTop = scrollTop;
   else followTranscript();
@@ -1421,25 +1461,50 @@ function renderComposer(): void {
   if (oldPrompt?.dataset.sessionId && !deletedSessions.has(oldPrompt.dataset.sessionId)) state.drafts.set(oldPrompt.dataset.sessionId, oldPrompt.value);
   // Re-rendering replaces the textarea; keep typing focus and the caret, since people type while agents work.
   const typing = oldPrompt && document.activeElement === oldPrompt ? { id: oldPrompt.dataset.sessionId, start: oldPrompt.selectionStart, end: oldPrompt.selectionEnd } : null;
+  if (state.sharedChannelId) {
+    const channel = state.sharedChannelDetail;
+    // Refreshes rewrite the actions; an open Reassign menu for the same message stays open.
+    const reassign = document.querySelector<HTMLElement>('#composer-area .bc-reassign-menu:not([hidden]) [data-message]')?.dataset.message;
+    $('#composer-area').innerHTML = channel ? `${sharedChannelActionsHtml(channel, sidebarBots)}${sharedChannelComposerHtml(channel)}` : '';
+    const menu = reassign ? document.querySelector<HTMLElement>(`#composer-area .bc-reassign-menu:has([data-message="${CSS.escape(reassign)}"])`) : null;
+    if (menu) { menu.hidden = false; menu.previousElementSibling?.setAttribute('aria-expanded', 'true'); }
+    const prompt = document.querySelector<HTMLTextAreaElement>('#shared-channel-prompt');
+    const posting = state.sharedChannelPosting.has(state.sharedChannelId);
+    if (prompt) { prompt.value = state.sharedChannelDrafts.get(state.sharedChannelId) ?? ''; prompt.disabled = Boolean(channel?.archived) || !channel?.memberIds.length || posting; }
+    const send = document.querySelector<HTMLButtonElement>('#shared-channel-composer button[type="submit"]');
+    if (send) send.disabled = posting;
+    return;
+  }
   const s = session();
   if (!s) { $('#composer-area').innerHTML = ''; browserPanel?.refresh(); return; }
   syncOverlayContext({ projectId: s.projectId, provider: s.provider, model: s.model || 'default', mode: s.mode, reasoningEffort: s.reasoningEffort ?? null });
   if (taskStage(s) === 'completed' || s.archived) { $('#composer-area').innerHTML = `<div class="board-completed-note">${s.archived ? 'This task is archived.' : 'This task is complete.'}${state.view === 'conversation' ? `<button type="button" class="secondary-button" data-action="${s.archived ? 'archive-task' : 'board-reopen'}">${s.archived ? 'Restore task' : 'Reopen task'}</button>` : s.archived ? '' : ' Reopen it above to continue.'}</div>`; browserPanel?.refresh(); return; }
   const previous = state.drafts.get(s.id) ?? '';
   const running = isRunning(), behavior = approvalMode(s.provider, s.mode);
-  const team = teams.get(s.id), modelLocked = running && !team;
+  // A bot's next model can be picked mid-turn; it applies from the next turn.
+  const team = teams.get(s.id), modelLocked = running && !team && !botForThread();
   $('#composer-area').innerHTML = `<form id="composer" class="composer ${running ? 'composer-running' : ''}"><div id="attachments" class="attachments">${attachmentBar(s)}</div><textarea id="prompt" data-session-id="${escape(s.id)}" aria-label="Message your coding agent" placeholder="${running ? (team ? 'Queue a follow-up…' : 'Queue a follow-up · ⌘↩ steers now') : composerPlaceholder()}" aria-description="${running ? `Enter to queue for when the agent finishes.${team ? '' : ' Command Enter to steer the running turn.'}` : 'Enter to send. Shift Enter for a new line.'}" rows="2"></textarea><div class="composer-toolbar"><div class="composer-tools">${button('attach', 'Attach files for context', 'plus', '', 'type="button"')}<button type="button" id="model-picker-trigger" class="model-picker" data-action="model" aria-label="Choose harness and model" aria-description="${escape([modelLabel(s), teamModelLabel(s)].filter(Boolean).join(' '))}" aria-haspopup="dialog" aria-expanded="false" title="${team && !team.config.auto ? 'Choose team profile and models' : 'Choose harness and model'}" ${modelLocked ? 'disabled' : ''}><span class="provider-small ${s.provider}">${providerLogo(s.provider)}</span><span class="model-detail" data-model-label>${escape(modelLabel(s))}</span><span class="team-model-count" data-team-model-label ${teamModelLabel(s) ? '' : 'hidden'}>${teamModelLabel(s)}</span>${icon('down')}</button><span class="composer-separator"></span><button type="button" id="mode-picker-trigger" class="mode-picker" data-action="mode" data-mode="${behavior.id}" title="${escape(behavior.description)}" aria-haspopup="dialog" aria-expanded="false" ${running ? 'disabled' : ''}>${icon(behavior.icon)}<span>${escape(behavior.label)}</span>${icon('down')}</button>${teamButton(s)}${tokenSaver.button(s.id)}</div>${running && !team ? `<button type="button" class="steer-button" data-action="steer" title="Send into the running turn (${shortcut('Enter')})" aria-label="Steer the running turn">${icon('spark')}<span>Steer</span></button>` : ''}${running ? '<button type="button" class="send-button stop-button" data-action="stop" title="Stop task (Esc)" aria-label="Stop task">' + icon('stop') + '</button>' : '<button type="submit" class="send-button" title="Send message (' + shortcut('Enter') + ')" aria-label="Send message">' + icon('arrow') + '</button>'}</div></form>${s.archived ? '<div class="composer-footnote"><span>Archived task</span></div>' : ''}`;
   $('#composer-area').insertAdjacentHTML('afterbegin', worktrees.contextBar(s, newTaskView()));
   // Approvals sit above everything that rides on the prompt, the context bar included.
   $('#composer-area').insertAdjacentHTML('afterbegin', '<div id="approval-bar"></div>');
-  $('#composer').insertAdjacentHTML('beforebegin', cloudStrip(s) + (running ? '' : limitBanner(s)) + queuePanel({ entries: state.queues.get(s.id) ?? [], hold: state.queueHolds.get(s.id) ?? null, running, steerable: !team, sendable: !botProjects.has(s.projectId) && !s.archived, editingId: state.queueEditing || null, busy: state.queueBusy.has(s.id), steering: steeringQueued }));
-  renderApprovalBar(); resizePrompt();
+  $('#composer-area').insertAdjacentHTML('afterbegin', '<div id="bot-failover-bar"></div>');
+  $('#composer').insertAdjacentHTML('beforebegin', cloudStrip(s) + (running ? '' : limitBanner(s)) + queuePanel({ entries: state.queues.get(s.id) ?? [], hold: state.queueHolds.get(s.id) ?? null, running, steerable: !team, sendable: !botProjects.has(s.projectId) && !s.archived, editingId: state.queueEditing || null, busy: state.queueBusy.has(s.id), steering: steeringQueued, notSteered, agentName: botForThread()?.name ?? provider(s.provider)?.name }));
+  renderApprovalBar(); renderBotFailover(); resizePrompt();
   void github.status(s.projectId);
   const prompt = document.querySelector<HTMLTextAreaElement>('#prompt');
+  const activeBot = running ? botForThread() : undefined;
+  if (prompt && activeBot) {
+    const entersSteer = activeBot.whileWorking === 'steer';
+    prompt.placeholder = `Enter ${entersSteer ? 'steers' : 'queues'} for ${activeBot.name} · ⌘↩ ${entersSteer ? 'queues' : 'steers'}`;
+    prompt.setAttribute('aria-description', `Enter to ${entersSteer ? 'steer current work' : 'queue for after it finishes'}. Command Enter to ${entersSteer ? 'queue for after it finishes' : 'steer now'}.`);
+    const action = document.querySelector<HTMLButtonElement>('#composer-area .steer-button');
+    if (action) { const label = entersSteer ? 'Queue' : 'Steer'; action.setAttribute('aria-label', `${label} while ${activeBot.name} is working`); action.title = `${label} while ${activeBot.name} is working`; action.querySelector('span')!.textContent = label; }
+  }
   // The prompt stays open during a run: messages typed then are queued or steered.
   // A finished run whose history failed to load waits for Retry before anything else is sent.
   if (prompt) { prompt.value = previous; prompt.disabled = state.messagesLoading || Boolean(state.messagesError) || Boolean(finishingStreams.get(s.id)?.error); }
   if (prompt && typing?.id === s.id && !prompt.disabled) { prompt.focus({ preventScroll: true }); prompt.setSelectionRange(typing.start, typing.end); }
+  if (botForThread()) botThread.paintReplyChip(s.id);
   const footnote = document.querySelector('.composer-footnote');
   if (footnote) footnote.insertAdjacentHTML('beforeend', '<span class="context-indicator" hidden></span>');
   else $('#composer-area').insertAdjacentHTML('beforeend', '<div class="composer-footnote is-empty"><span class="context-indicator" hidden></span></div>');
@@ -2031,15 +2096,45 @@ function composerPayload(s: Session): { text: string; items: QueuedMessage['atta
   const text = document.querySelector<HTMLTextAreaElement>('#prompt')?.value.trim() ?? '';
   return { text, items: [...attachments.list(s.id), ...state.attachments.map(path => ({ kind: 'path' as const, path }))] as QueuedMessage['attachments'] };
 }
+async function botMessageFromComposer(s: Session, bot: import('./bots').Bot, text: string, promptItems: ReturnType<typeof attachments.list>, paths: string[], browserItems: BrowserAttachment[], moodboardItems: { id: string; projectId: string; name: string }[], forceQueue = false): Promise<void> {
+  const contexts = await Promise.all(paths.map(path => fileContext(s, path)));
+  const imageIds = [...browserItems.filter(item => item.kind === 'screenshot').map(item => item.id), ...attachments.imageIds(promptItems)];
+  const content = text + contexts.join('') + browserContextText(browserItems) + attachments.contextFor(promptItems) + await github.contextFor(s.projectId, s.id, text) + tokenSaver.contextFor(s.id)
+    || (imageIds.length || moodboardItems.length ? 'Please review the attached material.' : '');
+  await call('bot_message', { botId: bot.id, text: content, imageIds, moodboardIds: moodboardItems.map(item => item.id), forceQueue });
+}
 function clearComposer(s: Session): void {
   const prompt = document.querySelector<HTMLTextAreaElement>('#prompt');
   if (prompt) prompt.value = '';
   state.drafts.delete(s.id); attachments.clear(s.id); state.attachments = [];
 }
 /** Queues the composer's message to send when the agent finishes. */
-async function enqueueFromComposer(): Promise<void> {
+async function enqueueFromComposer(forceQueue = false): Promise<void> {
   const s = session(); if (!s) return;
   const { text, items } = composerPayload(s);
+  const bot = sidebarBots.find(item => item.desktopSession === s.id);
+  if (bot) {
+    const promptItems = attachments.list(s.id), paths = [...state.attachments];
+    const browserItems = [...(state.browserAttachments.get(s.id) ?? [])];
+    const moodboardItems = (state.moodboardAttachments.get(s.id) ?? []).filter(item => item.projectId === s.projectId);
+    if (!text && !paths.length && !browserItems.length && !moodboardItems.length && !promptItems.length) return;
+    clearComposer(s);
+    state.browserAttachments.delete(s.id);
+    const sentBoards = new Set(moodboardItems.map(item => item.id));
+    state.moodboardAttachments.set(s.id, (state.moodboardAttachments.get(s.id) ?? []).filter(item => !sentBoards.has(item.id)));
+    renderComposer(); document.querySelector<HTMLTextAreaElement>('#prompt')?.focus();
+    try {
+      await botMessageFromComposer(s, bot, text, promptItems, paths, browserItems, moodboardItems, forceQueue);
+      // The gateway may have queued it; show the row now rather than on the next queue event.
+      setQueue(s.id, await call<QueuedMessage[]>('queue_list', { sessionId: s.id }).catch(() => queueOf(s.id)));
+    } catch (error) {
+      restoreComposer(s, text, promptItems, paths);
+      if (browserItems.length) state.browserAttachments.set(s.id, browserItems);
+      if (moodboardItems.length) state.moodboardAttachments.set(s.id, [...moodboardItems, ...(state.moodboardAttachments.get(s.id) ?? [])]);
+      throw error;
+    } finally { if (s.id === state.sessionId) renderComposer(); }
+    return;
+  }
   if (!text && !items.length) return;
   // Clear at once so the next message can be typed while this one is saved.
   const promptItems = attachments.list(s.id), paths = [...state.attachments];
@@ -2070,9 +2165,10 @@ const steeringQueued = new Set<string>();
 /** Sends text into the running turn and shows it at once as a pending user message. */
 async function steer(s: Session, text: string): Promise<void> {
   const result = await call<{ id?: string; mode?: SteerMode } | null>('steer_task', { sessionId: s.id, text });
-  const messageId = transientId--, known = result?.id ? steers.get(result.id) : undefined;
+  const known = result?.id ? steers.get(result.id) : undefined, messageId = known?.messageId ?? transientId--;
   if (result?.id) steers.set(result.id, { sessionId: s.id, text, mode: known?.mode ?? result.mode ?? 'live', status: known?.status ?? 'pending', messageId });
-  if (s.id !== state.sessionId) return;
+  // The event got here first and already showed the message.
+  if (s.id !== state.sessionId || known?.messageId !== undefined) return;
   state.messages = [...state.messages, { id: messageId, sessionId: s.id, role: 'user', content: text, createdAt: Date.now() }]; renderTranscript(true);
 }
 function steerEvent(event: AgentEvent): void {
@@ -2080,15 +2176,21 @@ function steerEvent(event: AgentEvent): void {
   if (!data?.id || !data.status) return;
   const known = steers.get(data.id);
   if (known?.status === 'failed') return;
-  steers.set(data.id, { sessionId: event.sessionId, text: event.text, ...known, mode: data.mode ?? known?.mode ?? 'live', status: data.status });
-  if (data.status === 'failed') void requeueSteer(event.sessionId, event.text || known?.text || '');
-  if (event.sessionId === state.sessionId && known?.messageId !== undefined) renderTranscript(true);
+  // A steer this window did not send (a bot routes Enter natively) still shows as the user's message.
+  const shown = !known && data.status !== 'failed' && event.text && event.sessionId === state.sessionId ? transientId-- : undefined;
+  if (shown !== undefined) state.messages = [...state.messages, { id: shown, sessionId: event.sessionId, role: 'user', content: event.text, createdAt: Date.now() }];
+  steers.set(data.id, { sessionId: event.sessionId, text: event.text, ...known, ...(shown !== undefined ? { messageId: shown } : {}), mode: data.mode ?? known?.mode ?? 'live', status: data.status });
+  if (data.status === 'failed') void requeueSteer(event.sessionId, event.text || known?.text || '', (event.data as { reason?: string } | undefined)?.reason || 'The agent could not take it during this turn.');
+  if (event.sessionId === state.sessionId && (known?.messageId !== undefined || shown !== undefined)) renderTranscript(true);
 }
+/** Queued entries whose steer did not land, with the reason (the queue shows "Not steered"). */
+const notSteered = new Map<string, string>();
 /** A steer the agent could not take goes back to the queue, so nothing typed is lost. */
-async function requeueSteer(sessionId: string, text: string): Promise<void> {
+async function requeueSteer(sessionId: string, text: string, reason: string): Promise<void> {
   if (!text) return;
   const entry = await call<QueuedMessage>('queue_add', { sessionId, text, attachments: [] }).catch(() => null);
   const s = state.sessions.find(item => item.id === sessionId);
+  if (entry) notSteered.set(entry.id, reason);
   if (entry) { setQueue(sessionId, [...queueOf(sessionId), entry]); notify('The agent could not take that message, so it was queued.'); }
   else { if (s) restoreComposer(s, text, [], []); notify('The agent could not take that message; it is back in the prompt.'); }
   if (sessionId === state.sessionId) renderComposer();
@@ -2103,6 +2205,12 @@ function steerStateHtml(m: Message): string {
 async function steerFromComposer(): Promise<void> {
   const s = session(); if (!s) return;
   const { text, items } = composerPayload(s);
+  const bot = sidebarBots.find(item => item.desktopSession === s.id);
+  if (bot?.whileWorking === 'steer') return enqueueFromComposer(true);
+  if (bot && (items.length || (state.browserAttachments.get(s.id) ?? []).length || (state.moodboardAttachments.get(s.id) ?? []).length)) {
+    notify('Attachments travel with queued messages, so this one was queued.');
+    return enqueueFromComposer();
+  }
   if (!text) { document.querySelector<HTMLTextAreaElement>('#prompt')?.focus(); return; }
   if (items.length || teams.get(s.id)) {
     notify(items.length ? 'Attachments travel with queued messages, so this one was queued.' : 'A team takes messages between runs, so this one was queued.');
@@ -2113,8 +2221,10 @@ async function steerFromComposer(): Promise<void> {
     await steer(s, text);
   } catch (error) {
     // Not taken mid-turn: keep it for after the run instead of losing it.
-    notify(`${error instanceof Error ? error.message : String(error)} Queued instead.`);
+    const reason = error instanceof Error ? error.message : String(error);
+    notify(/\bqueued\b/i.test(reason) ? reason : `${reason} Queued instead.`);
     const entry = await call<QueuedMessage>('queue_add', { sessionId: s.id, text, attachments: [] }).catch(() => null);
+    if (entry) notSteered.set(entry.id, reason);
     if (entry) setQueue(s.id, [...queueOf(s.id), entry]); else restoreComposer(s, text, [], []);
     if (s.id === state.sessionId) renderComposer();
   }
@@ -2187,7 +2297,7 @@ async function dispatchQueue(id: string): Promise<void> {
   const task = state.sessions.find(item => item.id === id);
   const first = sendFirst.get(id), next = queueOf(id).find(item => item.id === first?.id) ?? queueOf(id)[0];
   if (first && next?.id !== first.id) sendFirst.delete(id);
-  if (!task || !next || botProjects.has(task.projectId) || (state.queueHolds.has(id) && next.id !== first?.id) || state.queueBusy.has(id) || steeringQueued.has(next.id) || isRunning(id) || finishingStreams.has(id) || configuringSessions.has(id) || task.archived) return;
+  if (!task || !next || botProjects.has(task.projectId) || (state.queueHolds.has(id) && next.id !== first?.id) || state.queueBusy.has(id) || steeringQueued.has(next.id) || next.id === state.queueEditing || isRunning(id) || finishingStreams.has(id) || configuringSessions.has(id) || task.archived) return;
   if (limitActive(task)) { state.queueHolds.set(id, 'limited'); if (id === state.sessionId) renderComposer(); return; }
   state.queueBusy.add(id);
   try {
@@ -2266,7 +2376,10 @@ async function fileContext(s: Session, path: string): Promise<string> {
 }
 async function send(): Promise<void> {
   const draft = document.querySelector<HTMLTextAreaElement>('#prompt')?.value ?? ''; const text = draft.trim(); const s = session();
-  if (!text || !s || s.archived || taskStage(s) === 'completed' || isRunning() || finishingStreams.has(s.id) || state.messagesLoading || state.messagesError || configuringSessions.has(s.id)) return;
+  if (!s) return;
+  const bot = sidebarBots.find(item => item.desktopSession === s.id);
+  const hasBotAttachments = Boolean(bot && (state.attachments.length || state.browserAttachments.get(s.id)?.length || attachments.list(s.id).length || state.moodboardAttachments.get(s.id)?.some(item => item.projectId === s.projectId)));
+  if ((!text && !hasBotAttachments) || s.archived || taskStage(s) === 'completed' || isRunning() || finishingStreams.has(s.id) || state.messagesLoading || state.messagesError || configuringSessions.has(s.id)) return;
   const target = !s.remoteDevice && newTaskView() ? remoteTargets.find(item => item.deviceId === remoteChoice) : undefined;
   if (target) return sendRemote(s, target, draft, text);
   const cloud = !s.remoteDevice && !s.cloud && newTaskView() ? cloudTargets.find(item => item.ready && item.provider === cloudProvider(remoteChoice)) : undefined;
@@ -2314,7 +2427,8 @@ async function send(): Promise<void> {
   try {
     const contexts = await Promise.all(filePaths.map(path => fileContext(s, path)));
     // Mentioned issues and pull requests travel with the message, so every harness can read them.
-    const content = text + contexts.join('') + browserContextText(browserItems) + attachments.contextFor(promptItems) + await github.contextFor(s.projectId, s.id, text) + tokenSaver.contextFor(s.id);
+    const rawContent = text + contexts.join('') + browserContextText(browserItems) + attachments.contextFor(promptItems) + await github.contextFor(s.projectId, s.id, text) + tokenSaver.contextFor(s.id);
+    const content = rawContent || (bot ? 'Please review the attached material.' : rawContent);
     const sentIds = new Set(browserItems.map(item => item.id));
     const remaining = (state.browserAttachments.get(s.id) ?? []).filter(item => !sentIds.has(item.id));
     if (remaining.length) state.browserAttachments.set(s.id, remaining); else state.browserAttachments.delete(s.id);
@@ -2336,8 +2450,7 @@ async function send(): Promise<void> {
     } else renderNavigation();
     const imageIds = [...screenshots, ...attachments.imageIds(promptItems)];
     // A bot's own conversation goes through the bot, which adds its brief and memories.
-    const bot = sidebarBots.find(item => item.desktopSession === s.id);
-    if (bot && !imageIds.length && !moodboardItems.length && !teams.get(s.id)) await call('bot_message', { botId: bot.id, text: content });
+    if (bot) await call('bot_message', { botId: bot.id, text: content, imageIds, moodboardIds: moodboardItems.map(item => item.id) });
     else await call(teams.get(s.id) && !moodboardItems.length ? 'architect_start' : 'send_message', { sessionId: s.id, text: content, imageIds, moodboardIds: moodboardItems.map(item => item.id) });
   } catch (error) {
     pendingPromptActivity.delete(s.id);
@@ -2459,7 +2572,7 @@ function onAgent(event: AgentEvent): void {
   if (event.kind === 'done') {
     if (s) refreshFileLinks(workspaceContext(s));
     void detectPullRequest(event.sessionId);
-    if (s && botProjects.has(s.projectId)) void refreshBotPreviews();
+    if (s && botProjects.has(s.projectId)) { if (event.sessionId !== state.sessionId) respondedBots.add(s.projectId); void refreshBotPreviews(); }
     for (const [id, item] of steers) if (item.sessionId === event.sessionId) steers.delete(id);
     const finishing = { stream: state.streams.get(event.sessionId) ?? stream(event.sessionId), finishedAt: Date.now() };
     clearAgentInputs(finishing.stream);
@@ -2473,8 +2586,13 @@ function onAgent(event: AgentEvent): void {
     if (first?.stopping) sendFirst.set(event.sessionId, { id: first.id });
     if (first?.stopping && ending === 'stopped') { if (first.hold) state.queueHolds.set(event.sessionId, first.hold); else state.queueHolds.delete(event.sessionId); }
     else if (ending) state.queueHolds.set(event.sessionId, ending);
+    if (s && botProjects.has(s.projectId)) {
+      if (ending === 'failed') failedBotProjects.add(s.projectId);
+      else if (!ending) failedBotProjects.delete(s.projectId);
+    }
     if (!ending) void maybeTurnChecks(event.sessionId);
     if (event.sessionId === state.sessionId) { renderStream(); renderComposer(); }
+    void applyNextBotModel(event.sessionId);
     void finishResponse(event.sessionId, finishing).finally(() => run(dispatchQueue(event.sessionId))); return;
   }
   if (event.kind === 'session') return;
@@ -2483,7 +2601,8 @@ function onAgent(event: AgentEvent): void {
     const until = (event.data as { resetsAt?: number | null } | undefined)?.resetsAt ?? null;
     if (s) { s.limitedAt = Date.now(); s.limitedUntil = until; s.resumeAtReset = false; }
     runEndings.set(event.sessionId, 'limited');
-    notify(`${s?.title ?? 'Task'}: ${event.text}${until ? ` · ${resetLabel(until)}` : ''}`);
+    // A bot's limit already shows as its sidebar chip and above its composer.
+    if (!sidebarBots.some(bot => bot.projectId === s?.projectId)) notify(`${s?.title ?? 'Task'}: ${event.text}${until ? ` · ${resetLabel(until)}` : ''}`);
     renderNavigation(); if (event.sessionId === state.sessionId) renderComposer();
     return;
   }
@@ -2519,7 +2638,7 @@ function onAgent(event: AgentEvent): void {
     if (event.text === 'Stopping agent') clearAgentInputs(current);
   }
   if (event.kind === 'error') { if (runEndings.get(event.sessionId) !== 'limited') runEndings.set(event.sessionId, 'failed'); current.tools.push({ key: 'error:' + transientId--, content: 'Error: ' + event.text.slice(0, 8192), statusOnly: true }); trimLiveActivity(current, event.sessionId); current.revision++; notify(event.text); }
-  if (event.kind === 'approval' && event.requestId) { current.approvals.set(event.requestId, event.text); current.revision++; updateStreamStatus(current, 'Waiting for approval'); if (event.sessionId !== state.sessionId) notify(`${s?.title ?? 'Task'} needs approval`); }
+  if (event.kind === 'approval' && event.requestId) { current.approvals.set(event.requestId, event.text); current.revision++; updateStreamStatus(current, 'Waiting for approval'); if (event.sessionId !== state.sessionId) notify(`${(s?.title ?? 'Task').replace(/ · You$/, '')} needs approval`); }
   if (event.kind === 'approval_cancelled' && event.requestId && current.approvals.delete(event.requestId)) {
     current.revision++; if (!current.approvals.size && current.status === 'Waiting for approval') updateStreamStatus(current, 'Continuing task');
   }
@@ -2532,7 +2651,7 @@ function onAgent(event: AgentEvent): void {
       scheduleNavigation();
     }));
     current.revision++; updateStreamStatus(current, 'Waiting for your answer');
-    if (event.sessionId !== state.sessionId) notify(`${s?.title ?? 'Task'} needs your answer`);
+    if (event.sessionId !== state.sessionId) notify(`${(s?.title ?? 'Task').replace(/ · You$/, '')} needs your answer`);
   }
   if (event.kind === 'input_cancelled' && event.requestId) {
     current.inputs.get(event.requestId)?.dispose(); current.inputs.delete(event.requestId); current.revision++;
@@ -2687,7 +2806,8 @@ const INSPECTOR_TITLES: Record<typeof state.inspectorTab, string> = { files: 'Fi
 function renderInspector(): void {
   const diffEpoch = ++inspectorDiffEpoch;
   inspectorDiff?.dispose(); inspectorDiff = undefined;
-  const visible = state.inspector && !inspectorSuppressed;
+  // A shared channel has no checkout of its own, so the inspector steps aside.
+  const visible = state.inspector && !inspectorSuppressed && !state.sharedChannelId;
   const inspector = $('#inspector');
   inspector.hidden = !visible;
   // Keep the resize edge immediately interactive and native browser bounds stable.
@@ -2929,13 +3049,14 @@ async function showModel(anchor: HTMLElement): Promise<void> {
   if (modelPickerCleanup) { closeModelPicker(); return; }
   const selected = session(); if (!selected || configuringSessions.has(selected.id)) return;
   if (teams.get(selected.id) && !teams.get(selected.id)?.config.auto) { await showArchitectSetup(anchor); return; }
-  if (isRunning()) return;
+  const botNext = Boolean(botForThread());
+  if (isRunning() && !botNext) return;
   closeProjectPicker();
   closeChoiceMenu();
   const { epoch, release } = beginMenuOpen(anchor);
   const generation = state.generation;
   const [{ openModelPicker }, library] = await Promise.all([import('./model-picker'), call<TeamLibrary>('architect_profiles').catch(() => null), call<import('./connections').ConnectionSnapshot>('connections_list').then(snapshot => { namedConnections = snapshot; }).catch(() => undefined)]).finally(release);
-  if (epoch !== menuEpoch || modelPickerCleanup || !anchor.isConnected || selected.id !== state.sessionId || generation !== state.generation || isRunning()) return;
+  if (epoch !== menuEpoch || modelPickerCleanup || !anchor.isConnected || selected.id !== state.sessionId || generation !== state.generation || (isRunning() && !botNext)) return;
   const device = composerDevice();
   const named = library && !device ? namedTeams(library) : [];
   modelPickerCleanup = openModelPicker({
@@ -2971,6 +3092,11 @@ async function showModel(anchor: HTMLElement): Promise<void> {
       } finally { configuringSessions.delete(selected.id); }
     },
     onSelect: async (providerId, model, connection) => {
+      if (botNext && isRunning(selected.id) && selected.id === state.sessionId) {
+        const changed = providerId !== selected.provider || (model || 'default') !== (selected.model || 'default');
+        botThread.setNextModel(selected.id, changed ? { provider: providerId, model, label: model && model !== 'default' ? model : provider(providerId)?.name ?? providerId } : undefined);
+        renderHeader(); return;
+      }
       if (selected.id !== state.sessionId || generation !== state.generation || isRunning()) throw new Error('Select the task again to change its model.');
       configuringSessions.add(selected.id);
       try {
@@ -3081,7 +3207,10 @@ async function showChoices(anchor: HTMLElement, options: ChoiceOptions): Promise
   const { openChoiceMenu } = await import('./choice-menu').finally(release);
   if (epoch !== menuEpoch || generation !== state.generation || !anchor.isConnected) return;
   choiceMenuAnchor = anchor;
-  choiceMenuCleanup = openChoiceMenu({ ...options, anchor, onClose: () => { choiceMenuCleanup = undefined; choiceMenuAnchor = undefined; } });
+  choiceMenuCleanup = openChoiceMenu({ ...options, anchor, onClose: () => {
+    choiceMenuCleanup = undefined; choiceMenuAnchor = undefined;
+    if (anchor.closest('#sidebar-bots-panel')) window.setTimeout(() => { if (botsListPendingRender) renderBots(); }, 0);
+  } });
 }
 async function showMode(anchor: HTMLElement): Promise<void> {
   const s = session(); if (!s || isRunning() || configuringSessions.has(s.id)) return;
@@ -3487,7 +3616,7 @@ function botsOptions(providers: Provider[]): import('./bots').BotsOptions {
   };
 }
 async function showBots(open: { botId?: string; startNew?: boolean } = {}): Promise<void> {
-  const dialog = modal('Bots', '<div id="bots-host"><p role="status">Loading bots…</p></div>', 'bots-dialog');
+  const dialog = modal(open.startNew ? 'New bot' : 'Bots', '<div id="bots-host"><p role="status">Loading bots…</p></div>', 'bots-dialog');
   const host = dialog.querySelector<HTMLElement>('#bots-host')!;
   try {
     const [{ mountBots }, providers] = await Promise.all([
@@ -3516,11 +3645,24 @@ async function showBotSettings(botId: string, tab?: import('./bots').Section): P
 /** Bots shown in the sidebar. Their workspaces stay out of the project tree, and their
  * conversations deliver queued messages natively, so the window never sends them twice. */
 let sidebarBots: import('./bots').Bot[] = [];
+let sidebarChannels: SharedChannelSummary[] = [];
 let botProjects = new Set<string>();
 let botProjectsLoad: Promise<void> | undefined;
+const botSwitches = new Map<string, BotActivity[]>();
+const botMessages = new Map<string, botThread.BotMessageMarker[]>();
+const botFailovers = new Map<string, FailoverAsk>();
+const botFailoverErrors = new Map<string, string>();
+const botThreadMetaLoaded = new Set<string>();
+const botThreadMetaRequests = new Map<string, number>();
 function ensureBotProjects(): Promise<void> { return botProjectsLoad ??= reloadBotProjects(false); }
 async function reloadBotProjects(withProjects = true): Promise<void> {
-  sidebarBots = await call<import('./bots').Bot[]>('bots_list').catch(() => sidebarBots);
+  const [nextBots, nextChannels] = await Promise.all([
+    call<import('./bots').Bot[]>('bots_list').catch(() => sidebarBots),
+    call<SharedChannelSummary[]>('bot_shared_channels').catch(() => sidebarChannels),
+  ]);
+  sidebarBots = nextBots;
+  sidebarChannels = nextChannels;
+  botsLoaded = true;
   botProjects = new Set(sidebarBots.map(bot => bot.projectId));
   // An earlier build could leave the filter on a bot's workspace; send it back to All projects.
   if (botProjects.has(state.projectFilter)) setProjectFilter('');
@@ -3670,11 +3812,32 @@ async function sendRemote(s: Session, target: RemoteTarget, draft: string, text:
 /** The sidebar shows tasks or bots; the bar at its bottom switches between them. */
 let sidebarView: SidebarView = storedSidebarView();
 let botsQuery = '';
+/** Skeleton rows show until the first bots_list answers, so the empty state never flashes. */
+let botsLoaded = false;
+let hiddenBotsOpen = (() => { try { return localStorage.getItem('pandacode.botsHiddenOpen') === 'true'; } catch { return false; } })();
+let botsListPendingRender = false;
+/** Bot workspaces whose run finished while another thread was open; cleared when the bot opens. */
+const respondedBots = new Set<string>();
+const failedBotProjects = new Set<string>();
+function botSignals(bot: import('./bots').Bot, unread: Map<string, number>): BotSignals {
+  const tasks = state.sessions.filter(task => task.projectId === bot.projectId), now = Date.now();
+  const live = tasks.map(task => state.streams.get(task.id)).filter(item => item !== undefined);
+  const limited = tasks.find(task => limitActive(task, now));
+  return {
+    waiting: live.some(item => item.inputs.size) ? 'question' : live.some(item => item.approvals.size) ? 'approval' : undefined,
+    failed: failedBotProjects.has(bot.projectId),
+    limited: limited ? { until: limited.limitedUntil ?? null } : undefined,
+    working: tasks.some(task => isRunning(task.id)), unread: unread.get(bot.id) ?? 0, responded: respondedBots.has(bot.projectId),
+  };
+}
 function renderBots(): void {
   const bar = document.querySelector<HTMLElement>('#sidebar-bots'), panel = document.querySelector<HTMLElement>('#sidebar-bots-panel');
   if (!bar || !panel) return;
   const current = session(), open = state.view === 'conversation' ? current?.projectId : undefined;
-  const unread = syncSeen(sidebarBots, open);
+  if (open) respondedBots.delete(open);
+  const unread = syncSeen(sidebarBots, open, bot => state.sessions.filter(task => task.projectId === bot.projectId && task.lastResponseAt).map(task => task.lastResponseAt!));
+  const markRead = panel.querySelector<HTMLButtonElement>('.bots-mark-read');
+  if (markRead) markRead.hidden = unread.size === 0;
   document.querySelector('.sidebar')?.classList.toggle('bots-view', sidebarView === 'bots');
   const barHtml = botsBarHtml(sidebarView, sidebarBots.length, unread.size);
   if (bar.innerHTML !== barHtml) bar.innerHTML = barHtml;
@@ -3682,10 +3845,218 @@ function renderBots(): void {
   if (!panel.firstElementChild) {
     panel.innerHTML = botsPanelHeadHtml();
     panel.querySelector<HTMLInputElement>('[data-bots-search]')!.addEventListener('input', event => { botsQuery = (event.target as HTMLInputElement).value; renderBots(); });
+    document.addEventListener('pointerdown', event => {
+      const target = event.target as Element | null;
+      if (target?.closest('#sidebar-bots-panel')) return;
+      hideCreateBotMenu();
+    }, true);
+    bindBotRows(panel.querySelector<HTMLElement>('.bots-panel-list')!);
   }
   const list = panel.querySelector<HTMLElement>('.bots-panel-list')!;
-  const html = botsListHtml({ bots: sidebarBots, selectedProject: current?.projectId, working: bot => state.sessions.some(task => task.projectId === bot.projectId && isRunning(task.id)) }, unread, botsQuery);
-  if (list.innerHTML !== html) list.innerHTML = html;
+  const html = botsListHtml({ bots: sidebarBots, channels: sidebarChannels, selectedProject: state.sharedChannelId ? undefined : current?.projectId, selectedChannel: state.sharedChannelId, signals: bot => botSignals(bot, unread), loaded: botsLoaded, hiddenOpen: hiddenBotsOpen }, botsQuery);
+  if (list.innerHTML !== html) {
+    const menuAnchor = choiceMenuAnchor ?? pendingMenuOpen?.anchor;
+    if (menuAnchor && list.contains(menuAnchor)) botsListPendingRender = true;
+    else { list.innerHTML = html; botsListPendingRender = false; }
+  }
+}
+/** Right-click (or the context-menu key) opens a row's menu; rows drag to reorder. */
+function bindBotRows(list: HTMLElement): void {
+  const rowOf = (target: EventTarget | null) => (target as HTMLElement | null)?.closest<HTMLElement>('[data-bot-row]') ?? null;
+  // A right click can also produce a non-primary click on the nested open button.
+  // Keep that event from navigating away while the context menu opens.
+  list.addEventListener('click', event => {
+    if (event.button !== 0) { event.preventDefault(); event.stopPropagation(); }
+  }, true);
+  list.addEventListener('contextmenu', event => {
+    const row = rowOf(event.target); if (!row) return;
+    event.preventDefault();
+    run(showBotMenu(row.querySelector<HTMLElement>('.bot-row-open')!, row.dataset.botRow!));
+  });
+  list.addEventListener('contextmenu', event => {
+    const row = (event.target as HTMLElement | null)?.closest<HTMLElement>('.channel-row[data-channel]'); if (!row) return;
+    event.preventDefault();
+    run(showSharedChannelMenu(row, row.dataset.channel!));
+  });
+  let dragged = '', draggedGroup = '';
+  list.addEventListener('dragstart', event => {
+    const row = rowOf(event.target); if (!row) return;
+    if (!['pinned', 'bots'].includes(row.dataset.botGroup ?? '')) { event.preventDefault(); return; }
+    dragged = row.dataset.botRow!; draggedGroup = row.dataset.botGroup ?? ''; event.dataTransfer?.setData('text/plain', dragged);
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+  });
+  list.addEventListener('dragover', event => { const row = rowOf(event.target); if (dragged && row?.dataset.botGroup === draggedGroup) { event.preventDefault(); row.classList.add('drag-over'); } });
+  list.addEventListener('dragleave', event => { const row = rowOf(event.target); if (row && !row.contains(event.relatedTarget as Node | null)) row.classList.remove('drag-over'); });
+  list.addEventListener('drop', event => {
+    const row = rowOf(event.target); if (!dragged || !row) return;
+    if (row.dataset.botGroup !== draggedGroup) return;
+    event.preventDefault();
+    const shown = [...list.querySelectorAll<HTMLElement>('[data-bot-row]')].map(item => item.dataset.botRow!);
+    if (row.dataset.botRow !== dragged) { moveBot(shown, dragged, row.dataset.botRow!); renderBots(); }
+    dragged = ''; draggedGroup = '';
+  });
+  list.addEventListener('dragend', () => { list.querySelectorAll('.drag-over').forEach(item => item.classList.remove('drag-over')); dragged = ''; draggedGroup = ''; });
+  list.addEventListener('keydown', event => {
+    if (!event.altKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
+    const row = rowOf(event.target), group = row?.dataset.botGroup;
+    if (!row || !['pinned', 'bots'].includes(group ?? '')) return;
+    const peers = [...list.querySelectorAll<HTMLElement>(`[data-bot-group="${group}"]`)];
+    const index = peers.indexOf(row), next = index + (event.key === 'ArrowUp' ? -1 : 1);
+    if (next < 0 || next >= peers.length) return;
+    event.preventDefault();
+    const all = [...list.querySelectorAll<HTMLElement>('[data-bot-row]')].map(item => item.dataset.botRow!);
+    const before = event.key === 'ArrowUp' ? peers[next].dataset.botRow! : peers[next + 1]?.dataset.botRow ?? null;
+    moveBot(all, row.dataset.botRow!, before);
+    const id = row.dataset.botRow!;
+    const live = document.querySelector<HTMLElement>('#bots-reorder-live');
+    if (live) live.textContent = `Moved ${sidebarBots.find(bot => bot.id === id)?.name ?? 'bot'} ${event.key === 'ArrowUp' ? 'up' : 'down'} within ${group}.`;
+    renderBots();
+    document.querySelector<HTMLButtonElement>(`[data-bot-row="${CSS.escape(id)}"] .bot-row-open`)?.focus();
+  });
+}
+async function showBotMenu(anchor: HTMLElement, botId: string): Promise<void> {
+  const bot = sidebarBots.find(item => item.id === botId); if (!bot) return;
+  const pinned = pinnedBots().has(bot.id);
+  await showChoices(anchor, { title: `${bot.name} actions`, actions: true, items: [
+    { id: 'pin', label: pinned ? 'Unpin' : 'Pin', icon: 'pin' },
+    { id: 'edit', label: 'Edit bot', icon: 'edit' },
+    { id: 'duplicate', label: 'Duplicate bot', icon: 'copy' },
+    { id: 'hide', label: bot.paused ? 'Restore' : 'Hide (pause)', icon: bot.paused ? 'play' : 'pause' },
+    { id: 'delete', label: 'Delete bot…', icon: 'trash', danger: true },
+  ], onSelect: id => { closeChoiceMenu(); run(botMenuAction(id, bot.id)); } });
+}
+async function showCreateBotMenu(anchor: HTMLElement): Promise<void> {
+  const menu = document.querySelector<HTMLElement>('#bot-create-menu'); if (!menu) return;
+  menu.hidden = !menu.hidden;
+  anchor.setAttribute('aria-expanded', String(!menu.hidden));
+  if (!menu.hidden) menu.querySelector<HTMLElement>('[role=menuitem]')?.focus();
+}
+function hideCreateBotMenu(): void {
+  const menu = document.querySelector<HTMLElement>('#bot-create-menu');
+  if (!menu || menu.hidden) return;
+  menu.hidden = true;
+  document.querySelector('[data-action="new-bot-menu"]')?.setAttribute('aria-expanded', 'false');
+}
+function syncChannelWorkingLabel(): void {
+  if (channelWorkingLabelTimer) { window.clearInterval(channelWorkingLabelTimer); channelWorkingLabelTimer = 0; }
+  if (!state.sharedChannelId || !state.sharedChannelDetail?.activeBotIds.length) return;
+  channelWorkingLabelTimer = window.setInterval(() => {
+    if (!state.sharedChannelId || !state.sharedChannelDetail?.activeBotIds.length) { syncChannelWorkingLabel(); return; }
+    const label = document.querySelector<HTMLElement>('.bc-history .bc-working .bot-working-label');
+    if (label) label.textContent = botThread.pickLabel(label.textContent ?? '');
+  }, 4_000);
+}
+/** Channel history rows per page, as `HISTORY_PAGE` in `shared_channels.rs`. */
+const CHANNEL_PAGE = 100;
+async function refreshSharedChannel(channelId = state.sharedChannelId): Promise<void> {
+  if (!channelId) return;
+  const request = ++state.sharedChannelRequest;
+  const history = document.querySelector<HTMLElement>('.bc-history');
+  if (history) {
+    state.sharedChannelScrollTop = history.scrollTop;
+    state.sharedChannelAtBottom = history.scrollHeight - history.clientHeight - history.scrollTop < 32;
+  }
+  const prompt = document.querySelector<HTMLTextAreaElement>('#shared-channel-prompt');
+  if (prompt && state.sharedChannelId) state.sharedChannelDrafts.set(state.sharedChannelId, prompt.value);
+  try {
+    const detail = await call<SharedChannelDetail>('bot_shared_channel_detail', { channelId, limit: state.sharedChannelLimits.get(channelId) ?? CHANNEL_PAGE });
+    if (request !== state.sharedChannelRequest || channelId !== state.sharedChannelId) return;
+    state.sharedChannelDetail = detail;
+    renderHeader(); renderTranscript(true); renderComposer(); renderBots();
+    syncChannelWorkingLabel();
+  } catch (error) { if (channelId === state.sharedChannelId) notify(error instanceof Error ? error.message : String(error)); }
+}
+function activateSharedChannel(channelId: string): void {
+  state.sharedChannelId = channelId;
+  state.sharedChannelDetail = null;
+  state.sharedChannelScrollTop = 0;
+  state.sharedChannelAtBottom = true;
+  state.view = 'conversation'; state.boardPanel = false;
+  render(); renderInspector(); renderBots();
+  void refreshSharedChannel(channelId);
+}
+function closeSharedChannel(): void {
+  state.sharedChannelId = ''; state.sharedChannelDetail = null;
+  state.sharedChannelRequest++;
+  syncChannelWorkingLabel();
+  render(); renderInspector(); renderBots();
+}
+function sharedChannelUi(): SharedChannelUiOptions {
+  return { call, bots: sidebarBots, modal, closeModal, changed: () => reloadBotProjects(false), openChannel: activateSharedChannel, notify };
+}
+async function createSharedChannel(): Promise<void> {
+  const { openCreateChannel } = await import('./bot-shared-channels');
+  openCreateChannel(sharedChannelUi());
+}
+async function openSharedChannel(id: string): Promise<void> {
+  const { openSharedChannel } = await import('./bot-shared-channels');
+  await openSharedChannel(id, sharedChannelUi());
+}
+async function showSharedChannelMenu(anchor: HTMLElement, channelId: string): Promise<void> {
+  const channel = sidebarChannels.find(item => item.id === channelId); if (!channel) return;
+  await showChoices(anchor, { title: `#${channel.name} actions`, actions: true, items: channel.archived
+    ? [{ id: 'restore', label: 'Restore', icon: 'undo' }]
+    : [{ id: 'edit', label: 'Edit', icon: 'edit' }, { id: 'delete', label: 'Delete', icon: 'trash', danger: true }],
+  onSelect: id => { closeChoiceMenu(); run(sharedChannelMenuAction(id, channel)); } });
+}
+async function sharedChannelMenuAction(action: string, channel: SharedChannelSummary): Promise<void> {
+  try {
+    if (action === 'edit') {
+      const { openSharedChannelSettings } = await import('./bot-shared-channels');
+      await openSharedChannelSettings(channel.id, sharedChannelUi());
+    }
+    else {
+      await call('bot_shared_channel_archive', { channelId: channel.id, archived: action !== 'restore' });
+      await reloadBotProjects(false);
+    }
+  } catch (error) { notify(error instanceof Error ? error.message : String(error)); }
+}
+async function botMenuAction(id: string, botId: string): Promise<void> {
+  const bot = sidebarBots.find(item => item.id === botId); if (!bot) return;
+  if (id === 'pin') { setBotPinned(bot.id, !pinnedBots().has(bot.id)); renderBots(); }
+  else if (id === 'edit') await showBotSettings(bot.id);
+  else if (id === 'hide') await setBotPaused(bot, !bot.paused);
+  else if (id === 'duplicate') await duplicateBot(bot);
+  else if (id === 'delete') await deleteBot(bot);
+}
+async function setBotPaused(bot: import('./bots').Bot, paused: boolean): Promise<void> {
+  try {
+    await call('bot_set_paused', { botId: bot.id, paused });
+    notify(paused ? `${bot.name} paused` : `${bot.name} resumed`);
+  } catch (error) {
+    notify(`Couldn’t ${paused ? 'pause' : 'resume'} ${bot.name}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  await reloadBotProjects(false);
+}
+async function duplicateBot(bot: import('./bots').Bot): Promise<void> {
+  try {
+    const { bot: source } = await call<import('./bots').BotDetail>('bot_detail', { botId: bot.id });
+    const input: import('./bots').BotInput = { name: `${[...source.name].slice(0, 55).join('')} copy`, role: source.role, instructions: source.instructions, goals: source.goals, avatar: source.avatar, provider: source.provider, model: source.model, mode: source.mode, heartbeatMinutes: source.heartbeatMinutes, color: source.color ?? '', reasoningEffort: source.reasoningEffort ?? '', backupModels: source.backupModels ?? [], fallbackMode: source.fallbackMode ?? 'ask', notify: source.notify ?? true, whileWorking: source.whileWorking ?? 'queue', showPlan: source.showPlan ?? false };
+    await call('bot_create', { input });
+    notify(`${input.name} created`);
+  } catch (error) {
+    notify(`Couldn’t duplicate ${bot.name}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  await reloadBotProjects();
+}
+async function deleteBot(bot: import('./bots').Bot): Promise<void> {
+  if (!await confirmBotDelete(bot.name)) return;
+  try { await call('bot_delete', { botId: bot.id }); }
+  catch (error) { notify(`Couldn’t delete ${bot.name}: ${error instanceof Error ? error.message : String(error)}`); return; }
+  setBotPinned(bot.id, false);
+  notify(`${bot.name} deleted`);
+  await reloadBotProjects(); await reloadSessions();
+  if (!session()) state.sessionId = '';
+  render();
+}
+function confirmBotDelete(name: string): Promise<boolean> {
+  const dialog = modal(`Delete ${name}?`, '<form id="delete-bot-form"><p class="delete-task-description">This removes the bot, its conversations and its channel connections. Its workspace folder stays on disk.</p><div class="dialog-footer"><button type="button" class="secondary-button" data-action="close-dialog">Cancel</button><button type="submit" class="secondary-button delete-task-confirm">Delete bot</button></div></form>', 'delete-task-dialog');
+  const form = dialog.querySelector<HTMLFormElement>('#delete-bot-form')!;
+  form.querySelector<HTMLButtonElement>('[data-action="close-dialog"]')!.focus();
+  return new Promise(resolve => {
+    dialog.addEventListener('close', () => resolve(false), { once: true });
+    form.addEventListener('submit', event => { event.preventDefault(); event.stopPropagation(); resolve(true); closeModal(); }, { once: true });
+  });
 }
 function setSidebarView(view: SidebarView): void {
   sidebarView = view; storeSidebarView(view); renderBots();
@@ -3701,9 +4072,58 @@ function botForThread(): import('./bots').Bot | undefined {
   const s = state.view === 'conversation' ? session() : undefined;
   return s ? sidebarBots.find(bot => bot.projectId === s.projectId) : undefined;
 }
+function switchKey(item: BotActivity): string {
+  return [item.at, item.detail.sessionId, item.detail.provider, item.detail.model, item.detail.cause, item.detail.back].join(':');
+}
+function mergeBotSwitches(current: BotActivity[], incoming: BotActivity[]): BotActivity[] {
+  const merged = new Map<string, BotActivity>();
+  for (const item of [...current, ...incoming]) merged.set(switchKey(item), item);
+  return [...merged.values()].sort((a, b) => a.at - b.at);
+}
+async function refreshBotThreadMeta(bot: import('./bots').Bot, sessionId: string, force = false): Promise<void> {
+  if (!force && (botThreadMetaLoaded.has(sessionId) || botThreadMetaRequests.has(sessionId))) return;
+  const request = (botThreadMetaRequests.get(sessionId) ?? 0) + 1;
+  botThreadMetaRequests.set(sessionId, request);
+  try {
+    const [ask, switches, messages] = await Promise.all([
+      call<FailoverAsk | null>('bot_failover_pending', { sessionId }),
+      call<BotActivity[]>('bot_model_switches', { sessionId }),
+      call<botThread.BotMessageMarker[]>('bot_message_markers', { sessionId }),
+    ]);
+    if (botThreadMetaRequests.get(sessionId) !== request) return;
+    if (ask?.sessionId === sessionId) botFailovers.set(sessionId, ask); else botFailovers.delete(sessionId);
+    botSwitches.set(sessionId, mergeBotSwitches(botSwitches.get(sessionId) ?? [], switches));
+    botMessages.set(sessionId, messages);
+    botThreadMetaLoaded.add(sessionId);
+    if (state.sessionId === sessionId && botForThread()?.id === bot.id) { renderTranscript(true); renderComposer(); }
+  } catch (error) {
+    console.warn('Could not load bot conversation markers:', error);
+  } finally {
+    if (botThreadMetaRequests.get(sessionId) === request) botThreadMetaRequests.delete(sessionId);
+  }
+}
+function renderBotFailover(): void {
+  const host = document.querySelector<HTMLElement>('#bot-failover-bar');
+  const ask = botFailovers.get(state.sessionId);
+  if (host) host.innerHTML = `${botThread.failoverHtml(ask)}${ask && botFailoverErrors.has(state.sessionId) ? `<p class="bot-failover-error" role="alert">${escape(botFailoverErrors.get(state.sessionId)!)}</p>` : ''}`;
+}
+/** A model picked during a bot's turn takes over once the turn ends; if the next turn already
+ *  started (a queued message), it stays pending and is tried again at that turn's end. */
+async function applyNextBotModel(sessionId: string): Promise<void> {
+  const next = botThread.nextModel(sessionId);
+  if (!next || isRunning(sessionId)) return;
+  try {
+    const updated = await call<Session>('configure_session', { sessionId, provider: next.provider, model: next.model });
+    botThread.setNextModel(sessionId, undefined);
+    state.sessions = state.sessions.map(task => task.id === sessionId ? updated : task);
+    if (sessionId === state.sessionId) { renderComposer(); renderHeader(); }
+  } catch (error) { console.warn('The bot keeps its model until the next turn ends:', error); }
+}
 /** Opens a bot's conversation in this app, creating it the first time. */
 async function openBot(botId: string): Promise<void> {
+  const bot = sidebarBots.find(item => item.id === botId); if (bot) respondedBots.delete(bot.projectId);
   const id = await call<string>('bot_desktop_thread', { botId });
+  if (bot) { sidebarBots = sidebarBots.map(item => item.id === botId ? { ...item, desktopSession: id } : item); renderBots(); }
   if (!state.sessions.some(task => task.id === id)) await reloadSessions();
   await selectSession(id, true);
 }
@@ -3792,9 +4212,16 @@ async function action(name: string, element: HTMLElement): Promise<void> {
     case 'jev-assist': await openJevAssist(); break;
     case 'agent-usage': await showAgentUsage(); break;
     case 'bots': await showBots(); break;
-    case 'new-bot': await showBots({ startNew: true }); break;
+    case 'new-bot': hideCreateBotMenu(); await showBots({ startNew: true }); break;
+    case 'new-bot-menu': await showCreateBotMenu(element); break;
+    case 'new-channel': hideCreateBotMenu(); await createSharedChannel(); break;
+    case 'open-shared-channel': if (element.dataset.channel) await openSharedChannel(element.dataset.channel); break;
+    case 'close-shared-channel': closeSharedChannel(); break;
+    case 'shared-channel-settings': if (state.sharedChannelId) { const { openSharedChannelSettings } = await import('./bot-shared-channels'); await openSharedChannelSettings(state.sharedChannelId, sharedChannelUi()); } break;
     case 'bot-settings': if (element.dataset.bot) await showBotSettings(element.dataset.bot, element.dataset.tab as import('./bots').Section | undefined); break;
-    case 'bot-pause': if (element.dataset.bot) { const bot = sidebarBots.find(item => item.id === element.dataset.bot); if (bot) { await call('bot_set_paused', { botId: bot.id, paused: !bot.paused }); notify(bot.paused ? `${bot.name} resumed` : `${bot.name} paused`); await reloadBotProjects(false); } } break;
+    case 'bot-pause': if (element.dataset.bot) { const bot = sidebarBots.find(item => item.id === element.dataset.bot); if (bot) await setBotPaused(bot, !bot.paused); } break;
+    case 'toggle-hidden-bots': hiddenBotsOpen = !hiddenBotsOpen; try { localStorage.setItem('pandacode.botsHiddenOpen', String(hiddenBotsOpen)); } catch { /* Keep the choice for this window. */ } renderBots(); break;
+    case 'mark-bots-read': markAllBotsRead(sidebarBots, bot => state.sessions.filter(task => task.projectId === bot.projectId && task.lastResponseAt).map(task => task.lastResponseAt!)); renderBots(); break;
     case 'open-bot': if (element.dataset.bot) await openBot(element.dataset.bot); break;
     case 'computer-menu': await showComputerMenu(element); break;
     case 'cloud-menu': await showCloudMenu(element); break;
@@ -3870,9 +4297,67 @@ async function action(name: string, element: HTMLElement): Promise<void> {
   }
 }
 mountExternalLinks(document, url => call('open_external_url', { url }), report);
+document.addEventListener('click', event => {
+  const button = (event.target as Element | null)?.closest<HTMLButtonElement>('[data-shared-action]');
+  if (!button || !state.sharedChannelId) return;
+  const action = button.dataset.sharedAction;
+  if (action === 'reassign-toggle') { const menu = button.nextElementSibling as HTMLElement | null; if (menu) { menu.hidden = !menu.hidden; button.setAttribute('aria-expanded', String(!menu.hidden)); } return; }
+  const channelId = state.sharedChannelId, messageId = button.dataset.message;
+  if (action === 'earlier') {
+    const history = button.closest<HTMLElement>('.bc-history');
+    state.sharedChannelLimits.set(channelId, (state.sharedChannelLimits.get(channelId) ?? CHANNEL_PAGE) + CHANNEL_PAGE);
+    button.disabled = true;
+    if (history) state.sharedChannelFromBottom = history.scrollHeight - history.scrollTop;
+    run(refreshSharedChannel(channelId));
+    return;
+  }
+  if (action === 'stop') run(call('bot_shared_channel_stop', { channelId }).then(() => refreshSharedChannel(channelId)).catch(error => notify(String(error))));
+  else if (action === 'continue' && messageId) run(call('bot_shared_channel_continue', { channelId, messageId }).then(() => refreshSharedChannel(channelId)).catch(error => notify(String(error))));
+  else if (action === 'reassign' && messageId && button.dataset.bot) run(call('bot_shared_channel_reassign', { channelId, messageId, botId: button.dataset.bot }).then(() => refreshSharedChannel(channelId)).catch(error => notify(String(error))));
+});
 document.addEventListener('click', event => { if ((event.target as Element).closest('.markdown,.streaming-content,.message-content')) return; const element = (event.target as Element).closest<HTMLElement>('[data-action]'); if (!element || element instanceof HTMLButtonElement && element.disabled) return; event.preventDefault(); run(action(element.dataset.action!, element)); });
+document.addEventListener('click', event => {
+  const button = (event.target as Element).closest<HTMLButtonElement>('[data-failover]');
+  if (!button || button.disabled) return;
+  const card = button.closest<HTMLElement>('.bot-failover'), sessionId = card?.dataset.failoverSession;
+  const action = button.dataset.failover;
+  if (!card || !sessionId || !botFailovers.has(sessionId) || (action !== 'send' && action !== 'wait')) return;
+  event.preventDefault(); button.disabled = true;
+  const always = card.querySelector<HTMLInputElement>('[data-failover-always]')?.checked ?? false;
+  run((async () => {
+    try {
+      botFailoverErrors.delete(sessionId);
+      await call('bot_failover_decide', { sessionId, action, always });
+      botFailovers.delete(sessionId);
+      if (state.sessionId === sessionId) renderComposer();
+    } catch (error) {
+      botFailoverErrors.set(sessionId, error instanceof Error ? error.message : String(error));
+      if (state.sessionId === sessionId) renderComposer();
+      if (button.isConnected) button.disabled = false;
+    }
+  })());
+});
 document.addEventListener('submit', event => {
   const form = event.target as HTMLFormElement; event.preventDefault();
+  if (form.id === 'shared-channel-composer' && state.sharedChannelId) {
+    const channelId = state.sharedChannelId, text = String(new FormData(form).get('text') ?? '').trim();
+    if (!text) return;
+    state.sharedChannelDrafts.delete(channelId);
+    const channel = state.sharedChannelDetail;
+    const recipients = (channel?.memberIds ?? []).filter(id => {
+      const name = sidebarBots.find(bot => bot.id === id)?.name;
+      return Boolean(name && new RegExp(`(?:^|\\s)@${name.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}(?=$|\\s|[^\\p{L}\\p{N}_])`, 'iu').test(text));
+    }).slice(0, 2);
+    state.sharedChannelPosting.add(channelId); renderComposer();
+    // A failed post goes back to its own channel's draft, unless something new was typed there.
+    run(call('bot_shared_channel_post', { channelId, text, ...(recipients.length ? { recipients } : {}) }).then(() => { state.sharedChannelPosting.delete(channelId); return refreshSharedChannel(channelId); }).catch(error => {
+      state.sharedChannelPosting.delete(channelId);
+      if (!state.sharedChannelDrafts.get(channelId)?.trim()) state.sharedChannelDrafts.set(channelId, text);
+      notify(error instanceof Error ? error.message : String(error));
+      if (channelId === state.sharedChannelId) renderComposer();
+    }));
+    return;
+  }
   if (form.id === 'composer') { run(send()); return; }
   const data = new FormData(form); const submitter = form.querySelector<HTMLButtonElement>('button:not([type="button"])'); if (submitter) submitter.disabled = true;
   run((async () => {
@@ -3895,7 +4380,12 @@ function resizePrompt(): void {
   prompt.style.overflowY = prompt.scrollHeight > prompt.clientHeight + 1 ? 'auto' : 'hidden';
 }
 window.addEventListener('pandacode-ui-scale-change', resizePrompt);
-document.addEventListener('input', event => { const input = event.target as HTMLInputElement; if (input.id === 'command-query') renderCommands(input.value); if (input.id === 'prompt') resizePrompt(); });
+document.addEventListener('input', event => { const input = event.target as HTMLInputElement; if (input.id === 'command-query') renderCommands(input.value); if (input.id === 'prompt') resizePrompt(); if (input.id === 'shared-channel-prompt' && state.sharedChannelId) state.sharedChannelDrafts.set(state.sharedChannelId, input.value); });
+document.addEventListener('scroll', event => {
+  if (!state.sharedChannelId) return;
+  const history = (event.target as Element | null)?.closest?.('.bc-history') as HTMLElement | null;
+  if (history) { state.sharedChannelScrollTop = history.scrollTop; state.sharedChannelAtBottom = history.scrollHeight - history.clientHeight - history.scrollTop < 32; }
+}, true);
 document.addEventListener('change', event => {
   const input = event.target as HTMLInputElement;
   if (input.id === 'daily-wallpapers') wallpapers.setEnabled(input.checked);
@@ -3942,6 +4432,7 @@ document.addEventListener('keydown', event => {
     if (isRunning()) run(event.metaKey || event.ctrlKey ? steerFromComposer() : enqueueFromComposer());
     else if (finishingStreams.has(state.sessionId)) run(enqueueFromComposer()); else run(send());
   }
+  else if (event.key === 'Enter' && (event.target as HTMLElement).id === 'shared-channel-prompt' && !event.shiftKey && !event.isComposing) { event.preventDefault(); (event.target as HTMLTextAreaElement).form?.requestSubmit(); }
   else if (event.key === 'Enter' && (event.target as HTMLElement).classList.contains('queue-edit') && (event.metaKey || event.ctrlKey)) { event.preventDefault(); run(saveQueueEdit()); }
   else if (event.key === 'Escape' && settingsView && !event.defaultPrevented && !document.querySelector<HTMLDialogElement>('#dialog')?.open && !document.querySelector('.floating-menu')) { event.preventDefault(); closeSettings(); }
   else if (event.key === 'Escape' && state.view !== 'conversation' && state.boardPanel && !event.defaultPrevented) { event.preventDefault(); closeMenus(); state.boardPanel = false; renderBoardView(); }
@@ -3978,14 +4469,33 @@ async function boot(): Promise<void> {
   // An agent booted or asked to show a simulator: bring the panel forward.
   // An agent started or asked to show a VM: bring the panel forward.
   run(subscribe('vm-changed', event => { if (event && !Array.isArray(event) && event.show) openVm(); void vmPanel?.refresh(); }).then(() => undefined));
-  // bridge.ts has no typed overload for this event yet.
   run((subscribe as (name: string, callback: () => void) => Promise<() => void>)('design-changed', () => void designPanel?.refresh()).then(() => undefined));
   run(subscribe('agent-event', (event: AgentEvent) => { if (event.kind === 'done' && event.sessionId === state.sessionId) void designPanel?.refresh(); }).then(() => undefined));
   run(subscribe('simulator-changed', event => { if (event?.show) openSimulator(); void simulatorPanel?.refresh(); }).then(() => undefined));
   run(subscribe('bots-changed', () => run((async () => { botProjectsLoad = reloadBotProjects(); await botProjectsLoad; botsView?.refresh(); })())).then(() => undefined));
+  run(subscribe('bot-shared-channel-changed', event => { run(reloadBotProjects(false)); if (state.sharedChannelId && (!event?.channelId || event.channelId === state.sharedChannelId)) void refreshSharedChannel(); }).then(() => undefined));
+  run(subscribe('bot-messages-changed', () => {
+    botThreadMetaLoaded.clear();
+    const bot = botForThread();
+    if (bot && state.sessionId) void refreshBotThreadMeta(bot, state.sessionId, true);
+  }).then(() => undefined));
   run(initRemote());
   run(initCloudAgents());
   run(subscribe('bot-notification', event => { if (event?.text) notify(String(event.text).replace(/\s+/g, ' ').slice(0, 160)); }).then(() => undefined));
+  run(subscribe('bot-failover', (ask: FailoverAsk) => {
+    if (!ask?.sessionId) return;
+    botFailovers.set(ask.sessionId, ask);
+    if (state.sessionId === ask.sessionId) renderComposer();
+  }).then(() => undefined));
+  run(subscribe('bot-model-switch', (event: { botId?: string; at?: number; text?: string; detail?: Record<string, unknown> }) => {
+    const sessionId = typeof event?.detail?.sessionId === 'string' ? event.detail.sessionId : '';
+    const bot = sidebarBots.find(item => item.id === event?.botId);
+    if (!sessionId || !bot) return;
+    const activity: BotActivity = { id: Number(event.at) || Date.now(), kind: 'model-switch', summary: event.text ?? '', detail: event.detail ?? {}, at: Number(event.at) || Date.now() };
+    botSwitches.set(sessionId, mergeBotSwitches(botSwitches.get(sessionId) ?? [], [activity]));
+    if (state.sessionId === sessionId) renderTranscript(true);
+    void refreshBotThreadMeta(bot, sessionId, true);
+  }).then(() => undefined));
   // Bots appear in the sidebar once loaded; startup does not wait for them.
   botProjectsLoad = reloadBotProjects(false); run(botProjectsLoad);
   run(subscribe('bot-pairing', event => { if (event?.code) notify(`${event.senderName || 'Someone'} wants to talk to a bot. Approve code ${event.code} in Bots.`); }).then(() => undefined));
