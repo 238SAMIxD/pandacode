@@ -33,7 +33,7 @@
 .gh-repo{display:grid;grid-template-columns:var(--icon-sm) minmax(0,1fr) auto auto;align-items:center;gap:8px;min-height:var(--control-lg);padding:0 16px;border-radius:0;text-align:left;color:var(--text);transition:background 90ms}
 .gh-repo:hover{background:var(--gh-hover)}
 .gh-repo:active{background:color-mix(in srgb,var(--text) 8%,transparent)}
-.gh-repo[aria-selected=true]{background:color-mix(in srgb,var(--accent) 18%,transparent)}
+.gh-repo[aria-selected=true]{background:var(--accent-dim)}
 .gh-repo[aria-selected=true] .gh-glyph{color:var(--accent-ink)}
 .gh-repo-name{display:flex;align-items:baseline;gap:6px;min-width:0;overflow:hidden;white-space:nowrap}
 .gh-repo-name b{min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:var(--text-sm);font-weight:var(--weight-medium)}
@@ -70,7 +70,7 @@
 html[data-theme=dark] .gh-tabs>.segment-thumb{background:color-mix(in srgb,var(--text) 13%,transparent);box-shadow:0 1px 3px rgb(0 0 0 / .25)}
 .workspace[data-wallpaper] .gh-tabs{background:var(--workspace-frost-surface);backdrop-filter:var(--workspace-frost);-webkit-backdrop-filter:var(--workspace-frost)}
 .gh-count{font-size:var(--text-2xs);font-weight:500;color:var(--muted);font-variant-numeric:tabular-nums}
-.gh-search{width:min(240px,32%);margin:0 0 0 auto}
+.gh-search{width:min(240px,32%);margin:0}
 .gh-body{flex:1;min-height:0;overflow-y:auto;padding:8px 16px 28px;scrollbar-gutter:stable}
 
 /* Rows */
