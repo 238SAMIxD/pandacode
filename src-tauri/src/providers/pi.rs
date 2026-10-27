@@ -346,6 +346,8 @@ impl Protocol {
                     self.text_delta(&id, None, field(event, "delta"), &mut step);
                 } else if event["type"] == "thinking_start" {
                     step.events.push(self.event("status", "Reasoning", None));
+                } else if event["type"] == "thinking_delta" {
+                    self.thinking(field(event, "delta"), &mut step);
                 }
             }
             "message_end" if value["message"]["role"] == "assistant" => {
@@ -628,6 +630,13 @@ mod tests {
 
     fn state() -> Value {
         json!({"type":"response","command":"get_state","id":"pandacode-init","success":true,"data":{"sessionId":"01a15ba3-9096-76db-bd69-35168c0ecfa9","thinkingLevel":"medium"}})
+    }
+
+    #[test]
+    fn thinking_deltas_surface_as_thinking_events() {
+        let mut p = ready();
+        let step = p.receive(json!({"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"Hmm"}})).unwrap();
+        assert!(step.events.iter().any(|e| e.kind == "thinking" && e.text == "Hmm"));
     }
 
     #[test]

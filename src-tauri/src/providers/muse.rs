@@ -469,6 +469,7 @@ impl Protocol {
                 }
             }
             "reasoning" if !completed => step.events.push(self.event("status", "Reasoning", None)),
+            "reasoning" => self.thinking(field(item, "text"), step),
             "userMessage" if item["steered"] == true || item.get("commandId").is_some() => {
                 // A steer taken into the running turn.
                 if !self.muse_steer_seen(field(item, "commandId"), step) && item["steered"] == true && item.get("commandId").is_none() {
@@ -792,6 +793,13 @@ mod tests {
         let mut params = params;
         params["sessionId"] = json!(SESSION_ID);
         json!({"jsonrpc":"2.0","method":method,"params":params})
+    }
+
+    #[test]
+    fn completed_reasoning_items_surface_as_thinking_events() {
+        let (mut p, _) = started("ask", "default", false);
+        let step = p.receive(frame("item/completed", json!({"item":{"itemId":"r","kind":"reasoning","turnId":TURN_ID,"status":"completed","text":"Weighing options"}}))).unwrap();
+        assert!(step.events.iter().any(|e| e.kind == "thinking" && e.text == "Weighing options"));
     }
 
     #[test]

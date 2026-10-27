@@ -1356,7 +1356,7 @@ impl Protocol {
         AgentEvent {
             session_id: self.config.session_id.clone(),
             kind: kind.into(),
-            text: if kind == "text" || kind == "session" {
+            text: if kind == "text" || kind == "thinking" || kind == "session" {
                 text
             } else {
                 short(&text)
@@ -1365,6 +1365,10 @@ impl Protocol {
             data: data.and_then(event_metadata),
             tool: None,
         }
+    }
+    /// Reasoning text the model streams; the window appends it to the turn's Thinking fold.
+    fn thinking(&self, text: &str, step: &mut Step) {
+        if !text.is_empty() { step.events.push(self.event("thinking", text, None)); }
     }
     fn tool_update(
         &mut self,
@@ -1928,6 +1932,8 @@ impl Protocol {
             "item/agentMessage/delta" => {
                 self.text_delta(field(params,"itemId"),None,field(params,"delta"),&mut step);
             },
+            "item/reasoning/summaryTextDelta"|"item/reasoning/textDelta" => self.thinking(field(params,"delta"),&mut step),
+            "item/reasoning/summaryPartAdded" if params["summaryIndex"].as_u64().is_some_and(|index| index > 0) => self.thinking("\n\n",&mut step),
             "item/commandExecution/outputDelta" => {
                 let id=field(params,"itemId");
                 let mut output=self.tools.get(id).map(|tool|tool.output.clone()).unwrap_or_default();
@@ -2173,7 +2179,10 @@ impl Protocol {
                             }
                         }
                     },
-                    "agent_thought_chunk"=>self.kimi_message_id.clear(),
+                    "agent_thought_chunk"=>{
+                        self.kimi_message_id.clear();
+                        if update["content"]["type"]=="text" {self.thinking(field(&update["content"],"text"),&mut step);}
+                    },
                     "tool_call"|"tool_call_update"=>{
                         // Late snapshots of a known tool must not split a later
                         // assistant response. Only a new call closes the segment.
@@ -2405,6 +2414,11 @@ impl Protocol {
                             }
                         }
                     }
+                }
+                if event["type"] == "content_block_delta"
+                    && event["delta"]["type"] == "thinking_delta"
+                {
+                    self.thinking(field(&event["delta"], "thinking"), &mut step);
                 }
                 if event["type"] == "content_block_delta" && event["delta"]["type"] == "text_delta"
                 {
