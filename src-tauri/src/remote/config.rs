@@ -52,6 +52,10 @@ pub(crate) struct Settings {
     pub device_id: String,
     #[serde(default)]
     pub host_enabled: bool,
+    /// Sends a generic push when a hosted task needs attention or finishes; the relay's bridge
+    /// delivers it to the account's phones. Payloads carry counts, never task content.
+    #[serde(default)]
+    pub notify_enabled: bool,
     /// Lets remote devices pick Full access (no approvals). Off: they get approving modes only.
     #[serde(default)]
     pub remote_full_access: bool,

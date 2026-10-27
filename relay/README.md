@@ -27,6 +27,15 @@ Hardening notes:
 - Sign-in bodies are read through a streaming cap of 256 KiB (`src/body.ts`), so chunked uploads get 413 too.
 - Tokens carry `gen`, a random value stored on the device row when it is first registered. The Durable Object rejects a token whose `gen` differs from the row's, so a revoke followed by a re-register in the same second kills old tokens. A plain re-sign-in of a still-registered device keeps its `gen` (its other tokens stay valid; same device, same key). Tokens without `gen` (issued before schema 2) fall back to the `iat >= registered_at` check; `/v1/token` upgrades them. Schema 2 adds `devices.gen` (existing rows get 0).
 - A rate-limited WebSocket frame over 4 KiB is answered `rate limit exceeded` without parsing it.
+- **Push** (`src/push.ts`): a signed-in phone can register a device push token with
+  `POST /v1/push/devices` (`{ platform: "ios" | "android", token }`; one device keeps up to
+  3 per platform). A host with remote control on can send a `{ kind: "notify", body: { kind:
+  "waiting" | "finished", count } }` frame on its socket; the object coalesces bursts (30 s
+  window, halved when the waiting count grows) and forwards the notice to every registered
+  token via APNs/FCM. Payloads carry counts and a deep link, never task text. The bridge is
+  env-gated: with none of `APNS_KEY`/`APNS_KEY_ID`/`APNS_TEAM_ID`/`APNS_TOPIC` (iOS, the .p8
+  provider key) or `FCM_SERVICE_ACCOUNT`/`FCM_PROJECT_ID` (Android) set, registrations are
+  stored and notify frames answered, but nothing is sent.
 
 ## Behaviour
 

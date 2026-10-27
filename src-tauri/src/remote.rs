@@ -218,6 +218,7 @@ impl Remote {
             "signedIn": inner.token.is_some(),
             "device": {"id": inner.settings.device_id, "name": config::device_name(), "fingerprint": fingerprint},
             "hostEnabled": inner.settings.host_enabled,
+            "notifyEnabled": inner.settings.notify_enabled,
             "remoteFullAccess": inner.settings.remote_full_access,
             "connected": inner.connected,
         });
@@ -424,6 +425,19 @@ pub async fn remote_set_host_enabled(app: tauri::AppHandle, enabled: Option<bool
                 let _ = outbox.try_send(json!({"kind": "host", "enabled": enabled}).to_string());
             }
         }
+        inner.settings.clone()
+    };
+    state.save(&settings);
+    emit_status(&app);
+    Ok(state.status())
+}
+
+#[tauri::command]
+pub async fn remote_set_notify_enabled(app: tauri::AppHandle, enabled: bool) -> Result<Value> {
+    let state = remote(&app);
+    let settings = {
+        let mut inner = state.lock();
+        inner.settings.notify_enabled = enabled;
         inner.settings.clone()
     };
     state.save(&settings);

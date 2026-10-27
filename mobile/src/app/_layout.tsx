@@ -8,6 +8,7 @@ import { LiveActivityHost } from '../live/LiveActivityHost.tsx';
 import { HOME, SIGN_IN } from '../routes.ts';
 import { useStatus } from '../store/index.ts';
 import { useOutboxFlusher } from '../store/local.ts';
+import { usePushNotifications } from '../ui/push.ts';
 import { loadAppearance } from '../ui/appearance.ts';
 import { useWallpaperShown, WallpaperLayer } from '../ui/Backdrop.tsx';
 import { hasGlass } from '../ui/Glass.tsx';
@@ -48,6 +49,7 @@ export default function RootLayout() {
     void connect.init(); // or demo mode (src/demo.ts)
   }, []);
   useOutboxFlusher();
+  usePushNotifications(signedIn);
   if (!ready) return null;
   return (
     <GestureHandlerRootView style={[styles.root, { backgroundColor: colors.background }]}>

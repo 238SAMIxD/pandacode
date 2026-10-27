@@ -9,6 +9,7 @@ import type { RemoteDevice, RemoteHost, RemoteSignIn, RemoteStatus } from './rem
 
 const FULL_TIP = 'When off, your other computers cannot start or switch a task here to Full access (no approvals); a remote task without a mode starts in Ask.';
 const ALLOW_TIP = 'Remote prompts follow this computer’s approval settings; they get no more power than prompts typed here.';
+const NOTIFY_TIP = 'The relay sends the phone a push that says only how many tasks need attention; approving still happens in the app over the end-to-end encrypted channel.';
 const KEY_TIP = 'Another computer shows this key when it asks you to approve this one. Approve only if the keys match.';
 const CODE_TIP = 'A one-time code skips the approval prompt for one new device. It works once, for 10 minutes, and gives the access you pick. Enter it on the other computer under Pair with a code.';
 const PAIR_TIP = 'Enter the 6-digit code that the other computer shows under Pairing code. It gives this computer the access that computer chose.';
@@ -68,6 +69,7 @@ export function mountRemoteSettings(root: HTMLElement, host: RemoteHost): () => 
     }
     return `<div class="setting-row"><div><strong>${escape(status.account?.login ?? 'Signed in')}</strong><small>Signed in with GitHub · ${status.connected ? 'connected' : 'connecting…'}</small></div><button type="button" class="secondary-button" data-sign-out>Sign out</button></div>
       <div class="setting-row"><div><strong>Allow remote control of this computer ${infoMark(ALLOW_TIP, 'About remote control')}</strong><small>Your other signed-in computers can see and drive tasks here.</small></div><input type="checkbox" class="settings-switch" id="remote-host" aria-label="Allow remote control of this computer" ${status.hostEnabled ? 'checked' : ''}></div>
+      <div class="setting-row"><div><strong>Notify my phone ${infoMark(NOTIFY_TIP, 'About phone notifications')}</strong><small>Pushes a generic notice when a hosted task needs approval or finishes. The relay never sees task content.</small></div><input type="checkbox" class="settings-switch" id="remote-notify" aria-label="Notify my phone" ${status.notifyEnabled ? 'checked' : ''}></div>
       <div class="setting-row"><div><strong>Full access for remote tasks ${infoMark(FULL_TIP, 'About full access for remote tasks')}</strong><small>Off: remote tasks always ask before acting.</small></div><input type="checkbox" class="settings-switch" id="remote-full-access" aria-label="Full access for remote tasks" ${status.remoteFullAccess ? 'checked' : ''}></div>
       <div class="setting-row"><div><strong>This computer’s key ${infoMark(KEY_TIP, 'About this computer’s key')}</strong><small><code class="remote-key">${escape(groupFingerprint(status.device.fingerprint))}</code></small></div></div>
       ${status.hostEnabled ? codeRow() : ''}${pairRow()}
@@ -163,6 +165,7 @@ export function mountRemoteSettings(root: HTMLElement, host: RemoteHost): () => 
     if (input instanceof HTMLSelectElement && input.dataset.grant) { setGrant(input.dataset.grant, input.value); return; }
     const args = input.id === 'remote-host' ? { enabled: (input as HTMLInputElement).checked } : input.id === 'remote-full-access' ? { fullAccess: (input as HTMLInputElement).checked } : undefined;
     if (args) void host.call<RemoteStatus>('remote_set_host_enabled', args).then(next => { apply(next); render(); }, e => { (input as HTMLInputElement).checked = !(input as HTMLInputElement).checked; fail(e); });
+    if (input.id === 'remote-notify') void host.call<RemoteStatus>('remote_set_notify_enabled', { enabled: (input as HTMLInputElement).checked }).then(next => { apply(next); render(); }, e => { (input as HTMLInputElement).checked = !(input as HTMLInputElement).checked; fail(e); });
   });
   const unlisten: Promise<() => void>[] = [
     host.listen('remote://status', next => { if (!signingIn || next.signedIn) { apply(next); render(); } }),
