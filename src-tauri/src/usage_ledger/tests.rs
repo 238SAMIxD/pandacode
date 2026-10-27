@@ -149,6 +149,32 @@ fn scanning_dedupes_claude_replies_resumes_appends_and_forgets_deleted_logs() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+#[test]
+fn task_usage_sums_only_linked_session_logs_and_honors_since() {
+    let record = |hour: i64, input: u64, output: u64, key: Option<u64>| Record { key, hour, model: "m".into(), class: 0, input, cache_read: 0, cache_write: 0, cache_write_1h: 0, output };
+    let mut cache = Cache { version: CACHE_VERSION, files: HashMap::new() };
+    // The reply with key 7 appears twice: streamed once, then copied by a resume into the same log.
+    cache.files.insert(
+        "/logs/8f0e7c5a-1111-4222-8333-444455556666".into(),
+        FileEntry { agent: Some(Agent::Claude), session: true, records: vec![record(1, 10, 5, Some(7)), record(1, 10, 5, Some(7)), record(5, 100, 50, Some(8))], ..FileEntry::default() },
+    );
+    cache.files.insert(
+        "/logs/rollout-2026-09-26T08-58-01-aaaa1111-b222-4c33-8d44-555566667777".into(),
+        FileEntry { agent: Some(Agent::Codex), records: vec![record(2, 7, 3, None)], ..FileEntry::default() },
+    );
+    cache.files.insert(
+        "/logs/unlinked".into(),
+        FileEntry { agent: Some(Agent::Claude), records: vec![record(1, 999, 999, None)], ..FileEntry::default() },
+    );
+    let links = ["8f0e7c5a-1111-4222-8333-444455556666".to_string(), "aaaa1111-b222-4c33-8d44-555566667777".to_string()];
+    let usage = task_usage_from_cache(&cache, &links, 0);
+    assert_eq!((usage.input, usage.cache_read, usage.output), (117, 0, 58), "streamed copies count once");
+    assert_eq!((usage.first_used, usage.last_used), (Some(3_600_000), Some(18_000_000)));
+    let since = task_usage_from_cache(&cache, &links, 3);
+    assert_eq!((since.input, since.output), (100, 50));
+    assert_eq!((since.first_used, since.last_used), (Some(18_000_000), Some(18_000_000)));
+}
+
 /// `cargo test --lib live_local_logs -- --ignored --nocapture` prints totals only.
 #[test]
 #[ignore]
