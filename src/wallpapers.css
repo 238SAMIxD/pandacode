@@ -17,7 +17,7 @@ html .workspace[data-wallpaper] :is(.main-pane,.sidebar,.inspector){--muted:#505
 .workspace[data-wallpaper] .board-card-start:is(:hover,:active){background:color-mix(in srgb,var(--accent-dim) 66%,transparent)}
 html .workspace[data-wallpaper]>.main-pane>.workspace-header{background:transparent;border:0;backdrop-filter:none;-webkit-backdrop-filter:none}
 /* Over a wallpaper the header glass is the sidebar's frost material, a little denser so the muted header text stays legible. */
-.workspace[data-wallpaper]>.main-pane{--header-glass:rgb(255 255 255 / .68);--header-blur:var(--workspace-frost)}
+.workspace[data-wallpaper]>.main-pane{--header-glass:rgb(255 255 255 / .78);--header-blur:blur(14px) saturate(1.1);--header-fade:48px}
 html[data-theme="dark"] .workspace[data-wallpaper]>.main-pane{--header-glass:rgb(26 29 25 / .72)}
 html[data-theme="dark"] .workspace-wallpaper::after{background:rgb(28 28 27 / var(--wallpaper-scrim-center,.856))}
 html[data-theme="dark"] .workspace[data-wallpaper] :is(.main-pane,.sidebar,.inspector){--muted:#d0cfc5;--faint:#c4c3b8}
