@@ -260,7 +260,8 @@ pub(super) fn staff(config: &TeamConfig, lead: &storage::Session, assignment: &A
                 Some(_) => format!("ladder {rung}/{}, opener; ", ladder.len()),
                 None => String::new(),
             };
-            let mut note = format!("routed: {label} ({step}P {:.2}, ~{}, difficulty {difficulty} {category}{rough})", pick.p_success, money(pick.est_cost_usd));
+            let tier = pick.tier.map_or_else(String::new, |t| format!("tier {t:?}, "));
+            let mut note = format!("routed: {label} ({step}{tier}P {:.2}, ~{}, difficulty {difficulty} {category}{rough})", pick.p_success, money(pick.est_cost_usd));
             if decided_by.starts_with("escalation") {
                 let past: Vec<_> = failed.iter().map(|m| format!("{} · {}", m.name, m.provider)).collect();
                 note.push_str(&format!(", {decided_by} past {}", past.join(", ")));
@@ -360,6 +361,12 @@ pub(super) fn route_summary(config: &TeamConfig, routes: &[Route]) -> Value {
         let mut entry = json!({"provider":m.provider,"model":m.model,"name":m.name,"pSuccess":(m.p_success * 100.0).round() / 100.0,"estCostUsd":(m.est_cost_usd * 10000.0).round() / 10000.0});
         if let Some(p) = config.workers.iter().find(|p| p.provider == m.provider && p.model == m.model) {
             entry["profileId"] = json!(p.id);
+        }
+        if let Some(tier) = m.tier {
+            entry["tier"] = json!(tier);
+        }
+        if let Some(p) = m.tier_p {
+            entry["tierP"] = json!((p * 100.0).round() / 100.0);
         }
         entry
     };

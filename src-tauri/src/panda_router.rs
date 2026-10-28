@@ -15,15 +15,21 @@ mod onnx;
 mod onnx;
 mod profile;
 mod success;
+mod tiers;
 #[cfg(test)]
 mod tests;
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
 use onnx::OnnxProfiler;
+pub use tiers::Tier;
+
+/// User tier list: card id for rated models, `<provider>/<model>` for unrated ones (`tier_key`).
+pub type Tiers = HashMap<String, Tier>;
 
 /// Whether this build carries the ONNX profiler (see `panda_onnx` in build.rs).
 pub const ONNX_AVAILABLE: bool = cfg!(panda_onnx);
@@ -97,6 +103,12 @@ pub struct Routed {
     /// Cost plus the failure term (1 - P)·(next step + retry penalty).
     pub expected_cost_usd: f64,
     pub est_latency_ms: f64,
+    /// The user's tier for this model, when ranked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier: Option<Tier>,
+    /// That tier's P for this task before the blend: `p_success` = 0.7·tier P + 0.3·card P.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier_p: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -133,6 +145,15 @@ pub struct Router {
 pub fn resolve_card(provider: &str, model: &str, name: &str) -> Option<&'static str> {
     let catalog = cards::catalog().ok()?;
     catalog.resolve(provider, model, name).map(|i| catalog.cards[i].id.as_str())
+}
+
+/// A model's tier-list key: its card id when rated (the same model on several harnesses shares it),
+/// else `<provider>/<model>`.
+pub fn tier_key(provider: &str, model: &str, name: &str) -> (String, Option<&'static str>) {
+    match resolve_card(provider, model, name) {
+        Some(id) => (id.to_string(), Some(id)),
+        None => (format!("{provider}/{model}"), None),
+    }
 }
 
 impl Router {
@@ -172,10 +193,11 @@ impl Router {
         pool: &[PoolModel],
         prefs: &Preferences,
         failed: &[PoolModel],
+        tiers: &Tiers,
     ) -> Result<Route, String> {
         let start = Instant::now();
         let profile = self.profile(text, ctx)?;
-        let rated = Rated::new(pool)?;
+        let rated = Rated::new(pool, tiers)?;
         let mut route = self.decide(&profile, text, ctx, &rated, prefs, None, &[], &[], start);
         for m in failed {
             if rated.position(m).is_some() {
@@ -192,6 +214,7 @@ impl Router {
     /// `escalation:strongest_left`. Errors when `failed` is empty or names a model not rated in `pool`.
     // Production escalates through `route(.., failed)` (no saved Route across turns); tests prove both agree.
     #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
     pub fn escalate(
         &self,
         text: &str,
@@ -200,13 +223,14 @@ impl Router {
         prefs: &Preferences,
         previous: &Route,
         failed: &[PoolModel],
+        tiers: &Tiers,
     ) -> Result<Route, String> {
         let start = Instant::now();
         if failed.is_empty() {
             return Err("escalate needs at least one failed model".into());
         }
         let profile = self.profile(text, ctx)?;
-        let rated = Rated::new(pool)?;
+        let rated = Rated::new(pool, tiers)?;
         let mut route = previous.clone();
         for m in failed {
             if rated.position(m).is_none() {
@@ -234,7 +258,7 @@ impl Router {
             Ok(d) => matcher::normalized(&d),
             Err(_) => matcher::normalized(&profile.difficulty),
         };
-        let post = matcher::Demand::new(profile).after_failure(&prior, rated.card(i));
+        let post = matcher::Demand::new(profile).after_failure(&prior, rated.card(i), rated.ability(i));
         let mut failed_list: Vec<usize> = previous.failed.iter().filter_map(|m| rated.position(m)).collect();
         failed_list.push(i);
         let ladder: Vec<usize> = previous.ladder.iter().filter_map(|r| rated.by_card_id(&r.card_id)).collect();
@@ -255,6 +279,7 @@ impl Router {
         start: Instant,
     ) -> Route {
         let cards: Vec<&cards::Card> = (0..rated.entries.len()).map(|i| rated.card(i)).collect();
+        let abilities: Vec<Option<f64>> = (0..rated.entries.len()).map(|i| rated.ability(i)).collect();
         let difficulty = difficulty.unwrap_or(profile.difficulty);
         let d = matcher::decide(&matcher::Request {
             profile,
@@ -263,23 +288,26 @@ impl Router {
             pool: &cards,
             failed,
             prev_ladder,
+            tiers: &abilities,
             requires_tools: ctx.requires_tools,
             mode: prefs.mode,
             min_p: prefs.min_p,
         });
         let routed = |i: usize| {
-            let (m, card) = &rated.entries[i];
+            let (m, _, tier) = &rated.entries[i];
             let s = &d.scored[i];
             Routed {
                 provider: m.provider.clone(),
                 model: m.model.clone(),
                 name: m.name.clone(),
-                card_id: rated.catalog.cards[*card].id.clone(),
+                card_id: rated.card(i).id.clone(),
                 p_success: s.p,
                 p_success_lower: s.p_lo,
                 est_cost_usd: s.cost,
                 expected_cost_usd: s.expected_cost,
                 est_latency_ms: s.latency,
+                tier: *tier,
+                tier_p: s.tier_p,
             }
         };
         let level = d.difficulty.iter().enumerate().fold(0, |best, (i, p)| if *p > d.difficulty[best] { i } else { best });
@@ -301,39 +329,72 @@ impl Router {
     }
 }
 
-/// The pool resolved to cards; the first entry for a card wins.
+#[derive(Clone, Copy)]
+enum Source {
+    Catalog(usize),
+    Synthetic(usize),
+}
+
+/// The pool resolved to cards; the first entry for a card wins. Ranked models without a card get a
+/// synthetic one (`tiers::synthetic`); unranked ones stay unrated.
 struct Rated<'a> {
     catalog: &'static cards::Catalog,
-    entries: Vec<(&'a PoolModel, usize)>,
+    entries: Vec<(&'a PoolModel, Source, Option<Tier>)>,
+    synthetic: Vec<cards::Card>,
     unrated: Vec<PoolModel>,
 }
 
 impl<'a> Rated<'a> {
-    fn new(pool: &'a [PoolModel]) -> Result<Self, String> {
+    fn new(pool: &'a [PoolModel], tiers: &Tiers) -> Result<Self, String> {
         let catalog = cards::catalog()?;
-        let mut entries: Vec<(&PoolModel, usize)> = Vec::new();
+        let mut entries: Vec<(&PoolModel, Source, Option<Tier>)> = Vec::new();
+        let mut pending: Vec<(&PoolModel, String, Tier)> = Vec::new();
         let mut unrated = Vec::new();
+        let legacy = |m: &PoolModel| tiers.get(&format!("{}/{}", m.provider, m.model)).copied();
         for m in pool {
             match catalog.resolve(&m.provider, &m.model, &m.name) {
-                Some(card) if entries.iter().all(|(_, c)| *c != card) => entries.push((m, card)),
-                Some(_) => {}
-                None => unrated.push(m.clone()),
+                Some(card) => match entries.iter_mut().find(|(_, c, _)| matches!(c, Source::Catalog(c) if *c == card)) {
+                    // A tier saved under `<provider>/<model>` while the model was unrated still applies once
+                    // it has a card, from any of the card's pool entries; the card-id tier wins.
+                    Some((_, _, tier)) => *tier = tier.or_else(|| legacy(m)),
+                    None => entries.push((m, Source::Catalog(card), tiers.get(&catalog.cards[card].id).copied().or_else(|| legacy(m)))),
+                },
+                None => {
+                    let key = format!("{}/{}", m.provider, m.model);
+                    match tiers.get(&key) {
+                        Some(_) if pending.iter().any(|(_, k, _)| *k == key) => {}
+                        Some(&tier) => pending.push((m, key, tier)),
+                        None => unrated.push(m.clone()),
+                    }
+                }
             }
         }
-        Ok(Self { catalog, entries, unrated })
+        let synthetic: Vec<cards::Card> = pending.iter().map(|(_, key, tier)| tiers::synthetic(key.clone(), *tier)).collect();
+        entries.extend(pending.into_iter().enumerate().map(|(k, (m, _, tier))| (m, Source::Synthetic(k), Some(tier))));
+        Ok(Self { catalog, entries, synthetic, unrated })
     }
 
-    fn card(&self, i: usize) -> &'static cards::Card {
-        &self.catalog.cards[self.entries[i].1]
+    fn card(&self, i: usize) -> &cards::Card {
+        match self.entries[i].1 {
+            Source::Catalog(c) => &self.catalog.cards[c],
+            Source::Synthetic(k) => &self.synthetic[k],
+        }
+    }
+
+    fn ability(&self, i: usize) -> Option<f64> {
+        self.entries[i].2.map(Tier::ability)
     }
 
     /// The rated entry for a model (by its card, so a duplicate entry maps to the kept one).
     fn position(&self, m: &PoolModel) -> Option<usize> {
-        let card = self.catalog.resolve(&m.provider, &m.model, &m.name)?;
-        self.entries.iter().position(|(_, c)| *c == card)
+        let id = match self.catalog.resolve(&m.provider, &m.model, &m.name) {
+            Some(card) => self.catalog.cards[card].id.clone(),
+            None => format!("{}/{}", m.provider, m.model),
+        };
+        self.by_card_id(&id)
     }
 
     fn by_card_id(&self, id: &str) -> Option<usize> {
-        self.entries.iter().position(|(_, c)| self.catalog.cards[*c].id == id)
+        (0..self.entries.len()).position(|i| self.card(i).id == id)
     }
 }

@@ -112,6 +112,20 @@ const ROUTING_KEY = 'pandacode.preview.routing';
 let previewRouting = { enabled: true, mode: 'balanced', minP: 0.5, profiler: 'missing', error: null as string | null };
 try { previewRouting = { ...previewRouting, ...JSON.parse(localStorage.getItem(ROUTING_KEY) ?? '{}') }; } catch { /* Defaults. */ }
 let previewExclusions = { providers: [] as string[], models: [] as { provider: string; model: string }[] };
+// Two seeded tiers; keys are the mock's normalized model names.
+let previewTiers: Record<string, string> = { 'claude-sonnet-5-5': 'S', 'deepseek-v4-pro': 'B' };
+/** Stand-in for native grouping: one row per model name across harnesses; experimental or default entries are unrated. */
+function previewTierModels(pool: { provider: string; model: string; name: string }[]) {
+  const rows = new Map<string, { key: string; name: string; cardId: string | null; providers: string[]; rated: boolean }>();
+  for (const m of pool) {
+    const key = m.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const rated = !/exp|default|adaptive/i.test(m.name);
+    const row = rows.get(key) ?? { key, name: m.name, cardId: rated ? key : null, providers: [], rated };
+    if (!row.providers.includes(m.provider)) row.providers.push(m.provider);
+    rows.set(key, row);
+  }
+  return [...rows.values()];
+}
 let previewHealth = [{ provider: 'commandcode', model: 'gpt-6.1-sol', reason: 'Two runs in a row ended with a provider error (sample).', until: Date.now() + 8 * 60_000, failures: 2, providerDown: false }];
 const saveRouting = () => { try { localStorage.setItem(ROUTING_KEY, JSON.stringify(previewRouting)); } catch { /* Kept in memory only. */ } };
 /** Deterministic stand-in for Panda Router: longer text reads as harder, later pool entries as pricier and stronger. */
@@ -1067,6 +1081,9 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'model_routing_prepare': previewRouting = { ...previewRouting, profiler: 'ready', error: null }; saveRouting(); result = { ...previewRouting }; break;
     case 'model_routing_exclusions': result = structuredClone(previewExclusions); break;
     case 'model_routing_set_exclusions': previewExclusions = { providers: [...(args.providers as string[] ?? [])], models: [...(args.models as any[] ?? [])] }; result = structuredClone(previewExclusions); break;
+    case 'model_routing_tier_models': result = previewTierModels(args.pool as any[] ?? []); break;
+    case 'model_routing_tiers': result = { ...previewTiers }; break;
+    case 'model_routing_set_tiers': previewTiers = Object.fromEntries(Object.entries(args.tiers as Record<string, string> ?? {}).filter(([, tier]) => /^[SABCD]$/.test(tier))); result = { ...previewTiers }; break;
     case 'model_health_list': result = previewHealth.map(entry => ({ ...entry })); break;
     case 'model_health_clear': previewHealth = previewHealth.filter(entry => (args.provider != null && entry.provider !== args.provider) || (args.model != null && entry.model !== args.model)); result = previewHealth.map(entry => ({ ...entry })); break;
     case 'model_routing_route': result = previewRoute(String(args.text), args.pool as any[]); break;

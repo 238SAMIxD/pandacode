@@ -7,6 +7,7 @@ use super::cards::Card;
 use super::policy::{self, Arrays};
 use super::profile::{TaskProfile, FLAG_NEEDS_TOOLS, FLAG_NEEDS_VISION, N_DIFFICULTY};
 use super::success::HEAD;
+use super::tiers;
 use super::Mode;
 
 const LAMBDA: f64 = 0.5;
@@ -46,8 +47,9 @@ impl Demand {
         Self { exp, w }
     }
 
-    /// Mean and sd of the effective ability z (linear + hinge, moment-matched per axis).
-    fn moments(&self, card: &Card) -> (f64, f64) {
+    /// Mean and sd of the effective ability z (linear + hinge, moment-matched per axis). A user tier
+    /// (ability, weight) pulls the mean toward it.
+    pub(super) fn moments(&self, card: &Card, tier: Option<(f64, f64)>) -> (f64, f64) {
         let (mut mu, mut var) = (0.0, 0.0);
         for k in 0..10 {
             let m = self.exp[k] - card.theta[k];
@@ -60,12 +62,17 @@ impl Demand {
             mu += (card.theta[k] - LAMBDA * eh) * self.w[k];
             var += (s * s + LAMBDA * LAMBDA * var_h + 2.0 * LAMBDA * s * s * cdf) * self.w[k] * self.w[k];
         }
-        (mu, var.sqrt())
+        (tier.map_or(mu, |(t, w)| w * t + (1.0 - w) * mu), var.sqrt())
     }
 
     /// P(success | b = level) for levels 1..10, integrated over z ~ N(mu, sd) by Gauss-Hermite.
-    pub fn p_by_level(&self, card: &Card) -> ([f64; N_DIFFICULTY], f64) {
-        let (mu, sd) = self.moments(card);
+    /// A tier moves the mean ability `TIER_WEIGHT` of the way to it.
+    pub fn p_by_level(&self, card: &Card, tier: Option<f64>) -> ([f64; N_DIFFICULTY], f64) {
+        self.p_by_ability(card, tier.map(|t| (t, tiers::TIER_WEIGHT)))
+    }
+
+    fn p_by_ability(&self, card: &Card, tier: Option<(f64, f64)>) -> ([f64; N_DIFFICULTY], f64) {
+        let (mu, sd) = self.moments(card, tier);
         let sigmoid = |x: f64| 0.5 * (1.0 + (0.5 * x).tanh());
         let mut out = [0.0; N_DIFFICULTY];
         for (l, o) in out.iter_mut().enumerate() {
@@ -79,8 +86,8 @@ impl Demand {
     }
 
     /// Bayes: post(b) ∝ prior(b) · P(fail | b) for a model that failed.
-    pub fn after_failure(&self, prior: &[f64; N_DIFFICULTY], failed: &Card) -> [f64; N_DIFFICULTY] {
-        let (p, _) = self.p_by_level(failed);
+    pub fn after_failure(&self, prior: &[f64; N_DIFFICULTY], failed: &Card, tier: Option<f64>) -> [f64; N_DIFFICULTY] {
+        let (p, _) = self.p_by_level(failed, tier);
         let post: [f64; N_DIFFICULTY] = std::array::from_fn(|l| prior[l] * (1.0 - p[l]));
         let s: f64 = post.iter().sum();
         if s > 1e-12 { post.map(|x| x / s) } else { *prior }
@@ -99,6 +106,8 @@ pub(super) struct Scored {
     pub latency: f64,
     /// Expected cost including the failure term (candidates only; NaN otherwise).
     pub expected_cost: f64,
+    /// A ranked card's tier P before the blend (`p` = blend(tier_p, v4 P)).
+    pub tier_p: Option<f64>,
 }
 
 pub(super) struct Decision {
@@ -123,14 +132,24 @@ pub(super) struct Request<'a> {
     pub failed: &'a [usize],
     /// The previous route's escalation ladder (pool indices).
     pub prev_ladder: &'a [usize],
+    /// User tier ability per pool entry (None: unranked).
+    pub tiers: &'a [Option<f64>],
     pub requires_tools: bool,
     pub mode: Mode,
     pub min_p: f64,
 }
 
 /// v4 P and its lower bound per card: the success head for cards it was trained on; otherwise the card's
-/// P at the upper difficulty quantile, recentred on this task's covered cards (`Matcher._v4_p`).
-fn v4_p(r: &Request, p_levels: &[[f64; N_DIFFICULTY]], cost: &[f64], diff: &[f64; N_DIFFICULTY]) -> (Vec<f64>, Vec<f64>, [f64; N_DIFFICULTY]) {
+/// P at the upper difficulty quantile, recentred on this task's covered cards (`Matcher._v4_p`). A ranked
+/// card's P (and bound) then moves `TIER_WEIGHT` of the way to the P of its tier's ability, put on the head's
+/// scale for this task by the covered cards' mean logit shift (raw card P sits far above the head's).
+fn v4_p(
+    r: &Request,
+    p_levels: &[[f64; N_DIFFICULTY]],
+    tier_levels: &[Option<[f64; N_DIFFICULTY]>],
+    cost: &[f64],
+    diff: &[f64; N_DIFFICULTY],
+) -> (Vec<f64>, Vec<f64>, Vec<Option<f64>>, [f64; N_DIFFICULTY]) {
     let head = &*HEAD;
     let (dec, vague) = head.decision_difficulty(r.profile, r.text, diff);
     let level = super::success::quantile_level(&dec, head.quantile());
@@ -144,6 +163,7 @@ fn v4_p(r: &Request, p_levels: &[[f64; N_DIFFICULTY]], cost: &[f64], diff: &[f64
     let mut p_lo = p.clone();
     let covered: Vec<usize> = (0..n).filter(|&i| head.covers(&r.pool[i].id)).collect();
     let failed: Vec<&str> = r.failed.iter().map(|&i| r.pool[i].id.as_str()).collect();
+    let mut head_shift = 0.0;
     if !failed.is_empty() {
         // Uncovered cards also lose the mean correlated-failure shift.
         for i in (0..n).filter(|i| !covered.contains(i)) {
@@ -156,6 +176,9 @@ fn v4_p(r: &Request, p_levels: &[[f64; N_DIFFICULTY]], cost: &[f64], diff: &[f64
         let x = head.features(r.profile, r.text, &dec, vague);
         let (pc, lo): (Vec<f64>, Vec<f64>) =
             covered.iter().map(|&i| head.predict(&x, &r.pool[i].id, head.failure_offset(&failed, &r.pool[i].id))).unzip();
+        let mean = |v: Vec<f64>| v.iter().sum::<f64>() / v.len() as f64;
+        head_shift = mean(pc.iter().map(|p| policy::logit(*p)).collect())
+            - mean(covered.iter().map(|&i| alpha + beta * policy::logit(card_q[i])).collect());
         if covered.len() >= 2 {
             // Upstream recomputes every card here, so the failure shift above survives only with < 2 covered cards.
             let ref_q: Vec<f64> = covered.iter().map(|&i| card_q[i]).collect();
@@ -166,9 +189,18 @@ fn v4_p(r: &Request, p_levels: &[[f64; N_DIFFICULTY]], cost: &[f64], diff: &[f64
             (p[i], p_lo[i]) = (pc[k], lo[k]);
         }
     }
+    let tier_p: Vec<Option<f64>> = tier_levels
+        .iter()
+        .map(|levels| levels.map(|l| policy::sigmoid(alpha + beta * policy::logit(policy::p_at_level(&l, level)) + head_shift)))
+        .collect();
+    for (i, tp) in tier_p.iter().enumerate() {
+        if let Some(tp) = *tp {
+            (p[i], p_lo[i]) = (tiers::blend(tp, p[i]), tiers::blend(tp, p_lo[i]));
+        }
+    }
     let p: Vec<f64> = p.iter().map(|v| v.clamp(0.0, 1.0)).collect();
     let p_lo = p_lo.iter().zip(&p).map(|(lo, p)| lo.min(*p).clamp(0.0, 1.0)).collect();
-    (p, p_lo, dec)
+    (p, p_lo, tier_p, dec)
 }
 
 fn cmp(a: f64, b: f64) -> std::cmp::Ordering {
@@ -182,11 +214,14 @@ pub(super) fn decide(r: &Request) -> Decision {
     let diff = normalized(r.difficulty);
     let in_tok = (r.text.chars().count() / 4 + INPUT_OVERHEAD_TOKENS) as f64;
     let out_tok = 10f64.powf(r.profile.out_p50);
-    let p_levels: Vec<[f64; N_DIFFICULTY]> = pool.iter().map(|c| demand.p_by_level(c).0).collect();
+    // Untiered levels keep every unranked card's recentring exactly as without tiers.
+    let p_levels: Vec<[f64; N_DIFFICULTY]> = pool.iter().map(|c| demand.p_by_level(c, None).0).collect();
+    let tier_levels: Vec<Option<[f64; N_DIFFICULTY]>> =
+        pool.iter().zip(r.tiers).map(|(c, t)| t.map(|t| demand.p_by_ability(c, Some((t, 1.0))).0)).collect();
     let cost: Vec<f64> = pool.iter().map(|c| (in_tok * c.cost_in + out_tok * c.cost_out) / 1e6).collect();
     let latency: Vec<f64> = pool.iter().map(|c| c.ttft_ms + out_tok / c.tps * 1000.0).collect();
-    let (p, p_lo, dec) = v4_p(r, &p_levels, &cost, &diff);
-    let strength: Vec<f64> = pool.iter().map(|c| c.strength).collect();
+    let (p, p_lo, tier_p, dec) = v4_p(r, &p_levels, &tier_levels, &cost, &diff);
+    let strength: Vec<f64> = pool.iter().zip(r.tiers).map(|(c, t)| t.map_or(c.strength, |t| tiers::blend(t, c.strength))).collect();
 
     // Hard filters.
     let needs_tools = r.profile.flags[FLAG_NEEDS_TOOLS].max(if r.requires_tools { 1.0 } else { 0.0 }) > 0.5;
@@ -242,7 +277,7 @@ pub(super) fn decide(r: &Request) -> Decision {
         order.insert(0, c);
     }
     let scored = (0..n)
-        .map(|i| Scored { p: p[i], p_lo: p_lo[i], cost: cost[i], latency: latency[i], expected_cost: expected[i] })
+        .map(|i| Scored { p: p[i], p_lo: p_lo[i], cost: cost[i], latency: latency[i], expected_cost: expected[i], tier_p: tier_p[i] })
         .collect();
     Decision { scored, chosen, decided_by, order, ladder, difficulty: dec }
 }

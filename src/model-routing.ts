@@ -4,6 +4,7 @@ import { escape, icon } from './dom';
 import { providerLogo } from './provider-logos';
 import { trackSegment } from './motion';
 import { installedCatalog } from './team-catalog';
+import { modelTiersHtml, mountModelTiers } from './model-tiers';
 import { infoMark } from './tooltip';
 import type { ProviderId, ProviderModel } from './types';
 
@@ -48,7 +49,8 @@ export function mountModelRouting(host: HTMLElement, options: ModelRoutingOption
     <div class="setting-row"><div><strong>Models for teams ${infoMark('Turned-off harnesses and models are never picked for team workers: Panda Router skips them, profiles and fallbacks never staff them and a failed worker never fails over to them. A model the lead is explicitly asked to use still runs.', 'About models for teams')}</strong><small class="routing-pool-note" role="status" data-live></small></div></div>
     <p class="routing-pool-warning" role="alert" hidden>No model is on for teams. Workers will use the lead's model.</p>
     <div class="routing-pool-rows"></div>
-  </div>`;
+  </div>
+  ${modelTiersHtml()}`;
   const $ = <T extends HTMLElement>(selector: string) => host.querySelector<T>(selector)!;
   const enabled = $<HTMLInputElement>('.routing-enabled'), minP = $<HTMLInputElement>('.routing-minp'), minRow = $('.routing-minp-row');
   const statusText = $('.routing-status'), prepare = $<HTMLButtonElement>('.routing-prepare');
@@ -75,10 +77,11 @@ export function mountModelRouting(host: HTMLElement, options: ModelRoutingOption
     }, 1000);
   };
 
-  let healthTicket = 0;
+  let healthTicket = 0, lastHealth: Unhealthy[] | null = null;
   // Rows are keyed by provider and model: a refresh updates the countdown in place, adds and removes rows,
   // and never replaces a row that stays, so keyboard focus on its button or info mark survives.
   const renderHealth = (list: Unhealthy[]) => {
+    lastHealth = list;
     health.hidden = list.length === 0;
     // A newer failure (new count) gets a fresh row, so its reason is never stale.
     const keys = new Set(list.map(entry => `${entry.provider}\n${entry.model}\n${entry.failures}`));
@@ -107,7 +110,10 @@ export function mountModelRouting(host: HTMLElement, options: ModelRoutingOption
   // Newest reply wins, so a slow list never undoes a clear.
   const loadHealth = (command = 'model_health_list', args?: Record<string, unknown>) => {
     const ticket = ++healthTicket;
-    return options.call<Unhealthy[]>(command, args).then(list => { if (!disposed && ticket === healthTicket) renderHealth(list); }).catch(fail);
+    // Rank models hides the same paused models; until a list arrives it waits (a failed first read keeps it waiting).
+    return options.call<Unhealthy[]>(command, args).then(list => {
+      if (!disposed && ticket === healthTicket) { renderHealth(list); tiers.setHealth(list); }
+    }).catch(cause => { if (!disposed && ticket === healthTicket && lastHealth) tiers.setHealth(lastHealth); fail(cause); });
   };
   const healthTimer = window.setInterval(() => void loadHealth(), HEALTH_REFRESH_MS);
   host.querySelector('.routing-health-clear')!.addEventListener('click', () => void loadHealth('model_health_clear'));
@@ -178,15 +184,16 @@ export function mountModelRouting(host: HTMLElement, options: ModelRoutingOption
   });
 
   void request('model_routing_status').catch(fail);
+  const tiers = mountModelTiers($('.model-tiers'), { ...options, fail });
   void loadHealth();
-  mountPool($('.routing-pool'), options, fail, () => disposed);
-  return () => { disposed = true; clearTimeout(polling); clearInterval(healthTimer); };
+  mountPool($('.routing-pool'), options, fail, () => disposed, tiers.setExclusions);
+  return () => { disposed = true; tiers.dispose(); clearTimeout(polling); clearInterval(healthTimer); };
 }
 
 // Models for teams: one switch per installed harness, its models behind a disclosure. The switches stay
 // disabled until the saved set loads. Saves run one at a time, each sending the newest set; a failure of
 // the newest save reverts to the last set native confirmed.
-function mountPool(group: HTMLElement, options: ModelRoutingOptions, fail: (cause: unknown) => void, disposed: () => boolean): void {
+function mountPool(group: HTMLElement, options: ModelRoutingOptions, fail: (cause: unknown) => void, disposed: () => boolean, onChange: (shown: Exclusions) => void): void {
   const harnesses = options.providers.filter(p => p.installed);
   const models = new Map<ProviderId, ProviderModel[]>(harnesses.map(p => [p.id, p.models]));
   const rows = group.querySelector<HTMLElement>('.routing-pool-rows')!, note = group.querySelector<HTMLElement>('.routing-pool-note')!;
@@ -220,6 +227,7 @@ function mountPool(group: HTMLElement, options: ModelRoutingOptions, fail: (caus
     const on = counts.reduce((sum, n) => sum + n, 0);
     note.textContent = `${on} model${on === 1 ? '' : 's'} on`;
     warning.hidden = !loaded || on > 0;
+    if (loaded) onChange(shown);
   };
   const flush = async () => {
     if (sent === version || disposed()) return;

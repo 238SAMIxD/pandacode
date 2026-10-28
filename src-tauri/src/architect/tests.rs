@@ -2968,3 +2968,20 @@ fn the_lead_is_told_to_route_first() {
     let dispatch = catalog().into_iter().find(|t| t["name"] == "pandacode_dispatch_workers").unwrap();
     assert!(dispatch["description"].as_str().unwrap().starts_with("Dispatch independent assignments together in one batch to run concurrently. By default use profileId \"auto\""));
 }
+#[test]
+fn ranked_picks_say_their_tier() {
+    let (state, sid) = auto_state();
+    with_catalog(&state, &sid);
+    let mut config = config();
+    config.catalog = routing_catalog();
+    let tiers: crate::panda_router::Tiers =
+        routing::pool(&config).iter().map(|m| (crate::panda_router::tier_key(&m.provider, &m.model, &m.name).0, crate::panda_router::Tier::S)).collect();
+    crate::model_routing::with_tiers(tiers, || {
+        let args = json!({"assignments":[auto_assignment("fix", json!({"profileId":"auto","prompt":"Fix the flaky scheduler test."}))]});
+        let result = routed_call(&state, &sid, args, true).unwrap();
+        assert!(result["routing"][0].as_str().unwrap().contains("tier S, P "), "{result}");
+        let (pool, jobs, _) = routing::route_request(&config, &[], json!({"tasks":[{"text":"Fix a typo."}]})).unwrap();
+        let routes = crate::model_routing::route_with(&crate::panda_router::Router::heuristic(), &Default::default(), &pool, jobs).unwrap();
+        assert_eq!(routing::route_summary(&config, &routes)["tasks"][0]["pick"]["tier"], "S");
+    });
+}

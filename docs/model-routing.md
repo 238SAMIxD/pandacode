@@ -75,6 +75,37 @@ and **Route** return a "routing is off" error.
 
 Whole providers and individual provider/model pairs can be switched off for orchestration. These choices are saved separately in `routing-exclusions.json` beside the routing settings and exclude models from Panda Router, the lead's roster and harness failover. Profiles and the unrouted fallback never staff a switched-off or paused model (a profileId naming one is refused); if no roster model is usable, the lead sees an empty roster with a note and workers use the lead's own model. Explicitly naming a provider and model in an automatic team still dispatches it. Only harness failures (the CLI missing or failing to start, session errors, auth, rate limits, crashes) pause a model; PandaCode's own preflight errors do not. A follow-up resets a worker's failover count.
 
+## Tier list
+
+Users can rank models S, A, B, C or D. A ranked model's tier is the major weight in every
+routing decision; unranked models route exactly as before. Saved in `routing-tiers.json`
+beside the exclusions (written atomically; invalid entries are dropped one by one on load).
+
+- Each tier is an ability on the cards' 1–10 scale (`Tier::ability` in
+  `panda_router/tiers.rs`): S 8.9 (the strongest cards, Fable 5.1 and Opus 5.5), A 8.0,
+  B 7.0, C 6.0, D 4.5 (small local models).
+- With `TIER_WEIGHT` = 0.7, a ranked card's mean ability (so P at every level and the
+  escalation posterior) is `0.7·tier + 0.3·card`, and so is its strength (the policy's
+  tie-breaks, the ladder and the never-step-down floor after a failure).
+- The final P (success head or recentred card P) moves 70% of the way to the P of the
+  tier's own ability, put on the head's scale for the task by the covered cards' mean
+  logit shift, so an S-ranked weak card beats a D-ranked strong one. A rank is not an
+  override: an unranked card whose own P beats the tier's P still wins.
+- Keys are the card id for rated models (one rank covers every harness running that
+  card) and `<provider>/<model>` for unrated ones. A ranked unrated model becomes routable
+  through a synthetic card: the tier on every axis, se 1.0, the catalog-wide median
+  discrimination and paid cost (fixed, so toggling other models never moves it), tools on.
+  Its `cardId` is its key. A rated card with no card-id rank still takes a rank saved under
+  one of its entries' `<provider>/<model>` keys (ranked before it gained a card).
+- Routes carry `tier` and `tierP` (the tier's P before the blend) on ranked models (`model_routing_route`, `route_models`) and the
+  staffing note says `tier S`.
+
+IPC: `model_routing_tiers() -> {[key]: "S"|"A"|"B"|"C"|"D"}`; `model_routing_set_tiers({tiers})`
+returns the same (at most 1000 entries, keys 1–300 bytes with no NUL);
+`model_routing_tier_models({pool: PoolEntry[]}) -> [{key, name, cardId|null, providers, rated}]`,
+one row per key in pool order, named after its first entry without the trailing
+` · <harness>`; `default` entries that resolve to no card are left out.
+
 ## In teams
 
 - In an automatic team, the lead sets `profileId: "auto"` on an assignment in
