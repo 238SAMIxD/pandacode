@@ -198,3 +198,6 @@ button.gh-run-pull:hover{color:var(--text);background:var(--gh-hover)}
 @media (max-width:900px){.gh-row .gh-label,.gh-author,.gh-diff{display:none}.gh-head,.gh-bar{padding-inline:18px}}
 .gh-error-detail{display:block;max-width:100%;margin-top:8px;padding:6px 9px;border-radius:var(--radius-sm);background:var(--gh-inset);font:500 .72rem/1.45 var(--mono,ui-monospace,monospace);color:var(--muted);overflow-wrap:anywhere;text-align:left}
 .gh-run-details .gh-note{margin:4px 0;font-size:var(--text-xs)}
+
+/* Micro-interactions: only without reduced motion. */
+@media(prefers-reduced-motion:no-preference){.gh-other-toggle .icon{transition:transform 150ms ease-out}.gh-other-toggle,.gh-act,.gh-title .icon-button,.gh-repos-head .icon-button{transition:background-color 130ms ease-out,color 130ms ease-out}}

@@ -297,6 +297,8 @@ test.describe('thread order', () => {
     await open(page);
     const box = (await row(page, 'session-2').boundingBox())!;
     await row(page, 'session-2').click({ button: 'right', position: { x: 60, y: 6 } });
+    // The menu settles a few pixels as it arrives; measure where it lands.
+    await expect.poll(() => menu(page).evaluate(element => element.getAnimations().length)).toBe(0);
     let panel = (await menu(page).boundingBox())!;
     expect(Math.abs(panel.x - (box.x + 60))).toBeLessThan(2);
     expect(panel.y).toBeGreaterThan(box.y + 6);
@@ -304,6 +306,7 @@ test.describe('thread order', () => {
     await expect(menu(page)).toBeHidden();
     await row(page, 'session-2').hover();
     await page.locator('#task-row-session-2 .task-more').click();
+    await expect.poll(() => menu(page).evaluate(element => element.getAnimations().length)).toBe(0);
     panel = (await menu(page).boundingBox())!;
     // At the row's left edge, kept 12px inside the window.
     expect(Math.abs(panel.x - Math.max(box.x, 12))).toBeLessThan(2);

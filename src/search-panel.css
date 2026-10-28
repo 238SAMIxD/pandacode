@@ -27,3 +27,6 @@
 .search-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:pre;font:.76rem/1.5 var(--mono)}
 .search-text mark{background:color-mix(in srgb,var(--accent) 38%,transparent);color:inherit;border-radius:var(--radius-xs)}
 @media(prefers-reduced-motion:reduce){.search-group-title>svg.icon:first-child{transition:none}}
+
+/* Micro-interactions: only without reduced motion. */
+@media(prefers-reduced-motion:no-preference){.search-field{transition:border-color 130ms ease-out}.search-row,.search-toggle{transition:background-color 120ms ease-out,color 120ms ease-out}}

@@ -3,7 +3,7 @@
 *{box-sizing:border-box}
 html,body,#app{margin:0;width:100%;height:100%;overflow:hidden}
 button,input,select,textarea{font:inherit;color:inherit}
-button{cursor:pointer;background:none;border:0;padding:0;display:inline-flex;align-items:center;justify-content:center;gap:8px;transition:background-color 120ms, color 120ms, box-shadow 160ms, transform var(--spring-fast-duration) var(--spring-fast);touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+button{cursor:pointer;background:none;border:0;padding:0;display:inline-flex;align-items:center;justify-content:center;gap:8px;transition:background-color 120ms, color 120ms, box-shadow 160ms, scale var(--spring-fast-duration) var(--spring-fast);touch-action:manipulation;-webkit-tap-highlight-color:transparent}
 button:disabled{opacity:.45;cursor:not-allowed}
 button:not(:disabled):hover{color:var(--text)}
 a{color:var(--accent-ink);text-decoration-thickness:1px;text-underline-offset:3px}
@@ -455,8 +455,9 @@ html .composer:has(#prompt:placeholder-shown):not(:has(#attachments>*)) .send-bu
 .drawer-heading .muted{font-size:var(--text-2xs);color:var(--muted);margin-left:7px}
 .drawer-heading>.icon-button{height:24px;width:24px}
 #terminal-host{height:calc(100% - 37px);padding:10px 13px 5px;color:var(--text);font-size:var(--text-xs)}
-.toast{position:fixed;top:64px;bottom:auto;left:0;right:0;width:fit-content;margin:0 auto;display:flex;align-items:center;gap:var(--space-2);background:var(--glass-warm);color:var(--text);font-size:var(--text-sm);padding:11px 17px 11px 14px;border-radius:var(--radius-md);box-shadow:0 16px 44px -14px var(--glass-shadow-deep),0 4px 12px -6px var(--glass-shadow-near);backdrop-filter:blur(24px) saturate(1.5);-webkit-backdrop-filter:blur(24px) saturate(1.5);z-index:50;max-width:min(600px,90vw);animation:none;overflow-wrap:anywhere}
-.toast::before{content:"";width:7px;height:7px;flex-shrink:0;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px rgb(var(--accent-rgb) / .22)}
+/* Toast: a small warm-glass note in the bottom-right corner. Text wraps (paths break anywhere) and clamps at five lines. */
+.toast{position:fixed;right:max(16px,env(safe-area-inset-right));bottom:max(16px,env(safe-area-inset-bottom));left:auto;z-index:50;box-sizing:border-box;width:max-content;max-width:min(360px,calc(100vw - 32px));margin:0;padding:10px 14px 10px 30px;border-radius:var(--glass-radius);display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:5;overflow:hidden;overflow-wrap:anywhere;word-break:break-word;color:var(--text);font-size:var(--text-sm);line-height:1.45;letter-spacing:-.003em;background:radial-gradient(140% 120% at 0% 0%,var(--glass-glow),transparent 62%),linear-gradient(160deg,var(--glass-warm),var(--glass-tint) 70%);border:.5px solid var(--glass-edge);box-shadow:0 0 0 .5px var(--glass-ring),0 18px 40px -16px var(--glass-shadow-deep),0 4px 12px -6px var(--glass-shadow-near),inset 0 1px 0 var(--glass-highlight);backdrop-filter:blur(28px) saturate(1.6);-webkit-backdrop-filter:blur(28px) saturate(1.6);animation:none}
+.toast::before{content:"";position:absolute;left:13px;top:calc(10px + .725em - 3px);width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px rgb(var(--accent-rgb) / .18)}
 /* The dialog is a transparent shell: .dialog-plate behind it carries the glass so
    menus positioned inside keep viewport coordinates (see motion.css). */
 /* Dialog chrome is slim: a one-line title row, an optional one-line note, then content. */
@@ -920,7 +921,7 @@ html[data-native-platform=macos] .github-view .gh-repos-head{padding-left:calc(8
 .github-view .sidebar-resize-handle{display:none}
 #github-hub{flex:1;min-width:0;min-height:0}
 #github-hub[hidden]{display:none}
-@container workspace-header (max-width:420px){.header-actions{gap:1px}.header-actions .icon-button{width:24px}.header-divider{margin:0 1px}}
+@container workspace-header (max-width:420px){.header-actions{gap:1px}.header-actions .icon-button{width:24px}.header-divider{display:none}}
 
 /* An update is downloaded: one quiet, clickable line in the status bar. */
 .update-status{display:inline-flex;align-items:center;gap:var(--space-1);padding:2px 9px;border-radius:var(--radius-full);background:var(--accent-dim);color:var(--accent-ink);font-size:var(--text-2xs);font-weight:var(--weight-strong)}
@@ -999,6 +1000,7 @@ html[data-theme="dark"] body .dialog-plate{box-shadow:0 40px 100px -30px rgb(0 0
 .message-attachment-dialog{max-width:min(92vw,960px)}
 .message-attachment-image{display:block;max-width:100%;max-height:70vh;margin:0 auto;border-radius:var(--radius-sm);background:#fff;object-fit:contain}
 .message-attachment-raw{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:var(--text-xs);line-height:1.55;color:var(--muted);max-height:60vh;overflow:auto;padding:10px 12px;border-radius:var(--radius-sm);background:var(--raised)}
-/* PandaCode is instant: no transitions anywhere. Looping status indicators (spinners,
-   working pulses) are animations, not transitions, so they keep running. */
-*,*::before,*::after{transition:none!important}
+/* Motion is subtle, not absent: hover/press ease color, background, opacity and scale in
+   about 100–200 ms; springs in motion.ts carry surfaces. Reduced Motion removes CSS
+   transitions and animations (the block near the top of the narrow-window rules), and
+   motion.ts keeps only a short cross-fade there. */

@@ -323,6 +323,8 @@ test.describe('sidebar sections', () => {
   test('a focused row’s actions fade into the row’s own background', async ({ page }) => {
     await open(page);
     await row(page, 'session-2').focus();
+    // The row's background eases in; read it once it has settled.
+    await expect.poll(() => row(page, 'session-2').evaluate(item => item.getAnimations().length)).toBe(0);
     const [rowBg, fade] = await row(page, 'session-2').evaluate(item => [getComputedStyle(item).backgroundColor, getComputedStyle(item.parentElement!).getPropertyValue('--row-bg')]);
     expect(rowBg).not.toBe('rgba(0, 0, 0, 0)');
     const probe = await page.evaluate(value => { const el = document.createElement('div'); el.style.background = value; document.body.append(el); const color = getComputedStyle(el).backgroundColor; el.remove(); return color; }, fade.trim());

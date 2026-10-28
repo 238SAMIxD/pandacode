@@ -137,6 +137,8 @@ async function installReasoningPreview(page: Page): Promise<void> {
 
 async function captureEffortPresentation(page: Page): Promise<void> {
   await expect(modelPicker(page)).toHaveAttribute('data-popover-state', 'open');
+  // Let the menu's short entrance settle before recording what is on screen.
+  await expect.poll(() => modelPicker(page).evaluate(element => element.getAnimations().length)).toBe(0);
   await reasoningLabel(page).focus();
   await page.evaluate(() => {
     const selectors = ['.model-menu', '.model-menu-list', '.model-menu-option[aria-current="true"]', '.model-menu-settings', '.model-menu-effort', '.model-menu-rail', '#prompt', '#model-picker-trigger', '#breadcrumb button'];
@@ -1060,12 +1062,13 @@ test('finds and selects projects beyond the first hundred filter options', async
   await expect(openTaskProject(page)).toHaveText('Fixture project 119');
 });
 
-test('menus open and close instantly and stay usable', async ({ page }) => {
+test('menus open with a brief settle, close at once and stay usable', async ({ page }) => {
   await page.getByRole('button', { name: 'Choose harness and model', exact: true }).click();
   const menu = page.getByRole('dialog', { name: 'Harness and model', exact: true });
   const search = menu.getByRole('combobox', { name: 'Search harnesses and models', exact: true });
   await expect(menu).toHaveAttribute('data-popover-state', 'open');
-  expect(await menu.evaluate(element => element.getAnimations().length)).toBe(0);
+  // Any entrance is short and never blocks input: the search takes focus right away.
+  expect(await menu.evaluate(element => Math.max(0, ...element.getAnimations().map(animation => Number(animation.effect?.getComputedTiming().endTime ?? 0))))).toBeLessThan(300);
   await expect(search).toBeFocused();
   await page.keyboard.type('animation-ready-model');
   await expect(search).toHaveValue('animation-ready-model');
@@ -3243,13 +3246,16 @@ test('keeps the worktree terminal open when the previous checkout terminal fails
   await expect.poll(() => page.evaluate(() => (window as any).__pandacodeWorktreeCalls.filter((call: any) => call.command === 'close_terminal').length)).toBe(1);
 });
 
-test('the interface is instant: no transitions, no entrance motion, and presses keep a button in place', async ({ page }) => {
+test('motion is short and never gates input, and presses keep a button in place', async ({ page }) => {
   await page.locator('.sidebar-projects').getByRole('button', { name: 'Open project', exact: true }).click();
   await expect(page.locator('#dialog')).toBeVisible();
-  // The modal is fully there at once: nothing is animating it in (the action dock is the one animated surface).
-  expect(await page.evaluate(() => document.getAnimations().filter(animation => animation.playState === 'running' && animation.timeline instanceof DocumentTimeline && !((animation.effect as KeyframeEffect | null)?.target as Element | null)?.closest('#action-dock')).length)).toBe(0);
-  await expect(page.locator('.dialog-plate')).toHaveCSS('opacity', '1');
-  await expect(page.locator('#dialog .primary-button')).toHaveCSS('transition-duration', '0s');
+  // Every surface animation is brief, and the dialog takes input while it settles. Endless
+  // status indicators (the running-agents pulse) are ambient, not transitions.
+  const durations = await page.evaluate(() => document.getAnimations().filter(animation => animation.timeline instanceof DocumentTimeline).map(animation => animation.effect?.getComputedTiming()).filter(timing => timing && Number.isFinite(Number(timing.iterations))).map(timing => Number(timing!.endTime ?? 0)));
+  expect(Math.max(0, ...durations)).toBeLessThan(500);
+  const transition = await page.locator('#dialog .primary-button').evaluate(el => getComputedStyle(el).transitionDuration.split(',').map(value => Number.parseFloat(value) * (value.trim().endsWith('ms') ? 1 : 1000)));
+  expect(Math.max(...transition)).toBeGreaterThan(0);
+  expect(Math.max(...transition)).toBeLessThanOrEqual(400);
   await page.keyboard.press('Escape');
   await expect(page.locator('#dialog')).toBeHidden();
   await expect(page.locator('.dialog-plate')).toBeHidden();
@@ -3261,6 +3267,17 @@ test('the interface is instant: no transitions, no entrance motion, and presses 
   await page.mouse.down();
   expect(await send.evaluate(el => getComputedStyle(el).transform)).toBe(before);
   await page.mouse.up();
+});
+
+test('the toast sits in the bottom-right corner and wraps long text', async ({ page }) => {
+  const toast = page.locator('#toast');
+  await page.evaluate(() => { const toast = document.querySelector<HTMLElement>('#toast')!; toast.textContent = 'Could not open /Users/someone/projects/a-really-long-folder-name/with/a/deep/path/src/components/SomethingReallyLongFileName.tsx'; toast.hidden = false; });
+  const box = (await toast.boundingBox())!, viewport = page.viewportSize()!;
+  expect(box.width).toBeLessThanOrEqual(361);
+  expect(viewport.width - (box.x + box.width)).toBeLessThan(40);
+  expect(viewport.height - (box.y + box.height)).toBeLessThan(40);
+  expect(await toast.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await expect(toast).toHaveAttribute('role', 'status');
 });
 
 test('switching back to a thread draws it at once: formatted, at the bottom, with no loading frame', async ({ page }) => {
@@ -3332,7 +3349,9 @@ test('⌘F finds text in the thread, in your messages and the agent’s, and ste
 test('the prompt sits in the same place in every thread', async ({ page }) => {
   await expect(page.locator('#composer')).toBeVisible();
   const bottoms: number[] = [];
-  const measure = async () => { await expect(page.locator('#composer')).toBeVisible(); bottoms.push(Math.round((await page.locator('#composer').boundingBox())!.y + (await page.locator('#composer').boundingBox())!.height)); };
+  // Measured once surfaces have settled: panes arrive with a short spring.
+  const settled = () => page.evaluate(() => document.getAnimations().filter(animation => animation.timeline instanceof DocumentTimeline && animation.playState === 'running' && Number.isFinite(Number(animation.effect?.getComputedTiming().endTime))).length);
+  const measure = async () => { await expect(page.locator('#composer')).toBeVisible(); await expect.poll(settled).toBe(0); bottoms.push(Math.round((await page.locator('#composer').boundingBox())!.y + (await page.locator('#composer').boundingBox())!.height)); };
   const ids = await page.locator('#navigation .task-item').evaluateAll(rows => rows.map(row => (row as HTMLElement).dataset.id!));
   expect(ids.length).toBeGreaterThan(1);
   for (const id of ids) {

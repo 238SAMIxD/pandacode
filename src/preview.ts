@@ -198,6 +198,14 @@ const previewMimoEndpoints = [
   { id: 'api', url: 'https://api.xiaomimimo.com/anthropic', label: 'Pay-as-you-go API' },
 ];
 let previewMimoEndpoint: string | null = null;
+let previewAgentsDockPreferences = { enabled: true, keepOnScreen: true, pinned: false };
+const previewAgentsDockSnapshot = {
+  agents: [
+    { id: 'preview-active', title: 'Polish the new onboarding', projectName: 'PandaCode', provider: 'codex', model: 'gpt-5.6-sol', status: 'running', elapsedSeconds: 94 },
+    { id: 'preview-approval', title: 'Build a responsive gallery', projectName: 'Gallery', provider: 'claude', model: 'sonnet', status: 'waiting-for-approval', elapsedSeconds: 327 },
+    { id: 'preview-input', title: 'Prepare the release notes', projectName: 'Website', provider: 'pi', model: 'anthropic/sonnet', status: 'waiting-for-input', elapsedSeconds: 41 },
+  ],
+};
 /** Named connections; secret values are dropped, only their names are kept, as on the native side. */
 let previewConnections: import('./connections').ConnectionSnapshot = { connections: [], tasks: {} };
 function previewSaveConnection(input: { id?: string | null; provider: ProviderId; name: string; executable?: string | null; args?: string[]; env?: { name: string; value: string | null; secret: boolean }[]; configDir?: string | null }): import('./connections').ConnectionSnapshot {
@@ -820,8 +828,47 @@ function trayCommand(command: string, args: Record<string, any>): unknown {
     checking: false,
   };
 }
+/** The Running agents widget's commands (header and pinned window). */
+function previewAgentsDock<T>(command: string, args: Record<string, any>): T {
+  if (command === 'agents_dock_snapshot') {
+    // Tests push a native change event with this, as the app does when a run's state changes.
+    (window as any).__agentsDockPush = () => emit('agents-dock-changed', structuredClone(previewAgentsDockSnapshot));
+    return structuredClone(previewAgentsDockSnapshot) as T;
+  }
+  if (command === 'agents_dock_preferences') return structuredClone(previewAgentsDockPreferences) as T;
+  if (command === 'agents_dock_save_preferences') {
+    previewAgentsDockPreferences = {
+      enabled: Boolean(args.enabled),
+      keepOnScreen: Boolean(args.keepOnScreen),
+      pinned: args.enabled ? previewAgentsDockPreferences.pinned : false,
+    };
+    emit('agents-dock-preferences-changed', structuredClone(previewAgentsDockPreferences));
+    return structuredClone(previewAgentsDockPreferences) as T;
+  }
+  if (command === 'agents_dock_pin') {
+    if (!previewAgentsDockPreferences.enabled) throw new Error('Enable the Running agents widget first.');
+    previewAgentsDockPreferences = { ...previewAgentsDockPreferences, pinned: true };
+    emit('agents-dock-preferences-changed', structuredClone(previewAgentsDockPreferences));
+    return null as T;
+  }
+  if (command === 'agents_dock_unpin') {
+    previewAgentsDockPreferences = { ...previewAgentsDockPreferences, pinned: false };
+    emit('agents-dock-preferences-changed', structuredClone(previewAgentsDockPreferences));
+    return null as T;
+  }
+  if (command === 'agents_dock_set_expanded') { (window as any).__agentsDockExpanded = Boolean(args.expanded); return null as T; }
+  if (command === 'agents_dock_open_task') {
+    (window as any).__agentsDockOpened = args.sessionId;
+    emit('overlay-open-task', { sessionId: args.sessionId });
+    return null as T;
+  }
+  throw new Error(`Unknown running-agents command: ${command}`);
+}
+
 export async function invoke<T>(command: string, args: Record<string, any>): Promise<T> {
   if (command.startsWith('tray_')) return trayCommand(command, args) as T;
+  // An if chain, not a switch: specs patch the first command switch in this file to record calls.
+  if (command.startsWith('agents_dock_')) return previewAgentsDock<T>(command, args);
   if (command.startsWith('jj_')) return (await import('./preview-jj')).invokeJj<T>(command, args);
   if (command.includes('moodboard')) return (await import('./preview-moodboards')).invokeMoodboards<T>(command, args);
   if (command === 'bots_list' || command.startsWith('bot_')) return invokeBots<T>(command, args, {

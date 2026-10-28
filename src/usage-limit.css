@@ -13,3 +13,6 @@ html[data-theme=dark] .limit-banner>.icon{color:var(--warning)}
 .limit-banner .icon-button{width:24px;height:24px;flex:none}
 @media(max-width:560px){.limit-resume>span{display:none}}
 @media(prefers-contrast:more){.limit-banner{border-color:var(--text)}}
+
+/* Micro-interactions: only without reduced motion. */
+@media(prefers-reduced-motion:no-preference){.limit-continue{transition:background-color 130ms ease-out}}

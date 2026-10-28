@@ -36,4 +36,5 @@
 .subagent-tools .tool-activity{padding-left:0}
 .subagent-tools .tool-activity pre{font-size:var(--text-2xs);padding:9px}
 .subagent-tools .tool-activity summary{min-height:25px}
-
+/* Micro-interactions: only without reduced motion. */
+@media(prefers-reduced-motion:no-preference){.subagents-trigger,.subagent-row{transition:background-color 140ms ease-out,border-color 140ms ease-out}.subagent-state{transition:background-color 200ms}.subagent-assignment[open]>p{animation:sa-fade 160ms ease-out}@keyframes sa-fade{from{opacity:0}}}

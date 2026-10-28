@@ -22,3 +22,6 @@
 .workspace[data-wallpaper] .conversation-pane .agent-input-option:has(input:checked){background:var(--thread-accent)}
 .side-thread .agent-input{margin-left:28px;padding:12px;font-size:var(--text-xs)}
 @media(max-width:650px){.agent-input{margin-left:0}}
+
+/* Micro-interactions: only without reduced motion. */
+@media(prefers-reduced-motion:no-preference){.agent-input-option,.agent-input input:not([type=radio],[type=checkbox]),.agent-input select{transition:background-color 130ms ease-out,border-color 130ms ease-out}.agent-input-option:hover{border-color:color-mix(in srgb,var(--muted) 50%,var(--border))}}

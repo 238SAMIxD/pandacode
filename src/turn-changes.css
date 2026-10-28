@@ -32,3 +32,6 @@
 .inspector-diff-host{display:flex;flex-direction:column;min-height:0;flex:1;padding:0 8px 8px}
 @media(max-width:650px){.turn-changes-row{padding-left:0}.turn-change-list>summary{column-gap:6px}.turn-change-list>summary>.change-counts{flex-basis:100%;padding-left:21px}.turn-change-children{padding-left:8px}}
 @media(prefers-reduced-motion:reduce){.turn-changes summary>.icon{transition:none}}
+
+/* Micro-interactions: only without reduced motion. */
+@media(prefers-reduced-motion:no-preference){.turn-changes-open,.turn-change-file,.turn-change-folder>summary{transition:background-color 130ms ease-out,color 130ms ease-out}.turn-changes details[open]>.turn-change-children,.turn-changes details[open]>.turn-change-tree{animation:tc-fade 160ms ease-out}@keyframes tc-fade{from{opacity:0}}}

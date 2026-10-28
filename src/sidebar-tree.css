@@ -254,3 +254,17 @@ html[data-theme=dark] .toast-undo{color:var(--accent)}
 .sidebar .all-group .task-top>.task-app-icon{width:var(--icon-sm);height:var(--icon-sm)}
 .sidebar .task-project-name{flex:0 1 auto;min-width:4.5em;max-width:35%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--text-2xs);color:var(--faint)}
 @container sidebar-nav (max-width:264px){.sidebar .task-project-name{display:none}}
+
+/* Feel: hover and selection ease (never layout), row actions fade in, and the selected
+   task carries a slim accent bar at its leading edge. */
+.sidebar .task-item,.folder-more,.sidebar .sidebar-actions>button,.bot-row,.bot-row-add{transition:background-color 140ms ease-out,color 140ms ease-out,box-shadow 160ms ease-out,scale var(--spring-fast-duration,200ms) var(--spring-fast,ease-out)}
+.sidebar .task-title,.sidebar .task-provider,.sidebar .task-age,.sidebar .task-indicator{transition:color 140ms ease-out,opacity 140ms ease-out,background-color 200ms}
+.sidebar .task-actions,.bot-row-settings{transition:opacity 140ms ease-out}
+.sidebar .task-action{transition:background-color 120ms,color 120ms,scale var(--spring-fast-duration,200ms) var(--spring-fast,ease-out)}
+.sidebar .task-item:focus-visible,.folder-more:focus-visible,.bot-row-open:focus-visible{outline:2px solid var(--focus);outline-offset:-2px}
+.sidebar .task-row::before{content:"";position:absolute;z-index:1;left:-5px;top:9px;bottom:9px;width:2px;border-radius:1px;background:var(--accent);opacity:0;scale:1 .4;pointer-events:none;transition:opacity 160ms ease-out,scale var(--spring-duration,240ms) var(--spring,ease-out)}
+.sidebar .task-row-oneline::before{top:6px;bottom:6px}
+.sidebar .task-row:has(>.task-item.selected)::before{opacity:1;scale:1}
+.sidebar .task-item.task-dragging{transition:opacity 120ms ease-out}
+@media(max-width:650px){.sidebar .task-row::before{display:none}}
+@media(prefers-reduced-motion:reduce){.sidebar .task-row::before{scale:1}}

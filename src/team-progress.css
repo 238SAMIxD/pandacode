@@ -26,3 +26,6 @@ html[data-theme="dark"] .team-progress-worker[data-status=Working] .team-progres
 @keyframes team-progress-spin{to{transform:rotate(360deg)}}
 .team-progress-worker>.icon{width:11px;height:11px;flex:none;color:var(--muted)}
 .team-progress-more{font-size:var(--text-xs)}
+
+/* Micro-interactions: only without reduced motion. */
+@media(prefers-reduced-motion:no-preference){.team-progress-worker,.team-progress-more,.team-progress-description small,.team-progress-status{transition:color 140ms ease-out}}

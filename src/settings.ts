@@ -14,10 +14,11 @@ import { mountModelRouting } from './model-routing';
 import { mountAgentTeams, type AgentTeamsOptions } from './agent-teams';
 import { mountCloudSettings, type CloudSettingsHost } from './cloud-settings';
 import { mountSkillsLibrary, type SkillsLibraryHost } from './skills-library';
-import { call } from './bridge';
+import { call, subscribe } from './bridge';
 import { mount as mountCapabilities } from './capabilities-panel';
 import { mountRemoteSettings } from './remote-settings';
 import type { RemoteHost } from './remote-types';
+import type { AgentsDockPreferences } from './agents-dock';
 
 /** Panels that live elsewhere and are embedded here: each mounts into a host and returns its cleanup. */
 type Embed = (host: HTMLElement) => Promise<() => void>;
@@ -77,11 +78,60 @@ const LONG_DETAIL = 80;
 const switchRow = (id: string, title: string, detail: string, checked: boolean) =>
   `<div class="setting-row"><div><strong>${title}${detail.length > LONG_DETAIL ? ` ${infoMark(detail)}` : ''}</strong>${detail.length > LONG_DETAIL ? '' : `<small>${detail}</small>`}</div><input type="checkbox" class="settings-switch" id="${id}" aria-label="${title}" ${checked ? 'checked' : ''}></div>`;
 
+function mountAgentsDockSettings(host: HTMLElement): () => void {
+  let disposed = false;
+  let preferences: AgentsDockPreferences = { enabled: true, keepOnScreen: true, pinned: false };
+  let error = '';
+  let unsubscribe: (() => void) | undefined;
+  // Disabling a focused switch while saving blurs it, so the change handler remembers it.
+  let refocus = '';
+  const draw = () => {
+    if (disposed) return;
+    const active = document.activeElement;
+    const focused = refocus || (active instanceof HTMLElement && host.contains(active) ? active.id : '');
+    refocus = '';
+    host.innerHTML = `<div class="settings-group">${switchRow('agents-dock-enabled', 'Running agents widget', 'Show the live header widget. Turning this off also closes the pinned window.', preferences.enabled)}${switchRow('agents-dock-keep-on-screen', 'Keep pinned widget on screen', 'Keep the floating widget inside the current display when it expands.', preferences.keepOnScreen)}${error ? `<small class="settings-embed-error" role="alert">${escape(error)}</small>` : ''}</div>`;
+    if (focused) host.querySelector<HTMLElement>(`#${focused}`)?.focus({ preventScroll: true });
+  };
+  const change = async (event: Event) => {
+    const target = event.target instanceof HTMLInputElement ? event.target : null;
+    if (!target || !['agents-dock-enabled', 'agents-dock-keep-on-screen'].includes(target.id)) return;
+    const next = {
+      enabled: target.id === 'agents-dock-enabled' ? target.checked : preferences.enabled,
+      keepOnScreen: target.id === 'agents-dock-keep-on-screen' ? target.checked : preferences.keepOnScreen,
+    };
+    refocus = target.id;
+    host.querySelectorAll<HTMLInputElement>('.settings-switch').forEach(input => { input.disabled = true; });
+    try {
+      preferences = { ...preferences, ...await call<AgentsDockPreferences>('agents_dock_save_preferences', next) };
+      error = '';
+    } catch (failure) {
+      error = failure instanceof Error ? failure.message : String(failure);
+    }
+    draw();
+  };
+  host.addEventListener('change', change);
+  void call<AgentsDockPreferences>('agents_dock_preferences').then(value => {
+    if (!disposed) { preferences = { ...preferences, ...value }; draw(); }
+  }).catch(() => undefined);
+  const subscribeDockEvent = subscribe as unknown as <T>(name: string, callback: (event: T) => void) => Promise<() => void>;
+  void subscribeDockEvent<Partial<AgentsDockPreferences>>('agents-dock-preferences-changed', value => {
+    if (!disposed) { preferences = { ...preferences, ...value }; draw(); }
+  }).then(cleanup => { if (disposed) cleanup(); else unsubscribe = cleanup; }).catch(() => undefined);
+  draw();
+  return () => {
+    disposed = true;
+    unsubscribe?.();
+    host.removeEventListener('change', change);
+    host.replaceChildren();
+  };
+}
+
 function sectionHtml(id: SettingsSection, options: SettingsOptions): string {
   const defaultName = options.providers.find(provider => provider.id === options.defaultProvider)?.name ?? options.defaultProvider;
   switch (id) {
     case 'general': return `<div class="settings-group">${uiSizeControls()}${switchRow('compact-mode', 'Compact conversation', 'Less space between messages.', options.compact)}${switchRow('expand-tool-activity', 'Expand tool activity', 'Show grouped activity expanded by default.', options.activityExpanded)}</div>
-      <h3 class="settings-heading">Quick launcher</h3><div id="launcher-settings"></div>${options.projects ? '<h3 class="settings-heading">Projects</h3><div id="projects-settings" class="settings-group"></div>' : ''}`;
+      <h3 class="settings-heading">Quick launcher</h3><div id="launcher-settings"></div><h3 class="settings-heading">Running agents widget</h3><div id="agents-dock-settings"></div>${options.projects ? '<h3 class="settings-heading">Projects</h3><div id="projects-settings" class="settings-group"></div>' : ''}`;
     case 'appearance': return `<div class="settings-group">
         <div class="setting-row"><div><strong>Theme</strong><small>${options.theme === 'dark' ? 'Dark' : 'Light'}. Imported VS Code themes keep their own.</small></div><button type="button" class="secondary-button" data-action="toggle-theme">${icon(options.theme === 'dark' ? 'sun' : 'moon')}Use ${options.theme === 'dark' ? 'light' : 'dark'}</button></div>
         <div class="setting-row"><div><strong>Daily wallpapers</strong><small>A new scene for each part of the day.</small></div><input type="checkbox" class="settings-switch" id="daily-wallpapers" aria-label="Daily wallpapers" ${options.wallpapers ? 'checked' : ''}></div>
@@ -210,7 +260,10 @@ export function mountSettings(host: HTMLElement, options: SettingsOptions): Sett
     if (mounted.has(id)) return;
     mounted.add(id);
     const panel = panels.get(id)!;
-    if (id === 'general') cleanups.push(mountOverlaySettings(panel.querySelector<HTMLElement>('#launcher-settings')!));
+    if (id === 'general') {
+      cleanups.push(mountOverlaySettings(panel.querySelector<HTMLElement>('#launcher-settings')!));
+      cleanups.push(mountAgentsDockSettings(panel.querySelector<HTMLElement>('#agents-dock-settings')!));
+    }
     if (id === 'remote' && options.remote) cleanups.push(mountRemoteSettings(panel.querySelector<HTMLElement>('#remote-settings')!, options.remote));
     if (id === 'general' && options.projects) cleanups.push(mountProjects(panel.querySelector<HTMLElement>('#projects-settings')!, options.projects));
     if (id === 'github' && options.github) cleanups.push(options.github(panel.querySelector<HTMLElement>('#github-settings')!));

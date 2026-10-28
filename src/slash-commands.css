@@ -13,3 +13,6 @@
 .slash-menu-warning{color:var(--accent-ink);max-height:5.6em;overflow:auto}
 .slash-menu-footer{display:flex;justify-content:space-between;gap:12px;margin:7px 5px 2px;padding:7px 3px 0;font-size:var(--text-2xs);color:var(--faint);flex-shrink:0}
 @media(prefers-contrast:more){.slash-menu-option[aria-selected=true]{outline:1px solid var(--text);outline-offset:-1px}.slash-menu-option:disabled{opacity:1}}
+
+/* Micro-interactions: only without reduced motion. */
+@media(prefers-reduced-motion:no-preference){.slash-menu-option{transition:background-color 100ms ease-out}}

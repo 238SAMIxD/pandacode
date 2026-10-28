@@ -1,4 +1,5 @@
 mod agent_tools;
+mod agents_dock;
 mod agent_usage;
 mod agent_updates;
 mod agent_usage_providers;
@@ -96,6 +97,7 @@ struct RunningAgent {
     run_id: String,
     approvals: Arc<Mutex<HashSet<String>>>,
     pending_requests: Arc<Mutex<HashMap<String, AgentEvent>>>,
+    started_at_ms: i64,
     subagents: Arc<Mutex<subagent_state::SubagentState>>,
     assistant: Arc<Mutex<String>>,
     /// When the harness last sent anything; team watchdogs stop a turn that went silent.
@@ -109,6 +111,7 @@ impl RunningAgent {
             run_id: uuid::Uuid::new_v4().to_string(),
             approvals: Arc::new(Mutex::new(HashSet::new())),
             pending_requests: Arc::new(Mutex::new(HashMap::new())),
+            started_at_ms: storage::now(),
             subagents: Arc::new(Mutex::new(subagent_state::SubagentState::default())),
             assistant: Arc::new(Mutex::new(String::new())),
             last_event: Arc::new(std::sync::atomic::AtomicI64::new(storage::now())),
@@ -121,6 +124,12 @@ impl RunningAgent {
 
     pub(crate) fn has_pending_approvals(&self) -> bool {
         self.approvals.lock().map_or(true, |approvals| !approvals.is_empty())
+    }
+
+    fn waiting_for_input(&self) -> bool {
+        self.pending_requests
+            .lock()
+            .is_ok_and(|requests| requests.values().any(|request| request.kind == "input_request"))
     }
 
     fn respond_approval(
@@ -3590,6 +3599,7 @@ pub fn run() {
                 }
             });
             let dir = setup_common(app)?;
+            agents_dock::setup(app.handle(), &dir).map_err(std::io::Error::other)?;
             overlay::setup(app.handle(), &dir).map_err(std::io::Error::other)?;
             vm::watch_idle(app.handle().clone());
             if let Err(error) = tray::setup(app.handle()) {
@@ -3632,6 +3642,15 @@ pub fn run() {
                 ];
                 return handler(invoke);
             }
+            if invoke.message.webview_ref().label() == "agents-dock" {
+                let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+                    agents_dock::agents_dock_snapshot,
+                    agents_dock::agents_dock_unpin,
+                    agents_dock::agents_dock_set_expanded,
+                    agents_dock::agents_dock_open_task,
+                ];
+                return handler(invoke);
+            }
             if invoke.message.webview_ref().label() != "main" {
                 invoke
                     .resolver
@@ -3639,6 +3658,10 @@ pub fn run() {
                 return true;
             }
             let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+                agents_dock::agents_dock_snapshot,
+                agents_dock::agents_dock_preferences,
+                agents_dock::agents_dock_save_preferences,
+                agents_dock::agents_dock_pin,
                 support::open_support,
                 support::support_details,
                 model_routing::model_routing_status,

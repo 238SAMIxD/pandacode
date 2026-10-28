@@ -158,3 +158,6 @@ html[data-theme="dark"] .tool-trace-card{box-shadow:0 1px 2px rgb(0 0 0 / .3)}
   .trace-row,.tool-trace-card.is-rows .tool-trace-more{border-color:var(--text)}
   .trace-row-meta,.trace-row-time,.turn-activity-label[data-mode="folded"]{color:var(--text)}
 }
+
+/* Micro-interactions: only without reduced motion. */
+@media(prefers-reduced-motion:no-preference){.tool-trace-verb,.tool-trace-object{transition:color 140ms ease-out}.tool-trace-chevron{transition:transform 160ms ease-out}.tool-activity[open]>.tool-trace-card,.tool-activity[open] .tool-trace-raw-body{animation:tt-fade 160ms ease-out}@keyframes tt-fade{from{opacity:0}}}

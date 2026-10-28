@@ -400,6 +400,8 @@ test('Jev popover uses translucent blur and respects reduced transparency prefer
     return { alpha: context.getImageData(0, 0, 1, 1).data[3] / 255, filter: style.backdropFilter || style.getPropertyValue('-webkit-backdrop-filter') };
   });
   await expect(popover).toHaveAttribute('data-popover-state', 'open');
+  // The glass condenses as the popover arrives; read its material once it has settled.
+  await expect.poll(() => popover.evaluate(element => element.getAnimations().length)).toBe(0);
   const glass = await material();
   expect(glass.alpha).toBeGreaterThan(0); expect(glass.alpha).toBeLessThan(1);
   expect(glass.filter).toContain('blur(');
