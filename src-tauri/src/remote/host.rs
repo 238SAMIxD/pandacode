@@ -77,7 +77,7 @@ const MAX_BUFFER: usize = 4096;
 const LAGGED: &str = "lagged";
 const CUT: &str = "\n…[cut on the host to fit a remote page]";
 /// Harness ids `providers.models` accepts (the same list `storage` allows).
-pub(crate) const PROVIDERS: [&str; 17] = ["claude", "codex", "kimi", "opencode", "glm", "antigravity", "grok", "mimo", "pi", "deepseek", "commandcode", "cline", "kilo", "omp", "github-copilot", "muse", "devin"];
+pub(crate) const PROVIDERS: [&str; 19] = ["claude", "codex", "kimi", "opencode", "glm", "antigravity", "grok", "mimo", "pi", "deepseek", "commandcode", "cline", "kilo", "omp", "github-copilot", "muse", "devin", "zcode", "hermes"];
 
 /// Hosting must be on. The socket already limits frames to devices in presence.
 pub(crate) fn gate(host_enabled: bool) -> Result<()> {
@@ -2909,11 +2909,32 @@ pub(crate) fn agent_event(app: &tauri::AppHandle, event: &AgentEvent) {
     if let Some(delay) = delay {
         tauri::async_runtime::spawn(flush(app.clone(), delay));
     }
+    if matches!(event.kind.as_str(), "approval" | "input_request") && wants_notify(app) {
+        let _ = super::socket::relay(app, notify_frame("waiting", 1));
+    }
 }
 
 /// Queues `run.finished` for every device mirroring the task.
 pub(crate) fn run_finished(app: &tauri::AppHandle, session_id: &str, successful: bool, stopped: bool, text: &str) {
     journaled(app, session_id, json!({"sessionId": session_id, "successful": successful, "stopped": stopped, "text": text}), Queue::Finished);
+    if wants_notify(app) {
+        let _ = super::socket::relay(app, notify_frame("finished", 1));
+    }
+}
+
+/// The relay frame that becomes a phone push; the relay's bridge coalesces bursts and keeps
+/// payloads generic (counts only, no session ids or text).
+pub(crate) fn notify_frame(kind: &str, count: u32) -> String {
+    json!({"kind": "notify", "body": {"kind": kind, "count": count}}).to_string()
+}
+
+/// Whether this computer should push about the notice just emitted: the setting is on and the
+/// relay socket is up. Checked before the frame is queued; the relay does the rest.
+fn wants_notify(app: &tauri::AppHandle) -> bool {
+    app.try_state::<super::Remote>().is_some_and(|state| {
+        let inner = state.lock();
+        inner.settings.notify_enabled && inner.connected
+    })
 }
 
 /// How a numbered entry is queued: as an agent event, as a run end, or as the run end of a
@@ -3390,6 +3411,12 @@ mod tests {
         let mut row = json!({"status": "waiting"});
         shape_task_status(&mut row, true, None);
         assert_eq!(row["status"], "waiting");
+    }
+
+    #[test]
+    fn notify_frames_carry_only_the_kind_and_count() {
+        let frame: Value = serde_json::from_str(&notify_frame("waiting", 2)).unwrap();
+        assert_eq!(frame, json!({"kind": "notify", "body": {"kind": "waiting", "count": 2}}));
     }
 
     #[test]

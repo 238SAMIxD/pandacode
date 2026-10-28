@@ -268,7 +268,7 @@ test.describe('turn changes', () => {
     await page.getByRole('menuitemradio', { name: 'Balanced team', exact: true }).click();
     await expect(page.locator('#team-trigger')).toHaveAttribute('data-on', '');
     await page.locator('#prompt').fill('Demonstrate the worker change review'); await page.locator('#prompt').press('Enter');
-    await page.getByRole('button', { name: 'Open workers', exact: true }).click();
+    await page.locator('#agents-toggle').click();
     await page.clock.runFor(8000);
     const workers = page.getByRole('dialog', { name: 'Workers', exact: true });
     await workers.locator('.architect-worker-row').first().click();

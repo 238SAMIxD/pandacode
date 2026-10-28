@@ -136,18 +136,17 @@ html[data-theme=dark] .sidebar .task-indicator.unread{background:var(--accent)}
 
 /* Sections: Active and Finished above the tree, Settled (closed by default) below it. */
 .sidebar .sidebar-section{margin-bottom:6px}
-/* Completed docks at the bottom of the list, above the Bots bar, so running work never pushes it out
-   of sight: the list is a column, the section takes the space left below the folders and sticks to the
-   bottom while the rows above scroll. Open, its rows scroll on their own inside a capped panel. */
-@media(min-width:651px){.sidebar .navigation{display:flex;flex-direction:column}}
+/* Settled docks at the bottom of the list, above the Bots bar, so running work never pushes it out of sight.
+   It is placed in the frame around the list, outside the list's scrollport, and has no background of its own:
+   the sidebar's material (solid, frosted over a wallpaper, or native vibrancy) shows through unchanged. The list
+   keeps a transparent bottom border as tall as the dock (measured in main.ts), so its rows clip at the dock's
+   top instead of passing under it. Open, its rows scroll on their own inside a capped panel. */
+.sidebar .navigation-frame{position:relative;display:flex;flex-direction:column;flex:1;min-height:0}
+.sidebar.bots-view .navigation-frame{display:none}
+@media(max-width:650px){.sidebar .navigation-frame{display:none}}
 .sidebar .navigation>*{flex:none}
-.sidebar .navigation:has(>.completed-group){padding-bottom:0}
-.sidebar .sidebar-section.completed-group{position:sticky;bottom:0;z-index:1;margin:auto -8px 0;padding:6px 8px 8px;background:var(--sidebar)}
-/* Over a wallpaper the dock takes the sidebar's own frost tint, opaque: the sidebar's frost is .5–.55 over a .86
-   scrim, so this reads as the same surface (no block) while rows scrolling under it stay hidden. A nested backdrop blur
-   cannot help: the frosted sidebar is the backdrop root, so WebKit and Chrome draw the rows under it unblurred. */
-.workspace[data-wallpaper] .sidebar .sidebar-section.completed-group{background:rgb(255 255 255)}
-html[data-theme="dark"] .workspace[data-wallpaper] .sidebar .sidebar-section.completed-group{background:rgb(26 29 25)}
+.sidebar .navigation:has(>.completed-group){padding-bottom:0;border-bottom:var(--settled-height,0px) solid transparent}
+.sidebar .sidebar-section.completed-group{position:absolute;left:0;right:0;bottom:0;z-index:1;margin:0;padding:6px 8px 8px}
 /* Capped so Active and Finished keep about half the list in short windows. */
 .sidebar .completed-group>.task-list{max-height:clamp(84px,100vh - 600px,30vh);overflow-y:auto;overscroll-behavior:contain}
 .sidebar .section-heading>.section-count{margin-left:auto}

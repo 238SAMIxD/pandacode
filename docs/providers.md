@@ -1,12 +1,15 @@
 # Provider integrations
 
 PandaCode launches each installed CLI directly. Claude, Codex, Kimi, OpenCode,
-Antigravity, Grok Build, and Devin CLI own their authentication; sign in using their official
+Antigravity, Grok Build, Devin CLI, ZCode, and Hermes Agent own their authentication; sign in using their official
 CLI or extension.
 The optional Z.AI Coding Plan and MiMo Token Plan API keys are stored as separate
 entries in PandaCode's secrets store (see [secret storage](#secret-storage)) and injected only into their isolated Claude subprocesses. The app discovers executable paths
 from PATH and common per-user installation folders; provider settings report the
 actual path and version. The `default` model delegates model selection to the CLI.
+
+Pi's managed Windows installation is supported without a separate global npm
+installation, including launchers that leave the `node` command unquoted.
 
 Model menus load metadata on demand from the installed CLI. Each choice keeps its
 invocation ID separate from its display name and description, so choosing a named
@@ -43,11 +46,13 @@ API keys (DeepSeek, Command Code), and the key-based plans **GLM Coding Plan** a
 installed Claude Code with its own key and endpoint, and appears as its own group
 in the model selector. They are set up only under Providers.
 
-Nothing on the Providers page is applied to every agent. A key or plan is used
-only by the harness it belongs to, and only for tasks where you pick it in the
-model selector. Named connections (below) are extra setups of one harness that a
-task opts into. Each harness's own models stay in that harness; OpenCode's model
-list is chosen once, in Settings → Agents → OpenCode models.
+Nothing on the Providers page is applied to every agent, with one exception:
+the **global environment variables** at the top of the page (below) travel with
+every harness. A key or plan is used only by the harness it belongs to, and only
+for tasks where you pick it in the model selector. Named connections (below) are
+extra setups of one harness that a task opts into. Each harness's own models
+stay in that harness; OpenCode's model list is chosen once, in Settings → Agents
+→ OpenCode models.
 
 ### What PandaCode uses itself
 
@@ -109,6 +114,59 @@ harness has other connections, the usage-limit banner offers **Continue on
 <connection>** for each. It assigns that connection and sends “Continue where
 you left off.” with a note naming the new connection and the one that reached
 its limit, so the transcript shows the move. PandaCode never switches on its own.
+
+## Environment variables
+
+Some networks and some providers need environment variables on the harness — a
+proxy behind `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` is the common case.
+Settings → Providers has two places for them, both in `provider-settings.json`
+(`provider_settings.rs`):
+
+- **Global environment variables** are added to every harness PandaCode starts.
+- Each provider's card has its own **Environment variables** list, plus a
+  **Use global environment variables** switch (on by default) that leaves the
+  global set out for just that harness.
+
+Variable names use letters, digits and underscores and cannot start with a
+digit (the same rule named connections use), values stay under 4096 characters
+with no NUL, and there are at most 64 variables per provider and in the global
+set. Values are plain settings: they live in the settings file on this computer
+and are never sent back to the interface — the page lists only their names, and
+a saved value is replaced by typing it again. A variable that carries a
+credential belongs to a [named connection](#named-connections), whose Secret
+values go to the secure store.
+
+At launch the layers are applied in order, each winning over the last: the
+environment PandaCode inherited, then the global set (unless the provider opted
+out), then the provider's own variables, then the harness's sign-in and
+endpoint configuration (a GLM or MiMo key always configures its Claude Code
+process, and "Prefer saved Claude login" scrubs inherited credential variables
+at this point), then a named connection's environment, whose variables land
+after the scrub.
+
+The effective set is applied to everything that spawns the harness: tasks
+(`run_inner` in `providers.rs`), warm Claude agents (`providers/warm.rs`, whose
+adoption key carries a fingerprint of the saved variables, so an edit always
+starts the next turn cold), the harness console in the terminal panel
+(`terminal.rs`), model catalogs and slash command discovery, Claude login and
+usage probes, and Codex integration discovery. Tasks running on another
+computer use that computer's environment instead. Saving a variable refreshes
+the affected provider's cached catalogs and usage, so the next query runs with
+the new setting.
+
+On cloud machines nothing is inherited by default. Settings → Agents → Cloud
+sandboxes has a per-provider **Include provider environment variables** switch
+(off), and when it is on, a task on that cloud carries the harness's saved
+variables with it — a proxy the cloud machine can reach, for example, such as a
+corporate proxy reachable from an AWS VPC. A proxy pointing at this computer
+(`127.0.0.1`, `localhost`) refuses to start the task: the machine cannot reach
+it, and the harness would lose all its API traffic. The harness's own
+credentials and endpoints still win over inherited variables, and mirroring a
+task to another computer stays untouched — that computer uses its own settings.
+
+The per-provider list and the opt-out switch live on each provider's card here,
+so harnesses without a card (Codex and Kimi Code) currently take only the
+global set.
 
 ## GitHub Copilot CLI
 
@@ -512,6 +570,14 @@ descriptions only; MiMo publishes no per-plan entitlements, so no context or eff
 metadata is claimed and custom IDs stay usable. Endpoints and models verified against
 the MiMo docs on 2026-09-22.
 
+## DeepSeek Harness
+
+DeepSeek Harness reports one `reasoning_effort` option in ACP's `thought_level`
+category. PandaCode offers those reported choices for every named DeepSeek model,
+including API-key and DeepSeek Account models. The picker preserves each model's
+full invocation ID. Before prompting, PandaCode selects the model, then applies
+the effort from the session's updated `configOptions`.
+
 ## Grok Build
 
 xAI's Grok Build CLI (`grok`, installed with `curl -fsSL https://x.ai/cli/install.sh | bash`)
@@ -743,6 +809,68 @@ command, a Plan turn and a live steer). The recorded frames back the unit tests 
 `providers/devin.rs`, and an ignored smoke test
 (`installed_devin_lists_models_with_efforts`) reads the real catalog and command list
 without sending a prompt.
+
+## ZCode
+
+ZCode (z.ai's coding CLI, installed to `~/.local/bin/zcode` by its install script)
+has no ACP mode; PandaCode drives its own `zcode app-server` protocol instead —
+newline-delimited JSON on stdio with no handshake and no transport auth, so the
+process is trusted like any local CLI. Each run spawns one `zcode app-server` and
+speaks `session/create` → `session/subscribe` → `session/send`, mirroring how the
+ZCode desktop app drives the same binary.
+
+**Sign-in.** ZCode owns its authentication; sign in once with `zcode` in a terminal.
+PandaCode never handles credentials. If the account is not signed in, the turn stops
+with “ZCode requires sign-in. Run `zcode` in a terminal and sign in, then send again.”
+
+**Models and effort.** Model discovery opens a throwaway session and reads the
+catalog from the `session/create` snapshot (`settings.model.available`), never
+sending a prompt. Each entry keeps its label as the invocation id, with the
+provider label, context window and per-model reasoning levels as advertised; the
+`default` choice delegates to whatever the CLI has configured. Selected model and
+thinking level are applied with `session/setModel` / `session/setThoughtLevel` and
+verified against the returned snapshot — a model the server refuses fails the turn
+instead of silently running in a different one.
+
+**Approvals.** See [approvals](approvals.md): Plan → `plan`, Standard → `build`,
+Accept edits → `edit`, Full access → `yolo`. Permission requests arrive as
+`interaction/requestPermission` reverse requests with ready-made response objects;
+PandaCode answers with the offered `allow`/`deny` response, never inventing a
+standing grant. Sessions use deferred persistence, so captures and failed starts
+leave nothing in the user's ZCode history; `session/resume` keeps a task's session
+across turns.
+
+**Turn data.** Streaming text and reasoning deltas (`model.streaming`), tool calls
+(`tool.updated`), per-turn token usage (`turn.completed`) and titles all come from
+the `session/event` stream; a busy session queues a second message server-side, so
+steering holds for the next turn.
+
+**Not yet.** Screenshots are refused (the composer offers documents and folders
+with a note); interactive questions (`interaction/requestUserInput`) decline with a
+note so the turn continues; slash-command discovery and the harness console are not
+offered. The protocol is ZCode's private surface and evolves with the CLI — frames
+are parsed defensively (unknown events ignored, unknown reverse requests answered
+`-32601`) and pinned per recorded version.
+
+Verified against the CLI bundled with ZCode.app (user-agent `ZCode/3.16.3`) on
+2026-10-25 by driving `zcode app-server` directly (create, subscribe, two turns,
+a permission round-trip, mode/thought switches, usage and resume). The recorded
+frames back the unit tests in `providers/zcode.rs`, and an ignored smoke test
+(`installed_zcode_lists_models`) reads the real catalog without sending a prompt.
+
+## Hermes Agent
+
+Hermes Agent (`hermes`; install with `curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash`
+or from [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)) serves ACP v1 with `hermes acp`, so PandaCode
+drives it with the shared ACP adapter (`providers/hermes.rs`). Official docs: [hermes-agent.org](https://hermes-agent.org) and [GitHub repository](https://github.com/NousResearch/hermes-agent).
+
+**Configuration and sign-in.** Hermes stores its credentials and LLM provider settings in `~/.hermes/config.yaml` or `.env` (configure with `hermes acp --setup` or by editing `~/.hermes/config.yaml`). The agent supports Nous, OpenRouter, OpenAI, Anthropic, Together, Fireworks, and local endpoints. If `session/new` returns ACP `-32000`, PandaCode reports that Hermes is not configured and suggests running `hermes acp --setup`.
+
+**Models.** Hermes is model-agnostic. The model picker offers **Default** (which delegates model selection to Hermes' own `~/.hermes/config.yaml` configuration) alongside any models Hermes advertises through ACP `configOptions`. Custom model identifiers (such as `nous/hermes-3-llama-3.1-405b` or `anthropic/claude-sonnet-4`) can also be entered directly.
+
+**Approvals.** Standard (`ask`) requests approval for shell commands and dangerous actions; Accept edits (`auto`) automatically allows file edits while prompting for commands; Plan mode (`plan`) enforces read-only investigation and declines state-changing actions; Full access (`full`) skips approvals (equivalent to Hermes' `--yolo` flag).
+
+**Interactive console.** Click Open terminal to start `hermes` in an interactive terminal session. PandaCode passes `--resume <session>` when continuing a task, and `--yolo` when the task is in Full access mode.
 
 ## Kilo Code
 

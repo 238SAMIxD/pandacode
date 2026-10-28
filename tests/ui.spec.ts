@@ -811,6 +811,7 @@ test('retries unavailable model metadata and keeps custom model IDs usable', asy
   await trigger.click();
   const picker = page.getByRole('dialog', { name: 'Harness and model', exact: true });
   await expect(picker.locator('.model-menu-catalog-error')).toBeVisible();
+  await expect(picker.locator('.model-menu-catalog-error')).toContainText('Model service unavailable');
   await expect(picker.getByRole('option', { name: 'Claude Code · Claude Sonnet', exact: true })).toBeVisible();
   await picker.getByRole('combobox').fill('my-proxy/model_42');
   await picker.getByRole('option', { name: 'Use "my-proxy/model_42" with Claude Code', exact: true }).click();
@@ -1289,7 +1290,7 @@ test('chooses the default agent inside Settings without closing the Settings pag
   await trigger.click();
   await expect(menu.getByRole('menuitemradio', { name: 'Claude Code', exact: true })).toBeFocused();
   await page.keyboard.press('End');
-  await expect(menu.getByRole('menuitemradio', { name: 'Devin CLI', exact: true })).toBeFocused();
+  await expect(menu.getByRole('menuitemradio', { name: 'Hermes Agent', exact: true })).toBeFocused();
   await page.keyboard.press('Home');
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowDown');
@@ -1325,7 +1326,7 @@ test('keeps the Settings agent menu clickable at the minimum desktop window size
     return { inViewport: rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight,
       reachable: element.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)) };
   }));
-  expect(hitTargets).toHaveLength(17);
+  expect(hitTargets).toHaveLength(19);
   expect(hitTargets.every(target => target.inViewport && target.reachable)).toBe(true);
   await menu.getByRole('menuitemradio', { name: 'Kimi Code', exact: true }).click();
   await expect(settings.getByRole('button', { name: 'Default agent for new tasks', exact: true })).toHaveText('Kimi Code');
@@ -2885,8 +2886,7 @@ test('browses a file and includes its contents as attached message context', asy
   const chip = page.locator('.user-message').last().locator('.message-attachments .prompt-chip');
   await expect(chip).toHaveText(/package\.json\s*Project file/);
   await chip.click();
-  await expect(page.locator('#file-view')).toContainText('"name": "orbit"');
-  await page.locator('#file-tabs').getByRole('tab', { name: 'Conversation', exact: true }).click();
+  await expect(page.locator('#inspector #file-view')).toContainText('"name": "orbit"');
   await expect(page.locator('#attachments')).toBeEmpty();
   await expect(prompt(page)).toBeEnabled();
 });
@@ -3099,7 +3099,8 @@ test('routes worktree files, Git, and terminals by task and retains each checkou
   for (const command of ['git_status', 'list_files', 'git_diff', 'read_file', 'start_terminal']) {
     expect(calls).toContainEqual(expect.objectContaining({ command, args: expect.objectContaining({ projectId: 'project-1', sessionId: taskId }) }));
   }
-  expect(calls.filter((call: any) => call.command === 'read_file' && call.args.sessionId === taskId)).toHaveLength(2);
+  // Opened, attached, and re-read at run end because the file stays on screen in the inspector.
+  expect(calls.filter((call: any) => call.command === 'read_file' && call.args.sessionId === taskId)).toHaveLength(3);
   await page.locator('.task-item[data-id="session-1"]').click();
   await expect(page.locator('#terminal-drawer')).toBeVisible();
   await expect.poll(() => page.evaluate(() => (window as any).__pandacodeWorktreeCalls.filter((call: any) => call.command === 'close_terminal').length)).toBe(0);
@@ -3299,9 +3300,12 @@ test('⌘F finds text in the thread, in your messages and the agent’s, and ste
   await expect(input).toBeFocused();
   await input.fill('search');
   const count = find.locator('.thread-find-count');
-  await expect(count).toHaveText(/^1 of \d+$/);
-  const total = Number((await count.textContent())!.split(' of ')[1]);
+  // A fresh search starts at the first match below the header's fade, which may not be the first.
+  await expect(count).toHaveText(/^\d+ of \d+$/);
+  const [start, total] = (await count.textContent())!.split(' of ').map(Number);
   expect(total).toBeGreaterThan(1);
+  for (let index = start; index > 1; index--) await input.press('Shift+Enter');
+  await expect(count).toHaveText(`1 of ${total}`);
   // Matches come from both sides of the conversation, highlighted without touching the DOM.
   const owners = await page.evaluate(() => {
     const all = (CSS as any).highlights.get('thread-find');

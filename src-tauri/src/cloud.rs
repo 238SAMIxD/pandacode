@@ -15,24 +15,30 @@ pub mod codesandbox;
 pub mod commands;
 pub mod daytona;
 pub mod deploy;
+pub mod digitalocean;
+pub mod docker;
 pub mod e2b;
 pub mod freestyle;
 pub mod gcloud_vm;
+pub mod hetzner;
 pub mod http;
 pub mod instabox;
 pub mod modal;
 pub mod railway_sandbox;
 pub mod runloop;
+pub mod runpod;
 pub mod sandbox;
+pub mod ssh;
 pub mod tensorlake;
 pub mod vercel_sandbox;
+pub mod vultr;
 
 use serde::{Deserialize, Serialize};
 
 use crate::secret_store;
 
 const SERVICE: &str = "app.pandacode.cloud";
-pub const PROVIDERS: [&str; 16] = ["daytona", "cloudflare", "aws", "agentcore", "gcloud", "e2b", "modal", "vercel", "codesandbox", "runloop", "blaxel", "tensorlake", "freestyle", "railway", "boat", "instabox"];
+pub const PROVIDERS: [&str; 21] = ["daytona", "docker", "digitalocean", "vultr", "hetzner", "runpod", "cloudflare", "aws", "agentcore", "gcloud", "e2b", "modal", "vercel", "codesandbox", "runloop", "blaxel", "tensorlake", "freestyle", "railway", "boat", "instabox"];
 
 /// A cloud machine as the panel and tools see it.
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -118,6 +124,7 @@ mod tests {
         assert_eq!(split("daytona:3f2a"), Some(("daytona", "3f2a")));
         assert_eq!(split("pandacode-ubuntu"), None);
         assert_eq!(split("other:x"), None);
+        assert_eq!(split("netlify:project"), None);
         assert_eq!(split("daytona:"), None);
         assert_eq!(split("gcloud:pc-a.us-central1-a"), Some(("gcloud", "pc-a.us-central1-a")));
         for bad in ["instabox:m_1/exec", "instabox:m_1?x=1", "instabox:m_1#x", "instabox:..", "instabox:a..b", "instabox:.x", "instabox:m 1", "instabox:m%2F1", "instabox:m:1", "instabox:m\\1"] {

@@ -384,4 +384,22 @@ $&`);
     await page.keyboard.press('ArrowDown');
     await expect(section(page, 'completed').locator('.task-item').first()).toBeFocused();
   });
+
+  for (const [theme, wallpaper] of [['light', false], ['dark', false], ['light', true], ['dark', true]] as const) {
+    test(`Settled shows the sidebar's own surface and rows never pass under it (${theme}${wallpaper ? ', wallpaper' : ''})`, async ({ page }) => {
+      await page.addInitScript(([theme, wallpaper]) => { localStorage.setItem('pandacode.theme', theme); localStorage.setItem('pandacode.wallpapers', String(wallpaper)); }, [theme, wallpaper] as const);
+      await page.setViewportSize({ width: 1280, height: 640 });
+      await open(page);
+      expect(await page.locator('.workspace').evaluate(node => node.hasAttribute('data-wallpaper'))).toBe(wallpaper);
+      const dock = section(page, 'completed');
+      // No fill of its own: solid, frosted and native sidebar materials all show through unchanged.
+      await expect(dock).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+      await expect(dock).toHaveCSS('backdrop-filter', 'none');
+      const nav = page.locator('#navigation');
+      expect(await nav.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true);
+      // The list's scrollport ends where the dock begins.
+      const clip = await nav.evaluate(node => { const box = node.getBoundingClientRect(); return box.top + node.clientTop + node.clientHeight; });
+      expect(Math.abs(clip - (await dock.boundingBox())!.y)).toBeLessThan(1);
+    });
+  }
 });

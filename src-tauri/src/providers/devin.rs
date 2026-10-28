@@ -63,7 +63,7 @@ fn scratch() -> PathBuf {
 }
 
 fn command(path: &Path) -> Result<Command, String> {
-    let mut command = super::command(path)?;
+    let mut command = super::provider_command("devin", path)?;
     configure(&mut command);
     Ok(command)
 }

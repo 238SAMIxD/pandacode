@@ -74,7 +74,7 @@ button .icon{pointer-events:none}
 .task-indicator.running{background:var(--focus);box-shadow:none;animation:breathe 1.5s infinite}
 .task-indicator.attention{background:var(--accent-ink);box-shadow:0 0 0 3px rgb(var(--accent-rgb) / .3)}
 .provider-logo{width:20px;height:20px;display:inline-block;object-fit:contain;flex-shrink:0;vertical-align:middle;pointer-events:none}
-.provider-logo[data-provider="github-copilot"],.provider-logo[data-provider="cline"],.provider-logo[data-provider="devin"]{color:var(--text)}
+.provider-logo[data-provider="github-copilot"],.provider-logo[data-provider="cline"],.provider-logo[data-provider="devin"],.provider-logo[data-provider="kilo"]{color:var(--text)}
 .provider-logo[data-provider="codex"]{transform:scale(1.25)}
 .provider-logo[data-provider="pi"]{image-rendering:pixelated}
 .task-provider{width:18px;height:18px;opacity:.8;flex-shrink:0;align-self:center}
@@ -114,13 +114,13 @@ button .icon{pointer-events:none}
    own header row would otherwise sit under the workspace header. scroll-padding keeps focus and
    scrollIntoView below the fade. */
 .workspace:not(.board-view,.github-view)>.main-pane>.work-area{overflow:visible}
-.workspace:not(.board-view,.github-view) .conversation-pane:not(.new-task-page,.channel-thread):not(:has(>:is(.file-tabs,.task-details-heading,.jev-activity):not([hidden]))){--header-under:var(--titlebar-height);--header-fade-under:var(--header-fade);--transcript-top:var(--header-fade)}
-.workspace.sidebar-collapsed:not(.board-view,.github-view) .conversation-pane:not(.new-task-page,.channel-thread):not(:has(>:is(.file-tabs,.task-details-heading,.jev-activity):not([hidden]))){--header-fade-under:var(--titlebar-height);--transcript-top:var(--titlebar-height)}
+.workspace:not(.board-view,.github-view) .conversation-pane:not(.new-task-page,.channel-thread):not(:has(>:is(.task-details-heading,.jev-activity):not([hidden]))){--header-under:var(--titlebar-height);--header-fade-under:var(--header-fade);--transcript-top:var(--header-fade)}
+.workspace.sidebar-collapsed:not(.board-view,.github-view) .conversation-pane:not(.new-task-page,.channel-thread):not(:has(>:is(.task-details-heading,.jev-activity):not([hidden]))){--header-fade-under:var(--titlebar-height);--transcript-top:var(--titlebar-height)}
 .conversation-pane>.transcript{margin-top:calc(-1 * var(--header-under,0px));padding-top:var(--transcript-top,28px);scroll-padding-top:calc(var(--header-fade-under,0px) + 12px)}
 :root{--floating-bar-shadow:0 1px 3px rgb(0 0 0 / .08),0 6px 20px rgb(0 0 0 / .12)}
 html[data-theme="dark"]{--floating-bar-shadow:0 1px 3px rgb(0 0 0 / .4),0 8px 24px rgb(0 0 0 / .35)}
-/* The project name no longer shows at the top; a bot conversation keeps its crumb (name, state, pause, settings). */
-.breadcrumb:not(:has(.bot-crumb)){display:none!important}
+/* The project name no longer shows at the top; a bot conversation keeps its crumb (name, state, pause, settings), and a shared channel its back button. */
+.breadcrumb:not(:has(.bot-crumb,.channel-back)){display:none!important}
 .breadcrumb{display:flex;align-items:center;gap:var(--space-2);min-width:0;overflow:hidden;color:var(--muted);font-size:var(--text-sm)}
 .breadcrumb>.icon{--icon-size:var(--icon-sm);--icon-stroke:var(--icon-stroke-sm)}
 .breadcrumb>button{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--text);font-size:var(--text-sm);white-space:nowrap;font-weight:var(--weight-medium)}
@@ -246,7 +246,7 @@ mark{background:color-mix(in srgb,var(--accent) 45%,transparent);color:inherit;b
 .turn-activity-body .message-content{padding-left:0;font-size:var(--thread-font);line-height:1.6}
 .turn-activity-body .markdown p,.turn-activity-body .markdown ul,.turn-activity-body .markdown ol{margin-bottom:8px}
 .turn-activity-body .tool-activity[data-tool-status="completed"] .tool-activity-status{display:none}
-.tool-group{min-width:0;margin:2px 0;color:var(--muted)}
+.tool-group,.thinking-block{min-width:0;margin:2px 0;color:var(--muted)}
 .tool-group:not(:has(+ .tool-group)){margin-bottom:8px}
 .tool-group-summary{display:flex;align-items:center;gap:7px;min-height:30px;max-width:100%;width:fit-content;padding:2px 0;list-style:none;cursor:pointer;font-size:var(--thread-font);line-height:1.5;border-radius:var(--radius-xs);user-select:none}
 .tool-group-summary::-webkit-details-marker{display:none}
@@ -254,12 +254,14 @@ mark{background:color-mix(in srgb,var(--accent) 45%,transparent);color:inherit;b
 .tool-group-summary:focus-visible{outline:2px solid var(--focus);outline-offset:3px}
 .tool-group-summary>.icon{--icon-size:var(--icon-sm);--icon-stroke:var(--icon-stroke-sm);flex:none}
 .tool-group-summary>.icon:last-child{--icon-size:var(--icon-xs);--icon-stroke:var(--icon-stroke-xs);transition:transform 160ms ease-out}
-.tool-group[open]>.tool-group-summary>.icon:last-child{transform:rotate(90deg)}
+.tool-group[open]>.tool-group-summary>.icon:last-child,.thinking-block[open]>.tool-group-summary>.icon:last-child{transform:rotate(90deg)}
 .tool-group-label{flex:none;font-weight:var(--weight-medium)}
 .tool-group-hint{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .tool-group-status{flex:none;font-size:var(--thread-font);color:var(--accent-ink)}
 .tool-group-status.has-failure{color:var(--danger)}
 .tool-group-body{min-width:0;padding:4px 0 2px 15px;margin:2px 0 4px 6px}
+.thinking-block{margin-bottom:8px}
+.thinking-text{white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;font-size:var(--thread-font);line-height:var(--leading-body)}
 .tool-group-body .tool-activity{margin-bottom:3px;padding-left:0}
 .live-activity .turn-activity-body{padding-top:2px}
 .live-activity .message-content{font-size:var(--thread-font);line-height:1.65}
@@ -298,7 +300,8 @@ mark{background:color-mix(in srgb,var(--accent) 45%,transparent);color:inherit;b
 .composer-team-button{font-size:var(--text-xs);color:var(--muted);gap:var(--space-1);height:var(--control);padding:0 var(--space-2);border-radius:var(--radius-sm);white-space:nowrap;flex-shrink:0}
 .composer-team-button .icon{--icon-size:var(--icon-sm);--icon-stroke:var(--icon-stroke-sm)}
 .composer-team-button>.icon:last-child:not(:first-child){--icon-size:var(--icon-xs);--icon-stroke:var(--icon-stroke-xs);margin-left:-1px}
-.composer-team-button:is([aria-pressed=true],[data-on]){color:var(--accent-ink);background:var(--fill-selected)}
+.composer-team-button:is([aria-pressed=true],[data-on],[aria-busy=true]){color:var(--accent-ink);background:var(--fill-selected)}
+.composer-team-button[aria-busy=true]{opacity:1;cursor:progress}
 .send-button{width:var(--control);height:var(--control);background:var(--accent);color:var(--on-accent);border-radius:var(--radius-sm);flex-shrink:0}
 .send-button .icon{--icon-size:var(--icon-sm);--icon-stroke:var(--icon-stroke-xs)}
 .send-button:hover:not(:disabled){background:var(--accent-hover);color:var(--on-accent);transform:none}
@@ -562,7 +565,7 @@ dialog input::placeholder{color:var(--muted)}
 .composer-area{padding-left:12px;padding-right:12px}
 .composer-tools{gap:6px}
 .composer-separator{display:none}
-.composer-team-button span{display:none}
+.composer-team-button span:not(.support-spinner){display:none}
 .composer-team-button{gap:3px}.composer-team-button>.icon:last-child:not(:first-child){width:8px;height:8px}
 .mode-picker span{display:none}
 .workspace-header{padding:0 11px}
@@ -744,6 +747,7 @@ html[data-theme="dark"] :is(.task-indicator.running,.selected .task-indicator,.a
 html[data-theme="dark"] .task-indicator.attention{background:var(--accent)}
 html[data-theme="dark"] .provider-logo[data-provider="codex"]{filter:invert(1)}
 html[data-theme="dark"] .provider-logo[data-provider="kimi"]{border-radius:50%;box-shadow:none}
+html[data-theme="dark"] .provider-logo[data-provider="omp"]{border-radius:4px;box-shadow:0 0 0 1px rgb(255 255 255 / .18)}
 html[data-theme="dark"] .user-avatar{background:var(--raised)}
 html[data-theme="dark"] .composer{background:#262624;border-color:transparent;box-shadow:0 2px 5px rgb(0 0 0 / .1),0 8px 24px rgb(0 0 0 / .15)}
 html[data-theme="dark"] .composer:focus-within{border-color:transparent;box-shadow:0 0 0 3px rgb(var(--accent-rgb) / .1),0 8px 24px rgb(0 0 0 / .15)}

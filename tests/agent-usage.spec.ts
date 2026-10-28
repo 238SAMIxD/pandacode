@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 
-const installed = ['claude', 'codex', 'kimi', 'opencode', 'glm', 'grok', 'mimo', 'pi', 'deepseek', 'commandcode', 'cline', 'kilo', 'github-copilot', 'muse', 'devin'];
+const installed = ['claude', 'codex', 'kimi', 'opencode', 'glm', 'grok', 'mimo', 'pi', 'deepseek', 'commandcode', 'cline', 'kilo', 'github-copilot', 'muse', 'devin', 'zcode', 'hermes'];
 const usageButton = (page: Page) => page.getByRole('button', { name: 'Agent usage', exact: true });
 const dialog = (page: Page) => page.getByRole('dialog', { name: 'Agent usage', exact: true });
 const card = (page: Page, name: string) => dialog(page).locator('.usage-card').filter({ hasText: name });
@@ -40,10 +40,12 @@ async function openApp(page: Page, hold: string[] = [], failures: string[] = [],
         glm: result('glm', 'error', 'The GLM usage service is temporarily unavailable.'),
         grok: result('grok', 'unsupported', 'Grok Build does not expose account usage.'),
         mimo: result('mimo', 'unavailable', 'Usage is not available for this MiMo account.'),
+        deepseek: { ...result('deepseek', 'ready', 'Balance CNY 110.00 (granted 10.00, topped up 100.00).'), source: 'DeepSeek balance API' },
         kilo: result('kilo', 'unsupported', 'Kilo Code does not expose credits or limits through this agent.'),
         'github-copilot': result('github-copilot', 'unsupported', 'GitHub Copilot CLI does not expose usage limits through this agent.'),
         muse: result('muse', 'unsupported', 'Muse Code reports its usage windows only inside a running session.'),
         devin: result('devin', 'unsupported', 'Devin does not expose plan limits through its ACP server.'),
+        zcode: result('zcode', 'unsupported', 'ZCode does not expose plan limits through its app-server.'),
       },
     };
   }, { hold, failures, ledgerFixture: ledger(), connections });
@@ -147,7 +149,8 @@ test('Agent usage shows successful and unavailable cards while a different provi
   await expect(card(page, 'OpenCode')).toContainText('OpenCode does not expose account usage.');
   await expect(card(page, 'GLM Coding Plan')).toContainText('The GLM usage service is temporarily unavailable.');
   await expect(card(page, 'MiMo Token Plan')).toContainText('Usage is not available for this MiMo account.');
-  for (const name of ['Kimi Code', 'OpenCode', 'GLM Coding Plan', 'MiMo Token Plan']) {
+  await expect(card(page, 'DeepSeek')).toContainText('Balance CNY 110.00 (granted 10.00, topped up 100.00).');
+  for (const name of ['Kimi Code', 'OpenCode', 'GLM Coding Plan', 'MiMo Token Plan', 'DeepSeek']) {
     await expect(card(page, name).getByRole('progressbar')).toHaveCount(0);
   }
   await expect(refresh(page)).toBeDisabled();

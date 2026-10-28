@@ -57,6 +57,54 @@ async function openSettings(page: Page, section?: string, name = 'Scout'): Promi
 }
 
 test.describe('bots', () => {
+  test('a new bot keeps its draft and caret through background refreshes', async ({ page }) => {
+    await openBots(page);
+    const form = bots(page).getByRole('form', { name: 'New bot' });
+    const name = form.getByRole('textbox', { name: 'Name' });
+    const purpose = form.getByRole('textbox', { name: 'What should this bot help with?' });
+    await name.fill('kittisaurus');
+    await form.getByRole('button', { name: 'Blue', exact: true }).click();
+    await purpose.fill('Custom instructions\nwith two lines.');
+    const draft = await form.evaluate(form => Object.fromEntries(new FormData(form as HTMLFormElement)));
+    await purpose.focus();
+    await purpose.evaluate(field => (field as HTMLTextAreaElement).setSelectionRange(5, 11));
+    // Preview bot changes emit the same bots-changed event as the native scheduler.
+    const call = (command: string, args: Record<string, unknown>) => page.evaluate(async ([command, args]) => {
+      const module = '/src/bridge.ts';
+      return (await import(module)).call(command, args);
+    }, [command, args] as const);
+    const background = await call('bot_create', { input: { name: 'Background bot', role: '', instructions: '', goals: '', avatar: 'panda:0', provider: 'claude', model: 'default', mode: 'ask', heartbeatMinutes: 0 } }) as { id: string };
+    const row = page.getByRole('button', { name: 'Chat with Background bot', exact: true });
+    await expect(row).toBeVisible();
+    expect(await form.evaluate(form => Object.fromEntries(new FormData(form as HTMLFormElement)))).toEqual(draft);
+    await expect(purpose).toBeFocused();
+    expect(await purpose.evaluate(field => [(field as HTMLTextAreaElement).selectionStart, (field as HTMLTextAreaElement).selectionEnd])).toEqual([5, 11]);
+    await call('bot_delete', { botId: background.id });
+    await expect(row).toHaveCount(0);
+    expect(await form.evaluate(form => Object.fromEntries(new FormData(form as HTMLFormElement)))).toEqual(draft);
+  });
+
+  test('a new bot keeps its draft when creation fails and can be retried', async ({ page }) => {
+    await page.route('**/src/preview-bots.ts*', async route => {
+      const response = await route.fetch(); const source = await response.text();
+      const marker = /switch\s*\(command\)\s*\{/;
+      expect(source).toMatch(marker);
+      await route.fulfill({ response, body: source.replace(marker, `if (command === 'bot_create' && !window.__allowBotCreate) throw new Error('Bot could not be created.');\nswitch (command) {`) });
+    });
+    await openBots(page);
+    const form = bots(page).getByRole('form', { name: 'New bot' });
+    await form.getByRole('textbox', { name: 'Name' }).fill('Retry bot');
+    await form.getByRole('textbox', { name: 'What should this bot help with?' }).fill('Keep these instructions');
+    await form.getByRole('button', { name: 'Create bot', exact: true }).click();
+    await expect(bots(page).getByRole('alert')).toHaveText('Bot could not be created.');
+    await expect(form.getByRole('textbox', { name: 'Name' })).toHaveValue('Retry bot');
+    await expect(form.getByRole('textbox', { name: 'What should this bot help with?' })).toHaveValue('Keep these instructions');
+    await page.evaluate(() => { (window as any).__allowBotCreate = true; });
+    await form.getByRole('button', { name: 'Create bot', exact: true }).click();
+    await expect(bots(page)).toBeHidden();
+    await expect(crumb(page)).toContainText('Retry bot');
+  });
+
   test('the Bots bar switches the sidebar to the bots, each with its latest message', async ({ page }) => {
     await page.goto('/');
     await expect(page.locator('#navigation')).toBeVisible();

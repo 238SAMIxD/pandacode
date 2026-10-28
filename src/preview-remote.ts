@@ -2,10 +2,10 @@
 import type { RemoteDevice, RemoteSignIn, RemoteStatus, RemoteTarget } from './remote-types';
 
 const THIS = 'dev-this';
-let signedIn = false, hostEnabled = false, remoteFullAccess = false;
+let signedIn = false, hostEnabled = false, notifyEnabled = false, remoteFullAccess = false;
 let devices: RemoteDevice[] = [], cancelSignIn: (() => void) | undefined;
 const offline = new Set<string>(), revoked = new Set<string>();
-const status = (): RemoteStatus => ({ configured: true, signedIn, account: signedIn ? { login: 'octocat' } : undefined, device: { id: THIS, name: 'This Mac', fingerprint: '3fa91c07d2b64e58a1e07c94b25d3f66' }, hostEnabled, remoteFullAccess, connected: signedIn });
+const status = (): RemoteStatus => ({ configured: true, signedIn, account: signedIn ? { login: 'octocat' } : undefined, device: { id: THIS, name: 'This Mac', fingerprint: '3fa91c07d2b64e58a1e07c94b25d3f66' }, hostEnabled, notifyEnabled, remoteFullAccess, connected: signedIn });
 const sampleDevices = (): RemoteDevice[] => allDevices().filter(device => !revoked.has(device.id));
 const allDevices = (): RemoteDevice[] => [
   { id: THIS, name: 'This Mac', platform: 'macOS', fingerprint: '3fa91c07d2b64e58a1e07c94b25d3f66', host: hostEnabled, online: true, lastSeen: Date.now(), current: true },
@@ -30,10 +30,13 @@ function handle(command: string, args: Record<string, any>, emit: (name: string,
       cancelSignIn = () => { clearTimeout(timer); reject(new Error('Sign-in cancelled')); };
     });
     case 'remote_sign_in_cancel': cancelSignIn?.(); cancelSignIn = undefined; return {};
-    case 'remote_sign_out': signedIn = false; hostEnabled = false; remoteFullAccess = false; devices = []; emit('remote://status', status()); return status();
+    case 'remote_sign_out': signedIn = false; hostEnabled = false; notifyEnabled = false; remoteFullAccess = false; devices = []; emit('remote://status', status()); return status();
     case 'remote_set_host_enabled':
       if (args.fullAccess !== undefined) remoteFullAccess = Boolean(args.fullAccess);
       if (args.enabled !== undefined) { hostEnabled = Boolean(args.enabled); devices = sampleDevices(); emit('remote://presence', devices); }
+      return status();
+    case 'remote_set_notify_enabled':
+      notifyEnabled = Boolean(args.enabled);
       return status();
     case 'remote_devices':
       if (w.__remoteDevicesFailures > 0) { w.__remoteDevicesFailures--; throw new Error('The device list could not be loaded.'); }

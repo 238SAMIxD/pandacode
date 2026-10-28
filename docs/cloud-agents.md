@@ -2,9 +2,10 @@
 
 A task can run its agent on a cloud machine instead of this computer. In a New task, the
 context bar's computer menu ("This computer", other Connect computers) also lists
-**Cloud** targets: every provider connected in Settings → Cloud (Daytona, Cloudflare,
-AWS EC2, Google Cloud, E2B, Modal, Vercel Sandbox, CodeSandbox, Runloop, Blaxel,
-Tensorlake, Freestyle, Railway, boat, InstaBox). Picking one and sending starts the task there. The
+**Cloud** targets: every provider connected in Settings → Cloud (Daytona, Docker, DigitalOcean,
+Vultr, Hetzner, RunPod, Cloudflare, AWS EC2, Google Cloud, E2B, Modal, Vercel Sandbox,
+CodeSandbox, Runloop, Blaxel, Tensorlake, Freestyle, Railway, boat, InstaBox). Picking one and
+sending starts the task there. The
 task then reads like any other task: streaming transcript, approvals, questions, steering,
 queue, model picker. It keeps running when the laptop sleeps or PandaCode quits, and
 catches up when it comes back.
@@ -89,6 +90,11 @@ Keyed providers connect through `cloud_connect(provider, key, options)`:
 
 | Provider | Key | Options |
 | --- | --- | --- |
+| docker | — (no credentials) | `engine` (`docker`, `podman`, `apple` for Apple Containers on this machine, or `lxc` for the LXD/Incus client — which selects its own remote, so no endpoint), `endpoint` (empty for this machine's daemon, `ssh://[user@]host[:port]` over the shared SSH transport — for Podman this runs the remote podman directly, `tcp://host:port` with TLS (Docker only), or `unix:///path`), `image` (default `ubuntu:24.04`), and `tlsCa`/`tlsCert`/`tlsKey` paths for `tcp://` Docker hosts. One container or instance per task, named `pc-…` (labelled `pandacode` on Docker/Podman/Apple; the prefix is the ownership marker on LXC, which has no labels). Machines keep their disk until deleted and use the host's own resources. A Docker daemon is root-equivalent on its machine — an endpoint is a trust decision like any VPS |
+| digitalocean | API token | `region` (default `nyc1`). Droplets carry the `pandacode` tag and are persistent VMs: the disk survives stop/start, and DigitalOcean bills a droplet while it exists even when powered off — the panel's **delete** is what ends the billing. The first create registers an account SSH key holding the shared keypair's public half (`cloud/ssh.rs`), matched by key material so several computers can share the account |
+| vultr | API key | `region` (default `ewr`). Instances carry the `pandacode` tag; the Ubuntu 24.04 image is picked by name from the account's OS list at create (Vultr has no image slugs), and `user_data` is sent base64-encoded. Bill while they exist, stopped included — delete ends the billing |
+| hetzner | API token | `location` (default `fsn1`). Servers carry the `pandacode=true` label and are persistent VMs billed while they exist; CPX22 on the stock Ubuntu 24.04 image. Stop is a graceful shutdown followed by a hard poweroff, as Hetzner's own guidance orders them |
+| runpod | API key | `gpu` (default an RTX 3090) and `image` (default RunPod's own Ubuntu 24.04 base image, which ships SSH configured). Pods expose SSH on their public IP through the container's port 22 and authorize PandaCode's key with the documented `SSH_PUBLIC_KEY` pod variable; only pods named `pc-…` (the run pipeline's names) appear in the panel. The container disk is cleared when a pod stops (only the `/workspace` volume survives), so pods are non-persistent: a stopped pod is replaced by a fresh one and rehydrated, like Cloudflare's sandboxes. A running pod bills its GPU until stopped — the panel's stop releases it |
 | e2b | API key | — |
 | modal | token secret | `tokenId` (required), `environment` |
 | codesandbox | API key | — |
@@ -155,4 +161,11 @@ of it have; on an image without it the watcher closes nothing.
 
 Nothing is sent anywhere until the user connects a provider and starts a cloud task. A
 cloud task sends the checkout, the prompt, and the harness's login to the chosen
-provider's machine in the user's own account.
+provider's machine in the user's own account. One thing more travels only when asked
+for: with **Include provider environment variables** turned on for a cloud (Settings →
+Agents → Cloud sandboxes, off by default), the harness's saved variables from
+Settings → Providers ride the same run — a proxy the cloud machine can reach, for
+example. They land in the same 0600, self-deleting command file as the login token,
+the harness's own credentials always win over them, and a variable whose proxy points
+at this computer (`127.0.0.1`, `localhost`) refuses to start the task, because a
+cloud machine cannot reach it.

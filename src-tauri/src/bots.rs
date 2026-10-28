@@ -338,7 +338,8 @@ fn bot_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Bot> {
     })
 }
 
-fn clean(text: &str, limit: usize) -> String {
+/// The canonical stored form of a free-text field: control characters stripped, capped.
+pub(crate) fn clean(text: &str, limit: usize) -> String {
     text.chars().filter(|c| *c == '\n' || !c.is_control()).take(limit).collect::<String>().trim().to_owned()
 }
 
@@ -411,6 +412,8 @@ fn known_provider(provider: &str) -> bool {
             | "github-copilot"
             | "muse"
             | "devin"
+            | "zcode"
+            | "hermes"
     )
 }
 

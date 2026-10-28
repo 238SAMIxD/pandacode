@@ -218,7 +218,7 @@ test.describe('action dock', () => {
     await expect(tip).toBeHidden();
   });
 
-  test('centres between the header and the composer, and keeps file tabs and the Bots channel clear', async ({ page }) => {
+  test('centres between the header and the composer, stays put for file tabs, and keeps the Bots channel clear', async ({ page }) => {
     await open(page);
     const box = await rect(page, '#action-dock');
     const header = await rect(page, '.workspace-header');
@@ -231,16 +231,12 @@ test.describe('action dock', () => {
     await expect(page.locator('#terminal-drawer')).toBeVisible();
     await expect.poll(async () => (await rect(page, '#composer-area')).top - (await rect(page, '#action-dock')).bottom).toBeGreaterThanOrEqual(12);
     await page.locator('#terminal-toggle').click();
-    // File tabs stop short of the dock.
+    // File tabs open in the inspector, so the dock keeps its place in the conversation.
     await openInspectorTab(page, 'Files');
     await page.getByRole('button', { name: 'Files', exact: true }).click();
     await page.locator('#inspector [data-action="open-file"][data-path="README.md"]').click();
-    await expect(page.locator('#file-tabs')).toBeVisible();
-    await page.locator('#file-tabs').getByRole('tab', { name: 'Conversation', exact: true }).click();
-    const tabs = await rect(page, '#file-tabs');
-    await expect.poll(async () => (await rect(page, '#action-dock')).top).toBeGreaterThanOrEqual(tabs.bottom + 12);
-    const dockNow = await rect(page, '#action-dock');
-    expect(tabs.right).toBeLessThanOrEqual(dockNow.left);
+    await expect(page.locator('#inspector #file-tabs')).toBeVisible();
+    await expect.poll(async () => Math.round((await rect(page, '#action-dock')).top - header.bottom)).toBe(Math.round(box.top - header.bottom));
     // A shared bot channel's header row sits below the workspace header, clear of the dock.
     await page.goto('/?bots=sample');
     const bar = page.locator('.sidebar-bots-bar');

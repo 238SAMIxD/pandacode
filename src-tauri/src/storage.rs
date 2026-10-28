@@ -161,7 +161,7 @@ pub struct Store {
 type Result<T> = std::result::Result<T, String>;
 /// The newest `PRAGMA user_version`. Every migration step below must run for any
 /// database older than this, so the guard reads this constant, never a literal.
-pub const SCHEMA_VERSION: i64 = 33;
+pub const SCHEMA_VERSION: i64 = 34;
 
 const SIDEBAR_ORDER: &str = "pinned DESC,sidebar_order IS NULL,sidebar_order,COALESCE(MAX(last_response_at,last_prompt_at),last_response_at,last_prompt_at,created_at) DESC,id";
 
@@ -503,6 +503,11 @@ impl Store {
                     migration.execute_batch("ALTER TABLE messages ADD COLUMN remote_cut INTEGER;").map_err(|e| e.to_string())?;
                 }
                 migration.execute_batch("PRAGMA user_version=33;").map_err(|e| e.to_string())?;
+            }
+            if version < 34 {
+                // Per-task usage attribution: every harness session id each task has run
+                // under, so its token totals can be summed from the agents' own logs.
+                migration.execute_batch("CREATE TABLE IF NOT EXISTS task_usage_links(session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,harness_id TEXT NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(session_id,harness_id)); PRAGMA user_version=34;").map_err(|e| e.to_string())?;
             }
             migration.commit().map_err(|e| e.to_string())?;
         }
@@ -846,6 +851,19 @@ impl Store {
         Ok(())
     }
 
+    /// Tasks set to resume at reset whose limit has lifted (`pandacode serve` resumes them;
+    /// the desktop window schedules the same sends from the frontend).
+    pub fn due_limit_resumes(&self, now: i64) -> Result<Vec<String>> {
+        let mut statement = self
+            .db
+            .prepare(
+                "SELECT id FROM sessions WHERE resume_at_reset=1 AND limited_until IS NOT NULL AND limited_until<=?1 AND archived=0 AND draft=0 ORDER BY limited_until LIMIT 50",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = statement.query_map([now], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| e.to_string())
+    }
+
     /// The PandaCode task already continuing an agent conversation, if any.
     pub fn imported_task(&self, provider: &str, resume_id: &str) -> Result<Option<String>> {
         self.db
@@ -1116,6 +1134,8 @@ impl Store {
             "github-copilot",
             "muse",
             "devin",
+            "zcode",
+            "hermes",
         ]
         .contains(&provider)
         {
@@ -1300,6 +1320,8 @@ impl Store {
             "github-copilot",
             "muse",
             "devin",
+            "zcode",
+            "hermes",
         ]
         .contains(&provider)
         {
@@ -1459,7 +1481,28 @@ impl Store {
                 params![sid, resume_id],
             )
             .map_err(|e| e.to_string())?;
+        self.db
+            .execute(
+                "INSERT OR IGNORE INTO task_usage_links(session_id,harness_id,created_at) VALUES (?1,?2,?3)",
+                params![sid, resume_id, now()],
+            )
+            .map_err(|e| e.to_string())?;
         Ok(())
+    }
+    /// Every harness session id the task has run under, including the current resume id.
+    pub fn usage_links(&self, sid: &str) -> Result<Vec<String>> {
+        let mut stmt = self
+            .db
+            .prepare("SELECT harness_id FROM task_usage_links WHERE session_id=?1 UNION SELECT resume_id FROM sessions WHERE id=?1 AND resume_id IS NOT NULL")
+            .map_err(|e| e.to_string())?;
+        let mut ids: Vec<String> = stmt
+            .query_map([sid], |row| row.get(0))
+            .map_err(|e| e.to_string())?
+            .collect::<std::result::Result<_, _>>()
+            .map_err(|e| e.to_string())?;
+        ids.sort();
+        ids.dedup();
+        Ok(ids)
     }
     pub fn message(&self, sid: &str, role: &str, content: &str) -> Result<()> {
         self.db
@@ -1819,6 +1862,8 @@ fn handoff_from_provider(content: &str) -> Option<String> {
                 | "github-copilot"
                 | "muse"
                 | "devin"
+                | "zcode"
+                | "hermes"
         )
     };
     (known(from) && known(to)).then(|| from.to_owned())
@@ -1838,6 +1883,24 @@ mod tests {
             .create_session(&project.id, "claude", "sonnet", "auto")
             .unwrap();
         (store, session)
+    }
+
+    /// Usage-limit resumes list only flagged tasks whose reset has passed (serve mode).
+    #[test]
+    fn limit_resumes_are_only_the_due_flagged_live_tasks() {
+        let (store, due) = empty_session();
+        let future = store.create_session(&due.project_id, "claude", "sonnet", "auto").unwrap();
+        let draft = store.create_session(&due.project_id, "claude", "sonnet", "auto").unwrap();
+        store.mark_draft(&draft.id).unwrap();
+        for (sid, until) in [(&due.id, Some(1000)), (&future.id, Some(4_000_000_000_000)), (&draft.id, Some(1000))] {
+            store.set_limited(sid, until).unwrap();
+            store.set_resume_at_reset(sid, true).unwrap();
+        }
+        assert!(store.due_limit_resumes(500).unwrap().is_empty());
+        assert_eq!(store.due_limit_resumes(2000).unwrap(), vec![due.id.clone()]);
+        // A task that is no longer flagged waits like any other.
+        store.set_resume_at_reset(&due.id, false).unwrap();
+        assert!(store.due_limit_resumes(2000).unwrap().is_empty());
     }
 
     #[test]
@@ -1889,6 +1952,28 @@ mod tests {
         assert_eq!(store.session(&draft.id).unwrap().sidebar_order, Some(0));
         let ids = store.sessions().unwrap().into_iter().map(|task| task.id).collect::<Vec<_>>();
         assert_eq!(ids, vec![draft.id.clone(), second.id.clone(), first.id.clone()]);
+    }
+
+    #[test]
+    fn resume_links_harness_sessions_and_usage_links_include_the_current_id() {
+        let (store, session) = empty_session();
+        assert!(store.usage_links(&session.id).unwrap().is_empty(), "a fresh task has no harness sessions");
+        store.resume(&session.id, "alpha").unwrap();
+        store.resume(&session.id, "beta").unwrap();
+        assert_eq!(store.usage_links(&session.id).unwrap(), vec!["alpha", "beta"]);
+        // A task whose id arrived outside the run loop still reports through its links.
+        store
+            .db
+            .execute("INSERT INTO sessions(id,project_id,title,provider,model,mode,status,created_at,updated_at) VALUES ('imported',?1,'Imported','claude','sonnet','auto',0,0,0)", [&session.project_id])
+            .unwrap();
+        store.resume("imported", "gamma").unwrap();
+        assert_eq!(store.usage_links("imported").unwrap(), vec!["gamma"]);
+        // Ids written without resume() (imports, forks) still count through the current resume id.
+        store
+            .db
+            .execute("INSERT INTO sessions(id,project_id,title,provider,model,mode,status,created_at,updated_at,resume_id) VALUES ('forked',?1,'Forked','codex','gpt-5','auto',0,0,0,'direct-id')", [&session.project_id])
+            .unwrap();
+        assert_eq!(store.usage_links("forked").unwrap(), vec!["direct-id"]);
     }
 
     #[test]
@@ -3613,6 +3698,8 @@ mod tests {
                 "github-copilot",
                 "muse",
                 "devin",
+                "zcode",
+                "hermes",
             ] {
                 for mode in ["ask", "auto", "plan", "full"] {
                     let session = store

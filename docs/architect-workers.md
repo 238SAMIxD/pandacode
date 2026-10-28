@@ -1,5 +1,13 @@
 # Architect and workers
 
+By default, **Team** opens a menu that turns an automatic team led by the
+selected model on or off. While its model catalog and setup are loading, the
+button highlights immediately and shows a busy indicator. Sending and
+model/permission changes wait for setup to finish, and queued follow-ups go out
+once it does; the prompt stays editable. A failed save shows in the menu and
+leaves the saved team as it was. Settings → Agents → **Classic team setup** opens the
+manual setup described below instead.
+
 Open **Team** in the composer, choose the architect model and one or more worker
 profiles in the anchored popover, then **Save setup**. Profile and model pickers
 open directly from it; **Run limits** contains the less common settings. Send a

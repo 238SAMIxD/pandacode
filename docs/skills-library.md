@@ -2,6 +2,8 @@
 
 Issues #15 (skills) and #45 (rules). This is a small first version. It lets you import a skill or rule once, turn it on for each harness and scope, and see what each installed harness actually has.
 
+The import form keeps the local path field at its full control height. Its Kind, Source and Project menus use the current theme's text and solid panel colors, including unselected options in Windows native menus.
+
 ## Storage
 
 Everything is files under the app data folder. There is no schema migration.

@@ -6,6 +6,14 @@ export interface Env {
   SESSION_SECRET: string;
   GITHUB_CLIENT_ID: string;
   GITHUB_CLIENT_SECRET: string;
+  /** Push bridge (relay/src/push.ts): every field optional. A relay without them stores
+   * registrations and answers notify frames, but sends nothing. */
+  APNS_KEY?: string;
+  APNS_KEY_ID?: string;
+  APNS_TEAM_ID?: string;
+  APNS_TOPIC?: string;
+  FCM_SERVICE_ACCOUNT?: string;
+  FCM_PROJECT_ID?: string;
 }
 
 export const json = (body: unknown, status = 200) =>

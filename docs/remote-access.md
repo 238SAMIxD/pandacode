@@ -4,7 +4,8 @@ Opt-in. Off by default. Signing in lets a task *run on another computer*: one of
 computers signed in to the same GitHub account, with **Allow remote control of this computer**
 turned on. The task stays an ordinary task in the local sidebar and conversation pane, with the
 same streaming, composer, approvals and model picker as a local one; there is no separate remote
-view. Nothing is sent anywhere until the user signs in.
+view. Nothing is sent anywhere until the user signs in. A computer can also be an always-on
+server with no screen or desktop app: `pandacode serve` ([headless](headless.md)).
 
 ## Pieces
 
@@ -116,6 +117,9 @@ All routes except auth take `Authorization: Bearer <relay token>`. Errors are `{
   sockets with `4001 (signed out)`. Since tokens are accepted only for registered devices, all
   existing tokens become invalid; signing in again creates a fresh relay account.
 - `POST /v1/token` → `{ token }`: a fresh 30-day token for the same account and device
+- `POST /v1/push/devices` → `{ ok: true }`: registers a push device token for this device
+  (`{ platform: "ios" | "android", token }`; up to 3 per platform). A revocation or account
+  deletion drops the device's tokens with it.
 - `GET /v1/connect?host=0|1` (WebSocket upgrade) → joins the account's Durable Object, advertising
   whether this device hosts
 
@@ -142,7 +146,11 @@ Relay → client:
 - `{ kind: "error", error }`
 
 Client → relay control: `{ kind: "host", enabled: boolean }` changes the advertised host flag
-after connecting. `"ping"` gets `"pong"` as a hibernation auto-response.
+after connecting. A host can also send `{ kind: "notify", body: { kind: "waiting" | "finished",
+count } }`: the object coalesces these (30 s window, halved when the waiting count grows) and
+pushes a generic notice — counts and a deep link, never task text — to every push token the
+account's phones have registered via `POST /v1/push/devices`. `"ping"` gets `"pong"` as a
+hibernation auto-response.
 
 Presence is the device list: the desktop takes devices, names and keys from it and never fetches
 on connect or for an unknown sender. A device missing from presence is removed, and its event

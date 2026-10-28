@@ -238,7 +238,11 @@ fn harness_command(context: &HarnessContext<'_>) -> Result<CommandBuilder, Strin
     let args = harness_arguments(context)?;
     let executable = crate::providers::executable(context.provider)
         .ok_or("Install this harness before opening its console.")?;
+    if context.provider == "hermes" && executable.file_stem().is_some_and(|s| s == "hermes-acp") {
+        return Err("Hermes ACP server does not have an interactive console. Install the `hermes` CLI for terminal chat, or continue in PandaCode.".into());
+    }
     let mut cmd = crate::providers::pty_command(&executable)?;
+    crate::provider_settings::apply_environment(context.provider, &mut cmd);
     for name in crate::providers::claude_auth::removed_environment(context.provider) { cmd.env_remove(name); }
     cmd.args(args);
     if matches!(context.provider, "claude" | "glm" | "mimo") {
@@ -286,7 +290,14 @@ fn harness_arguments(context: &HarnessContext<'_>) -> Result<Vec<String>, String
     if provider == "antigravity" {
         return Err("Antigravity's ACP server does not have an interactive console. Use its synced commands in the composer, or open the agy CLI separately.".into());
     }
-    if !matches!(provider, "codex" | "claude" | "kimi" | "glm" | "opencode" | "grok" | "mimo" | "pi" | "omp" | "github-copilot" | "muse" | "cline" | "devin") {
+    if provider == "hermes" {
+        if let Some(exe) = crate::providers::executable("hermes") {
+            if exe.file_stem().is_some_and(|s| s == "hermes-acp") {
+                return Err("Hermes ACP server does not have an interactive console. Install the `hermes` CLI for terminal chat, or continue in PandaCode.".into());
+            }
+        }
+    }
+    if !matches!(provider, "codex" | "claude" | "kimi" | "glm" | "opencode" | "grok" | "mimo" | "pi" | "omp" | "github-copilot" | "muse" | "cline" | "devin" | "hermes") {
         return Err("Choose a supported coding harness.".into());
     }
     if provider == "github-copilot" {
@@ -326,7 +337,7 @@ fn harness_arguments(context: &HarnessContext<'_>) -> Result<Vec<String>, String
         args.push(
             match provider {
                 "codex" | "muse" => "resume",
-                "claude" | "glm" | "mimo" | "grok" | "devin" => "--resume",
+                "claude" | "glm" | "mimo" | "grok" | "devin" | "hermes" => "--resume",
                 "cline" => "--id",
                 _ => "--session",
             }
@@ -411,6 +422,11 @@ fn harness_arguments(context: &HarnessContext<'_>) -> Result<Vec<String>, String
                 _ => "accept-edits",
             };
             args.extend(["--permission-mode".into(), mode.into()]);
+        }
+        "hermes" => {
+            if context.mode == "full" {
+                args.push("--yolo".into());
+            }
         }
         "cline" => {
             args.push("-i".into());
@@ -1053,6 +1069,20 @@ mod tests {
         };
         let ask_args = harness_arguments(&ask_context).unwrap();
         assert_eq!(ask_args, ["-i", "--auto-approve", "false"]);
+    }
+
+    #[test]
+    fn hermes_console_uses_resume_and_yolo_and_model() {
+        let context = HarnessContext {
+            session_id: "task",
+            provider: "hermes",
+            resume_id: Some("session-123"),
+            model: Some("nous/hermes-3-llama-3.1-405b"),
+            reasoning_effort: None,
+            mode: "full",
+        };
+        let args = harness_arguments(&context).unwrap();
+        assert_eq!(args, ["--resume", "session-123", "--yolo", "--model", "nous/hermes-3-llama-3.1-405b"]);
     }
 
     #[test]

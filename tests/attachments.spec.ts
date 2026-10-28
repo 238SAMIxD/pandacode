@@ -166,10 +166,10 @@ test('a sent message shows its attachments as chips that open what they carried'
   await expect(message.locator('.message-content')).not.toContainText('# Orbit');
   await expect(message.locator('script')).toHaveCount(0);
 
-  // A document inside the workspace opens in a file tab.
+  // A document inside the workspace opens in a file tab in the inspector, beside the conversation.
   await sentChips.nth(0).click();
-  await expect(page.locator('#file-tabs').getByRole('tab', { name: 'README.md', exact: true })).toHaveAttribute('aria-selected', 'true');
-  await page.locator('#file-tabs').getByRole('tab', { name: 'Conversation', exact: true }).click();
+  await expect(page.locator('#inspector #file-tabs').getByRole('tab', { name: 'README.md', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(message).toBeVisible();
 
   // The image shows at full size from the capture registry.
   await expect(sentChips.nth(2).locator('img')).toHaveAttribute('src', /^data:image\/png;base64,/);

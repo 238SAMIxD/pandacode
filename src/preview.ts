@@ -123,6 +123,18 @@ function previewRoute(text: string, pool: { provider: string; model: string; nam
   return { pick: ranking[0] ?? null, ranking, unrated: [], difficulty: Math.max(1, Math.round(difficulty * 10)), category: /test|bug|fix/i.test(text) ? 'debugging' : 'general coding', profiler: 'onnx', latencyMs: 12 };
 }
 let previewClaudeMode: 'inherit' | 'subscription' = 'inherit';
+// Provider environment in the preview lives in memory so the Settings UI can be tested in a browser.
+const previewEnvState = { global: [] as [string, string][], providers: {} as Record<string, [string, string][]>, useGlobal: {} as Record<string, boolean> };
+const previewEnvNames = (vars: [string, string][]) => vars.map(([name]) => name);
+function previewProviderConfiguration(): Record<string, unknown> {
+  return {
+    executablePaths: {}, claudeConnectionMode: previewClaudeMode,
+    globalEnvironment: previewEnvNames(previewEnvState.global),
+    environment: Object.fromEntries(Object.entries(previewEnvState.providers).map(([provider, vars]) => [provider, previewEnvNames(vars)])),
+    useGlobalEnvironment: previewEnvState.useGlobal,
+    glmKeySaved: false, glmKeyFromEnvironment: false, deepseekKeySaved: false, deepseekKeyFromEnvironment: false, commandcodeKeySaved: false, commandcodeKeyFromEnvironment: false, mimoKeySaved: false, mimoKeyFromEnvironment: false, mimoEndpoint: previewMimoEndpoint, mimoEndpoints: previewMimoEndpoints, secureStorageAvailable: false,
+  };
+}
 const traceRoot = '/Users/you/Projects/orbit';
 const traceIndex = `${traceRoot}/src/lib/search-index.ts`;
 const traceJson = (value: unknown) => JSON.stringify(value, null, 2);
@@ -175,6 +187,8 @@ const providers: Provider[] = [
   { id: 'github-copilot', name: 'GitHub Copilot CLI', installed: true, path: '/sample/bin/copilot', version: 'GitHub Copilot CLI 1.0.82 (sample)', models: [] },
   { id: 'muse', name: 'Muse Code', installed: true, path: '/sample/bin/muse', version: 'Muse Code 1.4.7 (sample)', models: [] },
   { id: 'devin', name: 'Devin CLI', installed: true, path: '/sample/bin/devin', version: 'devin 3000.11.216 (sample)', models: [] },
+  { id: 'zcode', name: 'ZCode', installed: true, path: '/sample/bin/zcode', version: '3.16.3', models: [] },
+  { id: 'hermes', name: 'Hermes Agent', installed: true, path: '/sample/bin/hermes', version: 'hermes 0.5.0 (sample)', models: [] },
 ];
 // Mirrors providers::mimo::ENDPOINTS; the native side is the authority.
 const previewMimoEndpoints = [
@@ -236,6 +250,11 @@ const catalogs: Record<ProviderId, ProviderModel[]> = {
     ['glm-5-2', 'GLM-5.2 High', ['none', 'high', 'max'], 'high'],
     ['fusion-claude-opus-5-5-medium-sidekick-swe-2-medium', 'Fusion (Claude Opus 5.5 Medium + SWE-2 Medium)', ['low', 'medium', 'high', 'xhigh', 'max'], 'medium'],
   ] as [string, string, string[], string][]).map(([id, name, efforts, effort]) => ({ id, name, description: id === 'glm-5-2' ? 'Text only' : '', reasoningEfforts: efforts.map(value => ({ id: value, name: value === 'xhigh' ? 'Extra high' : value[0].toUpperCase() + value.slice(1), description: '' })), ...(effort ? { defaultReasoningEffort: effort } : {}) })),
+  hermes: [
+    { id: 'default', name: 'Default model', description: 'Uses the model configured in Hermes (~/.hermes/config.yaml).' },
+    { id: 'nous/hermes-3-llama-3.1-405b', name: 'Hermes 3 Llama 3.1 405B', description: 'Flagship open-weights model fine-tuned by Nous Research.' },
+    { id: 'anthropic/claude-sonnet-4', name: 'Claude Sonnet 4', description: 'Sample Hermes provider model.' },
+  ],
   muse: ['muse-wonder-1.0', 'muse-spark-1.3'].map(id => ({ id, name: id, description: '', reasoningEfforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map(effort => ({ id: effort, name: effort === 'xhigh' ? 'Extra high' : effort[0].toUpperCase() + effort.slice(1), description: '' })), defaultReasoningEffort: 'high', contextWindow: 1007997 })),
   opencode: openCodePreviewModels,
   glm: [
@@ -265,6 +284,10 @@ const catalogs: Record<ProviderId, ProviderModel[]> = {
   grok: [
     { id: 'grok-4.7', name: 'Grok 4.7', description: 'Frontier model for agentic coding.', reasoningEfforts: [{ id: 'low', name: 'Low', description: 'Fastest responses. Best for simple tasks.' }, { id: 'medium', name: 'Medium', description: 'Strong quality with a faster turnaround.' }, { id: 'high', name: 'High', description: 'Thorough reasoning and quality. Recommended.' }, { id: 'xhigh', name: 'Extra High', description: 'Maximum reasoning for the hardest tasks.' }], defaultReasoningEffort: 'high', contextWindow: 500000 },
     { id: 'grok-4.7-build-fast', name: 'Grok 4.7 Fast', description: 'Fast variant. 2x the price.', reasoningEfforts: [{ id: 'low', name: 'Low', description: 'Fastest responses.' }, { id: 'high', name: 'High', description: 'Thorough reasoning and quality.' }], defaultReasoningEffort: 'high', contextWindow: 500000 },
+  ],
+  // Mirrors the session/create settings snapshot recorded from zcode app-server 3.16.3.
+  zcode: [
+    { id: 'zcproxy/GLM-5.3', name: 'zcproxy/GLM-5.3', description: 'OmniRouter', reasoningEfforts: ['low', 'high', 'max'].map(effort => ({ id: effort, name: effort[0].toUpperCase() + effort.slice(1), description: '' })), defaultReasoningEffort: 'max', contextWindow: 200000 },
   ],
 };
 let git: GitStatus = { branch: 'feat/instant-search', isRepo: true, files: [{ path: 'src/components/search.ts', index: ' ', working: 'M' }, { path: 'src/lib/search-index.ts', index: '?', working: '?' }, { path: 'src/components/search.test.ts', index: ' ', working: 'M' }] };
@@ -943,6 +966,12 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'prompt_activity': result = sampleUsageLedger().rows.filter((_, i) => i % 3 === 0).map(row => [row[0], i2p(row[1]), 1 + (row[0] % 7)]); break;
     case 'agent_usage': {
       const provider = String(args.provider);
+      if (provider === 'deepseek') {
+        result = { provider, status: 'ready', checkedAt: Date.now(), stale: false, plan: null, windows: [],
+          source: 'Sample limits for the browser preview. No provider request was made.',
+          message: 'Balance CNY 110.00 (granted 10.00, topped up 100.00).' };
+        break;
+      }
       const supported = ['claude', 'codex', 'kimi', 'glm', 'opencode'].includes(provider);
       result = { provider, status: supported ? 'ready' : 'unsupported', checkedAt: Date.now(), stale: false,
         plan: provider === 'codex' ? 'Pro' : provider === 'opencode' ? 'Go' : null,
@@ -953,11 +982,31 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
         message: supported ? null : 'This harness does not expose account limits. Check its account dashboard.' };
       break;
     }
-    case 'provider_configuration': result = { executablePaths: {}, claudeConnectionMode: previewClaudeMode, glmKeySaved: false, glmKeyFromEnvironment: false, deepseekKeySaved: false, deepseekKeyFromEnvironment: false, commandcodeKeySaved: false, commandcodeKeyFromEnvironment: false, mimoKeySaved: false, mimoKeyFromEnvironment: false, mimoEndpoint: previewMimoEndpoint, mimoEndpoints: previewMimoEndpoints, secureStorageAvailable: false }; break;
+    case 'provider_configuration': result = previewProviderConfiguration(); break;
+    case 'provider_set_environment_variable': case 'provider_set_global_environment_variable': {
+      const name = String(args.name ?? ''), value = String(args.value ?? '');
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || name.length > 128) throw new Error('Environment variable names use letters, digits and underscores, and do not start with a digit.');
+      if (value.includes('\0') || value.length > 4096) throw new Error(`The value of ${name} is too long or contains NUL.`);
+      const vars = args.provider ? previewEnvState.providers[String(args.provider)] ??= [] : previewEnvState.global;
+      const existing = vars.find(entry => entry[0] === name);
+      if (existing) existing[1] = value; else vars.push([name, value]);
+      return invoke<T>('provider_configuration', {});
+    }
+    case 'provider_remove_environment_variable': case 'provider_remove_global_environment_variable': {
+      const name = String(args.name ?? '');
+      const vars = args.provider ? previewEnvState.providers[String(args.provider)] : previewEnvState.global;
+      const index = vars?.findIndex(entry => entry[0] === name) ?? -1;
+      if (index >= 0) vars!.splice(index, 1);
+      return invoke<T>('provider_configuration', {});
+    }
+    case 'provider_set_use_global_environment':
+      if (args.useGlobal) delete previewEnvState.useGlobal[String(args.provider)];
+      else previewEnvState.useGlobal[String(args.provider)] = false;
+      return invoke<T>('provider_configuration', {});
     case 'provider_set_mimo_endpoint':
       if (!previewMimoEndpoints.some(entry => entry.id === args.endpoint)) throw new Error('Choose one of the MiMo endpoints listed in Settings.');
       previewMimoEndpoint = args.endpoint;
-      result = { executablePaths: {}, claudeConnectionMode: previewClaudeMode, glmKeySaved: false, glmKeyFromEnvironment: false, deepseekKeySaved: false, deepseekKeyFromEnvironment: false, commandcodeKeySaved: false, commandcodeKeyFromEnvironment: false, mimoKeySaved: false, mimoKeyFromEnvironment: false, mimoEndpoint: previewMimoEndpoint, mimoEndpoints: previewMimoEndpoints, secureStorageAvailable: false }; break;
+      result = previewProviderConfiguration(); break;
     case 'provider_save_glm_key': case 'provider_remove_glm_key': case 'provider_save_deepseek_key': case 'provider_remove_deepseek_key': case 'provider_save_commandcode_key': case 'provider_remove_commandcode_key': case 'provider_save_mimo_key': case 'provider_remove_mimo_key': case 'provider_set_executable': throw new Error('Provider connections can only be changed in the desktop app.');
     case 'turn_change_summary': {
       session(args.sessionId);
@@ -1504,6 +1553,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
       s.pullRequest = { kind: 'pull', number, url: `${repo.url}/pull/${number}`, title: pull.title, state: 'open', checkedAt: Date.now() };
       result = s; break;
     }
+    case 'task_token_usage': result = { input: 91234, cacheRead: 1000000, cacheWrite: 45000, output: 152340, firstUsed: Date.now() - 86400000, lastUsed: Date.now() - 300000 }; break;
     case 'token_saver_tools': result = { rtk: previewRtk, rtkVersion: previewRtk ? '1.0.1' : '', rtkInstall: 'brew install rtk' }; break;
     case 'token_saver_install': {
       if (args.tool !== 'rtk') throw new Error('Unknown tool.');
@@ -1526,6 +1576,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'cloud_connections': result = previewCloud.connections(); break;
     case 'cloud_connect': result = previewCloud.connect(args.provider, args.key, args.options ?? {}); emit('vm-changed', {}); break;
     case 'cloud_disconnect': result = previewCloud.disconnect(args.provider); emit('vm-changed', {}); break;
+    case 'cloud_set_inherit_environment': result = previewCloud.setInheritEnvironment(args.provider, args.inherit); break;
     case 'cloud_setup_sandboxes': result = previewCloud.setupSandboxes(); emit('vm-changed', {}); break;
     case 'cloud_instabox_images': result = previewCloud.instaboxImages(); break;
     case 'cloud_instabox_set_image': result = previewCloud.setInstaboxImage(args.image); break;

@@ -176,3 +176,22 @@ test('narrow windows collapse the rail to logos', async ({ page }) => {
   expect((await tab.boundingBox())!.width).toBeLessThan(50);
   await expect(tab.locator('.model-menu-tab-label')).toBeHidden();
 });
+
+test('the picker shows provider logos for Cline, Kilo Code and Oh My Pi', async ({ page }) => {
+  await page.route('**/src/preview.ts*', async route => {
+    const response = await route.fetch(); const source = await response.text();
+    const marker = /switch\s*\(command\)\s*\{/;
+    expect(source).toMatch(marker);
+    await route.fulfill({ response, body: source.replace(marker, `if (command === 'list_providers') return structuredClone(providers.map(p => ({ ...p, installed: true })));\nswitch (command) {`) });
+  });
+  await page.goto('/');
+  await page.locator('.new-task-button').click();
+  await trigger(page).click();
+  const rail = picker(page).getByRole('tablist', { name: 'Harnesses' });
+  for (const [name, id] of [['Cline', 'cline'], ['Kilo Code', 'kilo'], ['Oh My Pi', 'omp']]) {
+    const tab = rail.getByRole('tab', { name, exact: true });
+    await expect(tab.locator(`.provider-logo[data-provider="${id}"]:not(.provider-logo-tile)`)).toHaveCount(1);
+    await tab.click();
+    await expect(picker(page).locator(`.provider-logo[data-provider="${id}"]:not(.provider-logo-tile)`).first()).toBeVisible();
+  }
+});

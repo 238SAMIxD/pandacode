@@ -13,7 +13,7 @@ pub(super) async fn discover(provider: &str, cwd: &Path) -> Result<Catalog, Stri
         let frame = crate::providers::devin_commands(&path, cwd).await?;
         return frame.as_ref().and_then(|frame| parse_runtime(provider, frame)).ok_or(NO_COMMANDS.into());
     }
-    let mut command = crate::providers::command(&path)?;
+    let mut command = crate::providers::provider_command(provider, &path)?;
     match provider {
         "opencode" => {
             command.arg("acp");
@@ -37,6 +37,9 @@ pub(super) async fn discover(provider: &str, cwd: &Path) -> Result<Catalog, Stri
         }
         "github-copilot" => {
             command.args(["--no-auto-update", "--acp", "--stdio"]);
+        }
+        "hermes" => {
+            crate::providers::hermes::configure_command(&mut command, &path);
         }
         _ => {
             #[cfg(target_os = "linux")]
@@ -87,7 +90,7 @@ mod tests {
 
     #[test]
     fn commands_use_real_provider_names_and_advertised_hints() {
-        for provider in ["opencode", "kilo", "antigravity", "grok", "github-copilot"] {
+        for provider in ["opencode", "kilo", "antigravity", "grok", "github-copilot", "hermes"] {
             let catalog = parse_runtime(provider,&json!({"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"review","description":"Review changes","input":{"hint":"[focus]"}}]}}})).unwrap();
             assert_eq!(catalog.commands[0].id, format!("{provider}:/review"));
             assert_eq!(
