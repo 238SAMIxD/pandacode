@@ -14,7 +14,7 @@ test.beforeEach(async ({ page }) => {
 
 test('a new chat lists under Chats, not projects, without project affordances', async ({ page }) => {
   await newChat(page);
-  await expect(page.locator('.folder-group .task-item.selected')).toHaveCount(0);
+  await expect(page.locator('[data-thread-group="all"] .task-item.selected')).toHaveCount(0);
   await expect(page.locator('.folder-heading', { hasText: 'Chat' })).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'What’s on your mind?' })).toBeVisible();
   await expect(page.locator('#breadcrumb')).toHaveText('Chat');
@@ -23,7 +23,7 @@ test('a new chat lists under Chats, not projects, without project affordances', 
   await expect(page.locator('#prompt')).toHaveAttribute('placeholder', 'Ask anything…');
 
   // Leaving the chat brings the project affordances back.
-  await page.locator('.folder-group .task-item').first().click();
+  await page.locator('#navigation .task-item[data-id="session-1"]').click();
   await expect(page.locator('#deploy-button')).toBeVisible();
 });
 
@@ -47,5 +47,5 @@ test('Go to anything starts a chat, and an empty chat can move to a project', as
   await page.getByRole('button', { name: 'Move to project…' }).click();
   await page.getByRole('option', { name: /orbit/ }).click();
   await expect(chats(page)).toHaveCount(0);
-  await expect(page.locator('.folder-group[aria-label="orbit tasks"] .task-item.selected')).toHaveCount(1);
+  await expect(page.locator('[data-thread-group="all"] .task-item.selected')).toHaveCount(1);
 });

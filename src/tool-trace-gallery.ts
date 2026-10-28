@@ -2,6 +2,7 @@
 // ?theme=dark switches theme; ?collapsed=1 leaves groups and rows closed.
 import './styles.css';
 import './tool-trace.css';
+import './tool-cards.css';
 import type { ToolActivity } from './types';
 import { escape } from './dom.ts';
 import { renderToolGroup } from './tool-activity.ts';
@@ -22,7 +23,7 @@ const FAMILIES: [string, Case[]][] = [
     { verb: 'Checked', name: 'pandacode_list_workers', output: { status: 'running', round: 1, maxRounds: 3, workers: [{ id: 'w1', name: 'Trace visualizations', status: 'completed', summary: 'Catalog, cards and gallery done.' }, { id: 'w2', name: 'Native audit', status: 'failed', error: 'Timed out reading providers.rs' }] } },
     { verb: 'Saved checkpoint', name: 'pandacode_checkpoint_worker', input: { key: 'c1', summary: 'Catalog written, tests green.', nextSteps: 'Polish CSS and screenshots.', blocker: 'playwright.config.ts testMatch is outside my scope.' } },
     { verb: 'Finished team', name: 'pandacode_finish_team', input: { summary: 'Shipped PandaCode tool traces.\n\n- 80 tools have specific rows\n- Subagent and MCP cards show prompts and arguments' } },
-    { verb: 'Cancelling', name: 'pandacode_cancel_worker', status: 'running', input: { workerId: 'w2', reason: 'Superseded by the native audit in w3.' } },
+    { verb: 'Cancelled', name: 'pandacode_cancel_worker', status: 'running', input: { workerId: 'w2', reason: 'Superseded by the native audit in w3.' } },
   ]],
   ['Tasks', [
     { verb: 'Created task', name: 'pandacode_create_task', input: { title: 'Polish onboarding', description: 'Tighten copy on the welcome screen.' }, output: { id: '1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed', title: 'Polish onboarding', provider: 'claude', model: 'sonnet', status: 'idle', stage: 'pending' } },
@@ -56,14 +57,15 @@ const FAMILIES: [string, Case[]][] = [
     { verb: 'Named', name: 'pandacode_title', input: { title: 'Tool trace visualizations' } },
     { verb: 'Remembered', name: 'pandacode_bot_remember', input: { content: 'The user prefers summaries before 9am.' } },
     { verb: 'Scheduled', name: 'pandacode_bot_schedule', input: { title: 'Morning digest', prompt: 'Summarize overnight PRs', kind: 'weekdays', timeOfDay: '08:30' } },
-    { verb: 'Starting browser test', name: 'pandacode_jev_test', status: 'running', input: { url: 'http://127.0.0.1:1420/', goal: 'Sign in with the demo account and reach the dashboard', viewport: 'mobile', expectedText: 'Welcome' } },
+    { verb: 'Started browser test', name: 'pandacode_jev_test', status: 'running', input: { url: 'http://127.0.0.1:1420/', goal: 'Sign in with the demo account and reach the dashboard', viewport: 'mobile', expectedText: 'Welcome' } },
     { verb: 'Waited for test', name: 'pandacode_jev_wait', input: { runId: 'run-42' }, output: { runId: 'run-42', status: 'passed', summary: 'Signed in and reached the dashboard.', checks: [{ name: 'Expected text “Welcome”', passed: true }, { name: 'URL ends with /dashboard', passed: true }] } },
   ]],
   ['Subagents & MCP', [
     { verb: 'Started', name: 'Task', input: { subagent_type: 'Explore', description: 'Find tool name spellings', prompt: 'Search src-tauri/src/providers* for how MCP tool names are recorded for each harness.' }, output: 'Claude: mcp__pandacode_architect__pandacode_x. Codex: “server · tool”. Host tools: bare pandacode_x.' },
-    { verb: 'Starting', name: 'Agent', status: 'running', input: { subagent_type: 'code-reviewer', description: 'Review trace cards' } },
-    { verb: 'Used', name: 'mcp__github__list_issues', input: { owner: 'pandacode', repo: 'pandacode', labels: ['bug', 'ui'], state: 'open', filter: { since: '2026-10-01' } }, output: { total_count: 2, items: [{ number: 812, title: 'Trace rows wrap' }, { number: 815, title: 'Dark chips' }] } },
-    { verb: 'Used', name: 'docs · search', input: { query: 'lifetimes' }, output: 'Three results\n1. The Book: Validating references\n2. Nomicon: Lifetimes' },
+    { verb: 'Started', name: 'Agent', status: 'running', input: { subagent_type: 'code-reviewer', description: 'Review trace cards' } },
+    { verb: 'Read the', name: 'mcp__github__list_issues', input: { owner: 'pandacode', repo: 'pandacode', labels: ['bug', 'ui'], state: 'open', filter: { since: '2026-10-01' } }, output: { total_count: 2, items: [{ number: 812, title: 'Trace rows wrap' }, { number: 815, title: 'Dark chips' }] } },
+    { verb: 'Used', name: 'mcp__acme__deploy_site', input: { site: 'panda-site', env: 'production' }, output: { id: 'dep_42', url: 'https://panda-site.example.com', status: 'ready' } },
+    { verb: 'Searched', name: 'docs · search', input: { query: 'lifetimes' }, output: 'Three results\n1. The Book: Validating references\n2. Nomicon: Lifetimes' },
     { verb: "Couldn't use", name: 'mcp__linear__create_issue', status: 'failed', input: { title: 'Gallery' }, output: 'Unauthorized: token expired' },
   ]],
   ['Built-in tools', [
@@ -84,7 +86,7 @@ let n = 0;
 const gallery = document.getElementById('gallery')!;
 gallery.innerHTML = `<h1 style="font-size:1rem;margin:0 0 4px 6px">Tool trace gallery</h1>` + FAMILIES.map(([title, cases]) => {
   const entries = cases.map(c => ({ key: `case-${n++}`, content: { id: `case-${n}`, name: c.name, status: c.status ?? 'completed', input: j(c.input ?? {}), output: j(c.output) } as ToolActivity }));
-  return `<section data-gallery-family="${escape(title)}" data-expect="${escape(cases.map(c => c.verb).join('|'))}"><h2>${escape(title)}</h2>${renderToolGroup(entries, !collapsed)}</section>`;
+  return `<section data-gallery-family="${escape(title)}" data-expect="${escape(cases.map(c => c.verb).join('|'))}"><h2>${escape(title)}</h2>${renderToolGroup(entries, !collapsed, true)}</section>`;
 }).join('');
 if (!collapsed) gallery.querySelectorAll<HTMLDetailsElement>('.tool-activity').forEach(row => { row.open = true; });
 document.body.dataset.ready = 'true';

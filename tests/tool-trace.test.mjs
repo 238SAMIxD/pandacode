@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { describeTool, summaryIcons, summarizeTools, toolPreview, traceRowHtml, shellCommand, toolKind } from '../src/tool-trace.ts';
+// dom.ts's fileIcon reads the theme once its lazy icon chunk has loaded.
+globalThis.document ??= { documentElement: { dataset: {} } };
+import { describeTool, mcpAction, mcpCard, summarizeTools, summaryIcons, toolPreview, traceRowHtml, shellCommand, toolKind } from '../src/tool-trace.ts';
+import { richCard } from '../src/tool-cards.ts';
+import { icon } from '../src/dom.ts';
 
 const tool = (name, input, extra = {}) => ({ name, status: 'completed', input: typeof input === 'string' ? input : JSON.stringify(input), output: '', ...extra });
 
@@ -19,11 +23,18 @@ test('describes each kind as a verb, chip and object', () => {
     [tool('TodoWrite', { todos: [{ content: 'a', status: 'pending' }, { content: 'b', status: 'completed' }] }), 'todo', 'Updated', undefined, 'the plan · 2 steps'],
     [tool('Task', { description: 'Find callers', subagent_type: 'Explore' }), 'agent', 'Started', 'Explore', 'Find callers'],
     [tool('Skill', { skill: 'hyperframes' }), 'skill', 'Loaded skill', 'hyperframes', ''],
-    [tool('mcp__github__list_issues', {}), 'mcp', 'Used', 'github', 'list issues'],
+    [tool('Skill', { skill: 'simplify', args: 'src/lib' }), 'skill', 'Loaded skill', 'simplify', 'src/lib'],
+    [tool('mcp__github__list_issues', {}), 'mcp', 'Read the', 'GitHub', 'issues'],
+    [tool('mcp__slack__search_messages', { query: 'messages since yesterday' }), 'mcp', 'Searched', 'Slack', 'for messages since yesterday'],
+    [tool('mcp__claude_ai_Granola__get_meetings', { query: 'notes from today’s calls' }, { status: 'running' }), 'mcp', 'Read the', 'Granola', 'notes from today’s calls'],
+    [tool('mcp__acme__deploy_site', {}), 'mcp', 'Used', 'acme', 'deploy site'],
+    [tool('docs · search', { query: 'x' }), 'mcp', 'Searched', 'docs', 'for x'],
+    // PandaCode's own tools come from the catalog (tool-trace-pandacode.ts).
     [tool('pandacode_dispatch_workers', { workers: [{}, {}] }), 'mcp', 'Dispatched', undefined, '2 workers'],
     [tool('pandacode_architect_pandacode_title', { title: 'Traces' }), 'mcp', 'Named', undefined, 'the task “Traces”'],
-    [tool('docs · search', { query: 'x' }), 'mcp', 'Used', 'docs', 'search'],
+    [tool('mcp__pandacode_architect__pandacode_dispatch_workers', { workers: [{}] }), 'mcp', 'Dispatched', undefined, '1 worker'],
     [tool('pandacode_mystery_tool', {}), 'mcp', 'Used', 'PandaCode', 'mystery tool'],
+    [tool('Write', { file_path: 'one.md', content: 'x' }), 'write', 'Wrote', 'one.md', '1 line'],
     [tool('Frobnicate', { path: 'x/y' }), 'tool', 'Used', 'Frobnicate', 'x/y'],
   ];
   for (const [input, kind, verb, chip, object] of cases) {
@@ -39,44 +50,100 @@ test('describes each kind as a verb, chip and object', () => {
   assert.deepEqual([multi.added, multi.removed], [1, 3]);
   assert.equal(shellCommand("bash -lc 'ls -la'", {}), 'ls -la');
   assert.equal(toolKind('MultiEdit'), 'edit');
+  assert.equal(describeTool(tool('mcp__slack__search_messages', {})).icon, 'search');
+  assert.equal(describeTool(tool('mcp__linear__list_issues', {})).icon, 'file');
+  assert.match(describeTool(tool('mcp__slack__search_messages', {})).chip.svg, /brand-icon/);
+  assert.deepEqual(['search_messages', 'slack_search_public', 'list_pull_requests', 'get_meetings', 'deploy_site'].map(mcpAction), ['search', 'search', 'read', 'read', undefined]);
+  assert.match(traceRowHtml(describeTool(tool('mcp__gmail__search_threads', { query: 'unread threads' }))), /tool-trace-verb">Searched<\/span><span class="tool-trace-chip" title="mcp__gmail__search_threads"><svg class="brand-icon"[^]*<b>Gmail<\/b><\/span><span class="tool-trace-object">for unread threads</);
 });
 
-test('running calls use present tense', () => {
-  assert.equal(describeTool(tool('Bash', { command: 'ls' }, { status: 'running' })).verb, 'Running');
-  assert.equal(describeTool(tool('Read', { file_path: 'a' }, { status: 'running' })).verb, 'Reading');
-  assert.equal(describeTool(tool('WebSearch', { query: 'q' }, { status: 'running' })).verb, 'Searching');
+test('rows read as finished sentences even while running; failures lead with Couldn\'t', () => {
+  assert.equal(describeTool(tool('Bash', { command: 'ls' }, { status: 'running' })).verb, 'Ran');
+  assert.equal(describeTool(tool('Read', { file_path: 'a' }, { status: 'running' })).verb, 'Read');
+  assert.equal(describeTool(tool('WebSearch', { query: 'q' }, { status: 'running' })).verb, 'Searched');
+  assert.equal(describeTool(tool('Skill', { skill: 's' }, { status: 'running' })).verb, 'Loaded skill');
   assert.equal(describeTool(tool('Read', { file_path: 'a' }, { status: 'failed' })).verb, "Couldn't read");
+  assert.equal(describeTool(tool('Skill', { skill: 's' }, { status: 'failed' })).verb, "Couldn't load skill");
+  // Only brand marks sit inside the chip; a line icon would repeat the row's kind icon.
+  assert.match(traceRowHtml(describeTool(tool('Read', { file_path: 'src/a.ts' }))), /tool-trace-chip" title="src\/a\.ts"><b>a\.ts<\/b>/);
+  assert.equal(describeTool(tool('pandacode_dispatch_workers', {}, { status: 'running' })).verb, 'Dispatched');
 });
 
 test('summaries pluralise, merge verbs and report running and failures', () => {
   const bash = tool('Bash', { command: 'ls' }), read = tool('Read', { file_path: 'a' });
-  assert.equal(summarizeTools([bash, bash, bash, read, read, tool('Edit', {})]), 'Ran 3 commands, read 2 files +1 more');
-  assert.equal(summarizeTools([tool('Grep', {}), tool('WebSearch', {}), read, read, read]), 'Ran 2 searches, read 3 files');
-  assert.equal(summarizeTools([{ ...bash, status: 'running' }, { ...bash, status: 'running' }]), 'Running 2 commands…');
+  // Two counts at most, then `and N more`, so the folded summary stays on one line.
+  assert.equal(summarizeTools([bash, bash, bash, read, read, tool('Edit', {})]), 'Ran 3 commands, read 2 files and 1 more step');
+  assert.equal(summarizeTools([tool('Grep', {}), tool('WebSearch', {}), read, read, read]), 'Ran 2 searches and read 3 files');
+  // Completed calls lead; running and failed are counted apart. Only a live turn has running calls.
+  assert.equal(summarizeTools([{ ...bash, status: 'running' }, { ...bash, status: 'running' }], { live: true }), 'Running 2 commands…');
+  assert.equal(summarizeTools([{ ...bash, status: 'running' }, bash], { live: true }), 'Ran 1 command · 1 running');
+  // A saved record stuck at `running` still reads as finished.
+  assert.equal(summarizeTools([{ ...bash, status: 'running' }, bash]), 'Ran 2 commands');
   assert.equal(summarizeTools([bash, { ...read, status: 'failed' }]), 'Ran 1 command · 1 failed');
-  assert.equal(summarizeTools([{ ...read, status: 'failed' }, { ...bash, status: 'failed' }]), "Couldn't read 1 file, couldn't run 1 command · 2 failed");
-  assert.equal(summarizeTools([bash, { ...bash, status: 'running' }, { ...read, status: 'failed' }]), 'Ran 1 command · 1 running · 1 failed');
+  assert.equal(summarizeTools([{ ...read, status: 'failed' }, { ...bash, status: 'failed' }]), "Couldn't read 1 file and couldn't run 1 command · 2 failed");
+  assert.equal(summarizeTools([bash, { ...bash, status: 'running' }, { ...read, status: 'failed' }], { live: true }), 'Ran 1 command · 1 running · 1 failed');
   assert.equal(summarizeTools([undefined]), 'Used 1 tool');
   assert.equal(summarizeTools([tool('TodoWrite', {})]), 'Updated the plan');
+  const brief = ['mcp__slack__search_messages', 'mcp__granola__get_meetings', 'mcp__gmail__search_threads', 'mcp__github__list_pull_requests', 'mcp__linear__list_issues'].map(name => tool(name, {}));
+  assert.equal(summarizeTools(brief), 'Ran 2 searches and read 3 sources');
+  assert.equal(summarizeTools([...brief, read]), 'Ran 2 searches, read 3 sources and 1 more step');
+  assert.equal(summarizeTools([{ ...brief[0], status: 'running' }, { ...brief[1], status: 'running' }], { live: true }), 'Running 1 search and reading 1 source…');
+  const marks = summaryIcons(brief);
+  assert.equal(marks.length, 3);
+  assert.ok(marks.every(mark => mark.includes('brand-icon')));
+  assert.equal(summaryIcons([bash, bash, read]).length, 2);
 });
 
-test('cards show structured results', () => {
-  const shell = toolPreview(tool('Command', 'ls', { output: 'Exit code: 2\nWall time: 1s\nOutput:\n' + Array.from({ length: 20 }, (_, i) => 'line ' + i).join('\n') }));
-  assert.match(shell, /tool-trace-badge is-failed">exit 2</);
-  assert.match(shell, /line 19/);
-  assert.ok(!shell.includes('line 11\n'));
-  const vm = toolPreview(tool('pandacode_vm_exec', { command: 'echo hi' }, { output: '{"exitCode":0,"stdout":"hi","stderr":""}' }));
-  assert.match(vm, /tool-trace-badge">exit 0</);
-  const read = toolPreview(tool('Read', 'src/a.ts', { output: 'one\ntwo\nthree' }));
-  assert.match(read, /<b>a.ts<\/b>/);
-  assert.match(read, /3 lines/);
-  assert.match(toolPreview(tool('Edit', { file_path: 'a', old_string: 'x', new_string: 'y' })), /<del>- x<\/del>\n<ins>\+ y<\/ins>/);
-  const grep = toolPreview(tool('Grep', { pattern: 'x' }, { output: 'Found 8 files\n' + Array.from({ length: 8 }, (_, i) => `src/f${i}.ts`).join('\n') }));
-  assert.match(grep, /tool-trace-item-title" title="src\/f0.ts">f0.ts</);
-  assert.match(grep, /\+2 more/);
-  const web = toolPreview(tool('WebSearch', { query: 'q' }, { output: 'Web search results for query: "q"\n\nLinks: [{"title":"Docs","url":"https://docs.example.com/x"}]\n\nSummary' }));
-  assert.match(web, /Docs<\/span><span class="tool-trace-item-meta">docs.example.com</);
-  assert.match(toolPreview(tool('TodoWrite', { todos: [{ content: 'Ship', status: 'completed' }] })), /data-status="completed"/);
+test('MCP results become brand rows: marks, title, meta, time, body and +N more', () => {
+  const json = value => JSON.stringify(value);
+  const slack = mcpCard(tool('mcp__slack__search_messages', {}, { output: json({ messages: [
+    { user: 'Jane Doe', channel: '#support', ts: '9:41', text: 'Two tickets.' },
+    { user: { name: 'Sam Lee' }, channel: '#deploys', ts: '11:02', text: 'fix: retry' },
+    { user: 'Alex Kim', channel: '#general', ts: '14:15', text: 'Huddle at 3?' },
+    { user: 'Priya Shah', channel: '#design', ts: '15:30', text: 'Mocks' },
+  ] }) }));
+  assert.match(slack, /class="tool-trace-card is-rows" data-trace-kind="mcp" data-brand="slack"/);
+  assert.match(slack, /trace-mark is-avatar">J<\/span><span class="trace-row-head"><b>Jane Doe<\/b><span class="trace-row-meta">#support<\/span><\/span><span class="trace-row-time">9:41<\/span><span class="trace-row-body">Two tickets.<\/span>/);
+  assert.match(slack, /<b>Sam Lee<\/b>/);
+  assert.ok(!slack.includes('Priya'));
+  assert.match(slack, /tool-trace-more">\+1 more</);
+  const gmail = mcpCard(tool('mcp__gmail__search_threads', {}, { output: json([{ type: 'text', text: json({ threads: [{ subject: 'Re: Signed contract', from: 'Jane Doe', time: '8:12', unread: true, snippet: 'Attached' }, { subject: 'Invoice', from: 'Billing', unread: false }] }) }]) }));
+  assert.match(gmail, /<li class="trace-row" data-unread><span class="trace-mark is-unread" data-unread><\/span><span class="trace-row-head"><b>Re: Signed contract<\/b><span class="trace-row-meta">Jane Doe/);
+  assert.match(gmail, /<span class="trace-mark is-unread"><\/span><span class="trace-row-head"><b>Invoice<\/b>/);
+  const github = mcpCard(tool('mcp__github__list_pull_requests', {}, { output: json({ pull_requests: [{ title: 'Retry', identifier: 'acme/app#128', state: 'merged', time: '2h' }, { title: 'Export', identifier: 'acme/app#131', state: 'open' }] }) }));
+  assert.match(github, /trace-mark is-pull" data-state="merged"/);
+  assert.match(github, /data-state="open"[^]*<b>Export<\/b><span class="trace-row-meta">acme\/app#131/);
+  const linear = mcpCard(tool('mcp__linear__list_issues', {}, { output: json({ issues: [{ title: 'CSV', identifier: 'ENG-142', state: 'In Progress' }, { title: 'Dupes', identifier: 'ENG-139', status: 'Todo' }, { title: 'Ship', identifier: 'ENG-120', state: 'Done' }] }) }));
+  assert.deepEqual([...linear.matchAll(/is-issue" data-state="(\w+)"/g)].map(match => match[1]), ['progress', 'todo', 'done']);
+  const granola = mcpCard(tool('mcp__granola__get_meetings', {}, { output: json({ meetings: [{ title: 'Kickoff', author: 'Jane, Sam', time: '10:00' }] }) }));
+  assert.match(granola, /<span class="trace-mark"><svg class="brand-icon"[^]*<b>Kickoff<\/b><span class="trace-row-meta">Jane, Sam/);
+  // Unparseable or list-free output falls through to the rich card or the excerpt.
+  const plain = tool('mcp__slack__search_messages', {}, { output: 'no results' });
+  assert.equal(mcpCard(plain), '');
+  assert.equal(mcpCard(tool('mcp__x__get', {}, { output: '{"ok":true}' })), '');
+  assert.equal(mcpCard(tool('Bash', { command: 'ls' }, { output: '[{"title":"x"}]' })), '');
+  assert.ok(toolPreview(plain).length > 0);
+});
+
+test('previews prefer the MCP card, then the rich card inside the shared card chrome', () => {
+  for (const input of [
+    tool('Command', 'ls', { output: 'Exit code: 2\nOutput:\nline 1' }),
+    tool('Read', 'src/a.ts', { output: 'one\ntwo\nthree' }),
+    tool('Edit', { file_path: 'a', old_string: 'x', new_string: 'y' }),
+    tool('TodoWrite', { todos: [{ content: 'Ship', status: 'completed' }] }),
+  ]) {
+    assert.ok(richCard(input), input.name);
+    assert.equal(toolPreview(input).replace('<!--trace-partial-->', ''), `<div class="tool-trace-card" data-trace-kind="${toolKind(input.name)}">${richCard(input)}</div>`, input.name);
+  }
+  const mcp = tool('mcp__linear__list_issues', {}, { output: '{"issues":[{"title":"CSV","state":"todo"}]}' });
+  // Rows show a subset of the JSON, so the raw record stays one click away.
+  assert.equal(toolPreview(mcp), '<!--trace-partial-->' + mcpCard(mcp));
+  // Docs servers use the rich card first (docs with URLs); PandaCode's own tools use the catalog's cards.
+  const docs = tool('mcp__docs__search_docs', { query: 'index' }, { output: '{"results":[{"title":"Search index","url":"https://docs.example.com/search-index"}]}' });
+  assert.ok(richCard(docs));
+  assert.equal(toolPreview(docs).replace('<!--trace-partial-->', ''), `<div class="tool-trace-card" data-trace-kind="mcp">${richCard(docs)}</div>`);
+  const workers = toolPreview(tool('mcp__pandacode_architect__pandacode_dispatch_workers', { workers: [{ name: 'A', prompt: 'Do it', model: 'opus' }] }, { output: '{"workers":[{"name":"A","status":"started"}]}' }));
+  assert.match(workers, /tool-trace-roster/);
   assert.equal(toolPreview(tool('Read', 'a', { output: '[Non-text content omitted]' })).includes('Non-text'), false);
 });
 
@@ -89,8 +156,10 @@ test('chips, objects and cards escape tool data', () => {
     + toolPreview(tool('Grep', {}, { output: unsafe }))
     + toolPreview(tool('TodoWrite', { todos: [{ content: unsafe, status: '"><b>' }] }));
   assert.ok(!html.includes('<img'));
-  assert.ok(!html.includes('"><b>'));
+  assert.ok(!/data-status="">/.test(html));
   assert.match(html, /&lt;img/);
+  const card = mcpCard(tool('mcp__slack__search_messages', {}, { output: JSON.stringify({ messages: [{ user: unsafe, channel: unsafe, ts: unsafe, text: unsafe, state: unsafe }] }) }));
+  assert.ok(card.includes('&lt;img') && !card.includes('<img'));
 });
 
 import { pandacodeTool, PANDACODE_TOOLS } from '../src/tool-trace-pandacode.ts';
@@ -125,7 +194,7 @@ test('PandaCode rows read as sentences', () => {
   assert.equal(row('mcp__pandacode_architect__pandacode_dispatch_workers', { assignments: [{}, {}, {}] }), 'Dispatched 3 workers');
   assert.equal(row('pandacode_send_team_message', { recipient: 'worker-2', message: 'hi' }), 'Sent message to worker-2');
   assert.equal(row('pandacode_vm_screenshot', { name: 'macos-vm' }), 'Took screenshot of macos-vm');
-  assert.equal(row('pandacode_vm_screenshot', { name: 'macos-vm' }, '', 'running'), 'Taking screenshot of macos-vm');
+  assert.equal(row('pandacode_vm_screenshot', { name: 'macos-vm' }, '', 'running'), 'Took screenshot of macos-vm');
   assert.equal(row('pandacode_design_write', { name: 'Login.html', html: '<p>\n</p>' }), 'Wrote artboard Login 2 lines');
   assert.equal(row('pandacode_cloud_cli', { tool: 'wrangler', args: 'deploy' }), 'Ran wrangler deploy');
   assert.equal(row('pandacode_open_browser', { url: 'http://127.0.0.1:1420/' }), 'Opened preview :1420');
@@ -141,7 +210,7 @@ test('PandaCode rows read as sentences', () => {
   assert.equal(row('pandacode_code_search', { query: 'icon(' }), 'Searched code for icon(');
   assert.equal(row('pandacode_read_team_mailbox', {}, '{"messages":[{"message":"x"}]}'), 'Checked mailbox · 1 message');
   assert.equal(row('Task', { subagent_type: 'Explore', description: 'Find callers' }), 'Started Explore Find callers');
-  assert.equal(summaryIcons([tool('pandacode_vm_list', {}), tool('pandacode_design_list', {})]).join(), 'monitor,sketch');
+  assert.deepEqual(summaryIcons([tool('pandacode_vm_list', {}), tool('pandacode_design_list', {})]), [icon('monitor'), icon('sketch')]);
 });
 
 test('PandaCode cards show rosters, bubbles, terminals and lists', () => {
@@ -231,11 +300,12 @@ test('cards do not repeat the row, and full data appears only when the card is p
   assert.ok(!card('Task', { subagent_type: 'Explore', prompt: 'p' }, 'r').includes('tool-trace-chip'));
   const activity = (name, input, output) => renderToolActivity({ id: '1', name, status: 'completed', input: JSON.stringify(input), output }, 'k');
   assert.ok(!activity('pandacode_vm_list', {}, '{"vms":[]}').includes('tool-trace-raw'));
-  assert.match(activity('mcp__x__y', {}, 'line\n'.repeat(20)), /Full tool data/);
-  assert.ok(!activity('Bash', { command: 'ls' }, 'a').includes('Full tool data'));
-  assert.match(activity('Bash', { command: 'ls' }, 'line\n'.repeat(20)), /Full tool data/);
-  assert.match(activity('Read', { file_path: 'a' }, 'x\n'.repeat(20)), /Full tool data/);
-  assert.ok(!activity('Read', { file_path: 'a' }, 'one\ntwo').includes('Full tool data'));
+  assert.match(activity('mcp__x__y', {}, 'line\n'.repeat(20)), /tool-trace-raw/);
+  // Rich cards for built-in tools are excerpts and always keep the raw record.
+  assert.match(activity('Bash', { command: 'ls' }, 'a'), /tool-trace-raw/);
+  assert.match(activity('Bash', { command: 'ls' }, Array.from({ length: 20 }, (_, i) => `line ${i}`).join('\n')), /tool-trace-raw/);
+  assert.match(activity('Read', { file_path: 'a' }, Array.from({ length: 400 }, (_, i) => `x ${i}`).join('\n')), /tool-trace-raw/);
+  assert.match(activity('Read', { file_path: 'a' }, 'one\ntwo'), /tool-trace-raw/);
   assert.match(activity('pandacode_open_terminal', {}, ''), /data-static><div class="tool-trace-summary"/);
   assert.ok(!activity('pandacode_open_terminal', {}, '').includes('<details'));
   assert.ok(!renderToolActivity({ id: '1', name: 'Bash', status: 'running', input: '{"command":"ls"}', output: '' }, 'k').includes('Waiting for output'));
@@ -250,8 +320,8 @@ test('cards do not repeat the row, and full data appears only when the card is p
 
 test('summaries keep finished work in past tense, name PandaCode families and count nonzero exits', () => {
   const bash = tool('Bash', { command: 'ls' });
-  assert.equal(summarizeTools([bash, { ...bash, status: 'running' }]), 'Ran 1 command · 1 running');
-  assert.equal(summarizeTools([tool('pandacode_send_team_message', {}), tool('pandacode_read_team_mailbox', {}), tool('pandacode_vm_list', {})]), 'Coordinated 2 team steps, operated 1 VM action');
+  assert.equal(summarizeTools([bash, { ...bash, status: 'running' }], { live: true }), 'Ran 1 command · 1 running');
+  assert.equal(summarizeTools([tool('pandacode_send_team_message', {}), tool('pandacode_read_team_mailbox', {}), tool('pandacode_vm_list', {})]), 'Coordinated 2 team steps and operated 1 VM action');
   assert.equal(summarizeTools([tool('pandacode_cloud_cli', {}), bash]), 'Ran 1 cloud command and 1 command');
   const failing = tool('Bash', { command: 'npm test' }, { output: 'Exit code: 1\nOutput:\nfail' });
   assert.equal(summarizeTools([failing, bash]), 'Ran 1 command · 1 failed');
@@ -263,11 +333,13 @@ test('summaries keep finished work in past tense, name PandaCode families and co
 });
 
 test('search keeps line numbers; generic arrays of objects become item lists; directory marks you', () => {
-  assert.match(toolPreview(tool('Grep', { pattern: 'x' }, { output: 'src/a.ts:12:const x = 1' })), /a\.ts:12</);
+  assert.match(toolPreview(tool('Grep', { pattern: 'x' }, { output: 'src/a.ts:12:const x = 1' })), /tc-gutter">12</);
+  // A recognizable collection becomes brand rows; other JSON keeps the argument/result tables.
   const mcp = toolPreview(tool('mcp__github__list_issues', {}, { output: JSON.stringify({ total: 2, items: [{ number: 812, title: 'Rows wrap' }, { number: 815, title: 'Dark chips' }] }) }));
-  assert.match(mcp, /<h5 class="tool-trace-label">items<\/h5>/);
-  assert.match(mcp, /Rows wrap<\/span><span class="tool-trace-item-meta">#812</);
+  assert.match(mcp, /trace-row-head"><b>Rows wrap<\/b>/);
   assert.ok(!mcp.includes('2 items'));
+  const generic = toolPreview(tool('mcp__x__get_config', {}, { output: JSON.stringify({ name: 'app', regions: ['us', 'eu'] }) }));
+  assert.match(generic, /<dt>regions<\/dt><dd>us, eu<\/dd>/);
   const dir = toolPreview(tool('pandacode_team_directory', {}, { output: JSON.stringify({ you: 'w1', workers: [{ id: 'w1', name: 'Traces' }, { id: 'w2', name: 'Audit' }] }) }));
   assert.ok(!dir.includes('You are'));
   assert.match(dir, /Traces<\/b><span class="tool-trace-badge is-quiet">you</);

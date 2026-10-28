@@ -1,5 +1,13 @@
 # Architect and workers
 
+By default, **Team** opens a menu that turns an automatic team led by the
+selected model on or off. While its model catalog and setup are loading, the
+button highlights immediately and shows a busy indicator. Sending and
+model/permission changes wait for setup to finish, and queued follow-ups go out
+once it does; the prompt stays editable. A failed save shows in the menu and
+leaves the saved team as it was. Settings → Agents → **Classic team setup** opens the
+manual setup described below instead.
+
 Open **Team** in the composer, choose the architect model and one or more worker
 profiles in the anchored popover, then **Save setup**. Profile and model pickers
 open directly from it; **Run limits** contains the less common settings. Send a
@@ -21,6 +29,20 @@ The architect and each worker can independently use Claude Code, Codex, Kimi
 Code, OpenCode, GLM through Claude Code, or Antigravity. Model and effort choices come from the existing harness catalog; configured
 custom model IDs remain available. A model must be supported by the selected
 harness and the user's account. PandaCode does not supply inference or API credits.
+
+## Model routing
+
+In an automatic team the lead can set `profileId: "auto"` on an assignment, and
+PandaCode picks the worker's model locally from every installed harness's models.
+The prompt box's Team menu chooses how: *Cheap team*, *Balanced team* or *Best team*,
+one global mode that a running automatic team also follows. In Cheap and Balanced a
+new worker starts on the ladder's first, cheapest safe rung. The lead verifies each
+routed result (tests, typecheck or review); when a worker fails, or completes with a
+result that fails that check, the lead dispatches a replacement with
+`replaces: <worker ID>` and `profileId: "auto"`. The old worker counts as abandoned
+and the router escalates to a stronger model than every model that failed the
+assignment, for at most 2 retries; after that the lead reports the failure.
+See [model routing](model-routing.md).
 
 ## Saved setups and profiles
 

@@ -1,11 +1,14 @@
 import type { ToolActivity } from './types';
 import { escape, icon } from './dom.ts';
+import { brandFor } from './trace-brands.ts';
+import { richCard } from './tool-cards.ts';
 import { pandacodeCard, pandacodeFamily, pandacodeTool, pandacodeTrace } from './tool-trace-pandacode.ts';
 
 /** Sentence-style tool traces: `Verb [chip] object` rows, result cards and group summaries. Pure and escaped. */
 export type TraceKind = 'shell' | 'read' | 'edit' | 'write' | 'search' | 'web' | 'fetch' | 'todo' | 'agent' | 'skill' | 'mcp' | 'tool';
-export type TraceChip = { icon: string; label: string; title: string };
-/** `family` tints the row icon (PandaCode tool families, `agent`, `mcp`); `icon` overrides the kind's icon. */
+/** `svg` is a brand mark (trusted markup from trace-brands), the only mark drawn inside the chip. */
+export type TraceChip = { icon: string; label: string; title: string; svg?: string };
+/** `family` tints the row icon (PandaCode tool families, `agent`, `mcp`); `icon` overrides the kind's icon (an MCP search reads as a search). */
 export type Trace = { kind: TraceKind; verb: string; chip?: TraceChip; object: string; mono?: boolean; added?: number; removed?: number; family?: string; icon?: string; exit?: number };
 export type Tool = Pick<ToolActivity, 'name' | 'status' | 'input' | 'output'>;
 export type Fields = Record<string, unknown>;
@@ -15,6 +18,7 @@ const MAX_TEXT = 140;
 const LIST_ITEMS = 6;
 const PREVIEW_LINES = 8;
 const DIFF_LINES = 14;
+const MCP_ROWS = 3;
 const OMITTED = '[Non-text content omitted]';
 
 // [running verb, finished verb, row icon, summary noun singular, plural]
@@ -118,10 +122,22 @@ function fileChip(path: string): TraceChip | undefined {
   return path ? { icon: 'file', label: basename(path), title: path } : undefined;
 }
 
-/** `mcp__server__tool` (Claude) and `server · tool` (Codex). */
+const MCP_VERB = '(search|find|query|lookup|get|list|read|fetch|retrieve|view|show|load)';
+/** What an MCP tool does, from its name: `search_messages` searches, `list_issues` reads. */
+export function mcpAction(tool: string): 'search' | 'read' | undefined {
+  if (/(^|_)(search|find|query|lookup)(_|$)/i.test(tool)) return 'search';
+  if (new RegExp(`(^|_)${MCP_VERB}(_|$)`, 'i').test(tool)) return 'read';
+  return;
+}
+function mcpNoun(tool: string): string {
+  return tool.replace(new RegExp(`^.*?${MCP_VERB}_`, 'i'), '').replace(/_/g, ' ');
+}
+
+/** `mcp__server__tool` (Claude) and `server · tool` (Codex); PandaCode's own server reads as PandaCode. */
 export function mcpParts(name: string): { server: string; tool: string } {
   const mcp = /^mcp__(.+?)__(.+)$/.exec(name) ?? /^(.+?) · (.+)$/.exec(name);
-  if (mcp) return { server: mcp[1], tool: mcp[2] };
+  if (mcp && !/^pandacode(_|$)/i.test(mcp[1])) return { server: mcp[1], tool: mcp[2] };
+  if (mcp) return { server: 'PandaCode', tool: mcp[2].replace(/^pandacode_/, '') };
   return { server: 'MCP', tool: name };
 }
 
@@ -138,7 +154,8 @@ function describeFields(kind: TraceKind, name: string, input: string, fields: Fi
     case 'read': case 'write': {
       const path = filePath(input, fields);
       const content = field(fields, 'content', 'contents');
-      return { chip: fileChip(path), object: kind === 'write' && content ? `${lines(content).length} lines` : '' };
+      const count = lines(content).length;
+      return { chip: fileChip(path), object: kind === 'write' && content ? `${count} ${count === 1 ? 'line' : 'lines'}` : '' };
     }
     case 'edit': {
       const path = field(fields, 'file_path', 'path', 'filePath', 'target_file');
@@ -153,7 +170,7 @@ function describeFields(kind: TraceKind, name: string, input: string, fields: Fi
     case 'web': return { chip: { icon: 'globe', label: 'Web', title: 'Web search' }, object: field(fields, 'query', 'q') ? `for ${clip(field(fields, 'query', 'q'))}` : '' };
     case 'fetch': {
       const url = field(fields, 'url');
-      return { chip: url ? { icon: 'globe', label: domain(url), title: url } : undefined, object: clip(field(fields, 'prompt'), 90) };
+      return { chip: url ? { icon: 'globe', label: domain(url), title: url, svg: brandFor(url)?.svg } : undefined, object: clip(field(fields, 'prompt'), 90) };
     }
     case 'todo': {
       const todos = Array.isArray(fields.todos) ? fields.todos.length : Array.isArray(fields.plan) ? fields.plan.length : 0;
@@ -165,13 +182,19 @@ function describeFields(kind: TraceKind, name: string, input: string, fields: Fi
     }
     case 'skill': {
       const skill = field(fields, 'skill', 'name', 'command');
-      return { verb: running ? 'Loading skill' : 'Loaded skill', chip: skill ? { icon: 'spark', label: skill, title: skill } : undefined, object: '' };
+      return { verb: running ? 'Loading skill' : 'Loaded skill', chip: skill ? { icon: 'spark', label: skill, title: skill } : undefined, object: clip(field(fields, 'args', 'arguments'), 80), mono: true };
     }
     case 'mcp': {
       const own = pandacodeTool(name);
       if (own) return pandacodeTrace(own, fields, output, running) ?? { family: 'pandacode', chip: { icon: 'server', label: 'PandaCode', title: name }, object: own.replace(/_/g, ' ') };
       const { server, tool } = mcpParts(name);
-      return { family: 'mcp', chip: { icon: 'server', label: server, title: name }, object: tool.replace(/_/g, ' ') };
+      const brand = brandFor(server);
+      const chip = { icon: 'server', label: brand?.label ?? server, title: name, svg: brand?.svg };
+      const action = mcpAction(tool);
+      const query = clip(field(fields, 'query', 'q', 'search', 'filter'), 80);
+      if (action === 'search') return { verb: running ? 'Searching' : 'Searched', family: 'mcp', icon: 'search', chip, object: `for ${query || mcpNoun(tool)}` };
+      if (action === 'read') return { verb: running ? 'Reading the' : 'Read the', family: 'mcp', icon: 'file', chip, object: query || mcpNoun(tool) };
+      return { family: 'mcp', chip, object: tool.replace(/_/g, ' ') };
     }
     default: return { chip: { icon: 'command', label: name || 'Tool', title: name || 'Tool' }, object: inputHint(input) };
   }
@@ -204,18 +227,19 @@ export function failedVerb(running: string): string {
 export function describeTool(tool: Tool): Trace {
   const kind = toolKind(tool.name);
   const failed = tool.status === 'failed';
-  const present = tool.status === 'running' || failed;
   const fields = parseFields(tool.input);
-  const described = describeFields(kind, tool.name, tool.input, fields, present, cleanOutput(tool.output));
+  // Rows read as finished sentences even while they run (the shimmer marks the running step); a failed row leads with `Couldn't …`.
+  const described = describeFields(kind, tool.name, tool.input, fields, failed, cleanOutput(tool.output));
   const vm = kind === 'shell' && pandacodeTool(tool.name) === 'vm_exec' ? { family: 'vm' } : {};
-  const verb = described.verb ?? KINDS[kind][present ? 0 : 1];
+  const verb = described.verb ?? KINDS[kind][failed ? 0 : 1];
   const code = !failed && toolFailed(tool) ? exitCode(cleanOutput(tool.output)).code : undefined;
   return { ...described, ...vm, kind, verb: failed ? failedVerb(verb) : verb, ...(code !== undefined ? { exit: code } : {}) };
 }
 
 /** One escaped sentence for a row's summary: verb, chip, object and edit delta. */
 export function traceRowHtml(trace: Trace): string {
-  const chip = trace.chip ? `<span class="tool-trace-chip" title="${escape(trace.chip.title)}">${icon(trace.chip.icon)}<b>${escape(trace.chip.label)}</b></span>` : '';
+  // Only a brand mark rides inside the chip; a line icon would repeat the row's own kind icon.
+  const chip = trace.chip ? `<span class="tool-trace-chip" title="${escape(trace.chip.title)}">${trace.chip.svg ?? ''}<b>${escape(trace.chip.label)}</b></span>` : '';
   const object = trace.object ? `<span class="tool-trace-object${trace.mono ? ' is-mono' : ''}">${escape(trace.object)}</span>` : '';
   const delta = trace.added !== undefined ? `<span class="tool-trace-delta"><ins>+${trace.added}</ins> <del>−${trace.removed ?? 0}</del></span>` : '';
   const exit = trace.exit !== undefined ? `<span class="tool-trace-badge is-failed">exit ${trace.exit}</span>` : '';
@@ -226,7 +250,6 @@ function joinPhrases(parts: string[]): string {
   return parts.length < 2 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
 }
 
-/** `Ran 3 commands, read 2 files and edited 1 file` (present tense while any call runs; failures appended). */
 // PandaCode tool families in summaries: [running verb, finished verb, singular, plural].
 const FAMILY_NOUNS: Record<string, [string, string, string, string]> = {
   team: ['Coordinating', 'Coordinated', 'team step', 'team steps'],
@@ -242,24 +265,31 @@ const FAMILY_NOUNS: Record<string, [string, string, string, string]> = {
   jev: ['Running', 'Ran', 'Jev check', 'Jev checks'],
   meta: ['Updating', 'Updated', 'task detail', 'task details'],
 };
+/** PandaCode families by their own nouns; third-party MCP searches count with searches and MCP reads as sources. */
 function summaryNoun(tool: Tool | undefined): { key: string; noun: [string, string, string, string] } {
   const kind = tool ? toolKind(tool.name) : 'tool';
   const family = kind === 'mcp' && tool ? pandacodeFamily(tool.name) : undefined;
   if (family && FAMILY_NOUNS[family]) return { key: family, noun: FAMILY_NOUNS[family] };
+  const action = tool && kind === 'mcp' ? mcpAction(mcpParts(tool.name).tool) : undefined;
+  if (action === 'search') return { key: 'search', noun: ['Running', 'Ran', 'search', 'searches'] };
+  if (action === 'read') return { key: 'source', noun: ['Reading', 'Read', 'source', 'sources'] };
   const [present, past, , one, many] = KINDS[kind];
   const [sPresent, sPast] = SUMMARY_VERB[kind] ?? [present, past];
   return { key: kind === 'web' ? 'search' : kind, noun: [sPresent, sPast, one, many] };
 }
 
+// A summary names at most this many counts; the rest read as `+N more`, so it stays one line.
 const SUMMARY_PHRASES = 2;
 type GroupSummary = { sentence: string; running: number; failed: number };
 
-/** Totals of completed calls (`Operated 4 VM actions`), at most two phrases then `+N more`; running and failed are counted apart.
- *  With nothing completed yet, the running calls lead in present tense; with only failures, `Couldn't …`. */
-export function summarizeGroup(tools: (Tool | undefined)[]): GroupSummary {
+/** Totals of completed calls (`Operated 4 VM actions`), at most two phrases then `and N more steps`; running and failed are counted apart.
+ *  With nothing completed yet, the running calls lead in present tense; with only failures, `Couldn't …`.
+ *  Only a live turn has running calls: a saved record stuck at `running` counts as completed. */
+export function summarizeGroup(tools: (Tool | undefined)[], options: { live?: boolean } = {}): GroupSummary {
+  const live = Boolean(options.live);
   const failed = tools.filter(tool => tool && toolFailed(tool));
-  const running = tools.filter(tool => tool?.status === 'running');
-  const done = tools.filter(tool => !tool || tool.status === 'completed' && !toolFailed(tool));
+  const running = live ? tools.filter(tool => tool?.status === 'running') : [];
+  const done = tools.filter(tool => !tool || !toolFailed(tool) && (tool.status === 'completed' || !live && tool.status === 'running'));
   const [lead, tense] = done.length ? [done, 1] as const : running.length ? [running, 0] as const : [failed, 0] as const;
   const entries = new Map<string, { verb: string; noun: [string, string, string, string]; count: number }>();
   for (const tool of lead) {
@@ -272,7 +302,7 @@ export function summarizeGroup(tools: (Tool | undefined)[]): GroupSummary {
   for (const [key, { verb, noun, count }] of shown) byVerb.set(verb, [...(byVerb.get(verb) ?? []), key === 'todo' ? 'the plan' : `${count} ${noun[count === 1 ? 2 : 3]}`]);
   const phrases = [...byVerb].map(([verb, nouns]) => `${verb.toLowerCase()} ${joinPhrases(nouns)}`);
   const hidden = [...entries].slice(SUMMARY_PHRASES).reduce((sum, [, entry]) => sum + entry.count, 0);
-  let sentence = phrases.join(', ') + (hidden > 0 ? ` +${hidden} more` : '');
+  let sentence = hidden > 0 ? `${phrases.join(', ')} and ${hidden} more ${hidden === 1 ? 'step' : 'steps'}` : joinPhrases(phrases);
   if (!done.length && running.length) sentence += '…';
   return {
     sentence: sentence.charAt(0).toUpperCase() + sentence.slice(1),
@@ -282,13 +312,22 @@ export function summarizeGroup(tools: (Tool | undefined)[]): GroupSummary {
 }
 
 /** The group sentence with its state counts: `Operated 4 VM actions · 1 running · 1 failed`. */
-export function summarizeTools(tools: (Tool | undefined)[]): string {
-  const { sentence, running, failed } = summarizeGroup(tools);
+export function summarizeTools(tools: (Tool | undefined)[], options: { live?: boolean } = {}): string {
+  const { sentence, running, failed } = summarizeGroup(tools, options);
   return sentence + (running ? ` · ${running} running` : '') + (failed ? ` · ${failed} failed` : '');
 }
 
-export function summaryIcons(tools: (Tool | undefined)[], limit = 4): string[] {
-  return [...new Set(tools.map(tool => tool ? traceIcon(describeTool(tool)) : kindIcon('tool')))].slice(0, limit);
+/** Up to `limit` distinct marks for the folded header: brand logos for MCP servers, else the row's line icon. */
+export function summaryIcons(tools: (Tool | undefined)[], limit = 3): string[] {
+  const marks = new Map<string, string>();
+  for (const tool of tools) {
+    const kind = tool ? toolKind(tool.name) : 'tool';
+    const brand = tool && kind === 'mcp' && !pandacodeTool(tool.name) ? brandFor(mcpParts(tool.name).server) : undefined;
+    const name = tool ? traceIcon(describeTool(tool)) : kindIcon('tool');
+    const id = brand ? 'brand:' + brand.id : name;
+    if (!marks.has(id)) marks.set(id, brand?.svg ?? icon(name));
+  }
+  return [...marks.values()].slice(0, limit);
 }
 
 // --- Cards ---------------------------------------------------------------
@@ -368,12 +407,12 @@ function diffCard(tool: Tool, fields: Fields): string {
     for (const line of lines(edit.old)) rows.push(`<del>- ${escape(line.slice(0, 300))}</del>`);
     for (const line of lines(edit.new)) rows.push(`<ins>+ ${escape(line.slice(0, 300))}</ins>`);
   }
-  const { added, removed } = diffCounts(fields);
   const shown = rows.slice(0, DIFF_LINES).join('\n');
   const clipped = rows.length > DIFF_LINES || editLines(fields).some(edit => lines(edit.old + '\n' + edit.new).some(line => line.length > 300));
   const more = rows.length > DIFF_LINES ? `<p class="tool-trace-more">+${rows.length - DIFF_LINES} more lines</p>` : '';
   const path = field(fields, 'file_path', 'path', 'filePath', 'target_file');
-  return (clipped ? PARTIAL : '') + (path ? fileCard(path, `+${added} −${removed}`, []) : '') + (shown ? `<pre class="tool-trace-diff" tabindex="0" aria-label="Edit preview">${shown}</pre>${more}` : '');
+  // The row already shows the +/− delta.
+  return (clipped ? PARTIAL : '') + (path ? fileCard(path, '', []) : '') + (shown ? `<pre class="tool-trace-diff" tabindex="0" aria-label="Edit preview">${shown}</pre>${more}` : '');
 }
 
 export function searchCard(output: string): string {
@@ -482,7 +521,8 @@ export function section(label: string, body: string): string {
   return body ? `<section class="tool-trace-section"><h5 class="tool-trace-label">${escape(label)}</h5>${body}</section>` : '';
 }
 
-function mcpCard(tool: Tool, fields: Fields, output: string): string {
+/** Arguments and result as key tables: the fallback when an MCP result is not a list of records. */
+function argsCard(tool: Tool, fields: Fields, output: string): string {
   const own = pandacodeTool(tool.name);
   if (own) return pandacodeCard(own, fields, output, tool.status) ?? section('Result', resultCard(output));
   const failed = tool.status === 'failed' && output.trim() && parseJson(output) === undefined;
@@ -506,6 +546,97 @@ function agentCard(tool: Tool, fields: Fields, output: string): string {
   return clipped + top + result + promptBox;
 }
 
+// --- MCP result rows (Slack, Granola, Gmail, GitHub, Linear…) ---------------
+
+const LIST_KEYS = ['results', 'messages', 'items', 'issues', 'pull_requests', 'pullRequests', 'pulls', 'threads', 'notes', 'meetings', 'events', 'documents', 'pages', 'files', 'records', 'data'];
+
+/** JSON from the output, unwrapping MCP's `[{ type: 'text', text }]` content blocks. */
+function outputJson(output: string): unknown {
+  const value = output.trim();
+  if (!/^[[{]/.test(value)) return;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    const blocks = Array.isArray(parsed) ? parsed : isRecord(parsed) && Array.isArray(parsed.content) ? parsed.content : undefined;
+    if (blocks?.length && blocks.every(block => isRecord(block) && block.type === 'text' && typeof block.text === 'string')) {
+      return outputJson(blocks.map(block => (block as Fields).text).join('\n')) ?? parsed;
+    }
+    return parsed;
+  } catch { return; }
+}
+
+function records(value: unknown): { items: Fields[]; collection: string } {
+  if (Array.isArray(value)) return { items: value.filter(isRecord), collection: '' };
+  if (!isRecord(value)) return { items: [], collection: '' };
+  const key = LIST_KEYS.find(name => Array.isArray(value[name])) ?? Object.keys(value).find(name => Array.isArray(value[name]) && (value[name] as unknown[]).some(isRecord));
+  return key ? { items: (value[key] as unknown[]).filter(isRecord), collection: key } : { items: [], collection: '' };
+}
+
+/** A string, or the readable name of a `{ name | display_name | login | email }` object. */
+function label(item: Fields, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = item[key];
+    const named = isRecord(value) ? field(value, 'name', 'display_name', 'real_name', 'login', 'email', 'title') : text(value);
+    if (named) return named;
+  }
+  return '';
+}
+
+function shortTime(value: string): string {
+  const date = /^\d{9,10}(\.\d+)?$/.test(value) ? new Date(Number(value) * 1000) : /^\d{4}-\d\d-\d\d/.test(value) ? new Date(value) : undefined;
+  if (!date || Number.isNaN(date.getTime())) return clip(value, 16);
+  return date.toDateString() === new Date().toDateString()
+    ? date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    : date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+// 16px status marks: GitHub pull requests and Linear-style issue circles.
+const ISSUE_MARKS: Record<string, string> = {
+  done: '<circle cx="8" cy="8" r="6" fill="currentColor"/><path d="m5.4 8.1 1.8 1.8 3.4-3.6" fill="none" stroke="var(--bg)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+  canceled: '<circle cx="8" cy="8" r="6" fill="currentColor"/><path d="m6 6 4 4m0-4-4 4" stroke="var(--bg)" stroke-width="1.5" stroke-linecap="round"/>',
+  progress: '<circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 4.6a3.4 3.4 0 0 1 0 6.8Z" fill="currentColor"/>',
+  todo: '<circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2.2 1.6"/>',
+};
+function statusMark(state: string, pull: boolean): string {
+  const value = state.toLowerCase();
+  if (pull) {
+    const tone = /merged/.test(value) ? 'merged' : /draft/.test(value) ? 'draft' : /closed/.test(value) ? 'closed' : 'open';
+    return `<span class="trace-mark is-pull" data-state="${tone}">${icon(tone === 'merged' ? 'merge' : 'pull')}</span>`;
+  }
+  const tone = /done|complete|closed|resolved|shipped/.test(value) ? 'done' : /cancel|duplicate|wont/.test(value) ? 'canceled' : /progress|started|doing|review|active/.test(value) ? 'progress' : 'todo';
+  return `<span class="trace-mark is-issue" data-state="${tone}"><svg viewBox="0 0 16 16" aria-hidden="true">${ISSUE_MARKS[tone]}</svg></span>`;
+}
+
+function mcpRow(item: Fields, collection: string, brandSvg: string | undefined): string {
+  const person = label(item, 'from', 'user', 'author', 'sender', 'username', 'user_name', 'owner', 'assignee', 'creator');
+  const where = label(item, 'identifier', 'channel', 'channel_name', 'repo', 'repository', 'key', 'project', 'team');
+  const titled = label(item, 'title', 'name', 'subject');
+  const title = titled || person || where;
+  const meta = titled ? person || where : person ? where : '';
+  const time = shortTime(label(item, 'ts', 'time', 'date', 'updated_at', 'updatedAt', 'created_at', 'createdAt', 'timestamp', 'start'));
+  const body = label(item, 'text', 'snippet', 'body', 'summary', 'description', 'preview', 'content');
+  const state = label(item, 'state', 'status');
+  const pull = /pull|merge/i.test(collection) || typeof item.merged === 'boolean' || typeof item.draft === 'boolean' || /\/pull\//.test(text(item.url) || text(item.html_url));
+  const unread = typeof item.unread === 'boolean' ? item.unread : typeof item.is_unread === 'boolean' ? item.is_unread : undefined;
+  const mark = state ? statusMark(state, pull)
+    : unread !== undefined ? `<span class="trace-mark is-unread"${unread ? ' data-unread' : ''}></span>`
+    : !titled && person ? `<span class="trace-mark is-avatar">${escape(person.trim().charAt(0).toUpperCase())}</span>`
+    : `<span class="trace-mark">${brandSvg ?? icon('file')}</span>`;
+  if (!title) return '';
+  return `<li class="trace-row"${unread ? ' data-unread' : ''}>${mark}<span class="trace-row-head"><b>${escape(clip(title, 120))}</b>${meta ? `<span class="trace-row-meta">${escape(clip(meta, 60))}</span>` : ''}</span>${time ? `<span class="trace-row-time">${escape(time)}</span>` : ''}${body ? `<span class="trace-row-body">${escape(clip(body, 200))}</span>` : ''}</li>`;
+}
+
+/** Brand-style result rows for an MCP call's JSON output; empty when the output has no list of records. */
+export function mcpCard(tool: Tool): string {
+  if (toolKind(tool.name) !== 'mcp') return '';
+  const { server } = mcpParts(tool.name);
+  const { items, collection } = records(outputJson(cleanOutput(tool.output)));
+  const brand = brandFor(server);
+  const rows = items.map(item => mcpRow(item, collection, brand?.svg)).filter(Boolean);
+  if (!rows.length) return '';
+  const more = rows.length - MCP_ROWS;
+  return `<div class="tool-trace-card is-rows" data-trace-kind="mcp"${brand ? ` data-brand="${escape(brand.id)}"` : ''}><ul class="trace-rows">${rows.slice(0, MCP_ROWS).join('')}${more > 0 ? `<li class="tool-trace-more">+${more} more</li>` : ''}</ul></div>`;
+}
+
 function previewBody(kind: TraceKind, tool: Tool, fields: Fields, output: string): string {
   switch (kind) {
     case 'shell': return shellCard(tool, fields);
@@ -524,7 +655,9 @@ function previewBody(kind: TraceKind, tool: Tool, fields: Fields, output: string
     case 'fetch': return fetchCard(fields, output);
     case 'todo': return todoCard(fields);
     case 'agent': return agentCard(tool, fields, output);
-    case 'mcp': return mcpCard(tool, fields, output);
+    case 'mcp': return argsCard(tool, fields, output);
+    // The step row already names the skill and its args; only a description (tool-cards.ts) earns a card.
+    case 'skill': return '';
     default: return excerptCard(output);
   }
 }
@@ -532,6 +665,15 @@ function previewBody(kind: TraceKind, tool: Tool, fields: Fields, output: string
 /** Structured, escaped result card for an expanded row; empty when there is nothing better than the raw record. */
 export function toolPreview(tool: Tool): string {
   const kind = toolKind(tool.name);
-  const body = previewBody(kind, tool, parseFields(tool.input), cleanOutput(tool.output));
-  return card(kind, body && tool.output.length > MAX_SCAN ? PARTIAL + body : body);
+  const fields = parseFields(tool.input);
+  const body = previewBody(kind, tool, fields, cleanOutput(tool.output));
+  const own = () => card(kind, body && tool.output.length > MAX_SCAN ? PARTIAL + body : body);
+  // PandaCode's own tools and subagents use the catalog's cards, which mark what they clip; a row that says it all has none.
+  if (pandacodeTool(tool.name) || kind === 'agent' || body === COMPLETE) return own();
+  // The rich cards (tool-cards.ts) and brand rows are excerpts that never mark what they clip, so they always keep the raw record.
+  const rich = richCard(tool);
+  // Brand rows for an MCP collection, else the argument/result tables; docs servers read better as rich cards (URLs).
+  if (kind === 'mcp' && /docs|context7/i.test(mcpParts(tool.name).server)) return rich ? PARTIAL + card(kind, rich) : own();
+  if (kind === 'mcp') { const rows = mcpCard(tool); return rows ? PARTIAL + rows : own(); }
+  return rich ? PARTIAL + card(kind, rich) : own();
 }
