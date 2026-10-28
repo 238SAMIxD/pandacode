@@ -40,3 +40,6 @@
 .queue-confirm{flex-basis:100%;display:flex;align-items:center;justify-content:flex-end;gap:6px;padding:4px 2px;font-size:.8rem}
 .queue-confirm strong{margin-right:auto;font-weight:600}
 .queue-confirm button{padding:3px 10px;font-size:.78rem}
+
+/* Micro-interactions: only without reduced motion. */
+@media(prefers-reduced-motion:no-preference){.queue-row,.queue-resume{transition:background-color 140ms ease-out}.queue-row{animation:mi-fade-in 160ms ease-out}@keyframes mi-fade-in{from{opacity:0}}}

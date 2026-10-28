@@ -20,3 +20,6 @@
 @media(max-width:650px){.message>.message-actions{padding-left:0}}
 @media(prefers-contrast:more){.message-actions{opacity:1;color:var(--text)}}
 @media(prefers-reduced-motion:reduce){.message-actions,.message-actions button{transition:none}.message-actions button:active{transform:none}}
+
+/* Micro-interactions: only without reduced motion. */
+@media(prefers-reduced-motion:no-preference){.message-actions button[data-copied]{transition:color 160ms ease-out}}

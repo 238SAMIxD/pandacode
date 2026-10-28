@@ -15,6 +15,8 @@
   --glass-line:rgb(20 18 8 / .08);
   --scrim:rgb(24 21 12 / .14);
   --sheet-radius:var(--radius-lg);
+  /* One radius for every small floating glass (toast, dock popover, pinned dock). */
+  --glass-radius:var(--radius-lg);
   --press:.97;
 }
 html[data-theme="dark"]{
@@ -47,7 +49,7 @@ dialog .settings-tabs{background:var(--glass-fill)}
 dialog:is(#dialog,.dialog-ghost){border-radius:var(--sheet-radius)}
 .dialog-heading{margin-bottom:14px}
 .dialog-heading h2{font-size:var(--text-lg);font-weight:var(--weight-strong);letter-spacing:-.022em}
-.dialog-heading [data-action="close-dialog"]{width:28px;height:28px;border-radius:50%;background:var(--glass-fill);color:var(--muted);transition:background-color 140ms,color 140ms,transform var(--spring-fast-duration) var(--spring-fast)}
+.dialog-heading [data-action="close-dialog"]{width:28px;height:28px;border-radius:50%;background:var(--glass-fill);color:var(--muted);transition:background-color 140ms,color 140ms,scale var(--spring-fast-duration) var(--spring-fast)}
 .dialog-heading [data-action="close-dialog"]:hover{background:var(--glass-fill-hover);color:var(--text)}
 .dialog-heading [data-action="close-dialog"] .icon{--icon-size:var(--icon-sm);--icon-stroke:var(--icon-stroke-sm)}
 /* Low specificity on purpose: fields a component frames itself (search boxes) keep their own look. */
@@ -68,8 +70,9 @@ dialog .command-results>button.command-selected{background:color-mix(in srgb,var
 /* Segmented controls: the selected option hands its highlight to one gliding pill. */
 [data-segmented]{position:relative;isolation:isolate}
 [data-segmented]>*{position:relative;z-index:1}
-[data-segmented]>.segment-thumb{position:absolute;z-index:0;left:0;top:0;width:var(--seg-w,0px);height:var(--seg-h,0px);transform:translate(var(--seg-x,0px),var(--seg-y,0px));pointer-events:none;will-change:transform}
-[data-segmented][data-segment-ready]>.segment-thumb{transition:transform var(--spring-duration) var(--spring),width var(--spring-duration) var(--spring),height var(--spring-duration) var(--spring)}
+[data-segmented]>.segment-thumb{position:absolute;z-index:0;left:0;top:0;width:var(--seg-w,0px);height:var(--seg-h,0px);transform:translate(var(--seg-x,0px),var(--seg-y,0px));transform-origin:0 0;pointer-events:none;will-change:transform}
+/* Size snaps; motion.ts carries it with a `scale` FLIP while the translate glides. */
+[data-segmented][data-segment-ready]>.segment-thumb{transition:transform var(--spring-duration) var(--spring)}
 [data-segmented]>button:is([aria-pressed="true"],[aria-selected="true"],.selected){background:transparent!important;box-shadow:none!important}
 .view-switch>.segment-thumb{border-radius:var(--radius-xs);background:var(--raised);box-shadow:0 1px 3px rgb(0 0 0 / .07)}
 .inspector-tabs>.segment-thumb{border-radius:var(--radius-xs);background:var(--bg);box-shadow:0 1px 3px rgb(0 0 0 / .08)}
@@ -77,7 +80,7 @@ dialog .command-results>button.command-selected{background:color-mix(in srgb,var
 html[data-theme="dark"] .inspector-tabs>.segment-thumb{background:#3a3a35;box-shadow:0 1px 3px rgb(0 0 0 / .25)}
 html[data-theme="dark"] :is(.view-switch,.settings-tabs)>.segment-thumb{box-shadow:0 1px 3px rgb(0 0 0 / .25)}
 html[data-theme] .workspace[data-wallpaper]>.inspector .inspector-tabs>.segment-thumb{background:color-mix(in srgb,var(--text) 12%,transparent)}
-.view-switch button,.inspector-tabs button,.settings-tabs button{transition:color 160ms,transform var(--spring-fast-duration) var(--spring-fast)}
+.view-switch button,.inspector-tabs button,.settings-tabs button{transition:color 160ms,scale var(--spring-fast-duration) var(--spring-fast)}
 
 /* Respond on press: instant down, spring back on release. */
 /* `scale`, not `transform`: a pressed button keeps any transform that positions it. */
@@ -88,7 +91,7 @@ button:not(:disabled):active{scale:var(--press)}
 /* Menu anchors keep their geometry: a popover is positioned from the trigger's box on press. */
 button[aria-haspopup],.model-picker,.mode-picker,.composer-project,.project-filter,.board-project-filter,.settings-select{--press:1}
 .browser-address button:not(:disabled):active{transform:rotate(90deg) scale(.9)}
-.task-item{transition:background-color 140ms,color 140ms,transform var(--spring-fast-duration) var(--spring-fast)}
+.task-item{transition:background-color 140ms,color 140ms,scale var(--spring-fast-duration) var(--spring-fast)}
 
 /* Yellow actions glow when they are about to be used. */
 .new-task-button,.primary-button,.send-button,.commit-button{box-shadow:none}
@@ -102,9 +105,11 @@ html[data-theme="dark"] .composer:focus-within{box-shadow:0 0 0 3px rgb(var(--ac
 /* Small state changes ease instead of snapping. */
 .task-indicator{transition:background-color 200ms,box-shadow 200ms}
 .inspector-tabs button>span,.attachments>span{transition:background-color 160ms,color 160ms}
-.stage-button,.file-attach,.change-group-title button{transition:opacity 140ms,transform var(--spring-fast-duration) var(--spring-fast)}
+.stage-button,.file-attach,.change-group-title button{transition:opacity 140ms,scale var(--spring-fast-duration) var(--spring-fast)}
 .activity-toggle .icon,.turn-activity-summary>.icon,.tool-activity summary>.icon:last-child{transition:transform var(--spring-duration) var(--spring)}
-.icon-button,.sidebar-bottom>button{transition:background-color 140ms,color 140ms,transform var(--spring-fast-duration) var(--spring-fast)}
+.icon-button,.sidebar-bottom>button{transition:background-color 140ms,color 140ms,scale var(--spring-fast-duration) var(--spring-fast)}
+/* The action dock springs its items itself (action-dock.ts), so CSS transitions stay off there. */
+.action-dock button{transition:none}
 
 @media(prefers-reduced-motion:reduce){
   [data-segmented][data-segment-ready]>.segment-thumb{transition:none}

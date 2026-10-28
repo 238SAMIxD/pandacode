@@ -56,3 +56,6 @@ html[data-theme="dark"] .branch-chip:not(:disabled):active{background:color-mix(
 .worktree-cleanup-option input{margin-top:2px}
 dialog .worktree-cleanup-option{background:color-mix(in srgb,var(--panel) 72%,transparent)}
 @media(prefers-contrast:more){.link-chip{border:1px solid var(--text)}.branch-chip[aria-expanded="true"]{outline:1px solid var(--focus);outline-offset:-1px}}
+
+/* Micro-interactions: only without reduced motion. */
+@media(prefers-reduced-motion:no-preference){.branch-chip,.link-chip,.composer-computer{transition:background-color 140ms ease-out,color 140ms ease-out}}

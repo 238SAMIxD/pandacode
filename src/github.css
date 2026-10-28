@@ -27,3 +27,6 @@
 .board-heading-actions .board-import{white-space:nowrap}
 @media(max-width:600px){.github-filters input:not([type="checkbox"]){flex-basis:100%}}
 @media(prefers-contrast:more){.github-issue-list{border:1px solid var(--text)}.github-issue-badge{outline:1px solid var(--text)}}
+
+/* Micro-interactions: only without reduced motion. */
+@media(prefers-reduced-motion:no-preference){.github-issue-badge,.github-issue-update{transition:background-color 130ms ease-out}}

@@ -28,3 +28,6 @@ button.approval-summary:hover{color:var(--text)}
 .approval-actions button:disabled{opacity:.5;cursor:default}
 .approval-full{margin:0 0 6px 23px;padding:6px 8px;max-height:160px;overflow:auto;border-radius:var(--radius-sm);background:var(--raised);font-family:var(--mono);font-size:var(--text-xs);line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
 @media (prefers-contrast:more){.approval-bar{box-shadow:inset 0 0 0 1px var(--text)}}
+
+/* Micro-interactions: only without reduced motion. */
+@media(prefers-reduced-motion:no-preference){.approval-summary,.approval-deny,.approval-allow{transition:background-color 130ms ease-out,color 130ms ease-out}.approval-full{animation:ab-fade 160ms ease-out}@keyframes ab-fade{from{opacity:0}}}

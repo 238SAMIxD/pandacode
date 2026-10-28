@@ -49,12 +49,11 @@ html[data-native-platform=macos] .settings-nav-head{padding-left:72px}
 .settings-page-root .settings-default-row .settings-select{justify-self:end}
 .settings-page-root .settings-switch{appearance:none;-webkit-appearance:none;display:block;position:relative;flex-shrink:0;width:var(--switch-w);height:var(--switch-h);padding:0;margin:0;border-radius:var(--radius-full);background:color-mix(in srgb,var(--text) 18%,transparent);cursor:pointer;transition:background-color 220ms,border-color 220ms,box-shadow 220ms}
 /* The knob carries momentum: it stretches while held and lands with a spring. */
-.settings-page-root .settings-switch::before{content:"";position:absolute;left:2px;top:2px;width:calc(var(--switch-h) - 6px);height:calc(var(--switch-h) - 6px);border-radius:var(--radius-full);background:#fff;box-shadow:0 1px 3px rgb(0 0 0 / .25);transition:transform var(--spring-bounce-duration,380ms) var(--spring-bounce,cubic-bezier(.34,1.4,.64,1)),width var(--spring-fast-duration,240ms) var(--spring-fast,ease)}
+.settings-page-root .settings-switch::before{content:"";position:absolute;left:2px;top:2px;width:calc(var(--switch-h) - 6px);height:calc(var(--switch-h) - 6px);border-radius:var(--radius-full);background:#fff;box-shadow:0 1px 3px rgb(0 0 0 / .25);transform-origin:left center;transition:transform var(--spring-bounce-duration,380ms) var(--spring-bounce,cubic-bezier(.34,1.4,.64,1)),scale var(--spring-fast-duration,240ms) var(--spring-fast,ease)}
 .settings-page-root .settings-switch:not(:checked):hover{}
-.settings-page-root .settings-switch:active::before{width:calc(var(--switch-h) - 1px)}
+.settings-page-root .settings-switch:active::before{scale:1.3 1}
 .settings-page-root .settings-switch:checked{background:var(--accent);}
-.settings-page-root .settings-switch:checked::before{transform:translateX(calc(var(--switch-w) - var(--switch-h)))}
-.settings-page-root .settings-switch:checked:active::before{transform:translateX(calc(var(--switch-w) - var(--switch-h) - 5px))}
+.settings-page-root .settings-switch:checked::before{transform:translateX(calc(var(--switch-w) - var(--switch-h)));transform-origin:right center}
 .settings-page-root .settings-switch:focus-visible{outline:2px solid var(--focus);outline-offset:3px}
 .settings-page-root .text-size-controls{gap:.1rem}
 .settings-page-root .text-size-controls button{min-height:var(--control);padding:0 var(--space-2);font-size:var(--text-sm)}
@@ -117,3 +116,6 @@ html[data-native-platform=macos] .settings-nav-head{padding-left:72px}
 }
 .settings-page-root .setting-row:nth-child(even),.settings-page-root .provider-diagnostic:nth-child(even){background:color-mix(in srgb,var(--text) 3.5%,transparent)}
 .support-details{margin-top:.5rem}
+
+/* Micro-interactions: only without reduced motion. */
+@media(prefers-reduced-motion:no-preference){.settings-back,.settings-nav-list>button,.settings-refresh,.settings-page-root .provider-diagnostic summary{transition:background-color 140ms ease-out,color 140ms ease-out}.settings-page-root .provider-diagnostic[open]>*:not(summary){animation:mi-fade 160ms ease-out}@keyframes mi-fade{from{opacity:0}}}

@@ -105,3 +105,6 @@ html[data-native-platform=macos] .board-view .workspace-header{padding-left:var(
 .board-completed-note .secondary-button{display:block;margin:9px auto 0;font-size:var(--text-xs);padding:5px 10px}
 
 .board-eyebrow>.icon{width:var(--icon-sm);height:var(--icon-sm);color:var(--bamboo)}
+
+/* Micro-interactions: only without reduced motion. */
+@media(prefers-reduced-motion:no-preference){.board-card-start,.board-card-open{transition:background-color 130ms ease-out,color 130ms ease-out}}
