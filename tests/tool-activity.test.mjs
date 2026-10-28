@@ -24,7 +24,10 @@ test('decodes only supported, bounded tool records', () => {
 });
 
 test('renders the command and recorded output with a stable disclosure key', () => {
-  const html = renderToolActivity(stored(activity), 'message-5');
+  // A short, fully shown output needs no raw record; a clipped one keeps it.
+  assert.ok(!renderToolActivity(stored(activity), 'short').includes('tool-trace-raw'));
+  const long = { ...activity, output: activity.output + '\n' + Array.from({ length: 12 }, (_, i) => `line ${i}`).join('\n') };
+  const html = renderToolActivity(stored(long), 'message-5');
   assert.match(html, /data-tool-key="message-5"/);
   assert.match(html, /data-tool-status="completed"/);
   assert.match(html, /tool-trace-verb">Ran<\/span><span class="tool-trace-chip" title="npm run test">/);
@@ -35,6 +38,7 @@ test('renders the command and recorded output with a stable disclosure key', () 
   assert.match(html, /data-tool-section="input"/);
   assert.match(html, /data-tool-section="output"/);
   assert.match(html, /12 tests passed\nFinished in 0.4s/);
+  assert.match(html, />Full tool data</);
 });
 
 test('tool payloads and keys cannot introduce HTML or delegated actions', () => {
@@ -58,7 +62,10 @@ test('status events have no empty disclosure and empty tool output is explained'
   assert.ok(!html.includes('<details'));
   assert.match(html, /Connected &lt;script&gt;/);
   assert.match(renderToolActivity({ ...activity, input: '', output: '', status: 'running' }, 'live'), /Waiting for tool details/);
-  assert.match(renderToolActivity({ ...activity, output: '' }, 'done'), /No output was returned/);
+  // A silent successful command and a running one are explained by the row itself.
+  assert.ok(!renderToolActivity({ ...activity, output: '' }, 'done').includes('tool-activity-note'));
+  assert.ok(!renderToolActivity({ ...activity, output: '', status: 'running' }, 'live').includes('Waiting for output'));
+  assert.match(renderToolActivity({ ...activity, output: '', status: 'failed' }, 'bad'), /No output was recorded/);
 });
 
 test('groups at most five consecutive calls without crossing narratives or statuses', () => {
@@ -81,7 +88,7 @@ test('group summaries count calls, expose running/failure states and escape tool
     { key: 'x" onclick="bad', content: { ...activity, status: 'running' } },
     { key: 'read', content: stored({ ...activity, id: 'read', name: 'Read', status: 'failed' }) },
   ]);
-  assert.match(html, /tool-group-label">Running 1 command and reading 1 file…</);
+  assert.match(html, /tool-group-label">Running 1 command…</);
   assert.match(html, /tool-group-status has-failure"> · 1 failed</);
   assert.match(html, /tool-trace-stack/);
   assert.ok(!html.includes('data-tool-group-key="group:x" onclick='));

@@ -509,7 +509,7 @@ test('launcher keeps live narratives between compact tool groups and preserves l
   await expect(narratives.nth(1)).toBeVisible();
   const groups = activity.locator('details.tool-group');
   await expect(groups).toHaveCount(2);
-  await expect(groups.nth(0).locator(':scope > summary')).toContainText('Reading 2 files');
+  await expect(groups.nth(0).locator(':scope > summary')).toContainText('Read 1 file · 1 running');
   await expect(groups.nth(1).locator(':scope > summary')).toContainText('Running 1 command');
   await expect(groups.nth(0)).toHaveJSProperty('open',false);
   await expect(groups.nth(1)).toHaveJSProperty('open',false);
@@ -517,7 +517,7 @@ test('launcher keeps live narratives between compact tool groups and preserves l
   const originalSequence = await sequence();
   expect(originalSequence).toEqual([
     expect.stringContaining('I will inspect the current launcher.'),
-    expect.stringContaining('Reading 2 files'),
+    expect.stringContaining('Read 1 file'),
     expect.stringContaining('The client is ready; I will verify the behavior.'),
     expect.stringContaining('Running 1 command'),
   ]);
@@ -527,7 +527,8 @@ test('launcher keeps live narratives between compact tool groups and preserves l
   await page.evaluate(() => {
     const fixture = (window as any).__chronologicalThread;
     const message = fixture.messages.find((message:any) => message.id === 3);
-    message.content = JSON.stringify({...JSON.parse(message.content),status:'completed',output:'The launcher inspection is complete.'});
+    // Longer than the card's preview, so the full output stays behind the row's disclosure.
+    message.content = JSON.stringify({...JSON.parse(message.content),status:'completed',output:'The launcher inspection is complete.\n' + 'checked\n'.repeat(12)});
     fixture.version++;
     window.dispatchEvent(new CustomEvent('pandacode-overlay-agent-event',{detail:{sessionId:'preview-active',kind:'tool',text:''}}));
   });

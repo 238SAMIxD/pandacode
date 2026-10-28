@@ -1626,7 +1626,22 @@ test('coalesces appearance preferences without restoring stale glass or losing t
   await devtools.detach();
 });
 
+// Pads the sample test output past the card's eight-line preview, so its rows keep the full-data disclosure.
+async function longSampleOutput(page: Page) {
+  await page.route('**/src/preview.ts*', async route => {
+    const response = await route.fetch();
+    const source = await response.text();
+    const marker = /const sampleTestOutput\s*=\s*/;
+    expect(source).toMatch(marker);
+    const body = source.replace(marker, "const sampleTestOutput = 'RUNS src/components/search.test.ts\\n'.repeat(4) + ");
+    await route.fulfill({ response, body: previewBody(body) });
+  });
+  await page.reload();
+  await expect(page.locator('.task-item.selected .task-title')).toHaveText('Make search feel instant');
+}
+
 test('expands saved tool commands and file contents after reloading the conversation', async ({ page }) => {
+  await longSampleOutput(page);
   const read = toolByName(page, 'Read');
   await expandToolTurn(read);
   await read.locator(':scope > summary').click();
@@ -1649,6 +1664,7 @@ test('expands saved tool commands and file contents after reloading the conversa
 });
 
 test('coalesces live tool updates while preserving expansion and saves their details', async ({ page }) => {
+  await longSampleOutput(page);
   await page.clock.install();
   await page.reload();
   await expect(page.locator('.task-item.selected .task-title')).toHaveText('Make search feel instant');
@@ -1673,7 +1689,8 @@ test('coalesces live tool updates while preserving expansion and saves their det
   await expect(turnForTool(live)).toHaveAttribute('open', '');
   await expandToolTurn(live);
   await live.locator(':scope > summary').click();
-  await expect(live.locator('[data-tool-section="input"] pre')).toHaveText('npm test -- --runInBand');
+  // While running, the card shows the whole command; the full record appears once output is clipped.
+  await expect(live.locator('.tool-trace-command')).toHaveText('npm test -- --runInBand');
   await page.clock.runFor(450);
   await expect(live).toHaveCount(1);
   await expect(live).toHaveAttribute('data-tool-status', 'completed');
@@ -1783,7 +1800,8 @@ test('caps long live tool activity without dropping the output being read', asyn
     const source = await response.text();
     const marker = /const toolMessage\s*=/;
     expect(source).toMatch(marker);
-    const body = source.replace(marker, `tool.output = 'Keep this first tool output available while I read it.'; const toolMessage =`)
+    // Longer than the card's preview, so the row keeps the full-data disclosure being read.
+    const body = source.replace(marker, `tool.output = 'Keep this first tool output available while I read it.' + '\\nstill reading'.repeat(10); const toolMessage =`)
       + '\nexport const emitActivityTestEvent = agent;\n';
     await route.fulfill({ response, body: previewBody(body) });
   });
@@ -1807,7 +1825,7 @@ test('caps long live tool activity without dropping the output being read', asyn
   await firstTool.locator(':scope > summary').click();
   await firstTool.locator('.tool-trace-raw > summary').click();
   const output = page.locator(`[data-tool-key="${key}"] [data-tool-section="output"] pre`);
-  await expect(output).toHaveText('Keep this first tool output available while I read it.');
+  await expect(output).toContainText('Keep this first tool output available while I read it.');
   await output.focus();
   await page.evaluate(async sessionId => {
     const { emitActivityTestEvent } = await import((window as any).__pandacodePreviewUrl);
@@ -1821,7 +1839,7 @@ test('caps long live tool activity without dropping the output being read', asyn
   }, sessionId);
   await page.clock.runFor(20);
   await expect(output).toBeFocused();
-  await expect(output).toHaveText('Keep this first tool output available while I read it.');
+  await expect(output).toContainText('Keep this first tool output available while I read it.');
   await expect(page.locator(`[data-tool-key="${key}"]`)).toHaveAttribute('open', '');
   await expect(page.locator('[data-tool-key="tool:long-live-39"]')).toHaveCount(1);
   const toolCount = await page.locator('.live-tools details.tool-activity').count();

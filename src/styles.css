@@ -208,7 +208,7 @@ mark{background:color-mix(in srgb,var(--accent) 45%,transparent);color:inherit;b
 .tool-group[open]>.tool-group-summary>.icon:last-child{transform:rotate(90deg)}
 .tool-group-label{flex:none;font-weight:500}
 .tool-group-hint{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-.tool-group-status{flex:none;font-size:.72rem;color:var(--accent-ink)}
+.tool-group-status{flex:none;font-size:.75rem;color:var(--accent-ink)}
 .tool-group-status.has-failure{color:var(--danger)}
 .tool-group-body{min-width:0;padding:4px 0 2px 15px;border-left:1px solid var(--border);margin:2px 0 4px 6px}
 .tool-group-body .tool-activity{margin-bottom:3px;padding-left:0}
