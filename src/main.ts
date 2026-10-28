@@ -28,7 +28,7 @@ import { afterRun as turnChecksAfterRun, enabled as turnChecksEnabled, noteManua
 import { limitActive, limitBanner, resetLabel } from './usage-limit';
 import { cascade, enterView, glideIn, glideOut, hideToast, installDialogMotion, publishSpringEasings, revealIn, showToast } from './motion';
 import { updateTeamProgress } from './team-progress';
-import { installedCatalog } from './team-catalog';
+import { installedCatalog, setTeamRecency } from './team-catalog';
 import { classicTeamSetup, isTeam, namedTeams, teamDetail, TEAM_MODE_EVENT } from './team-mode';
 import { renderCoordination } from './coordination-message';
 import { renderTurnChanges, changeRequest, captureChangeCards, restoreChangeCards } from './turn-changes';
@@ -1113,10 +1113,15 @@ function rememberedModel(id: ProviderId): string {
 let openCodeSaved = false;
 /** Models by last use for long catalogs: OpenCode without a Settings selection, and Devin (about 110 models, most of them Fusion pairs). */
 function recentModels(id: ProviderId): string[] | null {
-  if (!(id === 'opencode' && !openCodeSaved) && id !== 'devin') return null;
+  return (id === 'opencode' && !openCodeSaved) || id === 'devin' ? usedModels(id) : null;
+}
+/** Models of `id` by the last prompt of the tasks that ran them, newest first. */
+function usedModels(id: ProviderId): string[] {
   const used = state.sessions.filter(s => s.provider === id && s.model);
   return used.sort((a, b) => (b.lastPromptAt ?? b.updatedAt) - (a.lastPromptAt ?? a.updatedAt)).map(s => s.model);
 }
+// Teams offer a long catalog's recent models only; OpenCode's saved selection is already short.
+setTeamRecency({ used: usedModels, unlimited: id => id === 'opencode' && openCodeSaved });
 function loadModels(id: ProviderId): Promise<ProviderModel[]> {
   const cached = modelCatalogs.get(id);
   if (cached && cached.expires > Date.now()) return cached.pending;

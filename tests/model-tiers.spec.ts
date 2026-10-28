@@ -45,7 +45,7 @@ test('Rank models renders the seeded tiers, the unranked tray and unrated marker
   await expect(row(page, 'Unranked').locator('.tier-chip').first()).toBeVisible();
   await expect(chip(page, 'DeepSeek V4 Flash Vision Exp')).toHaveAccessibleName(/, Unranked, unrated$/);
   await expect(chip(page, 'DeepSeek V4 Flash Vision Exp').locator('.tier-unrated')).toHaveAttribute('data-tip', /lets the router use it/);
-  await expect(group(page).getByRole('img', { name: 'About ranking models' })).toHaveAttribute('data-tip', /an S model is tried before a B one/);
+  await expect(group(page).getByRole('img', { name: 'About ranking models' })).toHaveAttribute('data-tip', /a higher tier is usually tried first/);
 });
 
 test('dragging a chip to S saves the new tiers', async ({ page }) => {
@@ -195,4 +195,20 @@ test('dropping a chip on its own row sends no save', async ({ page }) => {
   await expect(row(page, 'Tier S').locator('.tier-name')).toHaveText(['Claude Sonnet 5.5']);
   expect(await calls(page, 'model_routing_set_tiers')).toHaveLength(0);
   await expect(group(page).locator('.tier-live')).not.toHaveText(/moved/);
+});
+
+test('Add model… picks a limited harness and its added model joins the tray', async ({ page }) => {
+  await install(page);
+  await openTeams(page);
+  await expect(chip(page, 'Nous Sample 3')).toHaveCount(0);
+  const add = group(page).getByRole('button', { name: 'Add model…', exact: true });
+  await add.click();
+  await page.getByRole('menuitem', { name: /Hermes Agent/ }).click();
+  const dialog = page.getByRole('dialog', { name: 'Models for teams: Hermes Agent' });
+  await expect(dialog.getByRole('searchbox')).toBeFocused();
+  await dialog.getByRole('checkbox', { name: /Nous Sample 3$/ }).check();
+  await dialog.getByRole('button', { name: 'Done', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(add).toBeFocused();
+  await expect(row(page, 'Unranked').locator('.tier-chip').filter({ hasText: 'Nous Sample 3' })).toHaveCount(1);
 });

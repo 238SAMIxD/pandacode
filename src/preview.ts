@@ -276,6 +276,8 @@ const catalogs: Record<ProviderId, ProviderModel[]> = {
     { id: 'default', name: 'Default model', description: 'Uses the model configured in Hermes (~/.hermes/config.yaml).' },
     { id: 'nous/hermes-3-llama-3.1-405b', name: 'Hermes 3 Llama 3.1 405B', description: 'Flagship open-weights model fine-tuned by Nous Research.' },
     { id: 'anthropic/claude-sonnet-4', name: 'Claude Sonnet 4', description: 'Sample Hermes provider model.' },
+    // A long catalog (over the team limit of 10) for Settings → Model routing.
+    ...Array.from({ length: 12 }, (_, i) => ({ id: `nous/sample-${i + 1}`, name: `Nous Sample ${i + 1}`, description: 'Sample Hermes provider model.' })),
   ],
   muse: ['muse-wonder-1.0', 'muse-spark-1.3'].map(id => ({ id, name: id, description: '', reasoningEfforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map(effort => ({ id: effort, name: effort === 'xhigh' ? 'Extra high' : effort[0].toUpperCase() + effort.slice(1), description: '' })), defaultReasoningEffort: 'high', contextWindow: 1007997 })),
   opencode: openCodePreviewModels,

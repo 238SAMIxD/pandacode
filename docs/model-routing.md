@@ -125,6 +125,14 @@ one row per key in pool order, named after its first entry without the trailing
   on the cheapest safe model; verify each routed result; on failure dispatch a
   replacement with `replaces` and `auto`, at most 2 retries, then report.
 - Named agent teams route only within their own roster.
+- Long catalogs are limited (`teamModels` in `src/team-catalog.ts`, pure part `limitTeamModels`, tested in
+  `tests/team-catalog.test.mjs`): a harness with more than 10 models besides `default` (OpenCode without a saved
+  Settings selection, Devin, Kilo…) offers teams only its 10 most recently used models (tasks by last prompt, then
+  the model picker's `pandacode.recent-models.<harness>`) plus the models added for teams
+  (`pandacode.team-models.added.<harness>`, at most 50). The same set feeds the team catalog sent to
+  `architect_configure`, Models for teams ("Showing N of M models · Add model…") and Rank models (whose Add model…
+  asks for the harness first); both open `src/team-model-add.ts`, a searchable list where recent models are
+  always on and the others toggle the added list. A ranked model that leaves the set keeps its tier, unshown.
 - When you name models in your message, the lead uses those.
 
 ## Privacy
