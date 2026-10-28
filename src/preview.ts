@@ -111,6 +111,8 @@ let id = 10;
 const ROUTING_KEY = 'pandacode.preview.routing';
 let previewRouting = { enabled: true, mode: 'balanced', minP: 0.5, profiler: 'missing', error: null as string | null };
 try { previewRouting = { ...previewRouting, ...JSON.parse(localStorage.getItem(ROUTING_KEY) ?? '{}') }; } catch { /* Defaults. */ }
+let previewExclusions = { providers: [] as string[], models: [] as { provider: string; model: string }[] };
+let previewHealth = [{ provider: 'commandcode', model: 'gpt-6.1-sol', reason: 'Two runs in a row ended with a provider error (sample).', until: Date.now() + 8 * 60_000, failures: 2, providerDown: false }];
 const saveRouting = () => { try { localStorage.setItem(ROUTING_KEY, JSON.stringify(previewRouting)); } catch { /* Kept in memory only. */ } };
 /** Deterministic stand-in for Panda Router: longer text reads as harder, later pool entries as pricier and stronger. */
 function previewRoute(text: string, pool: { provider: string; model: string; name: string }[]) {
@@ -967,6 +969,10 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'model_routing_status': result = { ...previewRouting }; break;
     case 'model_routing_configure': previewRouting = { ...previewRouting, ...(args.enabled != null ? { enabled: Boolean(args.enabled) } : {}), ...(args.mode ? { mode: args.mode } : {}), ...(args.minP != null ? { minP: Math.min(0.9, Math.max(0.3, Number(args.minP))) } : {}) }; saveRouting(); result = { ...previewRouting }; break;
     case 'model_routing_prepare': previewRouting = { ...previewRouting, profiler: 'ready', error: null }; saveRouting(); result = { ...previewRouting }; break;
+    case 'model_routing_exclusions': result = structuredClone(previewExclusions); break;
+    case 'model_routing_set_exclusions': previewExclusions = { providers: [...(args.providers as string[] ?? [])], models: [...(args.models as any[] ?? [])] }; result = structuredClone(previewExclusions); break;
+    case 'model_health_list': result = previewHealth.map(entry => ({ ...entry })); break;
+    case 'model_health_clear': previewHealth = previewHealth.filter(entry => (args.provider != null && entry.provider !== args.provider) || (args.model != null && entry.model !== args.model)); result = previewHealth.map(entry => ({ ...entry })); break;
     case 'model_routing_route': result = previewRoute(String(args.text), args.pool as any[]); break;
     case 'architect_get': result = architect.get(args.sessionId); break;
     case 'architect_configure': result = architect.configure(args.sessionId, args.config, args.architect, args.profileId); break;

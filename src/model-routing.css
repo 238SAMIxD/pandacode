@@ -17,3 +17,12 @@ html[data-theme=dark] .routing-modes>.segment-thumb{background:color-mix(in srgb
 .routing-ranking li{display:grid;grid-template-columns:40px 1fr 48px 64px;gap:8px;align-items:center;min-height:26px}
 .routing-ranking li:first-child{color:var(--text);font-weight:600}
 .routing-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.routing-pool-expand{display:flex;align-items:center;gap:6px;min-width:0;padding:0;background:none;color:var(--text);font:inherit;text-align:left}
+.routing-pool-expand strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.routing-pool-expand:focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:3px}
+.routing-pool-chevron{flex:none;width:14px;height:14px;color:var(--muted)}
+.routing-pool-expand[aria-expanded=true] .routing-pool-chevron{rotate:90deg}
+.routing-pool-models{padding-left:20px;font-size:.82rem}
+.routing-pool-models>p,.routing-pool-warning{margin:0;padding:4px 1rem;font-size:.78rem;color:var(--muted)}
+.routing-pool-warning{color:var(--warning)}
+.routing-pool-model-row>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

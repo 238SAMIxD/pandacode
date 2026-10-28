@@ -41,6 +41,7 @@ mod jev_decisions;
 mod local_servers;
 mod local_signing;
 mod message_queue;
+mod model_health;
 mod model_routing;
 mod moodboards;
 mod attachments;
@@ -2021,6 +2022,9 @@ async fn launch_operation_admitted(
             let tools = host.as_ref().map(|host| (host.tools.clone(), host.approval_tools.clone())).unwrap_or_default();
             (config.clone(), tools)
         });
+        // The harness and model this run used, for model health.
+        let ran = (config.provider.clone(), config.model.clone());
+        let reached_harness = Arc::new(AtomicBool::new(false));
         let result = if stopped.load(Ordering::SeqCst) {
             Ok(())
         } else if team_tools_missing {
@@ -2029,7 +2033,7 @@ async fn launch_operation_admitted(
                     .into(),
             )
         } else {
-            providers::run_with_tools(config, sink, rx, host).await
+            providers::run_with_tools(config, sink, rx, host, reached_harness.clone()).await
         };
         if cloud && app.state::<AppState>().shutdown.load(Ordering::SeqCst) != 0 {
             // The remote run continues; the next launch re-attaches to it.
@@ -2091,6 +2095,18 @@ async fn launch_operation_admitted(
         // request must not write into the next run while the team remains active.
         stopped.store(true, Ordering::SeqCst);
         let mut successful = result.is_ok() && !was_stopped;
+        // Only the harness's own outcome counts for model health (Settings → Model routing): a stop
+        // says nothing, and PandaCode's own failures before the harness (validation, attachments,
+        // connections, team tools) are not the model's.
+        let provider_error = match &result {
+            Err(error) if !was_stopped && reached_harness.load(Ordering::SeqCst) => Some(error.to_string()),
+            _ => None,
+        };
+        if let Some(error) = &provider_error {
+            model_health::record_failure(&ran.0, &ran.1, error);
+        } else if successful {
+            model_health::record_success(&ran.0, &ran.1);
+        }
         let mut children = subagents.lock().ok();
         if let Ok(db) = store.lock() {
             let child_status = if was_stopped || successful {
@@ -2231,7 +2247,7 @@ async fn launch_operation_admitted(
         // Read before the team scheduler can start this task's next turn.
         let launch = providers::warm_epoch(&session_id);
         if let Some(registry) = registry.as_ref() {
-            architect::completed(&app, &session_id, team.as_ref(), successful, was_stopped, registry);
+            architect::completed(&app, &session_id, team.as_ref(), successful, was_stopped, provider_error.as_deref(), registry);
         }
         drop(registry);
         // Start the next turn's agent now, so a follow-up skips the CLI's own startup.
@@ -3447,6 +3463,7 @@ pub fn run() {
             provider_settings::setup(&dir).map_err(std::io::Error::other)?;
             connections::setup(&dir).map_err(std::io::Error::other)?;
             model_routing::setup(&dir);
+            model_health::setup(&dir);
             // Optional integration storage must never prevent the workspace from opening.
             if jev::setup(&dir).is_err() {
                 eprintln!("Jev settings are unavailable; browser testing remains disabled.");
@@ -3525,9 +3542,13 @@ pub fn run() {
                 support::open_support,
                 support::support_details,
                 model_routing::model_routing_status,
+                model_routing::model_routing_exclusions,
+                model_routing::model_routing_set_exclusions,
                 model_routing::model_routing_configure,
                 model_routing::model_routing_prepare,
                 model_routing::model_routing_route,
+                model_health::model_health_list,
+                model_health::model_health_clear,
                 local_sign_app,
                 app_updates::app_update_install_supported,
                 agent_updates::check_agent_updates,

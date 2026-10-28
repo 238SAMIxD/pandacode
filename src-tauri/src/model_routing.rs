@@ -79,12 +79,120 @@ pub(crate) fn write_settings(path: &Path, settings: &Settings) -> Result<(), Str
     std::fs::rename(&temp, path).map_err(|e| format!("Could not save model routing settings: {e}"))
 }
 
+const EXCLUSIONS_FILE: &str = "routing-exclusions.json";
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExcludedModel {
+    pub provider: String,
+    pub model: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Exclusions {
+    pub providers: Vec<String>,
+    pub models: Vec<ExcludedModel>,
+}
+
+impl Exclusions {
+    fn validated(mut self) -> Result<Self, String> {
+        if self.providers.len() > 64 || self.models.len() > MAX_POOL {
+            return Err("Exclude at most 64 providers and 1000 models.".into());
+        }
+        for provider in self.providers.iter().chain(self.models.iter().map(|m| &m.provider)) {
+            if !crate::architect::HARNESSES.contains(&provider.as_str()) {
+                return Err(format!("Unknown harness {provider:?}."));
+            }
+        }
+        if self.models.iter().any(|m| m.model.is_empty() || m.model.len() > 200 || m.model.contains('\0')) {
+            return Err("Model IDs must be 1–200 bytes with no NUL.".into());
+        }
+        let mut providers = std::collections::HashSet::new();
+        self.providers.retain(|p| providers.insert(p.clone()));
+        let mut models = std::collections::HashSet::new();
+        self.models.retain(|m| models.insert((m.provider.clone(), m.model.clone())));
+        Ok(self)
+    }
+
+    fn allowed(&self, provider: &str, model: &str) -> bool {
+        !self.providers.iter().any(|p| p == provider)
+            && !self.models.iter().any(|m| m.provider == provider && m.model == model)
+    }
+}
+
+fn read_exclusions(path: &Path) -> Exclusions {
+    std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Exclusions>(&bytes).ok())
+        // Drop entries this version no longer accepts (a removed harness) rather than the whole file.
+        .map(|mut e| {
+            e.providers.retain(|p| crate::architect::HARNESSES.contains(&p.as_str()));
+            e.models.retain(|m| crate::architect::HARNESSES.contains(&m.provider.as_str()) && !m.model.is_empty() && m.model.len() <= 200 && !m.model.contains('\0'));
+            e.providers.truncate(64);
+            e.models.truncate(MAX_POOL);
+            e
+        })
+        .and_then(|e| e.validated().ok())
+        .unwrap_or_default()
+}
+
+fn write_exclusions(path: &Path, exclusions: &Exclusions) -> Result<(), String> {
+    let temp = path.with_extension("json.tmp");
+    let json = serde_json::to_vec_pretty(exclusions).map_err(|e| e.to_string())?;
+    std::fs::write(&temp, json).map_err(|e| format!("Could not save routing exclusions: {e}"))?;
+    std::fs::rename(&temp, path).map_err(|e| format!("Could not save routing exclusions: {e}"))
+}
+
+#[cfg(test)]
+thread_local!(static TEST_EXCLUSIONS: std::cell::RefCell<Option<Exclusions>> = const { std::cell::RefCell::new(None) });
+
+#[cfg(test)]
+pub(crate) fn with_exclusions<T>(exclusions: Exclusions, f: impl FnOnce() -> T) -> T {
+    struct Reset(Option<Exclusions>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            TEST_EXCLUSIONS.with(|slot| *slot.borrow_mut() = self.0.take());
+        }
+    }
+    let _reset = Reset(TEST_EXCLUSIONS.with(|slot| slot.replace(Some(exclusions))));
+    f()
+}
+
+pub fn allowed(provider: &str, model: &str) -> bool {
+    #[cfg(test)]
+    if let Some(allowed) = TEST_EXCLUSIONS.with(|slot| slot.borrow().as_ref().map(|e| e.allowed(provider, model))) {
+        return allowed;
+    }
+    RUNTIME.get().is_none_or(|rt| rt.exclusions.lock().unwrap_or_else(|e| e.into_inner()).allowed(provider, model))
+}
+
+fn available(pool: Vec<PoolModel>) -> Vec<PoolModel> {
+    crate::model_health::healthy(pool.into_iter().filter(|m| allowed(&m.provider, &m.model)).collect())
+}
+
+#[tauri::command]
+pub fn model_routing_exclusions() -> Result<Exclusions, String> {
+    runtime()?.exclusions.lock().map(|e| e.clone()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn model_routing_set_exclusions(providers: Vec<String>, models: Vec<ExcludedModel>) -> Result<Exclusions, String> {
+    let next = Exclusions { providers, models }.validated()?;
+    let rt = runtime()?;
+    let mut exclusions = rt.exclusions.lock().map_err(|e| e.to_string())?;
+    write_exclusions(&rt.root.join(EXCLUSIONS_FILE), &next)?;
+    *exclusions = next.clone();
+    Ok(next)
+}
+
 #[cfg(target_os = "macos")]
 const MIN_MACOS: (u32, u32) = (13, 4);
 
 struct Runtime {
     root: PathBuf,
     settings: Mutex<Settings>,
+    exclusions: Mutex<Exclusions>,
     error: Mutex<Option<String>>,
     downloading: AtomicBool,
     /// Finished download attempts; a caller that waited on another's attempt shares its result.
@@ -105,6 +213,7 @@ pub fn setup(app_data: &Path) {
     let _ = RUNTIME.set(Runtime {
         root: app_data.to_path_buf(),
         settings: Mutex::new(settings),
+        exclusions: Mutex::new(read_exclusions(&app_data.join(EXCLUSIONS_FILE))),
         error: Mutex::new(None),
         downloading: AtomicBool::new(false),
         attempts: AtomicU64::new(0),
@@ -405,7 +514,7 @@ pub async fn route_jobs(pool: Vec<PoolModel>, jobs: Vec<Job>, mode: Option<Mode>
     if !settings.enabled {
         return None;
     }
-    Some(run(rt, settings.preferences(mode), pool, jobs, false).await)
+    Some(run(rt, settings.preferences(mode), available(pool), jobs, false).await)
 }
 
 async fn run(rt: &'static Runtime, prefs: Preferences, pool: Vec<PoolModel>, jobs: Vec<Job>, wait: bool) -> Result<Vec<Route>, String> {
@@ -552,7 +661,7 @@ pub async fn model_routing_route(text: String, pool: Vec<PoolEntry>) -> Result<R
         return Err(format!("Describe the task in 1–{} KB.", MAX_TEXT / 1024));
     }
     validate_pool(&pool)?;
-    let pool = pool_from(pool.iter().map(|e| (e.provider.as_str(), e.model.as_str(), e.name.as_str())));
+    let pool = available(pool_from(pool.iter().map(|e| (e.provider.as_str(), e.model.as_str(), e.name.as_str()))));
     // Same context as a team dispatch, so Try it shows the pick a worker would get.
     let job = Job { text, ctx: TaskContext { requires_tools: true, ..TaskContext::default() }, failed: vec![] };
     let prefs = rt.settings().preferences(None);
@@ -596,6 +705,49 @@ mod tests {
         assert_eq!(read_settings(&path), Settings::default());
         let json = serde_json::to_value(RoutingStatus { enabled: true, mode: Mode::Balanced, min_p: 0.8, profiler: "missing", error: None }).unwrap();
         assert_eq!(json, serde_json::json!({"enabled":true,"mode":"balanced","minP":0.8,"profiler":"missing","error":null}));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn exclusions_round_trip_and_validation() {
+        let dir = std::env::temp_dir().join(format!("pandacode-exclusions-{}", crate::storage::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(EXCLUSIONS_FILE);
+        assert_eq!(read_exclusions(&path), Exclusions::default());
+        let model = |provider: &str, model: &str| ExcludedModel { provider: provider.into(), model: model.into() };
+        let saved = Exclusions {
+            providers: vec!["commandcode".into(), "commandcode".into()],
+            models: vec![model("codex", "gpt-5.6-luna"), model("codex", "gpt-5.6-luna")],
+        }.validated().unwrap();
+        assert_eq!(saved.providers, ["commandcode"]);
+        assert_eq!(saved.models.len(), 1);
+        write_exclusions(&path, &saved).unwrap();
+        assert_eq!(read_exclusions(&path), saved);
+        assert!(!path.with_extension("json.tmp").exists());
+        assert_eq!(serde_json::to_value(&saved).unwrap(), serde_json::json!({"providers":["commandcode"],"models":[{"provider":"codex","model":"gpt-5.6-luna"}]}));
+        for bad in [
+            Exclusions { providers: vec!["unknown".into()], models: vec![] },
+            Exclusions { providers: vec!["claude".into(); 65], models: vec![] },
+            Exclusions { providers: vec![], models: vec![model("unknown", "m")] },
+            Exclusions { providers: vec![], models: vec![model("codex", "")] },
+            Exclusions { providers: vec![], models: vec![model("codex", "a\0b")] },
+            Exclusions { providers: vec![], models: vec![model("codex", &"é".repeat(101))] },
+            Exclusions { providers: vec![], models: vec![model("codex", "m"); 1001] },
+        ] {
+            assert!(bad.validated().is_err());
+        }
+        assert!(Exclusions { providers: vec!["claude".into(); 64], models: vec![model("codex", &"é".repeat(100)); 1000] }.validated().is_ok());
+        with_exclusions(saved.clone(), || {
+            assert!(!allowed("commandcode", "anything"));
+            assert!(!allowed("codex", "gpt-5.6-luna"));
+            assert!(allowed("codex", "gpt-6-luna"));
+            assert!(allowed("claude", "gpt-5.6-luna"));
+            let pool = available(pool_from([("commandcode", "opus", "Opus"), ("codex", "gpt-5.6-luna", "Luna"), ("claude", "sonnet", "Sonnet")]));
+            assert_eq!(pool.len(), 1);
+            assert_eq!(pool[0].provider, "claude");
+        });
+        std::fs::write(&path, "invalid").unwrap();
+        assert_eq!(read_exclusions(&path), Exclusions::default());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -11,6 +11,7 @@ use rusqlite::{params, OptionalExtension};
 
 use super::{active, load, text, Assignment, TeamConfig, TeamSnapshot, WorkerProfile, HARNESSES};
 use crate::model_routing::{self, Job};
+use crate::model_health;
 use crate::panda_router::{Mode, PoolModel, Route, Routed, TaskContext};
 use crate::{storage, AppState, Result};
 
@@ -41,21 +42,36 @@ pub(super) const MAX_ATTEMPTS: usize = 3;
 /// (`catalog`), else the roster.
 pub(super) fn pool(config: &TeamConfig) -> Vec<PoolModel> {
     let source = if config.roster_only || config.catalog.is_empty() { &config.workers } else { &config.catalog };
-    model_routing::pool_from(source.iter().map(|p| (p.provider.as_str(), p.model.as_str(), p.name.as_str())))
+    model_routing::pool_from(source.iter().filter(|p| model_routing::allowed(&p.provider, &p.model)).map(|p| (p.provider.as_str(), p.model.as_str(), p.name.as_str())))
 }
 
-/// One sentence for the lead's team rules; empty while routing is off or nothing is rated.
+/// Rated models in the pool that are not paused after failures.
+fn rated(config: &TeamConfig) -> usize {
+    model_routing::rated_count(&model_health::healthy(pool(config)))
+}
+
+/// Whether an assignment without profileId, provider or model is routed like `profileId: "auto"`.
+pub(super) fn by_default(config: &TeamConfig) -> bool {
+    model_routing::enabled() && rated(config) > 0
+}
+
+/// Whether this assignment asks for routing: `profileId: "auto"`, or nothing chosen while routing is the default.
+fn routes(a: &Value, default: bool) -> bool {
+    a["profileId"] == AUTO || (default && a["profileId"].is_null() && a["provider"].is_null() && a["model"].is_null())
+}
+
+/// The routing part of the lead's team rules; empty while routing is off or nothing is rated.
 pub(super) fn prompt_note(config: &TeamConfig, enabled: bool) -> String {
     if !enabled {
         return String::new();
     }
-    let n = model_routing::rated_count(&pool(config));
+    let n = rated(config);
     if n == 0 {
         return String::new();
     }
     let scope = if config.roster_only { format!("this team's {n} rated models") } else { format!("{n} rated models") };
     let start = if model_routing::mode() == Mode::Quality { "starting on the strongest fit" } else { "starting on the cheapest model likely to pass" };
-    format!(" profileId \"auto\" lets Panda Router pick each assignment's model from {scope}, {start}; route_models shows picks and ladders first. Verify each routed result (tests, typecheck or a review); if it fails, dispatch a replacement with replaces set to that worker and profileId \"auto\", at most 2 retries, then report the failure to the user. An explicit model request from the user still wins.")
+    format!(" Router first: give every assignment profileId \"auto\" (or omit profileId, provider and model) and Panda Router picks its model from {scope}, {start}; route_models previews picks. Pick a model yourself only when the user names models or harnesses. Verify each result (tests, typecheck or review). When a routed worker errors, refuses or fails review, dispatch a replacement with replaces set to it and profileId \"auto\": a failed run drops that model and the router tries the same model on another harness first; a bad result escalates to a stronger model. At most 2 retries, then report the failure to the user. Only when routing has nothing left, use your own model.")
 }
 
 /// Failed worker ID -> the models that failed its assignment, oldest first, for `replaces`.
@@ -67,19 +83,35 @@ pub(super) fn replaceable(status: &str) -> bool {
     matches!(status, "failed" | "completed")
 }
 
-/// The models that failed worker `id`'s assignment if it is replaced, oldest first: each worker its
-/// dispatch `replaced` (recursively, from the saved requests), then its own. None unless `replaceable`.
-pub(super) fn failed_chain(store: &storage::Store, team: &TeamSnapshot, id: &str) -> Result<Option<Vec<PoolModel>>> {
+/// One assignment's history through its replacements.
+pub(super) struct Chain {
+    /// Models whose completed results failed the lead's check, oldest first: the router escalates past them.
+    pub failed: Vec<PoolModel>,
+    /// Every attempt, failed runs and failovers included, for the retry cap.
+    pub attempts: usize,
+}
+
+/// Worker `id`'s assignment if it is replaced: each worker its dispatch `replaced` (recursively, from
+/// the saved requests), then its own. None unless `replaceable`. A failed run or launch is the
+/// harness's, not the model's: health already pauses that entry, and listing it as failed would
+/// exclude the model on every harness, so only completed results escalate.
+pub(super) fn failed_chain(store: &storage::Store, team: &TeamSnapshot, id: &str) -> Result<Option<Chain>> {
     if !team.workers.iter().any(|w| w.id == id && replaceable(&w.status)) {
         return Ok(None);
     }
     let pool = pool(&team.config);
     let mut chain = Vec::new();
+    let (mut links, mut attempts) = (0, 0);
     let mut next = team.workers.iter().find(|w| w.id == id);
     // Bounded by the team's size, so a malformed record cannot loop.
-    while let Some(w) = next.filter(|_| chain.len() < team.workers.len()) {
-        let name = pool.iter().find(|m| m.provider == w.provider && m.model == w.model).map_or_else(|| w.model.clone(), |m| m.name.clone());
-        chain.push(PoolModel { provider: w.provider.clone(), model: w.model.clone(), name });
+    while let Some(w) = next.filter(|_| links < team.workers.len()) {
+        links += 1;
+        // Each dispatch is one attempt, and each harness failover another; follow-ups are not.
+        attempts += 1 + w.failovers;
+        if w.status == "completed" {
+            let name = pool.iter().find(|m| m.provider == w.provider && m.model == w.model).map_or_else(|| w.model.clone(), |m| m.name.clone());
+            chain.push(PoolModel { provider: w.provider.clone(), model: w.model.clone(), name });
+        }
         let request: Option<String> = store
             .db
             .query_row("SELECT content FROM architect_requests WHERE parent_session_id=?1 AND worker_id=?2 AND kind='dispatch'", params![team.session_id, w.id], |r| r.get(0))
@@ -89,7 +121,7 @@ pub(super) fn failed_chain(store: &storage::Store, team: &TeamSnapshot, id: &str
         next = replaced.and_then(|r| team.workers.iter().find(|x| x.id == r));
     }
     chain.reverse();
-    Ok(Some(chain))
+    Ok(Some(Chain { failed: chain, attempts }))
 }
 
 /// `failed_chain` for the workers this dispatch replaces (its `replaces` IDs), not the whole team.
@@ -97,7 +129,7 @@ pub(super) fn chains(store: &storage::Store, team: &TeamSnapshot, args: &Value) 
     let mut chains = Chains::new();
     for id in args["assignments"].as_array().into_iter().flatten().filter_map(|a| a["replaces"].as_str()) {
         if let Some(chain) = failed_chain(store, team, id)? {
-            chains.insert(id.to_string(), chain);
+            chains.insert(id.to_string(), chain.failed);
         }
     }
     Ok(chains)
@@ -130,19 +162,20 @@ fn job(text: &str, files: usize, langs: &[String], failed: Vec<PoolModel>) -> Jo
     Job { text, ctx: TaskContext { files_in_scope, repo_languages: langs.to_vec(), requires_tools: true }, failed }
 }
 
-/// Whether a dispatch asks for any routed worker, so plain dispatches skip the routing context.
-pub(super) fn has_auto(args: &Value) -> bool {
-    args["assignments"].as_array().is_some_and(|a| a.iter().any(|a| a["profileId"] == AUTO))
+/// Whether a dispatch may ask for any routed worker (`default`: routing is on), so plain dispatches
+/// skip the routing context.
+pub(super) fn has_auto(args: &Value, default: bool) -> bool {
+    args["assignments"].as_array().is_some_and(|a| a.iter().any(|a| routes(a, default)))
 }
 
-/// Keys and jobs for this dispatch's `profileId: "auto"` assignments; one that `replaces` a failed
-/// worker escalates past every model that failed that assignment.
-pub(super) fn auto_jobs(args: &Value, langs: &[String], chains: &Chains) -> (Vec<String>, Vec<Job>) {
+/// Keys and jobs for this dispatch's routed assignments (`by_default`: unchosen ones too); one that
+/// `replaces` a worker escalates past every model whose result failed that assignment.
+pub(super) fn auto_jobs(args: &Value, langs: &[String], chains: &Chains, default: bool) -> (Vec<String>, Vec<Job>) {
     args["assignments"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|a| a["profileId"] == AUTO)
+        .filter(|a| routes(a, default))
         .filter_map(|a| {
             let files = a["files"].as_array().map_or(0, Vec::len);
             let failed = a["replaces"].as_str().and_then(|id| chains.get(id)).cloned().unwrap_or_default();
@@ -170,7 +203,7 @@ pub(super) fn auto_from(keys: Vec<String>, routes: Option<std::result::Result<Ve
 }
 
 pub(super) async fn auto_routes(config: &TeamConfig, langs: &[String], chains: &Chains, args: &Value) -> AutoRoutes {
-    let (keys, jobs) = auto_jobs(args, langs, chains);
+    let (keys, jobs) = auto_jobs(args, langs, chains, by_default(config));
     if keys.is_empty() {
         return AutoRoutes::default();
     }
@@ -179,7 +212,7 @@ pub(super) async fn auto_routes(config: &TeamConfig, langs: &[String], chains: &
     auto_from(keys, model_routing::route_jobs(pool(config), jobs, Some(mode)).await, mode)
 }
 
-fn effort(provider: &str, effort: Option<&String>) -> Option<String> {
+pub(super) fn effort(provider: &str, effort: Option<&String>) -> Option<String> {
     effort.filter(|e| crate::providers::validate_reasoning_effort(provider, Some(e)).is_ok()).cloned()
 }
 
@@ -187,8 +220,13 @@ fn money(usd: f64) -> String {
     if usd < 0.01 { format!("${usd:.4}") } else { format!("${usd:.2}") }
 }
 
+/// A model the user has not switched off and that is not paused after failures.
+pub(super) fn usable(profile: &WorkerProfile) -> bool {
+    model_routing::allowed(&profile.provider, &profile.model) && crate::model_health::is_healthy(&profile.provider, &profile.model)
+}
+
 /// Staffs a `profileId: "auto"` assignment, or the lead's own model when unrouted (a configured or named
-/// team without the lead's model uses its first entry), and says which in one line. A fresh assignment
+/// team without the lead's usable model uses its first usable entry, else the lead's own model), and says which in one line. A fresh assignment
 /// in Cheap or Balanced mode opens on the ladder's first (cheapest safe) rung and escalates from there;
 /// Best mode and escalations take the policy's pick.
 pub(super) fn staff(config: &TeamConfig, lead: &storage::Session, assignment: &Assignment, routes: &AutoRoutes) -> Result<(WorkerProfile, String)> {
@@ -248,13 +286,18 @@ pub(super) fn staff(config: &TeamConfig, lead: &storage::Session, assignment: &A
             reasoning_effort: effort(&lead.provider, wanted).or_else(|| lead.reasoning_effort.clone()),
         }
     } else {
-        let entry = config
-            .workers
-            .iter()
-            .find(|p| p.provider == lead.provider && p.model == lead.model)
-            .or(config.workers.first())
-            .ok_or("This team has no models.")?;
-        WorkerProfile { reasoning_effort: effort(&entry.provider, wanted).or_else(|| entry.reasoning_effort.clone()), ..entry.clone() }
+        // The lead's entry, else the first usable one; with none usable, the lead's own model.
+        let entries = || config.workers.iter().filter(|p| usable(p));
+        match entries().find(|p| p.provider == lead.provider && p.model == lead.model).or_else(|| entries().next()) {
+            Some(entry) => WorkerProfile { reasoning_effort: effort(&entry.provider, wanted).or_else(|| entry.reasoning_effort.clone()), ..entry.clone() },
+            None => WorkerProfile {
+                id: AUTO.into(),
+                name: lead.model.clone(),
+                provider: lead.provider.clone(),
+                model: lead.model.clone(),
+                reasoning_effort: effort(&lead.provider, wanted).or_else(|| lead.reasoning_effort.clone()),
+            },
+        }
     };
     let note = format!("not routed ({reason}), using {} · {}", profile.name, profile.provider);
     Ok((profile, note))

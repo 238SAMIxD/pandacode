@@ -73,6 +73,8 @@ lead's own model (in a named team without the lead's model, the team's first
 model) and the dispatch note says "not routed (routing is off)". `route_models`
 and **Route** return a "routing is off" error.
 
+Whole providers and individual provider/model pairs can be switched off for orchestration. These choices are saved separately in `routing-exclusions.json` beside the routing settings and exclude models from Panda Router, the lead's roster and harness failover. Profiles and the unrouted fallback never staff a switched-off or paused model (a profileId naming one is refused); if no roster model is usable, the lead sees an empty roster with a note and workers use the lead's own model. Explicitly naming a provider and model in an automatic team still dispatches it. Only harness failures (the CLI missing or failing to start, session errors, auth, rate limits, crashes) pause a model; PandaCode's own preflight errors do not. A follow-up resets a worker's failover count.
+
 ## In teams
 
 - In an automatic team, the lead sets `profileId: "auto"` on an assignment in
@@ -135,3 +137,9 @@ network request.
   cargo test --lib live_team_routing -- --ignored --nocapture` prints each pick, its
   ladder and two escalation steps (`PANDA_ROUTER_MODE=cheapest|quality`).
 - `src/model-routing.ts`: the settings panel.
+
+## Unavailable models and failover
+
+Every run's own outcome feeds `src-tauri/src/model_health.rs`. A harness error pauses that model on that harness for 10 minutes, doubling with each further failure up to 2 hours; a team worker that goes silent counts the same. User stops and PandaCode's own failures (launch, saving) do not. Two paused models on one harness pause the whole harness until it has a successful run. Pauses are saved in `model-health.json` in app data. Paused models never reach Panda Router (`route_jobs`, `model_routing_route`) or the lead's roster. When a team worker's run fails and the same model (same card, or the same model ID if it is unrated) runs on another healthy harness in the team's pool, the worker moves there on a fresh session and is queued again. This counts toward `routing::MAX_ATTEMPTS`, and the lead sees a `Failover:` note. Settings → Model routing lists paused models; Allow now lifts a pause.
+
+Leads route first: an assignment with no profileId, provider or model is routed like `auto` while routing is on. The lead's own model is the last resort, and a lead picks a model only when the user names one.

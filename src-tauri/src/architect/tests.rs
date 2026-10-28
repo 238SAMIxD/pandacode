@@ -957,6 +957,7 @@ fn worker(id: &str, status: &str, files: &[&str], depends: &[&str]) -> Worker {
         result_revision: 0,
         checkpoint: None,
         timed_out: false,
+        failovers: 0,
     }
 }
 #[test]
@@ -1196,6 +1197,7 @@ fn finish(state: &AppState, prepared: &crate::PreparedRun, answer: &str, success
         prepared.team.as_ref(),
         success,
         false,
+        None,
         &mut |_| {},
     );
 }
@@ -2141,7 +2143,7 @@ fn a_failed_follow_up_never_reports_the_previous_attempts_success() {
         store.finish_task_turn(&retried.config.session_id, false, false).unwrap();
         agents.remove(&retried.config.session_id);
         drop(store);
-        completed_with_agents(&state, &agents, &retried.config.session_id, retried.team.as_ref(), false, false, &mut |_| {});
+        completed_with_agents(&state, &agents, &retried.config.session_id, retried.team.as_ref(), false, false, None, &mut |_| {});
     }
     let review = next_action_state(&state, &mut |_| {}).unwrap().unwrap();
     assert!(!review.prompt.contains("Attempt one"));
@@ -2258,10 +2260,14 @@ fn objective_turn(state: &AppState, sid: &str) -> crate::PreparedRun {
 }
 fn settle(state: &AppState, run: &crate::PreparedRun, successful: bool, stopped: bool) {
     let sid = &run.config.session_id;
+    // As the run loop in lib.rs does: a harness error pauses the model before the team settles.
+    if !successful && !stopped {
+        crate::model_health::record_failure(&run.config.provider, &run.config.model, "provider exploded");
+    }
     let mut agents = state.agents.lock().unwrap();
     state.store.lock().unwrap().finish_task_turn(sid, successful, stopped).unwrap();
     agents.remove(sid);
-    completed_with_agents(state, &agents, sid, run.team.as_ref(), successful, stopped, &mut |_| {});
+    completed_with_agents(state, &agents, sid, run.team.as_ref(), successful, stopped, (!successful && !stopped).then_some("provider exploded"), &mut |_| {});
 }
 const SILENT: i64 = (watchdog::SILENCE_MINUTES + 1) * 60 * 1000;
 #[test]
@@ -2456,7 +2462,7 @@ fn routing_catalog() -> Vec<WorkerProfile> {
 }
 fn heuristic_routes(store: &Store, team: &TeamSnapshot, args: &Value, enabled: bool, mode: Mode) -> routing::AutoRoutes {
     let config = &team.config;
-    let (keys, jobs) = routing::auto_jobs(args, &["rust".to_string()], &routing::chains(store, team, args).unwrap());
+    let (keys, jobs) = routing::auto_jobs(args, &["rust".to_string()], &routing::chains(store, team, args).unwrap(), enabled);
     let prefs = crate::panda_router::Preferences { mode, ..Default::default() };
     let routes = enabled.then(|| crate::model_routing::route_with(&crate::panda_router::Router::heuristic(), &prefs, &routing::pool(config), jobs));
     routing::auto_from(keys, routes, mode)
@@ -2538,7 +2544,7 @@ fn replacing_a_failed_auto_worker_escalates_past_its_models() {
         let store = state.store.lock().unwrap();
         let mut team = load(&store, &sid).unwrap().unwrap();
         let worker = team.workers.iter_mut().find(|w| w.id == id).unwrap();
-        worker.status = "failed".into();
+        worker.status = "completed".into();
         worker.error = Some("tests failed".into());
         save(&store, &mut team).unwrap();
     };
@@ -2561,11 +2567,11 @@ fn replacing_a_failed_auto_worker_escalates_past_its_models() {
     let (a, b, c) = (&team.workers[0], &team.workers[1], &team.workers[2]);
     assert!(a.abandoned && b.abandoned && !c.abandoned);
     assert!(a.error.as_deref().unwrap().starts_with(&format!("Replaced by worker {second_id}. tests failed")));
-    let chain = |w: &Worker| routing::failed_chain(&store, &team, &w.id).unwrap().map(|c| c.into_iter().map(|m| (m.provider, m.model)).collect::<Vec<_>>());
+    let chain = |w: &Worker| routing::failed_chain(&store, &team, &w.id).unwrap().map(|c| c.failed.into_iter().map(|m| (m.provider, m.model)).collect::<Vec<_>>());
     let model = |w: &Worker| (w.provider.clone(), w.model.clone());
     assert_eq!(chain(a), Some(vec![model(a)]));
     assert_eq!(chain(b), Some(vec![model(a), model(b)]));
-    assert_eq!(chain(c), None, "not failed");
+    assert_eq!(chain(c), None, "not settled");
     assert!(model(c) != model(a) && model(c) != model(b) && model(b) != model(a));
     let c_id = c.id.clone();
     drop(store);
@@ -2756,4 +2762,209 @@ fn routing_note_joins_the_lead_prompt_only_when_enabled() {
     let store = state.store.lock().unwrap();
     let text = prompt(&store, &sid, "Go.", Some(&Admission { parent: sid.clone(), generation: 1 })).unwrap();
     assert!(!text.contains("Panda Router"), "routing is off without setup");
+}
+
+#[test]
+fn an_unchosen_assignment_is_routed_like_auto_while_routing_is_on() {
+    let (state, sid) = auto_state();
+    with_catalog(&state, &sid);
+    let args = json!({"assignments":[auto_assignment("plain", json!({"prompt":"Fix a typo in the README heading."}))]});
+    assert!(routing::has_auto(&args, true) && !routing::has_auto(&args, false));
+    let picked = json!({"assignments":[auto_assignment("picked", json!({"provider":"claude","model":"opus"}))]});
+    assert!(!routing::has_auto(&picked, true));
+    let result = routed_call(&state, &sid, args, true).unwrap();
+    assert!(result["routing"][0].as_str().unwrap().starts_with("plain: routed: "), "{result}");
+    // Routing off: the lead's own model, as before.
+    let off = routed_call(&state, &sid, json!({"assignments":[auto_assignment("own", json!({}))]}), false).unwrap();
+    assert!(off.get("routing").is_none(), "{off}");
+    let store = state.store.lock().unwrap();
+    let (team, lead) = (load(&store, &sid).unwrap().unwrap(), store.session(&sid).unwrap());
+    assert_eq!(team.workers[0].profile_id, "auto");
+    assert!(routing_catalog().iter().any(|p| p.provider == team.workers[0].provider && p.model == team.workers[0].model));
+    assert_eq!((team.workers[1].provider.as_str(), team.workers[1].model.as_str()), (lead.provider.as_str(), lead.model.as_str()));
+}
+/// An auto team whose catalog runs one model on two harnesses (`provider` first).
+fn failover_state(model: &str, providers: &[&str]) -> (AppState, String, crate::PreparedRun) {
+    let (state, sid) = auto_state();
+    {
+        let store = state.store.lock().unwrap();
+        let mut team = load(&store, &sid).unwrap().unwrap();
+        team.config.catalog = providers.iter().map(|p| profile(&format!("{p}-m"), p, model, model)).collect();
+        save(&store, &mut team).unwrap();
+    }
+    call(&state, &sid, "pandacode_dispatch_workers", json!({"assignments":[auto_assignment("fo", json!({"provider":providers[0],"model":model,"reasoningEffort":"high"}))]})).unwrap();
+    let (run, _rx) = claim(&state, next_action_state(&state, &mut |_| {}).unwrap().unwrap());
+    let worker = &load(&state.store.lock().unwrap(), &sid).unwrap().unwrap().workers[0];
+    state.store.lock().unwrap().db.execute("UPDATE sessions SET resume_id='native-1' WHERE id=?1", [&worker.session_id]).unwrap();
+    (state, sid, run)
+}
+#[test]
+fn a_failed_run_fails_over_to_the_same_model_on_another_harness() {
+    let model = "claude-sonnet-5-5";
+    let (state, sid, run) = failover_state(model, &["claude", "commandcode"]);
+    settle(&state, &run, false, false);
+    let store = state.store.lock().unwrap();
+    let worker = load(&store, &sid).unwrap().unwrap().workers[0].clone();
+    assert_eq!((worker.status.as_str(), worker.provider.as_str(), worker.model.as_str(), worker.attempt), ("queued", "commandcode", model, 1));
+    assert_eq!(worker.failovers, 1, "a failover is not a follow-up");
+    assert_eq!(worker.profile_id, "auto", "not a roster entry");
+    let note = worker.error.as_deref().unwrap();
+    assert!(note.starts_with("Failover: ") && note.contains("via claude failed (provider exploded); retried on commandcode"), "{note}");
+    let session = store.session(&worker.session_id).unwrap();
+    assert_eq!((session.provider.as_str(), session.model.as_str(), session.resume_id), ("commandcode", model, None));
+    assert_eq!(session.reasoning_effort.as_deref(), worker.reasoning_effort.as_deref());
+    assert!(!crate::model_health::is_healthy("claude", model));
+    drop(store);
+    // The next launch is the same worker on its new harness.
+    let next = next_action_state(&state, &mut |_| {}).unwrap().unwrap();
+    assert_eq!(next.sid, worker.session_id);
+    crate::model_health::record_success("claude", model);
+}
+#[test]
+fn a_failed_run_without_another_harness_stays_failed_for_the_lead() {
+    // A model no other harness in the pool runs.
+    let (state, sid, run) = failover_state("gpt-6-luna", &["codex"]);
+    settle(&state, &run, false, false);
+    let worker = load(&state.store.lock().unwrap(), &sid).unwrap().unwrap().workers[0].clone();
+    assert_eq!((worker.status.as_str(), worker.provider.as_str(), worker.attempt), ("failed", "codex", 1));
+    assert_eq!(worker.error.as_deref(), Some("Worker run failed: provider exploded"));
+    assert!(!crate::model_health::is_healthy("codex", "gpt-6-luna"));
+    crate::model_health::record_success("codex", "gpt-6-luna");
+}
+#[test]
+fn failed_runs_count_as_attempts_but_never_escalate() {
+    let (state, sid) = auto_state();
+    with_catalog(&state, &sid);
+    let task = json!({"profileId":"auto","prompt":"Fix a typo in the README heading."});
+    let first = routed_call(&state, &sid, json!({"assignments":[auto_assignment("r1", task.clone())]}), true).unwrap();
+    let first_id = first["workerIds"][0].as_str().unwrap().to_string();
+    {
+        let store = state.store.lock().unwrap();
+        let mut team = load(&store, &sid).unwrap().unwrap();
+        team.workers[0].status = "failed".into();
+        // Follow-ups do not count; a harness failover does.
+        team.workers[0].attempt = 3;
+        team.workers[0].failovers = 1;
+        save(&store, &mut team).unwrap();
+        let chain = routing::failed_chain(&store, &team, &first_id).unwrap().unwrap();
+        assert!(chain.failed.is_empty());
+        assert_eq!(chain.attempts, 2);
+    }
+    let mut retry = task.clone();
+    retry["replaces"] = json!(first_id);
+    let second = routed_call(&state, &sid, json!({"assignments":[auto_assignment("r2", retry)]}), true).unwrap();
+    assert!(!second["routing"][0].as_str().unwrap().contains(" past "), "{second}");
+    let second_id = second["workerIds"][0].as_str().unwrap().to_string();
+    {
+        let store = state.store.lock().unwrap();
+        let mut team = load(&store, &sid).unwrap().unwrap();
+        team.workers[1].status = "failed".into();
+        save(&store, &mut team).unwrap();
+    }
+    let mut third = task.clone();
+    third["replaces"] = json!(second_id);
+    let error = routed_call(&state, &sid, json!({"assignments":[auto_assignment("r3", third)]}), true).unwrap_err();
+    assert!(error.contains("failed 3 times"), "{error}");
+}
+#[test]
+fn orchestration_exclusions_filter_provider_and_exact_model_pools() {
+    use crate::model_routing::{with_exclusions, ExcludedModel, Exclusions};
+    let mut config = config();
+    config.catalog = vec![
+        profile("sonnet", "claude", "sonnet", "Sonnet"),
+        profile("opus", "claude", "opus", "Opus"),
+        profile("luna", "codex", "gpt-6-luna", "Luna"),
+        profile("other", "commandcode", "gpt-6-luna", "Luna"),
+    ];
+    let exclusions = Exclusions {
+        providers: vec!["claude".into()],
+        models: vec![ExcludedModel { provider: "codex".into(), model: "gpt-6-luna".into() }],
+    };
+    with_exclusions(exclusions.clone(), || {
+        let pool = routing::pool(&config);
+        assert_eq!(pool.len(), 1);
+        assert_eq!(pool[0].provider, "commandcode");
+        assert!(routing::prompt_note(&config, true).contains("1 rated models"));
+        config.roster_only = true;
+        config.workers = config.catalog.clone();
+        assert_eq!(routing::pool(&config).len(), 1);
+    });
+    assert_eq!(routing::pool(&config).len(), 4);
+}
+
+#[test]
+fn excluded_models_leave_the_roster_unless_all_are_unavailable() {
+    use crate::model_routing::{with_exclusions, Exclusions};
+    let (state, sid) = auto_state();
+    let store = state.store.lock().unwrap();
+    let mut team = load(&store, &sid).unwrap().unwrap();
+    team.config.workers = vec![profile("sonnet", "claude", "sonnet", "Sonnet"), profile("luna", "codex", "gpt-6-luna", "Luna")];
+    with_exclusions(Exclusions { providers: vec!["claude".into()], models: vec![] }, || {
+        let text = rules(&store, &team, &sid).unwrap().0;
+        assert!(!text.contains("\"id\":\"sonnet\""), "{text}");
+        assert!(text.contains("\"id\":\"luna\""), "{text}");
+        assert!(!text.contains("every model is switched off or paused"));
+        crate::model_health::record_failure("codex", "gpt-6-luna", "unavailable");
+        let text = rules(&store, &team, &sid).unwrap().0;
+        assert!(text.contains("[] (every team model is switched off or paused"), "{text}");
+        assert!(!text.contains("\"id\":\"sonnet\"") && !text.contains("\"id\":\"luna\""), "{text}");
+    });
+}
+
+#[test]
+fn switched_off_or_paused_profiles_are_never_staffed() {
+    use crate::model_routing::{with_exclusions, Exclusions};
+    let (state, sid) = state_fixture();
+    let one = |extra: Value| json!({"assignments":[auto_assignment("x", extra)]});
+    with_exclusions(Exclusions { providers: vec!["codex".into()], models: vec![] }, || {
+        // A named profile that is switched off is refused.
+        let error = call(&state, &sid, "pandacode_dispatch_workers", one(json!({"profileId":"fast"}))).unwrap_err();
+        assert!(error.contains("switched off or paused") && error.contains("\"auto\""), "{error}");
+        // Unrouted, the fallback skips it for the first usable entry.
+        routed_call(&state, &sid, one(json!({"profileId":"auto"})), false).unwrap();
+        crate::model_health::record_failure("kimi", "", "unavailable");
+        // Paused too: nothing in the team is usable, so the worker uses the lead's own model.
+        let error = call(&state, &sid, "pandacode_dispatch_workers", json!({"assignments":[auto_assignment("z", json!({"profileId":"kimi"}))]})).unwrap_err();
+        assert!(error.contains("paused"), "{error}");
+        let mut second = auto_assignment("y", json!({"profileId":"auto"}));
+        second["files"] = json!(["src/y"]);
+        routed_call(&state, &sid, json!({"assignments":[second]}), false).unwrap();
+        let store = state.store.lock().unwrap();
+        let team = load(&store, &sid).unwrap().unwrap();
+        let picked: Vec<_> = team.workers.iter().map(|w| (w.profile_id.as_str(), w.provider.as_str(), w.model.as_str())).collect();
+        assert_eq!(picked, vec![("kimi", "kimi", ""), ("auto", "claude", "default")]);
+    });
+}
+
+#[test]
+fn explicit_models_in_auto_teams_dispatch_even_when_switched_off() {
+    use crate::model_routing::{with_exclusions, Exclusions};
+    let (state, sid) = auto_state();
+    with_exclusions(Exclusions { providers: vec!["codex".into()], models: vec![] }, || {
+        call(&state, &sid, "pandacode_dispatch_workers", json!({"assignments":[auto_assignment("x", json!({"provider":"codex","model":"gpt-6-luna"}))]})).unwrap();
+    });
+}
+
+#[test]
+fn excluded_harness_is_not_used_for_failover_but_explicit_dispatch_still_works() {
+    crate::model_routing::with_exclusions(crate::model_routing::Exclusions { providers: vec!["commandcode".into(), "claude".into()], models: vec![] }, || {
+        let (state, sid, run) = failover_state("claude-sonnet-5-5", &["claude", "commandcode"]);
+        settle(&state, &run, false, false);
+        let store = state.store.lock().unwrap();
+        let team = load(&store, &sid).unwrap().unwrap();
+        assert_eq!(team.workers[0].status, "failed");
+        assert_eq!(team.workers[0].provider, "claude");
+        assert_eq!(team.workers[0].failovers, 0);
+    });
+}
+
+#[test]
+fn the_lead_is_told_to_route_first() {
+    let mut config = config();
+    config.auto = true;
+    config.catalog = routing_catalog();
+    let note = routing::prompt_note(&config, true);
+    assert!(note.contains("Router first") && note.contains("profileId \"auto\"") && note.contains("another harness first") && note.contains("your own model"), "{note}");
+    let dispatch = catalog().into_iter().find(|t| t["name"] == "pandacode_dispatch_workers").unwrap();
+    assert!(dispatch["description"].as_str().unwrap().starts_with("Dispatch independent assignments together in one batch to run concurrently. By default use profileId \"auto\""));
 }

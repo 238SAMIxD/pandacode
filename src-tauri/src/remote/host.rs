@@ -3158,6 +3158,7 @@ mod tests {
                 updated_at: 150,
             }),
             timed_out: false,
+            failovers: 0,
         }
     }
 

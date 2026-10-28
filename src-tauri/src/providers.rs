@@ -2669,18 +2669,31 @@ pub async fn run(
     sink: Sink,
     input: UnboundedReceiver<RunInput>,
 ) -> Result<(), String> {
-    run_with_tools(config, sink, input, None).await
+    run_with_tools(config, sink, input, None, Default::default()).await
 }
 
+tokio::task_local! {
+    static HARNESS: Arc<std::sync::atomic::AtomicBool>;
+}
+
+/// Marks the run as having reached the harness: from here an error is the harness's (its CLI is
+/// missing, it could not start, or its process or session failed), so it counts for model health.
+/// PandaCode's own preflight (validation, attachments, connections, tools) fails before this.
+fn reached_harness() {
+    let _ = HARNESS.try_with(|reached| reached.store(true, std::sync::atomic::Ordering::SeqCst));
+}
+
+/// `harness` is set once the run reaches the harness (`reached_harness`).
 pub async fn run_with_tools(
     config: RunConfig,
     sink: Sink,
     input: UnboundedReceiver<RunInput>,
     host: Option<ToolHost>,
+    harness: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<(), String> {
     let identity = Protocol::new(config.clone());
     sink(identity.event("status", "Starting agent", None));
-    let result = run_inner(config, sink.clone(), input, host).await;
+    let result = HARNESS.scope(harness, run_inner(config, sink.clone(), input, host)).await;
     if let Err(error) = &result {
         sink(identity.event("error", error.clone(), None));
     }
@@ -2807,7 +2820,10 @@ async fn run_inner(
         .as_ref()
         .and_then(|connection| connection.executable.clone())
         .or_else(|| executable(&config.provider))
-        .ok_or_else(|| format!("{} CLI is not installed or is not on PATH", config.provider))?;
+        .ok_or_else(|| {
+            reached_harness();
+            format!("{} CLI is not installed or is not on PATH", config.provider)
+        })?;
     config.cwd = external_path(&config.cwd);
     let image_blocks = attachments::load(&config.provider, &config.images).await?;
     let mut command = command(&path)?;
@@ -2985,6 +3001,7 @@ async fn run_process_with_tools(
     let _pi_bridge = if matches!(config.provider.as_str(), "pi" | "omp") {
         Some(pi::Bridge::configure(&mut command, &config.mode, mcp.as_ref())?)
     } else { None };
+    reached_harness();
     let (mut child, mut group) = if let Some(spare) = spare {
         (spare.child, spare.group)
     } else {
@@ -3209,6 +3226,27 @@ mod tests {
             codex_settings: None,
             images: Vec::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn only_harness_failures_mark_the_run_as_reaching_the_harness() {
+        let sink: Sink = Arc::new(|_| {});
+        // PandaCode's own validation fails before the harness.
+        let reached: Arc<std::sync::atomic::AtomicBool> = Default::default();
+        let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut local = config("claude");
+        local.mode = "bogus".into();
+        assert!(run_with_tools(local, sink.clone(), rx, None, reached.clone()).await.is_err());
+        assert!(!reached.load(std::sync::atomic::Ordering::SeqCst));
+        // A harness that cannot start is the harness's failure.
+        let reached: Arc<std::sync::atomic::AtomicBool> = Default::default();
+        let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let missing = Command::new("/nonexistent/pandacode-harness");
+        let started = HARNESS
+            .scope(reached.clone(), run_process_with_tools(config("claude"), sink, rx, missing, Vec::new(), None))
+            .await;
+        assert!(started.unwrap_err().starts_with("Could not start"));
+        assert!(reached.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[test]
