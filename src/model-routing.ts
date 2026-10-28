@@ -1,6 +1,7 @@
 /* Settings → Agents → Model routing: Panda Router picks each worker's model for a task. */
 import './model-routing.css';
 import { escape, icon } from './dom';
+import { providerLogo } from './provider-logos';
 import { trackSegment } from './motion';
 import { installedCatalog } from './team-catalog';
 import { infoMark } from './tooltip';
@@ -97,8 +98,8 @@ export function mountModelRouting(host: HTMLElement, options: ModelRoutingOption
       }
       const label = `${model} · ${providerName}`;
       const row = document.createElement('div');
-      row.className = 'setting-row'; row.dataset.key = key;
-      row.innerHTML = `<div><strong>${escape(label)} ${infoMark(entry.reason, `Why ${label} is paused`)}</strong><small class="routing-health-left">${escape(left)}</small></div>`
+      row.className = 'setting-row routing-health-row'; row.dataset.key = key;
+      row.innerHTML = `<div>${providerLogo(entry.provider as ProviderId, 'routing-logo')}<strong>${escape(label)} ${infoMark(entry.reason, `Why ${label} is paused`)}</strong><small class="routing-health-left">${escape(left)}</small></div>`
         + `<button type="button" class="secondary-button routing-health-retry" data-provider="${escape(entry.provider)}" data-model="${escape(entry.model)}" aria-label="Allow ${escape(label)} now">Allow now</button>`;
       healthRows.append(row);
     }
@@ -196,7 +197,7 @@ function mountPool(group: HTMLElement, options: ModelRoutingOptions, fail: (caus
   const modelOff = (id: ProviderId, model: string) => shown.models.some(m => m.provider === id && m.model === model);
 
   rows.innerHTML = harnesses.map(p => `<div class="routing-pool-harness" data-provider="${escape(p.id)}">
-    <div class="setting-row"><button type="button" class="routing-pool-expand" aria-expanded="false" aria-controls="routing-pool-${escape(p.id)}" aria-label="${escape(p.name)} models">${icon('chevron', 'routing-pool-chevron')}<strong>${escape(p.name)}</strong></button>
+    <div class="setting-row routing-pool-row"><button type="button" class="routing-pool-expand" aria-expanded="false" aria-controls="routing-pool-${escape(p.id)}" aria-label="${escape(p.name)} models">${icon('chevron', 'routing-pool-chevron')}${providerLogo(p.id, 'routing-logo')}<strong>${escape(p.name)}</strong></button>
       <input type="checkbox" class="settings-switch routing-pool-provider" aria-label="Use ${escape(p.name)} for teams"></div>
     <div class="routing-pool-models" id="routing-pool-${escape(p.id)}" hidden></div></div>`).join('');
 
