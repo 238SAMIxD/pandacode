@@ -6,9 +6,9 @@ const group = (page: Page, name: string) => page.locator(`[data-thread-group="${
 const menu = (page: Page) => page.getByRole('dialog', { name: 'Task actions', exact: true });
 const prompt = (page: Page) => page.getByRole('textbox', { name: 'Message your coding agent', exact: true });
 const ids = (page: Page, name: string) => group(page, name).locator('.task-item').evaluateAll(nodes => nodes.map(node => (node as HTMLElement).dataset.id));
-// All projects: unpinned tasks sit in one Tasks list. orbit holds sessions 1–3, pandacode session 4 (last).
-const ORBIT = 'project:project-1';
-const orbit = async (page: Page) => (await ids(page, 'all')).filter(id => id !== 'session-4');
+// All projects: unpinned tasks sit in one Finished list (pending samples included). orbit holds sessions 1–3, pandacode session 4 (last).
+const ORBIT = 'review';
+const orbit = async (page: Page) => (await ids(page, 'review')).filter(id => id !== 'session-4');
 
 async function open(page: Page, seed = ''): Promise<void> {
   await page.route('**/src/preview.ts*', async route => {
@@ -112,25 +112,24 @@ test.describe('thread order', () => {
     await open(page, `for (const [index,id] of ['session-1','session-4','session-2','session-3'].entries()) { session(id).lastResponseAt = now - (index + 1) * 1000; }`);
     expect(await ids(page, ORBIT)).toEqual(['session-1', 'session-2', 'session-3']);
     await expect(row(page, 'session-4')).toHaveCount(0);
-    await expect(group(page, 'all')).toHaveCount(0);
     await dragBefore(page, 'session-3', 'session-1');
     await expect.poll(() => ids(page, ORBIT)).toEqual(['session-3', 'session-1', 'session-2']);
     expect((await calls(page, 'reorder_sessions'))[0].args.sessionIds).toEqual(['session-3', 'session-1', 'session-2']);
     expect((await saved(page)).find(task => task.id === 'session-4').sidebarOrder).toBe(1);
     await page.locator('#project-filter').click();
     await page.getByRole('dialog', { name: 'Filter projects', exact: true }).getByRole('menuitemradio', { name: 'All projects', exact: true }).click();
-    await expect.poll(() => ids(page, 'all')).toEqual(['session-3', 'session-4', 'session-1', 'session-2']);
+    await expect.poll(() => ids(page, 'review')).toEqual(['session-3', 'session-4', 'session-1', 'session-2']);
     await expect(row(page, 'session-1')).toHaveAttribute('aria-current', 'page');
   });
 
-  test('ignores drops across pinned and Tasks', async ({ page }) => {
+  test('ignores drops across pinned and Finished', async ({ page }) => {
     await open(page);
     await choosePin(page, 'session-2');
     await row(page, 'session-3').dragTo(row(page, 'session-2'));
     await row(page, 'session-2').dragTo(row(page, 'session-1'));
     expect(await calls(page, 'reorder_sessions')).toEqual([]);
     expect(await ids(page, 'pinned')).toEqual(['session-2']);
-    expect(await ids(page, 'all')).toEqual(['session-1', 'session-3', 'session-4']);
+    expect(await ids(page, 'review')).toEqual(['session-1', 'session-3', 'session-4']);
     await expect(page.locator('.drop-before,.drop-after,.task-dragging')).toHaveCount(0);
   });
 
@@ -226,7 +225,7 @@ test.describe('thread order', () => {
     expect((await saved(page)).find(task => task.id === 'session-2').pinned).toBe(true);
   });
 
-  test('a task created after a manual reorder appears at the top of Tasks', async ({ page }) => {
+  test('a task created after a manual reorder appears at the top of Finished', async ({ page }) => {
     await open(page);
     await dragBefore(page, 'session-3', 'session-1');
     await expect.poll(() => orbit(page)).toEqual(['session-3', 'session-1', 'session-2']);
@@ -269,7 +268,7 @@ test.describe('thread order', () => {
     await expect(row(page, 'session-1')).toHaveAttribute('draggable', 'true');
   });
 
-  test('All projects lists unpinned tasks in Tasks, each naming its project; selected options show a trailing check', async ({ page }) => {
+  test('All projects lists unpinned tasks in Finished, each naming its project; selected options show a trailing check', async ({ page }) => {
     await open(page);
     await page.getByRole('button', { name: 'Sort and view', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: 'Sort and view', exact: true });
@@ -278,19 +277,14 @@ test.describe('thread order', () => {
     await expect(manual.locator('svg.icon').last()).toBeVisible();
     await expect(dialog.getByRole('group', { name: 'Sort projects', exact: true })).toHaveCount(0);
     await expect(dialog.getByRole('group', { name: 'Group', exact: true })).toHaveCount(0);
-    expect((await dialog.boundingBox())!.width).toBe(280);
+    await expect.poll(async () => (await dialog.boundingBox())!.width).toBe(280);
     await page.keyboard.press('Escape');
     await expect(page.locator('#navigation .folder-heading')).toHaveCount(0);
-    await expect.poll(() => ids(page, 'all')).toEqual(['session-1', 'session-2', 'session-3', 'session-4']);
-    // At the default width titles come first: the name hides (the tooltip keeps it), the icon stays.
-    await expect(row(page, 'session-4').locator('.task-project-name')).toBeHidden();
-    await expect(row(page, 'session-4').locator('.task-app-icon')).toBeVisible();
+    await expect.poll(() => ids(page, 'review')).toEqual(['session-1', 'session-2', 'session-3', 'session-4']);
+    // Finished rows are cards: the first line names the project with its icon, as does the tooltip.
+    await expect(row(page, 'session-4').locator('.task-head .task-app-icon')).toBeVisible();
+    await expect(row(page, 'session-4').locator('.task-checkout')).toHaveText('pandacode');
     await expect(row(page, 'session-4')).toHaveAttribute('title', /\npandacode/);
-    // A wider sidebar shows the name in full.
-    await page.evaluate(() => document.querySelector<HTMLElement>('.workspace')!.style.setProperty('--sidebar-width', '320px'));
-    await expect(row(page, 'session-4').locator('.task-project-name')).toHaveText('pandacode');
-    const name = await row(page, 'session-4').locator('.task-project-name').evaluate(node => node.scrollWidth <= node.clientWidth);
-    expect(name).toBe(true);
   });
 
   test('a right-click opens the task menu at the pointer; the … button keeps it on the row', async ({ page }) => {

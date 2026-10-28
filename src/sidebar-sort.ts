@@ -65,10 +65,6 @@ export function taskComparator(sort: TaskSort): (a: Session, b: Session) => numb
 export function compareStarted(a: Session, b: Session): number {
   return newest(a.lastPromptAt ?? a.createdAt, b.lastPromptAt ?? b.createdAt) || settle(a, b);
 }
-/** Finished: the latest finished turn on top. */
-export function compareResponded(a: Session, b: Session): number {
-  return newest(a.lastResponseAt ?? a.createdAt, b.lastResponseAt ?? b.createdAt) || settle(a, b);
-}
 /** Completed: the latest completion on top. Metadata edits (renames) never move a row. */
 export function compareCompleted(a: Session, b: Session): number {
   const done = (task: Session) => task.completedAt ?? task.lastResponseAt ?? task.createdAt;

@@ -116,6 +116,8 @@ test('the project menu is flat glass with equal insets, a borderless search and 
   await page.locator('#project-filter').click();
   const menu = page.locator('.floating-menu').first();
   await expect(menu).toBeVisible();
+  // Measure once the menu has arrived (it scales in a few percent).
+  await expect.poll(() => menu.evaluate(element => element.getAnimations().length)).toBe(0);
   const layout = await menu.evaluate(element => {
     const box = element.getBoundingClientRect(), border = parseFloat(getComputedStyle(element).borderTopWidth);
     const search = element.querySelector<HTMLElement>('[class*="menu-search"]')!;
