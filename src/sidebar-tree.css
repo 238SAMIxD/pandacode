@@ -176,12 +176,14 @@ html[data-theme=dark] .sidebar .task-indicator.unread{background:var(--accent)}
    frost over the scene, which darker scenes pull toward grey. Two tiers below the title, both
    ≥4.5:1 on every scene at the default visibility. */
 html:not([data-theme="dark"]) .workspace[data-wallpaper]>.sidebar{--muted:#3d4038;--faint:#585b53}
-/* The actions cover the status/age slot, which keeps its width, behind a short fade to the row's
-   own background: the title keeps its length instead of shrinking for them. */
+/* The actions cover the status/age slot, which keeps its width, on a frosted blur that fades in
+   from the left: the title keeps its length instead of shrinking for them. No fill of its own,
+   since a second translucent row tint over the row's would show as a block on wallpapers. */
 .sidebar .task-row{--row-bg:var(--raised)}
 .sidebar .task-row:has(>.task-item.selected){--row-bg:var(--accent-dim)}
 html[data-theme] .workspace[data-wallpaper]>.sidebar .task-row:has(>.task-item.selected){--row-bg:color-mix(in srgb,var(--accent) 22%,var(--sidebar))}
-.sidebar .task-actions{padding-left:14px;border-radius:0 var(--radius-sm) var(--radius-sm) 0;background:var(--row-bg)}
+.sidebar .task-actions{padding-left:18px;border-radius:0 var(--radius-sm) var(--radius-sm) 0;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);-webkit-mask-image:linear-gradient(to right,transparent,#000 18px);mask-image:linear-gradient(to right,transparent,#000 18px)}
+@media(prefers-reduced-transparency:reduce){.sidebar .task-actions{-webkit-backdrop-filter:none;backdrop-filter:none;background:var(--row-bg)}}
 .sidebar .task-row:is(:hover,:focus-within)>.task-item>.task-line:first-child>:is(.task-age,.task-indicator,.task-provider,.task-status){visibility:hidden}
 .sidebar .task-action{display:grid;place-items:center;width:22px;height:22px;padding:0;border-radius:var(--radius-sm);color:var(--muted);--press:.9}
 .sidebar .task-action .icon{--icon-size:var(--icon-sm);--icon-stroke:var(--icon-stroke-sm)}

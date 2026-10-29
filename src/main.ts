@@ -4053,7 +4053,8 @@ async function createTask(projectId = state.projectId): Promise<void> {
   // (typed text or a worktree) is reopened; from inside one, New task starts another.
   const current = state.sessionId;
   leaveDraft('');
-  const existing = state.sessions.find(task => task.draft && task.id !== current && task.projectId === active.id && !deletedSessions.has(task.id));
+  // A settled draft (its worktree removed) is never reopened.
+  const existing = state.sessions.find(task => task.draft && task.id !== current && task.projectId === active.id && !deletedSessions.has(task.id) && taskStage(task) !== 'completed');
   if (existing) { state.query = ''; closeModal(); await selectSession(existing.id, true); return; }
   creatingTask = true;
   let created: Session;

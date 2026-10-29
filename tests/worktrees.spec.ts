@@ -229,6 +229,13 @@ test('merges a worktree into main locally, then offers to remove it', async ({ p
   await dialog.getByRole('button', { name: 'Remove and settle', exact: true }).click();
   await expect(page.locator('#toast')).toContainText('deleted pandacode/ship-it');
   expect((await calls(page, 'remove_worktree')).at(-1).args).toMatchObject({ deleteBranch: true });
+  // The settled draft is never reopened: New task, from here or elsewhere, starts a fresh one.
+  for (const from of [null, 'session-1']) {
+    if (from) await page.locator(`.task-item[data-id="${from}"]`).click();
+    await page.locator('.new-task-button').click();
+    await expect(page.locator('.board-completed-note')).toHaveCount(0);
+    await expect(prompt(page)).toBeEnabled();
+  }
 });
 
 test('a merge that conflicts says so and leaves the worktree alone', async ({ page }) => {
