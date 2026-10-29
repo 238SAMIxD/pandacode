@@ -899,7 +899,7 @@ pub(crate) fn parse_models_for(provider: &str, metadata: &Value) -> Vec<ModelInf
     if let Some(option) = options(metadata, "model") {
         for choice in choices(option) {
             let id = field(choice, "value");
-            if !valid_model_id(id) {
+            if !valid_model_id(id) || id == "default" {
                 continue;
             }
             models.push(ModelInfo {
@@ -914,7 +914,7 @@ pub(crate) fn parse_models_for(provider: &str, metadata: &Value) -> Vec<ModelInf
     } else if let Some(available) = metadata["models"]["availableModels"].as_array() {
         for entry in available.iter().take(MODEL_CATALOG_LIMIT) {
             let id = field(entry, "modelId");
-            if !valid_model_id(id) {
+            if !valid_model_id(id) || id == "default" {
                 continue;
             }
             models.push(ModelInfo {

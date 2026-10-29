@@ -177,8 +177,13 @@ async def handle_session_new_or_load(req_id: Any, params: dict[str, Any]) -> Non
 
 async def handle_set_mode(req_id: Any, params: dict[str, Any]) -> None:
     session_id = params.get("sessionId")
+    mode_id = params.get("modeId", "default")
     if session_id and session_id in sessions:
-        sessions[session_id]["mode"] = params.get("modeId", "default")
+        sessions[session_id]["mode"] = mode_id
+    if mode_id == "dont_ask":
+        os.environ["NANOBOT_YOLO_MODE"] = "1"
+    else:
+        os.environ.pop("NANOBOT_YOLO_MODE", None)
     send_response(req_id, {})
 
 
@@ -219,167 +224,209 @@ async def handle_prompt(req_id: Any, params: dict[str, Any]) -> None:
     sess = sessions.get(session_id, {})
     cwd = sess.get("cwd", os.getcwd())
     model = sess.get("model")
+    mode = sess.get("mode", "default")
+    if mode == "dont_ask":
+        os.environ["NANOBOT_YOLO_MODE"] = "1"
+    else:
+        os.environ.pop("NANOBOT_YOLO_MODE", None)
     mcp_servers = sess.get("mcpServers") or []
 
     prompt_items = params.get("prompt", [])
     message = "".join(
         item.get("text", "") for item in prompt_items if item.get("type") == "text"
     )
-    media: list[str] = [
-        item.get("path")
-        for item in prompt_items
-        if item.get("type") == "image" and item.get("path")
-    ]
-
-    try:
-        from nanobot import Nanobot
-        from nanobot.sdk.types import (
-            STREAM_EVENT_TEXT_DELTA,
-            STREAM_EVENT_REASONING_DELTA,
-            STREAM_EVENT_TOOL_STARTED,
-            STREAM_EVENT_TOOL_COMPLETED,
-            STREAM_EVENT_RUN_COMPLETED,
-            STREAM_EVENT_RUN_FAILED,
-        )
-
-        bot = Nanobot.from_config(workspace=cwd, model=model)
-
-        if mcp_servers and hasattr(bot, "_mcp_provider") and bot._mcp_provider is not None:
-            try:
-                from nanobot.config.schema import MCPServerConfig
-                for idx, s in enumerate(mcp_servers):
-                    if not isinstance(s, dict):
-                        continue
-                    name = s.get("name") or f"pandacode_mcp_{idx}"
-                    url = s.get("url") or s.get("uri")
-                    if not url:
-                        continue
-                    raw_headers = s.get("headers")
-                    headers_dict: dict[str, str] = {}
-                    if isinstance(raw_headers, list):
-                        for h in raw_headers:
-                            if isinstance(h, dict) and "name" in h and "value" in h:
-                                headers_dict[str(h["name"])] = str(h["value"])
-                    elif isinstance(raw_headers, dict):
-                        headers_dict = {str(k): str(v) for k, v in raw_headers.items()}
-
-                    bot._mcp_provider._servers[name] = MCPServerConfig(
-                        type="streamableHttp",
-                        url=url,
-                        headers=headers_dict,
-                        enabled_tools=["*"],
-                    )
-            except Exception as mcp_err:
+    temp_files_to_cleanup: list[str] = []
+    media: list[str] = []
+    for item in prompt_items:
+        if item.get("type") == "image":
+            path_val = item.get("path")
+            if path_val and os.path.exists(path_val):
+                media.append(str(path_val))
+            elif item.get("data"):
                 try:
-                    logger.warning("Could not register PandaCode MCP servers: {}", mcp_err)
-                except Exception:
-                    pass
-    except Exception as exc:
-        send_response(req_id, error={
-            "code": -32603,
-            "message": str(exc),
-            "data": {"details": str(exc)}
-        })
-        return
+                    import base64
+                    import tempfile
+                    raw_b64 = item["data"]
+                    if "," in raw_b64:
+                        raw_b64 = raw_b64.split(",", 1)[1]
+                    img_bytes = base64.b64decode(raw_b64)
+                    mime = item.get("mimeType") or ""
+                    suffix = ".png"
+                    if "jpeg" in mime or "jpg" in mime:
+                        suffix = ".jpg"
+                    elif "webp" in mime:
+                        suffix = ".webp"
+                    elif "gif" in mime:
+                        suffix = ".gif"
+                    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+                    tmp.write(img_bytes)
+                    tmp.close()
+                    media.append(tmp.name)
+                    temp_files_to_cleanup.append(tmp.name)
+                except Exception as b64_err:
+                    try:
+                        logger.warning("Failed to decode base64 image: {}", b64_err)
+                    except Exception:
+                        pass
 
     try:
-        run = await bot.run_streamed(
-            message,
-            session_key=session_id,
-            media=media or None,
-        )
-        delivered_chunks = 0
-        async for event in run.stream_events():
-            event_type = getattr(event, "type", "")
-            if event_type in ("text.delta", STREAM_EVENT_TEXT_DELTA):
-                delta = getattr(event, "delta", "") or getattr(event, "content", "")
-                if delta:
-                    delivered_chunks += 1
-                    send_notification("session/update", {
-                        "sessionId": session_id,
-                        "update": {
-                            "sessionUpdate": "agent_message_chunk",
-                            "content": {"type": "text", "text": delta}
-                        }
-                    })
-            elif event_type in ("reasoning.delta", STREAM_EVENT_REASONING_DELTA):
-                delta = getattr(event, "delta", "") or getattr(event, "content", "")
-                if delta:
-                    send_notification("session/update", {
-                        "sessionId": session_id,
-                        "update": {
-                            "sessionUpdate": "agent_thought_chunk",
-                            "content": {"type": "text", "text": delta}
-                        }
-                    })
-            elif event_type in ("tool.started", STREAM_EVENT_TOOL_STARTED):
-                call_id = getattr(event, "tool_call_id", None) or f"tool-{uuid.uuid4().hex[:8]}"
-                name = getattr(event, "name", None) or "Tool execution"
-                args = getattr(event, "arguments", None) or {}
-                send_notification("session/update", {
-                    "sessionId": session_id,
-                    "update": {
-                        "sessionUpdate": "tool_call",
-                        "toolCallId": call_id,
-                        "title": name,
-                        "status": "in_progress",
-                        "rawInput": args
-                    }
-                })
-            elif event_type in ("tool.completed", STREAM_EVENT_TOOL_COMPLETED):
-                call_id = getattr(event, "tool_call_id", None) or "tool"
-                content = getattr(event, "content", "")
-                send_notification("session/update", {
-                    "sessionId": session_id,
-                    "update": {
-                        "sessionUpdate": "tool_call_update",
-                        "toolCallId": call_id,
-                        "status": "completed",
-                        "rawOutput": {"content": content}
-                    }
-                })
-            elif event_type in ("run.completed", STREAM_EVENT_RUN_COMPLETED):
-                content = getattr(event, "content", "") or ""
-                if delivered_chunks == 0 and content:
-                    if (
-                        content.startswith("[Assistant reply unavailable")
-                        or content.startswith("Error:")
-                        or "LLM returned error" in content
-                    ):
-                        send_response(req_id, error={
-                            "code": -32603,
-                            "message": str(content),
-                            "data": {"details": str(content)}
-                        })
-                        await bot.aclose()
-                        return
-                    else:
+        try:
+            from nanobot import Nanobot
+            from nanobot.sdk.types import (
+                STREAM_EVENT_TEXT_DELTA,
+                STREAM_EVENT_REASONING_DELTA,
+                STREAM_EVENT_TOOL_STARTED,
+                STREAM_EVENT_TOOL_COMPLETED,
+                STREAM_EVENT_RUN_COMPLETED,
+                STREAM_EVENT_RUN_FAILED,
+            )
+
+            bot = Nanobot.from_config(workspace=cwd, model=model)
+
+            if mcp_servers and hasattr(bot, "_mcp_provider") and bot._mcp_provider is not None:
+                try:
+                    from nanobot.config.schema import MCPServerConfig
+                    for idx, s in enumerate(mcp_servers):
+                        if not isinstance(s, dict):
+                            continue
+                        name = s.get("name") or f"pandacode_mcp_{idx}"
+                        url = s.get("url") or s.get("uri")
+                        if not url:
+                            continue
+                        raw_headers = s.get("headers")
+                        headers_dict: dict[str, str] = {}
+                        if isinstance(raw_headers, list):
+                            for h in raw_headers:
+                                if isinstance(h, dict) and "name" in h and "value" in h:
+                                    headers_dict[str(h["name"])] = str(h["value"])
+                        elif isinstance(raw_headers, dict):
+                            headers_dict = {str(k): str(v) for k, v in raw_headers.items()}
+
+                        bot._mcp_provider._servers[name] = MCPServerConfig(
+                            type="streamableHttp",
+                            url=url,
+                            headers=headers_dict,
+                            enabled_tools=["*"],
+                        )
+                except Exception as mcp_err:
+                    try:
+                        logger.warning("Could not register PandaCode MCP servers: {}", mcp_err)
+                    except Exception:
+                        pass
+        except Exception as exc:
+            send_response(req_id, error={
+                "code": -32603,
+                "message": str(exc),
+                "data": {"details": str(exc)}
+            })
+            return
+
+        try:
+            run = await bot.run_streamed(
+                message,
+                session_key=session_id,
+                media=media or None,
+            )
+            delivered_chunks = 0
+            async for event in run.stream_events():
+                event_type = getattr(event, "type", "")
+                if event_type in ("text.delta", STREAM_EVENT_TEXT_DELTA):
+                    delta = getattr(event, "delta", "") or getattr(event, "content", "")
+                    if delta:
                         delivered_chunks += 1
                         send_notification("session/update", {
                             "sessionId": session_id,
                             "update": {
                                 "sessionUpdate": "agent_message_chunk",
-                                "content": {"type": "text", "text": content}
+                                "content": {"type": "text", "text": delta}
                             }
                         })
-            elif event_type in ("run.failed", STREAM_EVENT_RUN_FAILED):
-                err = getattr(event, "error", "Turn execution failed")
-                send_response(req_id, error={
-                    "code": -32603,
-                    "message": str(err),
-                    "data": {"details": str(err)}
-                })
-                await bot.aclose()
-                return
+                elif event_type in ("reasoning.delta", STREAM_EVENT_REASONING_DELTA):
+                    delta = getattr(event, "delta", "") or getattr(event, "content", "")
+                    if delta:
+                        send_notification("session/update", {
+                            "sessionId": session_id,
+                            "update": {
+                                "sessionUpdate": "agent_thought_chunk",
+                                "content": {"type": "text", "text": delta}
+                            }
+                        })
+                elif event_type in ("tool.started", STREAM_EVENT_TOOL_STARTED):
+                    call_id = getattr(event, "tool_call_id", None) or f"tool-{uuid.uuid4().hex[:8]}"
+                    sessions.setdefault(session_id, {})["last_tool_call_id"] = call_id
+                    name = getattr(event, "name", None) or "Tool execution"
+                    args = getattr(event, "arguments", None) or {}
+                    send_notification("session/update", {
+                        "sessionId": session_id,
+                        "update": {
+                            "sessionUpdate": "tool_call",
+                            "toolCallId": call_id,
+                            "title": name,
+                            "status": "in_progress",
+                            "rawInput": args
+                        }
+                    })
+                elif event_type in ("tool.completed", STREAM_EVENT_TOOL_COMPLETED):
+                    fallback_id = sessions.get(session_id, {}).get("last_tool_call_id") or "tool"
+                    call_id = getattr(event, "tool_call_id", None) or fallback_id
+                    content = getattr(event, "content", "")
+                    send_notification("session/update", {
+                        "sessionId": session_id,
+                        "update": {
+                            "sessionUpdate": "tool_call_update",
+                            "toolCallId": call_id,
+                            "status": "completed",
+                            "rawOutput": {"content": content}
+                        }
+                    })
+                elif event_type in ("run.completed", STREAM_EVENT_RUN_COMPLETED):
+                    content = getattr(event, "content", "") or ""
+                    if delivered_chunks == 0 and content:
+                        if (
+                            content.startswith("[Assistant reply unavailable")
+                            or content.startswith("Error:")
+                            or "LLM returned error" in content
+                        ):
+                            send_response(req_id, error={
+                                "code": -32603,
+                                "message": str(content),
+                                "data": {"details": str(content)}
+                            })
+                            await bot.aclose()
+                            return
+                        else:
+                            delivered_chunks += 1
+                            send_notification("session/update", {
+                                "sessionId": session_id,
+                                "update": {
+                                    "sessionUpdate": "agent_message_chunk",
+                                    "content": {"type": "text", "text": content}
+                                }
+                            })
+                elif event_type in ("run.failed", STREAM_EVENT_RUN_FAILED):
+                    err = getattr(event, "error", "Turn execution failed")
+                    send_response(req_id, error={
+                        "code": -32603,
+                        "message": str(err),
+                        "data": {"details": str(err)}
+                    })
+                    await bot.aclose()
+                    return
 
-        await bot.aclose()
-        send_response(req_id, {"stopReason": "end_turn"})
-    except Exception as exc:
-        send_response(req_id, error={
-            "code": -32603,
-            "message": str(exc),
-            "data": {"details": str(exc)}
-        })
+            await bot.aclose()
+            send_response(req_id, {"stopReason": "end_turn"})
+        except Exception as exc:
+            send_response(req_id, error={
+                "code": -32603,
+                "message": str(exc),
+                "data": {"details": str(exc)}
+            })
+    finally:
+        for p in temp_files_to_cleanup:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
 
 
 async def handle_cancel(params: dict[str, Any]) -> None:

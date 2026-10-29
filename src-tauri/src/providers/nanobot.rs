@@ -10,7 +10,11 @@ pub(crate) fn bridge_path() -> Result<PathBuf, String> {
     if let Some(path) = PATH.get() {
         return Ok(path.clone());
     }
-    let path = std::env::temp_dir().join("pandacode-nanobot-bridge.py");
+    #[cfg(unix)]
+    let filename = format!("pandacode-nanobot-bridge-{}.py", unsafe { libc::getuid() });
+    #[cfg(not(unix))]
+    let filename = "pandacode-nanobot-bridge.py".to_string();
+    let path = std::env::temp_dir().join(filename);
     let needs_write = match std::fs::read_to_string(&path) {
         Ok(existing) => existing != BRIDGE_CODE,
         Err(_) => true,
@@ -48,9 +52,21 @@ pub(crate) fn python_for_nanobot(path: &Path) -> Option<PathBuf> {
     if let Ok(content) = std::fs::read_to_string(path) {
         for line in content.lines() {
             if let Some(rest) = line.strip_prefix("#!") {
-                let candidate = PathBuf::from(rest.trim());
-                if candidate.is_file() {
-                    return Some(candidate);
+                let mut parts = rest.split_whitespace();
+                if let Some(first) = parts.next() {
+                    if first.ends_with("/env") {
+                        let second = parts.find(|part| !part.starts_with('-'));
+                        if let Some(cmd) = second {
+                            if let Some(found) = launch::find(cmd) {
+                                return Some(found);
+                            }
+                        }
+                    } else {
+                        let candidate = PathBuf::from(first);
+                        if candidate.is_file() {
+                            return Some(candidate);
+                        }
+                    }
                 }
             } else if line.contains("python") {
                 if let Some(start) = line.find('/') {
@@ -219,6 +235,15 @@ mod tests {
     #[test]
     fn python_for_nanobot_locates_interpreter() {
         let py = python_for_nanobot(Path::new("/usr/local/bin/nanobot"));
+        assert!(py.is_some());
+    }
+
+    #[test]
+    fn python_for_nanobot_parses_env_shebang() {
+        let temp = std::env::temp_dir().join(format!("mock-nanobot-{}", std::process::id()));
+        std::fs::write(&temp, "#!/usr/bin/env python3\n# mock script").unwrap();
+        let py = python_for_nanobot(&temp);
+        let _ = std::fs::remove_file(&temp);
         assert!(py.is_some());
     }
 
