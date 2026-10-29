@@ -8,7 +8,9 @@ import type { OfficeKind } from './office-viewer';
 
 type Context = { projectId: string; sessionId?: string };
 /** `source` shows a viewer-handled file (e.g. an SVG) as text. */
-type Tab = { path: string; context: Context; content?: string | ArrayBuffer; reads?: number; source?: boolean };
+type Tab = { path: string; context: Context; content?: string | ArrayBuffer; reads?: number; source?: boolean; used?: number };
+/** Document bytes kept for tabs not on screen, across all tasks; evicted tabs read their file again when shown. */
+const DOCUMENT_CACHE_BYTES = 64 * 1024 * 1024;
 /** PDF, Word, spreadsheet and image files arrive as bytes and draw in their own lazily loaded viewer. */
 const officeKind = (path: string): OfficeKind | undefined =>
   /\.pdf$/i.test(path) ? 'pdf' : /\.docx$/i.test(path) ? 'docx' : /\.(?:xlsx|xlsm|xls|ods)$/i.test(path) ? 'sheet' : /\.(?:png|jpe?g|gif|webp|avif|bmp|ico|svg)$/i.test(path) ? 'image' : undefined;
@@ -41,13 +43,29 @@ export function createFileTabs(deps: Deps) {
   const threads = new Map<string, Thread>();
   let key = '', workspace = '';
   let disposeOffice = () => {};
+  let tick = 0;
 
   const thread = (): Thread | undefined => threads.get(key);
   const current = (): Tab | undefined => thread()?.tabs.find(tab => tab.path === thread()!.active);
   const name = (path: string) => path.split('/').pop() ?? path;
 
+  /** Keeps the shown tab's bytes and the most recently shown background documents that fit the cache. */
+  function trim(): void {
+    const shown = current();
+    let budget = DOCUMENT_CACHE_BYTES;
+    const cached = [...threads.values()].flatMap(entry => entry.tabs)
+      .filter(tab => tab !== shown && typeof tab.content === 'object')
+      .sort((a, b) => (b.used ?? 0) - (a.used ?? 0));
+    for (const tab of cached) {
+      budget -= (tab.content as ArrayBuffer).byteLength;
+      if (budget < 0) tab.content = undefined;
+    }
+  }
+
   /** Redraws the strip and view; focus that was on the strip, or that the file view just made inert, lands on the selected tab. */
   function render(): void {
+    const shown = current(); if (shown) shown.used = ++tick;
+    trim();
     const focused = document.activeElement, onStrip = strip.contains(focused);
     draw();
     const now = document.activeElement;
@@ -103,7 +121,7 @@ export function createFileTabs(deps: Deps) {
       // An older reply arriving after a newer one must not put stale text back.
       if (read !== tab.reads || sameContent(content, tab.content)) return;
       tab.content = content;
-      if (current() === tab) render();
+      if (current() === tab) render(); else trim();
     } catch (error) {
       if (read !== tab.reads) return;
       const owner = [...threads.values()].find(entry => entry.tabs.includes(tab));

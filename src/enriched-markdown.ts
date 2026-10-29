@@ -21,22 +21,76 @@ export interface RenderOptions {
 }
 
 type Parse = (markdown: string, ...flags: number[]) => string;
-let parser: Promise<Parse> | undefined;
-function load(): Promise<Parse> {
-  parser ??= import('./vendor/enriched-markdown/md4c.js')
-    .then(module => module.default())
-    .then((wasm: { cwrap: (name: string, returns: string, args: string[]) => Parse }) =>
-      wasm.cwrap('parseMarkdown', 'string', ['string', 'number', 'number', 'number', 'number', 'number', 'number', 'number', 'number']))
-    .catch(error => { parser = undefined; throw error; });
-  return parser;
+interface Engine { parse: Parse; memory?: WebAssembly.Memory }
+
+/** WebAssembly memory only grows, so a parser past this is dropped and the next parse starts a fresh one. */
+export const MEMORY_CAP = 64 * 1024 * 1024;
+/** Inputs longer than this parse in a throwaway instance, so the long-lived one never grows for them. */
+export const LARGE_INPUT = 512 * 1024;
+
+type Factory = (options?: { instantiateWasm?: (imports: WebAssembly.Imports, receive: (instance: WebAssembly.Instance) => void) => object }) =>
+  Promise<{ cwrap: (name: string, returns: string, args: string[]) => Parse }>;
+
+// The vendored glue keeps its wasm bytes private, so the compiled module is read once from the one
+// instantiate its first start makes; the patch is in place only for that start, never two at once.
+let compiled: Promise<WebAssembly.Module> | undefined;
+function compiledModule(factory: Factory): Promise<WebAssembly.Module> {
+  compiled ??= (async () => {
+    const instantiate = WebAssembly.instantiate;
+    let found: WebAssembly.Module | undefined;
+    WebAssembly.instantiate = (async (...args: unknown[]) => {
+      const result = await (instantiate as (...a: unknown[]) => Promise<WebAssembly.WebAssemblyInstantiatedSource>).apply(WebAssembly, args);
+      if (result.instance?.exports?.parseMarkdown) found = result.module;
+      return result;
+    }) as typeof instantiate;
+    try { await factory(); } finally { WebAssembly.instantiate = instantiate; }
+    if (!found) throw new Error('Markdown engine did not start.');
+    return found;
+  })().catch(error => { compiled = undefined; throw error; });
+  return compiled;
+}
+
+// Every engine instantiates the cached module through the glue's own hook, so its memory is read
+// straight from the instance and nothing global changes. Re-creating costs about 1 ms.
+async function createEngine(): Promise<Engine> {
+  const factory = (await import('./vendor/enriched-markdown/md4c.js')).default as Factory;
+  const module = await compiledModule(factory);
+  let memory: WebAssembly.Memory | undefined;
+  let fail: (error: unknown) => void = () => {};
+  const failed = new Promise<never>((_, reject) => { fail = reject; });
+  const wasm = await Promise.race([failed, factory({
+    instantiateWasm: (imports, receive) => {
+      WebAssembly.instantiate(module, imports).then(instance => {
+        if (instance.exports.memory instanceof WebAssembly.Memory) memory = instance.exports.memory;
+        receive(instance);
+      }, fail);
+      return {};
+    },
+  })]);
+  return { memory, parse: wasm.cwrap('parseMarkdown', 'string', ['string', 'number', 'number', 'number', 'number', 'number', 'number', 'number', 'number']) };
+}
+
+let engine: Promise<Engine> | undefined;
+function load(): Promise<Engine> {
+  engine ??= createEngine().catch(error => { engine = undefined; throw error; });
+  return engine;
+}
+
+/** Bytes held by the long-lived parser's memory (0 before it loads). */
+export async function parserMemory(): Promise<number> {
+  return engine ? (await engine).memory?.buffer.byteLength ?? 0 : 0;
 }
 
 /** CommonMark with GitHub extensions, LaTeX math and admonitions; no syntax that changes
  * the meaning of ordinary agent text (`_underline_`, `^sup^`, `~sub~`, `==mark==`). */
 export async function parseMarkdown(markdown: string): Promise<MarkdownNode> {
-  const parse = await load();
+  const large = markdown.length > LARGE_INPUT;
+  const pending = large ? createEngine() : load();
+  const current = await pending;
   // underline, latexMath, superscript, subscript, highlight, hardSoftBreaks, preserveBlankLines, admonitions
-  const node = JSON.parse(parse(markdown, 0, 1, 0, 0, 0, 0, 0, 1)) as MarkdownNode;
+  const json = current.parse(markdown, 0, 1, 0, 0, 0, 0, 0, 1);
+  if (engine === pending && (current.memory?.buffer.byteLength ?? 0) > MEMORY_CAP) engine = undefined;
+  const node = JSON.parse(json) as MarkdownNode;
   if (!node || typeof node.type !== 'string') throw new Error('Markdown could not be parsed.');
   return node;
 }

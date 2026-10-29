@@ -3,6 +3,7 @@ mod agents_dock;
 mod agent_usage;
 mod agent_updates;
 mod agent_usage_providers;
+mod memory;
 mod app_updates;
 mod appearance;
 mod architect;
@@ -2291,6 +2292,9 @@ async fn launch_operation_admitted(
                 }
             }
             registry.remove(&session_id);
+            if registry.is_empty() {
+                memory::release_soon();
+            }
         }
         let done = if was_stopped {
             "Turn stopped"

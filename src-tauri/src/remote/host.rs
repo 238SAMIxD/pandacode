@@ -29,8 +29,10 @@ pub(crate) const BURST_FRAMES: u32 = 5;
 /// Events kept per task for viewers that come back (`afterSeq`), and in all.
 const JOURNAL_EVENTS: usize = 2000;
 const JOURNAL_BYTES: usize = 2 * 1024 * 1024;
-const JOURNAL_TOTAL: usize = 32 * 1024 * 1024;
+const JOURNAL_TOTAL: usize = 8 * 1024 * 1024;
 const JOURNAL_TASKS: usize = 2048;
+/// A finished task's events are dropped once no viewer has followed it for this long.
+const JOURNAL_IDLE: Duration = Duration::from_secs(10 * 60);
 /// The part of a subscribe reply that replayed events may fill; the rest comes in later
 /// pages (`more`), each another subscribe from where the viewer now is.
 const REPLAY_BUDGET: usize = PAGE_BUDGET / 3;
@@ -1065,6 +1067,15 @@ fn team_event_cache() -> &'static StdMutex<HashMap<String, HashMap<String, Value
     CACHE.get_or_init(Default::default)
 }
 
+/// Forgets the team rows of tasks no subscriber follows any more, so a phone that comes back
+/// gets every row again.
+fn forget_unfollowed_teams(inner: &super::Inner) {
+    team_event_cache()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .retain(|session, _| inner.subscribers.values().any(|s| s.sessions.contains(session)));
+}
+
 fn queue_team_event(app: &tauri::AppHandle, session_id: &str, data: Value) {
     journaled(app, session_id, team_event_value(session_id, data), Queue::Event);
 }
@@ -1251,12 +1262,22 @@ fn watch_team_events(app: &tauri::AppHandle) {
             let Ok(team) = serde_json::from_value::<crate::architect::TeamSnapshot>(value) else {
                 return;
             };
+            // Rows are remembered only while hosting and a phone follows the task; a phone
+            // that starts following gets every row once, then only changes.
+            let following = listener_app
+                .try_state::<super::Remote>()
+                .is_some_and(|state| followed(&state.lock(), &team.session_id) == Some(true));
             let changed = {
                 let mut cache = team_event_cache()
                     .lock()
                     .unwrap_or_else(|error| error.into_inner());
-                let previous = cache.entry(team.session_id.clone()).or_default();
-                changed_worker_rows(&team, previous)
+                if following {
+                    let previous = cache.entry(team.session_id.clone()).or_default();
+                    changed_worker_rows(&team, previous)
+                } else {
+                    cache.remove(&team.session_id);
+                    Vec::new()
+                }
             };
             for worker in changed {
                 queue_team_event(&listener_app, &team.session_id, worker);
@@ -1296,7 +1317,9 @@ async fn run_one(app: &tauri::AppHandle, from: &str, call: Call, full_access: bo
                 // An expired (or overgrown) subscription starts over.
                 if subscriber.until.is_none_or(|until| until <= Instant::now()) || subscriber.sessions.len() > 4 * MAX_IDS {
                     subscriber.sessions.clear();
+                    forget_unfollowed_teams(&inner);
                 }
+                let subscriber = inner.subscribers.entry(from.to_owned()).or_default();
                 subscriber.until = Some(Instant::now() + SUBSCRIPTION);
                 subscriber.sessions.extend(session_ids);
                 // The plain-sized replay, read at the same journal position, is the fallback for
@@ -1723,22 +1746,28 @@ pub(crate) struct Journal {
     seq: u64,
     bytes: usize,
     rings: HashMap<String, Ring>,
+    /// A delayed sweep ([`sweep_later`]) is scheduled.
+    sweeping: bool,
 }
 
 impl Default for Journal {
     fn default() -> Self {
-        Self { epoch: uuid::Uuid::new_v4().simple().to_string(), seq: 0, bytes: 0, rings: HashMap::new() }
+        Self { epoch: uuid::Uuid::new_v4().simple().to_string(), seq: 0, bytes: 0, rings: HashMap::new(), sweeping: false }
     }
 }
 
-#[derive(Default)]
 struct Ring {
     /// `seq` when recording began: anything before it may be missing.
     since: u64,
     /// The newest `seq` dropped to stay in bounds.
     dropped: u64,
     bytes: usize,
-    events: std::collections::VecDeque<(u64, usize, Value)>,
+    /// When a viewer last followed the task or its run last ended.
+    touched: Instant,
+    /// The newest entry is a run end.
+    finished: bool,
+    /// Kept as sent (JSON text, far smaller than a parsed Value), parsed only for a replay.
+    events: std::collections::VecDeque<(u64, String)>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -1759,21 +1788,61 @@ pub(crate) struct Resumed {
 impl Journal {
     /// Starts recording a task's events, unless it already is.
     fn watch(&mut self, session: &str) {
-        if self.rings.contains_key(session) {
+        let now = Instant::now();
+        if let Some(ring) = self.rings.get_mut(session) {
+            ring.touched = now;
             return;
         }
+        self.sweep(now);
         if self.rings.len() >= JOURNAL_TASKS {
             let quiet = self.rings.iter().min_by_key(|(_, ring)| ring.events.back().map_or(ring.since, |(seq, ..)| *seq)).map(|(id, _)| id.clone());
             if let Some(ring) = quiet.and_then(|id| self.rings.remove(&id)) {
                 self.bytes -= ring.bytes;
             }
         }
-        self.rings.insert(session.to_owned(), Ring { since: self.seq, ..Default::default() });
+        self.rings.insert(session.to_owned(), Ring { since: self.seq, dropped: 0, bytes: 0, touched: now, finished: false, events: Default::default() });
+    }
+
+    /// How long until the first finished ring goes idle, when no sweep is scheduled yet;
+    /// the caller schedules one ([`sweep_later`]) for then.
+    fn arm(&mut self, now: Instant) -> Option<Duration> {
+        if self.sweeping {
+            return None;
+        }
+        let due = self.rings.values().filter(|ring| ring.finished).map(|ring| ring.touched + JOURNAL_IDLE).min()?;
+        self.sweeping = true;
+        Some(due.saturating_duration_since(now))
+    }
+
+    /// The scheduled sweep: drops what went idle and says when to run again, if anything is
+    /// still waiting (a ring followed again meanwhile is due later, never polled).
+    fn fire(&mut self, now: Instant) -> Option<Duration> {
+        self.sweeping = false;
+        self.sweep(now);
+        self.arm(now)
+    }
+
+    /// Drops the rings of finished tasks nobody has followed for [`JOURNAL_IDLE`]. Run on
+    /// a new ring, a subscribe and a run end, and by [`sweep_later`] once a run end idles.
+    fn sweep(&mut self, now: Instant) {
+        let bytes = &mut self.bytes;
+        self.rings.retain(|_, ring| {
+            let keep = !ring.finished || now.saturating_duration_since(ring.touched) < JOURNAL_IDLE;
+            if !keep {
+                *bytes -= ring.bytes;
+            }
+            keep
+        });
     }
 
     /// Numbers and keeps an event of a recorded (or, with `subscribed`, newly recorded)
     /// task; the event as sent, with its `seq`, or None when nobody follows the task.
     fn record(&mut self, session: &str, mut event: Value, subscribed: bool) -> Option<Value> {
+        let now = Instant::now();
+        let finished = event["kind"] == "run.finished";
+        if finished {
+            self.sweep(now);
+        }
         if !self.rings.contains_key(session) {
             if !subscribed {
                 return None;
@@ -1782,19 +1851,25 @@ impl Journal {
         }
         self.seq += 1;
         event["seq"] = json!(self.seq);
-        let size = event.to_string().len();
+        let text = event.to_string();
+        let size = text.len();
         let ring = self.rings.get_mut(session)?;
-        ring.events.push_back((self.seq, size, event.clone()));
+        if subscribed || finished {
+            ring.touched = now;
+        }
+        ring.finished = finished;
+        ring.events.push_back((self.seq, text));
         ring.bytes += size;
         self.bytes += size;
         while ring.events.len() > JOURNAL_EVENTS || ring.bytes > JOURNAL_BYTES {
-            let Some((seq, size, _)) = ring.events.pop_front() else { break };
-            (ring.dropped, ring.bytes, self.bytes) = (seq, ring.bytes - size, self.bytes - size);
+            let Some((seq, text)) = ring.events.pop_front() else { break };
+            (ring.dropped, ring.bytes, self.bytes) = (seq, ring.bytes - text.len(), self.bytes - text.len());
         }
         while self.bytes > JOURNAL_TOTAL {
-            let Some(ring) = self.rings.values_mut().max_by_key(|ring| ring.bytes) else { break };
-            let Some((seq, size, _)) = ring.events.pop_front() else { break };
-            (ring.dropped, ring.bytes, self.bytes) = (seq, ring.bytes - size, self.bytes - size);
+            // The oldest event anywhere goes first, so the one just recorded stays.
+            let Some(ring) = self.rings.values_mut().filter(|ring| !ring.events.is_empty()).min_by_key(|ring| ring.events.front().map_or(0, |(seq, _)| *seq)) else { break };
+            let Some((seq, text)) = ring.events.pop_front() else { break };
+            (ring.dropped, ring.bytes, self.bytes) = (seq, ring.bytes - text.len(), self.bytes - text.len());
         }
         Some(event)
     }
@@ -1803,10 +1878,10 @@ impl Journal {
     /// says what the live frame said.
     fn amend(&mut self, session: &str, seq: u64, event: Value) {
         let Some(ring) = self.rings.get_mut(session) else { return };
-        let Some(slot) = ring.events.iter_mut().find(|(at, ..)| *at == seq) else { return };
-        let size = event.to_string().len();
-        (ring.bytes, self.bytes) = (ring.bytes - slot.1 + size, self.bytes - slot.1 + size);
-        (slot.1, slot.2) = (size, event);
+        let Some(slot) = ring.events.iter_mut().find(|(at, _)| *at == seq) else { return };
+        let text = event.to_string();
+        (ring.bytes, self.bytes) = (ring.bytes - slot.1.len() + text.len(), self.bytes - slot.1.len() + text.len());
+        slot.1 = text;
     }
 
     /// The events after `after` in order, as many as fit `budget`, or a gap when some are
@@ -1815,11 +1890,14 @@ impl Journal {
     fn missed(&self, session: &str, after: u64, budget: usize, first: bool) -> Missed {
         let Some(ring) = self.rings.get(session).filter(|ring| after >= ring.since && after >= ring.dropped && after <= self.seq) else { return Missed::Gap };
         let (mut events, mut size, mut last) = (Vec::new(), 2, after);
-        let mut pending = ring.events.iter().filter(|(seq, ..)| *seq > after).peekable();
-        while let Some(&(seq, length, event)) = pending.peek() {
+        let mut pending = ring.events.iter().filter(|(seq, _)| *seq > after).peekable();
+        while let Some(&(seq, text)) = pending.peek() {
             // Sizes are summed before deltas are joined, so the page only comes out smaller.
-            let mut event = event.clone();
-            let mut length = *length;
+            let Ok(mut event) = serde_json::from_str::<Value>(text) else {
+                pending.next();
+                continue;
+            };
+            let mut length = text.len();
             if size + length + 1 > budget {
                 if !first || !events.is_empty() {
                     break;
@@ -1864,6 +1942,8 @@ impl Journal {
                 }
             }
         }
+        // After the loop, which touched every subscribed task, so none of those is dropped.
+        self.sweep(Instant::now());
         Resumed { epoch: self.epoch.clone(), more, gaps }
     }
 }
@@ -2890,8 +2970,12 @@ pub(crate) fn follow(app: &tauri::AppHandle, device: &str, session_id: &str) {
 /// Drops expired subscribers and devices no longer in presence; true if any remain.
 fn prune_subscribers(inner: &mut super::Inner, now: Instant) -> bool {
     let super::Inner { subscribers, devices, .. } = inner;
+    let before = subscribers.len();
     subscribers.retain(|id, subscriber| subscriber.until.is_some_and(|until| until > now) && devices.iter().any(|d| &d.id == id));
-    !subscribers.is_empty()
+    if inner.subscribers.len() < before {
+        forget_unfollowed_teams(inner);
+    }
+    !inner.subscribers.is_empty()
 }
 
 /// Numbers an event, keeps it for viewers that come back, and queues it for every device
@@ -2957,9 +3041,27 @@ fn followed(inner: &super::Inner, session_id: &str) -> Option<bool> {
 /// that comes back gets it in its replay too.
 fn journaled(app: &tauri::AppHandle, session_id: &str, value: Value, queue: Queue) {
     let Some(state) = app.try_state::<super::Remote>() else { return };
-    let delay = journal_and_enqueue(&mut state.lock(), session_id, value, queue);
+    let (delay, sweep) = {
+        let mut inner = state.lock();
+        let delay = journal_and_enqueue(&mut inner, session_id, value, queue);
+        (delay, inner.journal.arm(Instant::now()))
+    };
     if let Some(delay) = delay {
         tauri::async_runtime::spawn(flush(app.clone(), delay));
+    }
+    if let Some(sweep) = sweep {
+        tauri::async_runtime::spawn(sweep_later(app.clone(), sweep));
+    }
+}
+
+/// Sweeps the journal when its first finished ring goes idle, so an idle host does not keep
+/// rings after the last run ends; one task, re-armed only while finished rings remain.
+async fn sweep_later(app: tauri::AppHandle, mut delay: Duration) {
+    loop {
+        tokio::time::sleep(delay).await;
+        let Some(state) = app.try_state::<super::Remote>() else { return };
+        let Some(next) = state.lock().journal.fire(Instant::now()) else { return };
+        delay = next;
     }
 }
 
@@ -4233,6 +4335,82 @@ mod tests {
         }
         assert!(journal.rings["b"].bytes <= JOURNAL_BYTES && journal.rings["b"].events.len() < 4);
         assert_eq!(journal.bytes, journal.rings.values().map(|ring| ring.bytes).sum::<usize>());
+    }
+
+    #[test]
+    fn an_idle_journal_sweeps_once_its_last_run_end_idles() {
+        let mut journal = Journal::default();
+        let now = Instant::now();
+        assert_eq!(journal.arm(now), None, "nothing finished, nothing to schedule");
+        journal.record("done", json!({"sessionId": "done", "kind": "run.finished", "successful": true}), true).unwrap();
+        let delay = journal.arm(now).expect("a sweep at the idle deadline");
+        assert!(delay >= JOURNAL_IDLE && delay < JOURNAL_IDLE + Duration::from_secs(5));
+        assert_eq!(journal.arm(now), None, "one sweep at a time");
+        // Followed again meanwhile: the sweep keeps it and re-arms for its new deadline.
+        let touched = now + Duration::from_secs(60);
+        journal.rings.get_mut("done").unwrap().touched = touched;
+        assert_eq!(journal.fire(now + JOURNAL_IDLE), Some(Duration::from_secs(60)));
+        assert!(journal.rings.contains_key("done"));
+        assert_eq!(journal.fire(touched + JOURNAL_IDLE), None, "nothing left to wait for");
+        assert!(journal.rings.is_empty() && journal.bytes == 0);
+        assert_eq!(journal.missed("done", 0, REPLAY_BUDGET, true), Missed::Gap, "the phone refetches");
+    }
+
+    #[test]
+    fn unfollowed_tasks_forget_their_team_rows() {
+        let now = Instant::now();
+        let mut inner = super::super::Inner {
+            devices: vec![super::super::Device { id: "phone".into(), name: String::new(), platform: String::new(), public_key: "k".into(), host: false, online: true, last_seen: Value::Null }],
+            ..Default::default()
+        };
+        inner.settings.host_enabled = true;
+        inner.subscribers.insert("phone".into(), Subscriber { until: Some(now + Duration::from_secs(60)), sessions: HashSet::from(["team-kept".to_string()]), ..Default::default() });
+        inner.subscribers.insert("gone".into(), Subscriber { until: Some(now + Duration::from_secs(60)), sessions: HashSet::from(["team-left".to_string()]), ..Default::default() });
+        inner.journal.watch("team-left");
+        for id in ["team-kept", "team-left"] {
+            team_event_cache().lock().unwrap().insert(id.into(), HashMap::from([("w1".to_string(), json!({}))]));
+        }
+        // "gone" left presence: its subscription ends, its ring stays for a replay.
+        assert!(prune_subscribers(&mut inner, now));
+        assert_eq!(followed(&inner, "team-left"), Some(false), "a ring but no subscriber is not following");
+        let cache = team_event_cache().lock().unwrap();
+        assert!(cache.contains_key("team-kept") && !cache.contains_key("team-left"));
+    }
+
+    #[test]
+    fn finished_rings_nobody_follows_are_dropped() {
+        let mut journal = Journal::default();
+        journal.record("done", event("done", "text", "Hi"), true).unwrap();
+        journal.record("done", json!({"sessionId": "done", "kind": "run.finished", "successful": true}), false).unwrap();
+        journal.record("busy", event("busy", "text", "Hi"), true).unwrap();
+        journal.record("back", json!({"sessionId": "back", "kind": "run.finished", "successful": true}), true).unwrap();
+        let later = Instant::now() + JOURNAL_IDLE;
+        journal.sweep(later - Duration::from_secs(1));
+        assert_eq!(journal.rings.len(), 3, "a run that ended a moment ago keeps its events");
+        // A viewer came back to "back" just before the sweep.
+        journal.rings.get_mut("back").unwrap().touched = later;
+        journal.sweep(later + Duration::from_secs(1));
+        assert!(!journal.rings.contains_key("done"), "finished and unfollowed for ten minutes");
+        assert!(journal.rings.contains_key("busy") && journal.rings.contains_key("back"));
+        assert_eq!(journal.bytes, journal.rings.values().map(|ring| ring.bytes).sum::<usize>());
+        assert_eq!(journal.missed("done", 0, REPLAY_BUDGET, true), Missed::Gap);
+        // A new run clears the mark.
+        journal.record("back", event("back", "text", "again"), false).unwrap();
+        assert!(!journal.rings["back"].finished);
+    }
+
+    #[test]
+    fn the_journal_total_stays_under_its_cap() {
+        let mut journal = Journal::default();
+        let big = "x".repeat(512 * 1024);
+        for task in 0..40 {
+            let id = format!("t{task}");
+            journal.record(&id, event(&id, "tool", &big), true).unwrap();
+            assert!(journal.bytes <= JOURNAL_TOTAL);
+        }
+        assert_eq!(journal.bytes, journal.rings.values().map(|ring| ring.bytes).sum::<usize>());
+        let newest = journal.missed("t39", journal.rings["t39"].since, usize::MAX, true);
+        assert!(matches!(newest, Missed::Events { events, .. } if events[0]["text"].as_str().is_some_and(|text| text.len() == big.len())), "replays parse the stored text");
     }
 
     #[test]

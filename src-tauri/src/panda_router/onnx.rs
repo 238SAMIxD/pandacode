@@ -78,6 +78,10 @@ impl OnnxProfiler {
         let env = ENVIRONMENT.as_ref().map_err(|e| format!("onnx runtime: {e}"))?;
         let session = Session::builder(env)
             .and_then(|b| Ok(b.with_intra_threads(INTRA_THREADS)?))
+            // No arena and no memory pattern: freed tensors go back to the system instead of
+            // staying reserved for the process.
+            .and_then(|b| Ok(b.with_memory_pattern(false)?))
+            .and_then(|b| Ok(b.with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])?))
             .and_then(|mut b| b.commit_from_memory(&model))
             .map_err(|e| format!("cannot load model.int8.onnx: {e}"))?;
         Ok(Self { tokenizer, pad_id, session: Mutex::new(session) })

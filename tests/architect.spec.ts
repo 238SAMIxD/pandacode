@@ -764,7 +764,7 @@ test.describe('architect teams', () => {
     await expect(panel(page).locator('.architect-worker-history')).toContainText('Reviewer history belongs here.');
   });
 
-  test('loads worker history while scrolling up and keeps it through completion', async ({ page }) => {
+  test('loads worker history while scrolling up within a bounded window and returns to the newest after completion', async ({ page }) => {
     await installArchitect(page, { 'session-2': team('session-2') });
     await page.evaluate(() => {
       (window as any).__architectTest.histories['session-2:build'] = { paginated: true, messages: Array.from({ length: 350 }, (_, i) => ({
@@ -775,19 +775,24 @@ test.describe('architect teams', () => {
     const history = panel(page).locator('.architect-worker-history'), scroll = panel(page).locator('.architect-panel-scroll');
     await expect(history.locator('[data-message-id]')).toHaveCount(100);
     await expect(panel(page).getByRole('button', { name: 'Earlier worker messages', exact: true })).toHaveCount(0);
-    for (const count of [200, 300, 350]) {
+    // The transcript keeps a 200-message window: paging back drops the newest messages.
+    for (const count of [200, 200, 200]) {
       await scroll.evaluate(node => { node.scrollTop = 0; node.dispatchEvent(new Event('scroll')); });
       await expect(history.locator('[data-message-id]')).toHaveCount(count);
     }
     await expect(history.locator('[data-message-id="1"]')).toHaveCount(1);
-    await expect(history.locator('[data-message-id="350"]')).toHaveCount(1);
+    await expect(history.locator('[data-message-id="350"]')).toHaveCount(0);
     await page.evaluate(() => {
       const fixture = (window as any).__architectTest;
       fixture.histories['session-2:build'].messages.push(...Array.from({ length: 180 }, (_, i) => ({ id: 351 + i, sessionId: 'worker-build', role: 'assistant', content: `The worker finished successfully. ${i}`, createdAt: 351 + i })));
       fixture.event({ sessionId: 'worker-build', kind: 'done', text: '' });
     });
-    await expect(history.locator('[data-message-id]')).toHaveCount(530);
-    await expect(history.locator('[data-message-id="1"]')).toHaveCount(1);
+    // Scrolling back to the bottom reloads the newest window.
+    await scroll.evaluate(node => { node.scrollTop = node.scrollHeight; node.dispatchEvent(new Event('scroll')); });
+    await expect(history.locator('[data-message-id="530"]')).toHaveCount(1);
+    await expect(history.locator('[data-message-id="1"]')).toHaveCount(0);
+    // The newest page reloads; older pages come back on scroll as before.
+    await expect(history.locator('[data-message-id]')).toHaveCount(100);
     await expect(history).toContainText('The worker finished successfully.');
   });
 

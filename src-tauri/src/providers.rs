@@ -66,12 +66,19 @@ pub(crate) mod windows_job;
 pub use subagents::SubagentActivity;
 
 const MAX_FRAME: usize = 4 * 1024 * 1024;
+/// Capacity the frame buffer keeps after a large message has been consumed.
+const FRAME_KEEP: usize = 64 * 1024;
 const MODEL_CATALOG_LIMIT: usize = 10_000;
 const STDERR_LIMIT: usize = 16 * 1024;
 const TOOL_INPUT_LIMIT: usize = 4096;
 const TOOL_OUTPUT_LIMIT: usize = 8192;
 const TOOL_CACHE_LIMIT: usize = 64;
 const PREVIEW_TRUNCATED: &str = "\n[Preview truncated]";
+
+/// A frame buffer grown past 1 MiB by one large message gives the memory back once drained.
+fn should_shrink(len: usize, capacity: usize) -> bool {
+    capacity > 1024 * 1024 && len <= FRAME_KEEP / 2
+}
 pub(crate) const PROVIDERS: [(&str, &str); 19] = [
     ("claude", "Claude Code"),
     ("codex", "Codex"),
@@ -3215,6 +3222,7 @@ async fn run_process_with_tools(
                         if apply_step(&mut protocol,step,&sink,&mut stdin,&mut jobs,&mut queued).await? {return Ok(());}
                     }
                     bytes.drain(..consumed);
+                    if should_shrink(bytes.len(),bytes.capacity()){bytes.shrink_to(FRAME_KEEP);}
                     if bytes.len()>MAX_FRAME{return Err("Provider output exceeded the message size limit".into());}
                 },
             }
@@ -3302,6 +3310,12 @@ mod coalesce_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn frame_buffer_shrinks_only_when_large_and_drained() {
+        assert!(super::should_shrink(10, 2 * 1024 * 1024));
+        assert!(!super::should_shrink(10, 1024 * 1024));
+        assert!(!super::should_shrink(super::FRAME_KEEP, 2 * 1024 * 1024));
+    }
     #[test]
     fn opencode_choices_keep_only_saved_models_and_retain_unavailable_ids() {
         let model = super::ModelInfo {

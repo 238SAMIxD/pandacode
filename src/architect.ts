@@ -10,6 +10,7 @@ import { streamMarkdown } from './streaming-markdown';
 import { captureTranscriptAnchor, preserveTranscriptPosition } from './transcript-scroll';
 import { bindFileLinkContext, refreshFileLinks, type FileLinkContext } from './file-links';
 import { createAgentInput, type AgentInput } from './agent-input';
+import { TailText } from './tail-text';
 import { decodeToolActivity, renderToolActivity } from './tool-activity';
 import { teamActive, type TeamConfig, type TeamSnapshot, type TeamWorker, type ModelSelection, type TeamLibrary, type TeamSetup } from './architect-types';
 import { mountTeamProfiles } from './team-profiles';
@@ -251,7 +252,9 @@ export function mountArchitectSetup(host: HTMLElement, options: SetupOptions): S
   return Object.assign(() => { disposed = true; picker?.(); savedProfiles.dispose(); }, { hasChildMenu: () => Boolean(picker) || savedProfiles.hasMenu() });
 }
 
-type WorkerLive = { text: string; tools: Map<string, ToolActivity>; approvals: Map<string, string>; inputs: Map<string, AgentInput>; ended: boolean };
+// An open worker transcript keeps a bounded window of messages in memory and the DOM.
+const WINDOW_MESSAGES = 200, WINDOW_CHARS = 2_000_000;
+type WorkerLive = { body: TailText; readonly text: string; tools: Map<string, ToolActivity>; approvals: Map<string, string>; inputs: Map<string, AgentInput>; ended: boolean };
 /** The selected worker is painted per frame. Background workers keep bounded data only. */
 export class ArchitectView {
   readonly host = document.createElement('div');
@@ -272,6 +275,8 @@ export class ArchitectView {
   private historyMessages = new Map<number, Message>();
   private historyPaints = new WeakMap<HTMLElement, Message>();
   private historyHasOlder = false;
+  /** Paging back dropped the newest messages; scrolling to the bottom reloads the latest. */
+  private historyTrimmedNewer = false;
   private historyLoading = false;
   private historyRefreshQueued = false;
   private busy = false;
@@ -322,12 +327,12 @@ export class ArchitectView {
     if (event.kind === 'turn_changes') { if (this.worker()?.sessionId === event.sessionId) void this.loadMessages(); return; }
     if (!['message_start', 'text', 'tool', 'approval', 'approval_cancelled', 'input_request', 'input_cancelled', 'done', 'error'].includes(event.kind)) return;
     let live = this.live.get(event.sessionId);
-    if (!live) { live = { text: '', tools: new Map(), approvals: new Map(), inputs: new Map(), ended: false }; this.live.set(event.sessionId, live); }
+    if (!live) { live = { body: new TailText(), get text() { return this.body.value; }, tools: new Map(), approvals: new Map(), inputs: new Map(), ended: false }; this.live.set(event.sessionId, live); }
     if (event.kind === 'message_start') {
-      live.text = ''; live.tools.clear(); live.ended = false;
+      live.body.set(''); live.tools.clear(); live.ended = false;
       if (this.worker()?.sessionId === event.sessionId) void this.loadMessages();
     }
-    if (event.kind === 'text') { live.text = (live.text + event.text).slice(-262144); live.ended = false; }
+    if (event.kind === 'text') { live.body.append(event.text); live.ended = false; }
     if (event.kind === 'tool' && event.tool) { const first = !live.tools.has(event.tool.id); live.tools.set(event.tool.id, event.tool);
       if (first && this.worker()?.sessionId === event.sessionId) void this.loadMessages(); while (live.tools.size > 40) live.tools.delete(live.tools.keys().next().value!); }
     if (event.kind === 'approval' && event.requestId) live.approvals.set(event.requestId, event.text);
@@ -382,7 +387,7 @@ export class ArchitectView {
     panel.querySelectorAll<HTMLButtonElement>('[data-team-control]').forEach(control => control.addEventListener('click', () => { void this.control(control.dataset.teamControl!); }));
     panel.querySelector('.architect-history-retry')!.addEventListener('click', () => { void this.loadMessages(); });
     const scroll = panel.querySelector<HTMLElement>('.architect-panel-scroll')!;
-    scroll.addEventListener('scroll', () => { if (scroll.scrollTop < 72) void this.loadMessages(true); }, { passive: true });
+    scroll.addEventListener('scroll', () => { if (scroll.scrollTop < 72) void this.loadMessages(true); else if (this.historyTrimmedNewer && scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 72) void this.loadMessages(); }, { passive: true });
     scroll.addEventListener('wheel', event => { if (event.deltaY < 0 && scroll.scrollTop < 72) void this.loadMessages(true); }, { passive: true });
     void Promise.allSettled([...new Set(this.team.config.workers.map(worker => worker.provider))].map(this.options.loadModels)).then(() => { if (this.panel === panel) this.paint(); });
     this.trigger.setAttribute('aria-expanded', 'true'); this.paint(); showPopover(panel, this.trigger); if (focus) panel.querySelector<HTMLButtonElement>('.architect-close')!.focus();
@@ -404,7 +409,7 @@ export class ArchitectView {
     this.panel?.querySelector<HTMLButtonElement>('.architect-back')?.focus();
     await this.loadMessages();
   }
-  close(): void { this.teamMessages?.destroy(); this.teamMessages = undefined; this.childAgents?.setTask('', false); if (this.panel) hidePopover(this.panel); this.panel = undefined; this.selected = ''; this.rows.clear(); this.paintedTools.clear(); this.paintedWorker = ''; this.historyWorker = ''; this.historyMessages.clear(); this.historyHasOlder = false; this.historyLoading = false; this.historyRefreshQueued = false; this.request++; cancelAnimationFrame(this.frame); this.frame = 0; this.trigger.setAttribute('aria-expanded', 'false'); }
+  close(): void { this.teamMessages?.destroy(); this.teamMessages = undefined; this.childAgents?.setTask('', false); if (this.panel) hidePopover(this.panel); this.panel = undefined; this.selected = ''; this.rows.clear(); this.paintedTools.clear(); this.paintedWorker = ''; this.historyWorker = ''; this.historyMessages.clear(); this.historyHasOlder = false; this.historyTrimmedNewer = false; this.historyLoading = false; this.historyRefreshQueued = false; this.request++; cancelAnimationFrame(this.frame); this.frame = 0; this.trigger.setAttribute('aria-expanded', 'false'); }
   private async control(action: string): Promise<void> {
     if (this.busy || !this.team) return;
     this.busy = true; this.paint();
@@ -494,10 +499,15 @@ export class ArchitectView {
   private async loadMessages(older = false): Promise<void> {
     const worker = this.worker(), panel = this.panel; if (!worker || !panel) return;
     const history = panel.querySelector<HTMLElement>('.architect-worker-history')!, scroll = panel.querySelector<HTMLElement>('.architect-panel-scroll')!;
+    if (!older && this.historyTrimmedNewer && this.historyWorker === worker.sessionId) {
+      // Without forward paging, the latest window is reloaded once the reader is back at the bottom.
+      if (this.historyLoading || scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight >= 72) return;
+      this.historyWorker = '';
+    }
     if (this.historyWorker !== worker.sessionId) {
       if (older) return;
       this.request++; this.historyWorker = worker.sessionId; this.historyMessages.clear();
-      this.historyHasOlder = false; this.historyLoading = false; this.historyRefreshQueued = false;
+      this.historyHasOlder = false; this.historyTrimmedNewer = false; this.historyLoading = false; this.historyRefreshQueued = false;
       history.replaceChildren(); scroll.scrollTop = 0;
     }
     if (this.historyLoading) { if (!older) this.historyRefreshQueued = true; return; }
@@ -531,6 +541,7 @@ export class ArchitectView {
       for (const message of incoming) this.historyMessages.set(message.id, message);
       if (older) this.historyHasOlder = page.hasOlder && incoming.length > 0;
       else if (previousFirst === undefined || first !== undefined && first <= previousFirst) this.historyHasOlder = page.hasOlder;
+      this.trimHistory(older);
       const restore = older ? captureTranscriptAnchor(scroll) : preserveTranscriptPosition(scroll);
       const changeViews = captureChangeCards(history);
       const openedTools = new Set([...history.querySelectorAll<HTMLDetailsElement>('details[data-tool-key][open]')].map(tool => tool.dataset.toolKey!));
@@ -571,8 +582,8 @@ export class ArchitectView {
       const live = this.live.get(worker.sessionId);
       // An earlier page is only history: it must never clear newer live output.
       if (!older && live && live === liveAtRequest && live.text === textAtRequest) {
-        if (live.ended) { live.text = ''; live.tools.clear(); }
-        else if (page.messages.some(message => message.role === 'assistant' && message.content === live.text)) live.text = '';
+        if (live.ended) { live.body.set(''); live.tools.clear(); }
+        else if (page.messages.some(message => message.role === 'assistant' && message.content === live.text)) live.body.set('');
       }
       empty.textContent = !this.historyMessages.size && !live?.text ? worker.error || worker.summary || (worker.status === 'queued' ? '' : 'Waiting for the worker’s first response.') : '';
       this.paintLive();
@@ -585,6 +596,16 @@ export class ArchitectView {
         if (this.historyRefreshQueued) { this.historyRefreshQueued = false; void this.loadMessages(); }
         else if (loaded && scroll.scrollHeight <= scroll.clientHeight + 80) void this.loadMessages(true);
       }
+    }
+  }
+  /** Drops the newest messages after paging back, else the oldest, until the window fits. */
+  private trimHistory(older: boolean): void {
+    const ids = [...this.historyMessages.keys()].sort((a, b) => a - b);
+    let chars = 0; for (const message of this.historyMessages.values()) chars += message.content.length;
+    while (ids.length > 1 && (ids.length > WINDOW_MESSAGES || chars > WINDOW_CHARS)) {
+      const id = older ? ids.pop()! : ids.shift()!;
+      chars -= this.historyMessages.get(id)!.content.length; this.historyMessages.delete(id);
+      if (older) this.historyTrimmedNewer = true; else this.historyHasOlder = true;
     }
   }
   private paintLive(): void {

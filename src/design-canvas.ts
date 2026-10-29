@@ -110,8 +110,13 @@ export function mountDesignCanvas(root: HTMLElement, host: DesignHost) {
     const frame = el.querySelector('iframe')!;
     const made: Board = { name, size: -1, modified: -1, html: '', x: 0, width: WIDTH, height: HEIGHT, el, frame };
     frame.addEventListener('load', () => measure(made));
+    if (!visible) frame.remove();
     world.append(el);
     return made;
+  }
+  /** A hidden canvas drops its artboard documents; showing it reinserts each iframe, which reloads its srcdoc. */
+  function attachFrames(on: boolean): void {
+    for (const b of boards) if (!on) b.frame.remove(); else if (!b.frame.isConnected) b.el.querySelector('.design-board-body')!.prepend(b.frame);
   }
 
   async function load(): Promise<void> {
@@ -261,8 +266,8 @@ export function mountDesignCanvas(root: HTMLElement, host: DesignHost) {
   }
   place();
   return {
-    show(): void { visible = true; root.hidden = false; if (stale || contextKey !== (args() ? `${args()!.projectId}:${args()!.sessionId ?? ''}` : '')) void refresh(); },
-    hide(): void { visible = false; root.hidden = true; },
+    show(): void { visible = true; root.hidden = false; attachFrames(true); if (stale || contextKey !== (args() ? `${args()!.projectId}:${args()!.sessionId ?? ''}` : '')) void refresh(); },
+    hide(): void { visible = false; root.hidden = true; attachFrames(false); },
     refresh,
   };
 }

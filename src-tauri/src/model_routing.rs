@@ -346,10 +346,49 @@ struct Runtime {
     attempts: AtomicU64,
     download: tokio::sync::Mutex<()>,
     failed_at: Mutex<Option<Instant>>,
-    onnx: tokio::sync::OnceCell<Arc<Router>>,
+    /// The loaded ONNX router and when it last routed; dropped after `IDLE_UNLOAD`, reloaded on use.
+    onnx: tokio::sync::Mutex<Option<Loaded>>,
     /// Verified files that ONNX Runtime still could not load: keyword heuristic for the rest of
     /// this process, with no re-downloads.
     unusable: OnceLock<String>,
+}
+
+struct Loaded {
+    router: Arc<Router>,
+    used: Instant,
+}
+
+/// The profiler (session + tokenizer, tens of MB) is freed after this long without a route.
+const IDLE_UNLOAD: Duration = Duration::from_secs(10 * 60);
+
+/// Drops an idle router; otherwise returns how long until it could be idle.
+fn unload_if_idle(slot: &mut Option<Loaded>, now: Instant) -> Option<Duration> {
+    let idle = now.saturating_duration_since(slot.as_ref()?.used);
+    if idle >= IDLE_UNLOAD {
+        *slot = None;
+        return None;
+    }
+    Some(IDLE_UNLOAD - idle)
+}
+
+fn touch(slot: &mut Option<Loaded>) -> Option<Arc<Router>> {
+    let loaded = slot.as_mut()?;
+    loaded.used = Instant::now();
+    Some(loaded.router.clone())
+}
+
+/// One sleeping task per load: wakes when the router could be idle and drops it if it is.
+fn watch_idle(rt: &'static Runtime) {
+    tauri::async_runtime::spawn(async move {
+        let mut wait = IDLE_UNLOAD;
+        loop {
+            tokio::time::sleep(wait).await;
+            match unload_if_idle(&mut *rt.onnx.lock().await, Instant::now()) {
+                Some(left) => wait = left,
+                None => break,
+            }
+        }
+    });
 }
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
@@ -367,7 +406,7 @@ pub fn setup(app_data: &Path) {
         attempts: AtomicU64::new(0),
         download: tokio::sync::Mutex::new(()),
         failed_at: Mutex::new(None),
-        onnx: tokio::sync::OnceCell::new(),
+        onnx: tokio::sync::Mutex::new(None),
         unusable: OnceLock::new(),
     });
 }
@@ -587,8 +626,8 @@ fn macos_supported(version: &str) -> bool {
 /// The ONNX router when its files are here (loaded once), else the heuristic. A missing profiler
 /// downloads in the background; only `wait` (Settings' Try it) waits for it, up to `DOWNLOAD_WAIT`.
 async fn router(rt: &'static Runtime, wait: bool) -> Arc<Router> {
-    if let Some(router) = rt.onnx.get() {
-        return router.clone();
+    if let Some(router) = touch(&mut *rt.onnx.lock().await) {
+        return router;
     }
     if rt.unusable.get().is_some() {
         return HEURISTIC.clone();
@@ -607,20 +646,25 @@ async fn router(rt: &'static Runtime, wait: bool) -> Arc<Router> {
             return HEURISTIC.clone();
         }
     }
-    let loaded = rt
-        .onnx
-        .get_or_try_init(|| async {
-            let dir = dir.clone();
-            let router = tokio::task::spawn_blocking(move || Router::load(&dir)).await.map_err(|e| e.to_string())??;
-            Ok::<_, String>(Arc::new(router))
-        })
-        .await;
+    // Single flight: a concurrent caller that loaded it meanwhile wins.
+    let mut slot = rt.onnx.lock().await;
+    if let Some(router) = touch(&mut slot) {
+        return router;
+    }
+    let load_dir = dir.clone();
+    let loaded = match tokio::task::spawn_blocking(move || Router::load(&load_dir)).await {
+        Ok(result) => result,
+        Err(e) => Err(e.to_string()),
+    };
     match loaded {
         Ok(router) => {
             for old in OLD_ASSET_DIRS {
                 let _ = std::fs::remove_dir_all(rt.root.join(old));
             }
-            router.clone()
+            let router = Arc::new(router);
+            *slot = Some(Loaded { router: router.clone(), used: Instant::now() });
+            watch_idle(rt);
+            router
         }
         // `read_verified` reports bad or unreadable files this way; anything else is ONNX Runtime.
         Err(error) if error.contains("sha256") || error.contains("cannot read") => {
@@ -1050,6 +1094,19 @@ mod tests {
         assert_eq!(top_languages(paths.into_iter()), ["rust", "typescript", "go"]);
         let here = Path::new(env!("CARGO_MANIFEST_DIR"));
         assert_eq!(repo_languages(here).first().map(String::as_str), Some("rust"));
+    }
+
+    #[test]
+    fn idle_router_is_dropped_after_ten_minutes() {
+        let start = Instant::now();
+        let mut slot = Some(Loaded { router: Arc::new(Router::heuristic()), used: start });
+        assert_eq!(unload_if_idle(&mut slot, start + Duration::from_secs(60)), Some(Duration::from_secs(540)));
+        assert!(slot.is_some());
+        assert!(touch(&mut slot).is_some());
+        let used = slot.as_ref().unwrap().used;
+        assert_eq!(unload_if_idle(&mut slot, used + IDLE_UNLOAD), None);
+        assert!(slot.is_none());
+        assert_eq!(unload_if_idle(&mut slot, used), None);
     }
 
     #[test]

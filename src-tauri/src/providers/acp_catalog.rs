@@ -57,11 +57,16 @@ impl Cache {
         self.0.retain(|key, _| key.provider != provider);
     }
 
-    fn get(&self, key: &Key, now: Instant) -> Option<Vec<ModelInfo>> {
+    /// Expired catalogs are never reused, so drop them whenever the cache is
+    /// read or written instead of keeping them for the life of the process.
+    fn purge(&mut self, now: Instant) {
         self.0
-            .get(key)
-            .filter(|(at, _)| now.saturating_duration_since(*at) < TTL)
-            .map(|(_, models)| models.clone())
+            .retain(|_, (at, _)| now.saturating_duration_since(*at) < TTL);
+    }
+
+    fn get(&mut self, key: &Key, now: Instant) -> Option<Vec<ModelInfo>> {
+        self.purge(now);
+        self.0.get(key).map(|(_, models)| models.clone())
     }
 
     fn store(&mut self, key: Key, models: Vec<ModelInfo>, now: Instant) {
@@ -70,9 +75,9 @@ impl Cache {
         if models.len() <= 1 {
             return;
         }
-        self.0.retain(|existing, (at, _)| {
-            now.saturating_duration_since(*at) < TTL
-                && !(existing.provider == key.provider && existing.path == key.path)
+        self.purge(now);
+        self.0.retain(|existing, _| {
+            !(existing.provider == key.provider && existing.path == key.path)
         });
         if self.0.len() >= LIMIT {
             if let Some(oldest) = self
@@ -224,6 +229,32 @@ mod tests {
         store(begin("deepseek", &path), &without_effort);
         assert!(get("deepseek", &path).unwrap().iter().all(|m| m.reasoning_efforts.is_empty() && m.default_reasoning_effort.is_none()));
         cache().lock().unwrap().0.retain(|key, _| key.path != path);
+    }
+
+    #[test]
+    fn expired_catalogs_are_purged_when_the_cache_is_touched() {
+        let now = Instant::now();
+        let metadata =
+            json!({"models":{"availableModels":[{"modelId":"model-a","name":"Model A"}]}});
+        let mut cache = Cache::default();
+        for index in 0..4 {
+            cache.store(
+                key("antigravity", Path::new(&format!("/fixture/idle-{index}"))),
+                acp::parse_models(&metadata),
+                now,
+            );
+        }
+        let fresh = key("antigravity", Path::new("/fixture/fresh"));
+        cache.store(fresh.clone(), acp::parse_models(&metadata), now + TTL / 2);
+        assert_eq!(cache.0.len(), 5);
+        // A lookup of any key, even a miss, drops every expired entry.
+        assert!(cache
+            .get(&key("grok", Path::new("/fixture/miss")), now + TTL)
+            .is_none());
+        assert_eq!(cache.0.len(), 1);
+        assert!(cache.get(&fresh, now + TTL).is_some());
+        assert!(cache.get(&fresh, now + TTL + TTL / 2).is_none());
+        assert!(cache.0.is_empty());
     }
 
     #[tokio::test]
