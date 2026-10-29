@@ -1,30 +1,7 @@
-// Warm paths for the inspector's Changes → diff view: the viewer module, its worker
-// pool and themes start after the app's first paint, the top changed files and any
-// hovered row get their git_diff fetched and first screen highlighted in the pool,
-// so the click only paints. Cached patches belong to one git status generation:
-// invalidateDiffs() on every status refresh. A click on a cached patch revalidates.
-// The patch splitting here is shared by prefetching and mounting, so both derive the
-// same pool cache keys.
-
-const MAX_ENTRIES = 20;
-const MAX_AGE_MS = 10_000;
-
-interface Entry { at: number; diff: Promise<string> }
-const cache = new Map<string, Entry>();
-
-export function invalidateDiffs(): void { cache.clear(); }
-
-/** The patch for `key`: a recent prefetch (`reused`, so the caller revalidates) or a new `load()`. Failures are never cached. */
-export function cachedDiff(key: string, load: () => Promise<string>): { diff: Promise<string>; reused: boolean } {
-  const hit = cache.get(key);
-  cache.delete(key);
-  if (hit && performance.now() - hit.at < MAX_AGE_MS) { cache.set(key, hit); return { diff: hit.diff, reused: true }; }
-  const entry = { at: performance.now(), diff: load() };
-  cache.set(key, entry);
-  entry.diff.catch(() => { if (cache.get(key) === entry) cache.delete(key); });
-  while (cache.size > MAX_ENTRIES) cache.delete(cache.keys().next().value!);
-  return { diff: entry.diff, reused: false };
-}
+// Warm paths for the inspector's Changes view: the viewer module, its worker pool and
+// themes start after the app's first paint, and the pool warms the grammars of the
+// files in the current git status first. The patch splitting here is shared with
+// mounting, so every viewer derives the same pool cache keys.
 
 let preloaded: Promise<unknown> | undefined;
 /** Imports the diff viewer and starts @pierre/diffs, its worker pool and themes, once. */
@@ -45,11 +22,6 @@ export function noteChangedPaths(paths: string[]): void {
   changedNames = paths.slice(0, 50).map(path => path.slice(path.lastIndexOf('/') + 1));
 }
 export function likelyFileNames(): string[] { return changedNames; }
-
-/** Highlights the first screen of `patch` in the worker pool ahead of a likely click. */
-export function primeDiffs(path: string, patch: string): void {
-  void preloadDiffs().then(() => import('./diff-viewer')).then(viewer => viewer.primeDiff(path, patch)).catch(() => {});
-}
 
 /** cyrb53 (53 bits) plus the length: a reopened, unchanged patch reuses its highlighted rows. */
 export function patchKey(path: string, text: string): string {

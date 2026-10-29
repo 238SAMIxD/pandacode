@@ -186,17 +186,6 @@ export function preloadDiffViewer(): Promise<unknown> {
   return engine;
 }
 
-/** Highlights the first screen of a patch in the pool, under the keys mountDiffViewer will use. */
-export async function primeDiff(path: string, patch: string): Promise<void> {
-  const { lib, pool } = await (preloadDiffViewer() as Promise<Engine>);
-  if (!pool || !patch.trim() || patch.length > MAX_PATCH_LENGTH) return;
-  let lines = 0;
-  for (const chunk of splitPatch(patch)) {
-    for (const file of parseChunk(lib, path, chunk)) if (highlightable(file)) void pool.primeDiffHighlightCache(file).catch(() => {});
-    if ((lines += chunk.lines) >= PRIME_LINES) break;
-  }
-}
-
 /** Read-only, bounded diff rendering. Replacing a viewer cancels its old mount. */
 export function mountDiffViewer(host: HTMLElement, input: DiffViewerInput): DiffViewerController {
   mountedViewers.get(host)?.dispose();
@@ -214,7 +203,7 @@ export function mountDiffViewer(host: HTMLElement, input: DiffViewerInput): Diff
   let mountFrame = 0;
   let requestedLayout = input.layout ?? 'unified';
   let layout: 'unified' | 'split' = 'unified';
-  let wrap = true;
+  let wrap = false;
   const listeners = new AbortController();
 
   const root = element('section', 'diff-viewer');
