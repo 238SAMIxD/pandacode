@@ -35,7 +35,7 @@ interface Entry {
 
 const EAGER = 8;
 const REFETCH_GAP = 1_000;
-// Applied inside each diff's shadow root: long lines scroll with a visible bar; wrapped code may break anywhere (so indentation never
+// Added to each diff's shadow root (by the viewer, also for hunk groups that mount later): long lines scroll with a visible bar; wrapped code may break anywhere (so indentation never
 // sits alone on a row), and hunk headers are one slim muted line.
 const SHADOW_CSS = `
   pre[data-diff][data-overflow='wrap'] [data-line] { white-space: pre-wrap; word-break: break-all; overflow-wrap: anywhere; }
@@ -50,17 +50,6 @@ const SHADOW_CSS = `
     font-size: .68rem; line-height: 20px; opacity: .8;
     background-color: color-mix(in srgb, var(--diffs-bg-separator) 45%, var(--diffs-bg));
   }`;
-let shadowSheet: CSSStyleSheet | null | undefined;
-function adoptShadowStyles(slot: HTMLElement): void {
-  if (shadowSheet === undefined) {
-    try { shadowSheet = new CSSStyleSheet(); shadowSheet.replaceSync(SHADOW_CSS); } catch { shadowSheet = null; }
-  }
-  if (!shadowSheet) return;
-  for (const container of slot.querySelectorAll('diffs-container')) {
-    const root = container.shadowRoot;
-    if (root && !root.adoptedStyleSheets.includes(shadowSheet)) root.adoptedStyleSheets = [...root.adoptedStyleSheets, shadowSheet];
-  }
-}
 const TRUNCATED = /\n*\[Preview truncated at [^\]]*\]\n*$/;
 const SCOPES: Record<Scope, string> = { all: 'All changes', unstaged: 'Unstaged', staged: 'Staged' };
 const STATUS: Record<string, string> = { A: 'Added', M: 'Modified', D: 'Deleted', R: 'Renamed', C: 'Copied', T: 'Modified', U: 'Conflict', '?': 'Untracked' };
@@ -112,9 +101,9 @@ export function mountChangesView(host: HTMLElement, deps: ChangesViewDeps): Chan
       <input class="cv-commit-input" type="text" placeholder="Commit message" aria-label="Commit message" autocomplete="off" spellcheck="true">
       <button type="submit" class="cv-commit-submit">Commit</button>
     </form>
-    <div class="cv-body" tabindex="-1"></div>`;
+    <div class="cv-body" tabindex="-1"><div class="cv-list"></div></div>`;
   const q = <T extends HTMLElement>(s: string) => host.querySelector<T>(s)!;
-  const body = q('.cv-body'), scopeLabel = q('.cv-scope-label'), filesLabel = q('.cv-files');
+  const body = q('.cv-body'), list = q('.cv-list'), scopeLabel = q('.cv-scope-label'), filesLabel = q('.cv-files');
   const addsLabel = q('.cv-adds'), delsLabel = q('.cv-dels'), branchLabel = q('.cv-branch'), foldButton = q<HTMLButtonElement>('[data-cv-action="fold-all"]');
   const commitBar = q<HTMLFormElement>('.cv-commit'), commitInput = q<HTMLInputElement>('.cv-commit-input'), commitSubmit = q<HTMLButtonElement>('.cv-commit-submit');
 
@@ -275,10 +264,9 @@ export function mountChangesView(host: HTMLElement, deps: ChangesViewDeps): Chan
         slot.classList.add('cv-diff-next');
         entry.body.append(slot);
       } else entry.body.replaceChildren(slot);
-      const viewer = mountDiffViewer(slot, { patch: entry.patch, path: entry.path, layout: 'unified', truncated: entry.el.dataset.truncated === 'true' });
+      const viewer = mountDiffViewer(slot, { patch: entry.patch, path: entry.path, layout: 'unified', truncated: entry.el.dataset.truncated === 'true', scrollRoot: body, shadowCSS: SHADOW_CSS });
       Object.assign(entry, { viewer, slot, shown: raw });
       void viewer.ready.then(() => {
-        adoptShadowStyles(slot);
         if (disposed || entry.viewer !== viewer) return;
         for (const old of entry.stale.splice(0)) { old.viewer.dispose(); old.slot.remove(); }
         slot.classList.remove('cv-diff-next');
@@ -300,7 +288,7 @@ export function mountChangesView(host: HTMLElement, deps: ChangesViewDeps): Chan
     for (const entry of entries.values()) { drop(entry); observer.unobserve(entry.el); }
     entries.clear();
     order = [];
-    body.innerHTML = `<div class="cv-state ${cls}">${html}</div>`;
+    list.innerHTML = `<div class="cv-state ${cls}">${html}</div>`;
   }
 
   function render(): void {
@@ -321,7 +309,7 @@ export function mountChangesView(host: HTMLElement, deps: ChangesViewDeps): Chan
   }
 
   function sync(wanted: { file: GitFile; staged: boolean }[]): void {
-    body.querySelector('.cv-state')?.remove();
+    list.querySelector('.cv-state')?.remove();
     const keep = new Set(wanted.map(w => w.file.path));
     for (const [path, entry] of entries) {
       if (keep.has(path)) continue;
@@ -350,8 +338,8 @@ export function mountChangesView(host: HTMLElement, deps: ChangesViewDeps): Chan
       }
       const side = staged ? file.index : (file.index === '?' ? '?' : file.working);
       paint(entry, side);
-      const next: Element | null = previous ? previous.nextElementSibling : body.firstElementChild;
-      if (next !== entry.el) body.insertBefore(entry.el, next);
+      const next: Element | null = previous ? previous.nextElementSibling : list.firstElementChild;
+      if (next !== entry.el) list.insertBefore(entry.el, next);
       previous = entry.el;
     });
     order = wanted.map(w => w.file.path);

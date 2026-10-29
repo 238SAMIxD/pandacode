@@ -359,7 +359,9 @@ const BENCH_DIFFS: Record<string, () => string> = {
 };
 // Production builds have no /src/preview.ts to import, so the benchmark reads patches here.
 if (benchDiffs) (window as any).__benchDiffs = BENCH_DIFFS;
-let git: GitStatus = { branch: 'feat/instant-search', isRepo: true, files: [{ path: 'src/components/search.ts', index: ' ', working: 'M' }, { path: 'src/lib/search-index.ts', index: '?', working: '?' }, { path: 'src/components/search.test.ts', index: ' ', working: 'M' }, ...(benchDiffs ? Object.keys(BENCH_DIFFS).map(path => ({ path, index: ' ', working: 'M' })) : [])] };
+// `&benchFiles=bench/large.ts,bench/small.ts` lists only those bench files in git status.
+const benchListed = new URLSearchParams(typeof location !== 'undefined' ? location.search : '').get('benchFiles')?.split(',') ?? Object.keys(BENCH_DIFFS);
+let git: GitStatus = { branch: 'feat/instant-search', isRepo: true, files: [{ path: 'src/components/search.ts', index: ' ', working: 'M' }, { path: 'src/lib/search-index.ts', index: '?', working: '?' }, { path: 'src/components/search.test.ts', index: ' ', working: 'M' }, ...(benchDiffs ? benchListed.filter(path => BENCH_DIFFS[path]).map(path => ({ path, index: ' ', working: 'M' })) : [])] };
 const worktreeGit = new Map<string, GitStatus>();
 const previewBranches = new Set<string>(), pushedBranches = new Set<string>(['feat/instant-search']), mergedBranches = new Set<string>();
 function checkoutGit(sessionId: unknown): GitStatus {

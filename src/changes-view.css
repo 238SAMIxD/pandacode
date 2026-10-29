@@ -149,7 +149,7 @@
 .cv-raw { margin: 0; padding: 6px 10px; font: var(--text-xs)/1.35 var(--mono); white-space: pre; overflow-x: auto; }
 
 /* The inline diff is a plain strip under its file header: no toolbar, card or inner scroll. */
-.cv-file-body .diff-viewer { max-height: none; overflow: visible; background: transparent; border-radius: 0; }
+.cv-file-body .diff-viewer { --diff-line-height: 1.15rem; max-height: none; overflow: visible; background: transparent; border-radius: 0; }
 .cv-file-body .diff-viewer-toolbar { display: none; }
 .cv-file-body .diff-viewer-content { overflow: visible; scrollbar-gutter: auto; }
 .cv-file-body .diff-viewer-status, .cv-file-body .diff-viewer-note { padding: 6px 12px; font-size: var(--text-2xs); }
@@ -157,7 +157,6 @@
 .cv-file-body .diff-viewer-file + .diff-viewer-file { margin-top: 0; }
 .changes-view .cv-file-body diffs-container {
   --diffs-font-size: var(--text-2xs);
-  --diffs-line-height: 1.15rem;
   --diffs-gap-inline: 6px;
   --diffs-gap-block: 0px;
   --diffs-min-number-column-width-default: 3ch;

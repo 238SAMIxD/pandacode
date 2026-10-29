@@ -13,6 +13,14 @@ export interface DiffViewerInput {
   truncated?: boolean;
   error?: string;
   layout?: 'unified' | 'split';
+  /**
+   * The element that scrolls when the viewer itself does not (a list of inline diffs).
+   * Its first element child must hold all of its content: large files are virtualized
+   * against it, and the virtualizer watches that child for scroll-height changes.
+   */
+  scrollRoot?: HTMLElement;
+  /** Constant CSS added to every diff's shadow root (never patch content). */
+  shadowCSS?: string;
 }
 
 export interface DiffViewerController {
@@ -68,6 +76,28 @@ const RAW_PREVIEW_LENGTH = 100_000;
 const RAW_PREVIEW_LINES = 1_200;
 const SPLIT_MIN_WIDTH = 680;
 const mountedViewers = new WeakMap<HTMLElement, DiffViewerController>();
+// One Virtualizer per scroll root, shared by every viewer in it: each Virtualizer keeps
+// its own scroll anchor and applies its own scroll fix, so several on one root would
+// correct the same scrollTop for different anchors, and each would only notice its own
+// content's size changes.
+const sharedVirtualizers = new WeakMap<HTMLElement, { virtualizer: Virtualizer; users: number }>();
+function acquireVirtualizer(lib: Diffs, root: HTMLElement): Virtualizer {
+  let shared = sharedVirtualizers.get(root);
+  if (!shared) {
+    shared = { virtualizer: new lib.Virtualizer({ overscrollSize: OVERSCROLL_PX }), users: 0 };
+    // Without a content container, pierre observes the root's first element child.
+    shared.virtualizer.setup(root);
+    sharedVirtualizers.set(root, shared);
+  }
+  shared.users++;
+  return shared.virtualizer;
+}
+function releaseVirtualizer(root: HTMLElement): void {
+  const shared = sharedVirtualizers.get(root);
+  if (!shared || --shared.users > 0) return;
+  shared.virtualizer.cleanUp();
+  sharedVirtualizers.delete(root);
+}
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
@@ -238,6 +268,8 @@ export function mountDiffViewer(host: HTMLElement, input: DiffViewerInput): Diff
   content.setAttribute('aria-busy', 'true');
   root.append(toolbar, status, content);
   host.replaceChildren(root);
+  // The element that actually scrolls: this viewer's content, or an ancestor list.
+  const scroller = input.scrollRoot ?? content;
 
   const options = (header: boolean): FileDiffOptions<undefined, undefined> => ({
     themeType: themeType(),
@@ -256,7 +288,8 @@ export function mountDiffViewer(host: HTMLElement, input: DiffViewerInput): Diff
     disableErrorHandling: true,
     enableLineSelection: false,
     // This CSS is constant; no patch content is ever interpolated into it.
-    unsafeCSS: ':host { --diffs-font-family: var(--mono, monospace); --diffs-font-size: 0.86rem; --diffs-line-height: 1.45rem; }',
+    // Pierre adds it to every container it creates, including hunk groups mounted later.
+    unsafeCSS: ':host { --diffs-font-family: var(--mono, monospace); --diffs-font-size: 0.86rem; --diffs-line-height: 1.45rem; }' + (input.shadowCSS ?? ''),
   });
 
   // Distance in pixels from the viewport to a virtualized renderer (0 when visible).
@@ -270,7 +303,7 @@ export function mountDiffViewer(host: HTMLElement, input: DiffViewerInput): Diff
     primeFrame = 0;
     if (disposed || !pool || !virtualizer) return;
     // Cached positions only: no layout reads while the virtualizer is writing.
-    const top = virtualizer.getScrollTop(), height = viewHeight || content.clientHeight, bottom = top + height;
+    const top = virtualizer.getScrollTop(), height = viewHeight || scroller.clientHeight, bottom = top + height;
     // While scrolling only visible groups prime; offscreen ones wait for the scroll to settle.
     if (!scrolling) keepFirstScreen(false);
     const reach = scrolling ? 0 : height;
@@ -295,7 +328,7 @@ export function mountDiffViewer(host: HTMLElement, input: DiffViewerInput): Diff
   function schedulePrime(): void {
     if (!disposed && pool && virtualizer && !primeFrame) primeFrame = requestAnimationFrame(primeNearby);
   }
-  content.addEventListener('scroll', () => {
+  scroller.addEventListener('scroll', () => {
     if (!virtualizer) return;
     scrolling = true;
     clearTimeout(settleTimer);
@@ -310,7 +343,7 @@ export function mountDiffViewer(host: HTMLElement, input: DiffViewerInput): Diff
     clearTimeout(settleTimer);
     for (const { view } of renderers) view.cleanUp();
     renderers = [];
-    virtualizer?.cleanUp();
+    if (virtualizer) releaseVirtualizer(scroller);
     virtualizer = undefined;
   }
 
@@ -353,20 +386,20 @@ export function mountDiffViewer(host: HTMLElement, input: DiffViewerInput): Diff
   function rerender(): void {
     if (disposed || !renderers.length) return;
     cancelAnimationFrame(rerenderFrame);
-    const scrollTop = content.scrollTop;
+    const scrollTop = scroller.scrollTop;
     const failed = () => showFallback('Unable to format this diff. Showing the recorded patch.');
     const apply = ({ view, header }: { view: FileDiff; header: boolean }) => { view.setOptions(options(header)); view.rerender(); };
     try {
       updateControls();
       let order = renderers, now = renderers.length;
       if (virtualizer) {
-        const bottom = scrollTop + content.clientHeight;
+        const bottom = scrollTop + scroller.clientHeight;
         const ranked = renderers.map(entry => ({ entry, away: distance(entry, scrollTop, bottom) })).sort((a, b) => a.away - b.away);
         order = ranked.map(({ entry }) => entry);
         now = Math.max(1, ranked.filter(({ away }) => !away).length);
       }
       order.slice(0, now).forEach(apply);
-      content.scrollTop = scrollTop;
+      scroller.scrollTop = scrollTop;
       let next = now;
       const slice = () => {
         rerenderFrame = 0;
@@ -432,15 +465,14 @@ export function mountDiffViewer(host: HTMLElement, input: DiffViewerInput): Diff
       if (lines > VIRTUALIZE_LINES) {
         list = element('div', 'diff-viewer-list');
         content.append(list);
-        virtualizer = new lib.Virtualizer({ overscrollSize: OVERSCROLL_PX });
-        virtualizer.setup(content, list);
+        virtualizer = acquireVirtualizer(lib, scroller);
       }
       // Every chunk gets a frame now, sized from its line count until it mounts, so the
-      // scroll height is right from the first frame.
-      const linePx = parseFloat(getComputedStyle(document.documentElement).fontSize) * 1.45;
+      // scroll height is right from the first frame. CSS resolves the row height, which
+      // the host may set (--diff-line-height), so no layout is read here.
       const frames = chunks.map(chunk => {
         const frame = element('div', chunk.continued ? 'diff-viewer-file diff-viewer-continued' : 'diff-viewer-file');
-        if (chunks.length > 1) frame.style.minHeight = `${Math.round(chunk.lines * linePx)}px`;
+        if (chunks.length > 1) frame.style.minHeight = `calc(${chunk.lines} * var(--diff-line-height))`;
         list.append(frame);
         return frame;
       });
@@ -497,7 +529,7 @@ export function mountDiffViewer(host: HTMLElement, input: DiffViewerInput): Diff
       themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
       resizeObserver = new ResizeObserver(entries => {
         for (const entry of entries) {
-          if (entry.target === content) { viewHeight = entry.contentRect.height; continue; }
+          if (entry.target === scroller) { viewHeight = entry.contentRect.height; continue; }
           width = entry.borderBoxSize?.[0]?.inlineSize ?? entry.contentRect.width;
         }
         if (disposed || resizeFrame) return;
@@ -510,7 +542,7 @@ export function mountDiffViewer(host: HTMLElement, input: DiffViewerInput): Diff
         });
       });
       resizeObserver.observe(root);
-      resizeObserver.observe(content);
+      resizeObserver.observe(scroller);
     } catch {
       fail();
     }
