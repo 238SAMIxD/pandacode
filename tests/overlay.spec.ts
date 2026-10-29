@@ -538,7 +538,8 @@ test('launcher keeps live narratives between compact tool groups and preserves l
   await page.evaluate(() => {
     const fixture = (window as any).__chronologicalThread;
     const message = fixture.messages.find((message:any) => message.id === 3);
-    message.content = JSON.stringify({...JSON.parse(message.content),status:'completed',output:'The launcher inspection is complete.'});
+    // Longer than the card's preview, so the full output stays behind the row's disclosure.
+    message.content = JSON.stringify({...JSON.parse(message.content),status:'completed',output:'The launcher inspection is complete.\n' + 'checked\n'.repeat(12)});
     fixture.version++;
     window.dispatchEvent(new CustomEvent('pandacode-overlay-agent-event',{detail:{sessionId:'preview-active',kind:'tool',text:''}}));
   });

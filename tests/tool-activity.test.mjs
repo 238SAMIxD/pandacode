@@ -25,13 +25,17 @@ test('decodes only supported, bounded tool records', () => {
 });
 
 test('renders the command and recorded output with a stable disclosure key', () => {
-  const html = renderToolActivity(stored(activity), 'message-5');
+  // A rich card is an excerpt, so the raw record stays one click away; a PandaCode card that shows everything drops it.
+  assert.match(renderToolActivity(stored(activity), 'short'), /tool-trace-raw/);
+  assert.ok(!renderToolActivity({ ...activity, name: 'pandacode_vm_list', input: '{}', output: '{"vms":[]}' }, 'own').includes('tool-trace-raw'));
+  const long = { ...activity, output: activity.output + '\n' + Array.from({ length: 12 }, (_, i) => `line ${i}`).join('\n') };
+  const html = renderToolActivity(stored(long), 'message-5');
   assert.match(html, /data-tool-key="message-5"/);
   assert.match(html, /data-tool-status="completed"/);
   assert.match(html, /tool-trace-verb">Ran<\/span><span class="tool-trace-chip" title="npm run test">/);
   assert.match(html, /tool-trace-object is-mono">run test</);
   assert.match(html, /data-tool-kind="shell" data-tool-name="Bash"/);
-  assert.ok(html.includes(toolPreview(activity)));
+  assert.ok(html.includes(toolPreview(long).replace('<!--trace-partial-->', '')));
   assert.match(html, /<div class="tool-trace-frame"><div class="tool-trace-card"[\s\S]*<\/div><details class="tool-trace-raw"><summary aria-label="Raw input and output"[\s\S]*<\/details><\/div><\/div><\/details>$/);
   assert.doesNotMatch(html, /Raw input\/output/);
   assert.match(html, /data-tool-section="input"/);
@@ -60,9 +64,13 @@ test('status events have no empty disclosure and empty tool output is explained'
   assert.ok(!html.includes('<details'));
   assert.match(html, /Connected &lt;script&gt;/);
   assert.match(renderToolActivity({ ...activity, input: '', output: '', status: 'running' }, 'live'), /Waiting for tool details/);
-  assert.match(renderToolActivity({ ...activity, output: '' }, 'done'), /No output was returned/);
+  // A silent successful command is explained by the row itself: a plain line, nothing to expand.
+  const silent = renderToolActivity({ ...activity, output: '' }, 'done');
+  assert.ok(!silent.includes('tool-activity-note'));
+  assert.ok(!silent.includes('<details'));
   // A running card shows its own placeholder, so no second "waiting" line jumps away when output lands.
   assert.doesNotMatch(renderToolActivity({ ...activity, output: '', status: 'running' }, 'live'), /Waiting for output/);
+  assert.match(renderToolActivity({ ...activity, output: '', status: 'failed' }, 'bad'), /No output was recorded/);
 });
 
 test('a failed call says so once (red icon + card badge), and a card-less record shows its raw sections open', () => {
@@ -92,9 +100,12 @@ test('group summaries count calls, expose running/failure states and escape tool
     { key: 'x" onclick="bad', content: { ...activity, status: 'running' } },
     { key: 'read', content: stored({ ...activity, id: 'read', name: 'Read', status: 'failed' }) },
   ]);
-  assert.match(html, /tool-group-label">Ran 1 command and read 1 file</);
-  assert.match(renderToolGroup([{ key: 'run', content: { ...activity, status: 'running' } }, { key: 'read', content: stored({ ...activity, id: 'read', name: 'Read', status: 'failed' }) }], false, true),
-    /tool-group-label">Running 1 command and reading 1 file…</);
+  // Completed calls lead; the running one and the failure are counted apart.
+  assert.match(html, /tool-group-label">Ran 1 command</);
+  assert.match(html, /tool-group-status has-failure"> · 1 failed</);
+  const live = renderToolGroup([{ key: 'run', content: { ...activity, status: 'running' } }, { key: 'read', content: stored({ ...activity, id: 'read', name: 'Read', status: 'failed' }) }], false, true);
+  assert.match(live, /tool-group-label">Running 1 command…</);
+  assert.match(live, /tool-group-status has-failure"> · 1 failed</);
   assert.match(html, /tool-group-status has-failure"> · 1 failed</);
   assert.match(html, /tool-trace-stack/);
   assert.ok(!html.includes('data-tool-group-key="group:x" onclick='));

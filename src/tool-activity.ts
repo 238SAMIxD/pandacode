@@ -1,6 +1,7 @@
 import type { ToolActivity } from './types';
 import { escape, icon } from './dom.ts';
-import { describeTool, kindIcon, summarizeTools, summaryIcons, toolPreview, traceRowHtml } from './tool-trace.ts';
+import { pandacodeTool } from './tool-trace-pandacode.ts';
+import { PARTIAL, describeTool, toolFailed, summarizeGroup, summaryIcons, toolPreview, traceIcon, traceRowHtml } from './tool-trace.ts';
 
 const MAX_CONTENT = 100_000;
 const MAX_DETAIL = 20_000;
@@ -35,22 +36,23 @@ function section(kind: 'input' | 'output', content: string): string {
   return `<section class="tool-activity-section" data-tool-section="${kind}"><h4>${label}</h4><pre tabindex="0" aria-label="Tool ${kind}">${escape(bounded(content))}</pre></section>`;
 }
 
-function toolNote(tool: ToolActivity, hasCard: boolean): string {
-  // A running card already shows its own placeholder; a second "waiting" line would only jump away.
-  if (tool.output.trim() || (hasCard && tool.status === 'running' && tool.input.trim())) return '';
-  const note = tool.status === 'running'
-    ? tool.input.trim() ? 'Waiting for output…' : 'Waiting for tool details…'
-    : tool.status === 'completed' ? 'No output was returned.' : 'No output was recorded.';
-  return `<p class="tool-activity-note">${note}</p>`;
+/** The row's verb already says a call is running or done; a note appears only when nothing else would explain an empty body. */
+function toolNote(tool: ToolActivity): string {
+  if (tool.output.trim()) return '';
+  const note = tool.status === 'running' ? tool.input.trim() ? '' : 'Waiting for tool details…'
+    : tool.status === 'failed' ? 'No output was recorded.' : '';
+  return note ? `<p class="tool-activity-note">${note}</p>` : '';
 }
 
 const RAW_LABEL = 'Raw input and output';
 const CODE_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 7-5 5 5 5m8-10 5 5-5 5M13.5 4l-3 16"/></svg>';
 
-/** The recorded input/output hide behind a quiet `</>` button in the card's corner; with no card they show open. */
-function rawRecord(tool: ToolActivity, hasCard: boolean): string {
+/** The recorded input/output: behind a quiet `</>` button in the card's corner only when the card leaves something out; with no card they show open. */
+function rawRecord(tool: ToolActivity, preview: string): string {
+  // A running call without a card has nothing to show yet, and a PandaCode row with no card and no output already says it all.
+  if (preview ? !preview.includes(PARTIAL) : tool.status === 'running' || pandacodeTool(tool.name) && !tool.output.trim()) return '';
   const sections = (tool.input.trim() ? section('input', tool.input) : '') + (tool.output.trim() ? section('output', tool.output) : '');
-  return sections ? `<details class="tool-trace-raw"${hasCard ? '' : ' open'}><summary aria-label="${RAW_LABEL}" title="${RAW_LABEL}">${CODE_ICON}</summary><div class="tool-trace-raw-body">${sections}</div></details>` : '';
+  return sections ? `<details class="tool-trace-raw"${preview ? '' : ' open'}><summary aria-label="${RAW_LABEL}" title="${RAW_LABEL}">${CODE_ICON}</summary><div class="tool-trace-raw-body">${sections}</div></details>` : '';
 }
 
 /** Caller owns the stable key and restores native details.open when replacing activity rows. */
@@ -59,11 +61,16 @@ export function renderToolActivity(content: string | ToolActivity, key: string):
   if (!tool) return renderLegacyTool(content as string, key);
   const named = { ...tool, name: tool.name.slice(0, MAX_LABEL) };
   const trace = describeTool(named);
-  const lead = icon(tool.status === 'failed' ? 'alert' : trace.icon ?? kindIcon(trace.kind), 'tool-trace-icon');
+  const failed = toolFailed(named);
+  const lead = icon(failed ? 'alert' : traceIcon(trace), 'tool-trace-icon');
   const preview = toolPreview(named);
+  const visible = preview.replace(/<!--trace-[a-z]+-->/g, '');
   // The card and its raw `</>` toggle share a frame so the toggle can sit in the card's corner.
-  const body = preview ? `<div class="tool-trace-frame">${preview}${rawRecord(tool, true)}</div>${toolNote(tool, true)}` : `<div class="tool-trace-frame">${toolNote(tool, false)}${rawRecord(tool, false)}</div>`;
-  return `<details class="tool-activity tool-trace" data-tool-key="${escape(key)}" data-tool-status="${escape(tool.status)}" data-tool-kind="${trace.kind}" data-tool-name="${escape(named.name)}"><summary title="${escape(named.name || 'Tool')}">${lead}${traceRowHtml(trace)}${icon('chevron', 'tool-trace-chevron')}</summary><div class="tool-activity-body">${body}</div></details>`;
+  const body = visible ? `<div class="tool-trace-frame">${visible}${rawRecord(tool, preview)}</div>${toolNote(tool)}` : toolNote(tool) + rawRecord(tool, preview);
+  const attrs = `data-tool-key="${escape(key)}" data-tool-status="${escape(tool.status)}" data-tool-kind="${trace.kind}"${trace.family ? ` data-tool-family="${escape(trace.family)}"` : ''} data-tool-name="${escape(named.name)}"${failed ? ' data-tool-failed' : ''}`;
+  // Nothing beyond the row: a plain line, not an empty disclosure.
+  if (!body) return `<div class="tool-activity tool-trace" ${attrs} data-static><div class="tool-trace-summary" title="${escape(named.name || 'Tool')}">${lead}${traceRowHtml(trace)}</div></div>`;
+  return `<details class="tool-activity tool-trace" ${attrs}><summary title="${escape(named.name || 'Tool')}">${lead}${traceRowHtml(trace)}${icon('chevron', 'tool-trace-chevron')}</summary><div class="tool-activity-body">${visible ? body : `<div class="tool-trace-frame">${body}</div>`}</div></details>`;
 }
 
 function renderLegacyTool(content: string, key: string): string {
@@ -105,10 +112,12 @@ export function toolStackHtml(tools: (ToolActivity | undefined)[]): string {
 export function renderToolGroup(entries: { key: string; content: string | ToolActivity }[], expanded = false, live = false): string {
   if (!entries.length) return '';
   const tools = entries.map(entry => typeof entry.content === 'string' ? decodeToolActivity(entry.content) : entry.content);
-  const failed = tools.some(tool => tool?.status === 'failed');
+  const failed = tools.some(tool => tool && toolFailed(tool));
   const running = tools.some(tool => tool?.status === 'running');
-  const [sentence, failures] = summarizeTools(tools, { live }).split(' · ');
+  const summary = summarizeGroup(tools, { live });
   const stack = toolStackHtml(tools);
-  const status = failures ? `<span class="tool-group-status has-failure"> · ${escape(failures)}</span>` : '';
+  const status = (summary.running ? `<span class="tool-group-status is-running"> · ${summary.running} running</span>` : '')
+    + (summary.failed ? `<span class="tool-group-status has-failure"> · ${summary.failed} failed</span>` : '');
+  const sentence = summary.sentence;
   return `<details class="tool-group" data-tool-group-key="${escape('group:' + entries[0].key)}"${running ? ' data-running' : ''}${expanded ? ' open' : ''}><summary class="tool-group-summary">${failed ? icon('alert') : ''}<span class="tool-group-label">${escape(sentence)}</span>${stack}${status}${icon('chevron')}</summary><div class="tool-group-body">${entries.map(entry => renderToolActivity(entry.content, entry.key)).join('')}</div></details>`;
 }

@@ -1005,16 +1005,13 @@ test('chooses a project filter from its anchored menu using the keyboard', async
   await expect(page.locator('#navigation .task-item')).toHaveCount(4);
 });
 
-test('all projects: no folder headings; Tasks rows are one line and lead with their project icon', async ({ page }) => {
-  const tasks = page.locator('#navigation [data-thread-group="all"]');
+test('all projects: no folder headings; Finished rows are cards that lead with their project icon', async ({ page }) => {
+  const tasks = page.locator('#navigation [data-thread-group="review"]');
   await expect(page.locator('#navigation .folder-heading')).toHaveCount(0);
-  await expect(tasks.locator('.task-item .task-top > .task-app-icon').first()).toBeVisible();
-  await expect(tasks.locator('.task-item .task-checkout')).toHaveCount(0);
+  await expect(page.locator('#navigation [data-thread-group="all"], #navigation [data-thread-group="chats"]')).toHaveCount(0);
+  await expect(tasks.locator('.task-item .task-head > .task-app-icon').first()).toBeVisible();
   await expect(tasks.locator('.task-item .task-top .task-title').first()).toBeVisible();
-  // Each row is one line, with its harness and linked PR beside the title.
-  await expect(tasks.locator('.task-item .task-meta')).toHaveCount(0);
   await expect(tasks.locator('.task-item .task-top .task-provider').first()).toBeVisible();
-  for (const height of await tasks.locator('.task-item').evaluateAll(rows => rows.map(row => row.getBoundingClientRect().height))) expect(height).toBeLessThan(36);
   // One project on its own is named by the filter, which shows its icon: one line per task too.
   await chooseProjectFilter(page, 'pandacode');
   await expect(page.locator('#project-filter > .task-app-icon')).toHaveCount(1);
@@ -1507,7 +1504,22 @@ test('coalesces appearance preferences without restoring stale glass or losing t
   await devtools.detach();
 });
 
+// Pads the sample test output past the card's eight-line preview, so its rows keep the full-data disclosure.
+async function longSampleOutput(page: Page) {
+  await page.route('**/src/preview.ts*', async route => {
+    const response = await route.fetch();
+    const source = await response.text();
+    const marker = /const sampleTestOutput\s*=\s*/;
+    expect(source).toMatch(marker);
+    const body = source.replace(marker, "const sampleTestOutput = 'RUNS src/components/search.test.ts\\n'.repeat(4) + ");
+    await route.fulfill({ response, body: previewBody(body) });
+  });
+  await page.reload();
+  await expect(page.locator('.task-item.selected .task-title')).toHaveText('Make search feel instant');
+}
+
 test('expands saved tool commands and file contents after reloading the conversation', async ({ page }) => {
+  await longSampleOutput(page);
   const read = toolByName(page, 'Read');
   await expandToolTurn(read);
   await read.locator(':scope > summary').click();
@@ -1530,6 +1542,7 @@ test('expands saved tool commands and file contents after reloading the conversa
 });
 
 test('coalesces live tool updates while preserving expansion and saves their details', async ({ page }) => {
+  await longSampleOutput(page);
   await page.clock.install();
   await page.reload();
   await expect(page.locator('.task-item.selected .task-title')).toHaveText('Make search feel instant');
@@ -1664,7 +1677,8 @@ test('caps long live tool activity without dropping the output being read', asyn
     const source = await response.text();
     const marker = /const toolMessage\s*=/;
     expect(source).toMatch(marker);
-    const body = source.replace(marker, `tool.output = 'Keep this first tool output available while I read it.'; const toolMessage =`)
+    // Longer than the card's preview, so the row keeps the full-data disclosure being read.
+    const body = source.replace(marker, `tool.output = 'Keep this first tool output available while I read it.' + '\\nstill reading'.repeat(10); const toolMessage =`)
       + '\nexport const emitActivityTestEvent = agent;\n';
     await route.fulfill({ response, body: previewBody(body) });
   });
@@ -1688,7 +1702,7 @@ test('caps long live tool activity without dropping the output being read', asyn
   await firstTool.locator(':scope > summary').click();
   await firstTool.locator('.tool-trace-raw > summary').click();
   const output = page.locator(`[data-tool-key="${key}"] [data-tool-section="output"] pre`);
-  await expect(output).toHaveText('Keep this first tool output available while I read it.');
+  await expect(output).toContainText('Keep this first tool output available while I read it.');
   await output.focus();
   await page.evaluate(async sessionId => {
     const { emitActivityTestEvent } = await import((window as any).__pandacodePreviewUrl);
@@ -1702,7 +1716,7 @@ test('caps long live tool activity without dropping the output being read', asyn
   }, sessionId);
   await page.clock.runFor(20);
   await expect(output).toBeFocused();
-  await expect(output).toHaveText('Keep this first tool output available while I read it.');
+  await expect(output).toContainText('Keep this first tool output available while I read it.');
   await expect(page.locator(`[data-tool-key="${key}"]`)).toHaveAttribute('open', '');
   await expect(page.locator('[data-tool-key="tool:long-live-39"]')).toHaveCount(1);
   const toolCount = await page.locator('.live-tools details.tool-activity').count();
@@ -2276,26 +2290,26 @@ test('saved user prompts keep old threads active until their own 24 hour boundar
   await expect(taskRow(page, 'session-4', 'inactive')).toBeVisible();
 });
 
-test('lists pending tasks of every project in one Tasks section that folds and stays folded', async ({ page }) => {
-  // Finished work sits in Finished; pending samples are listed under Tasks.
+test('lists pending tasks of every project in Finished, which folds and stays folded', async ({ page }) => {
+  // Only Active, Finished and Settled exist: pending samples are listed under Finished too.
   await page.route('**/src/preview.ts*', async route => {
     const response = await route.fetch();
     await route.fulfill({ response, body: (await response.text()).replace(/const providers\s*=/, `for (const s of sessions) s.taskStage = 'pending';\n$&`) });
   });
   await page.reload();
   await expect(projectFilter(page)).toHaveText('All projects');
-  const tasks = page.getByRole('region', { name: 'Tasks', exact: true });
+  const tasks = page.getByRole('region', { name: 'Finished tasks', exact: true });
   await expect(tasks.locator('.task-title')).toHaveText(['Make search feel instant', 'Refine the navigation', 'Add keyboard shortcuts', 'Explore the project']);
   await expect(activeRows(page).locator('.task-title')).toHaveText(['Make search feel instant']);
   // The row names its project, visibly once the sidebar is wide enough and always for assistive technology.
   await expect(taskRow(page, 'session-4').locator('.task-project')).toHaveText('pandacode');
-  const toggle = tasks.getByRole('button', { name: /^Tasks/ });
+  const toggle = tasks.getByRole('button', { name: /^Finished/ });
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
   await expect(tasks.locator('.task-item')).toHaveCount(0);
   await page.reload();
-  await expect(page.getByRole('region', { name: 'Tasks', exact: true }).getByRole('button', { name: /^Tasks/ })).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('region', { name: 'Finished tasks', exact: true }).getByRole('button', { name: /^Finished/ })).toHaveAttribute('aria-expanded', 'false');
 });
 
 test('moves a task to inactive automatically at the 24 hour response boundary', async ({ page }) => {

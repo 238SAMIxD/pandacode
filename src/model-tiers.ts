@@ -4,7 +4,7 @@ import { escape, icon } from './dom';
 import { openChoiceMenu } from './choice-menu';
 import { providerLogo } from './provider-logos';
 import { infoMark } from './tooltip';
-import { CATALOG_MAX } from './team-catalog';
+import { CATALOG_MAX, teamModels, TEAM_MODELS_EVENT } from './team-catalog';
 import type { Exclusions, Unhealthy } from './model-routing';
 import type { ProviderId, ProviderModel } from './types';
 
@@ -30,7 +30,7 @@ const rowName = (tier: Tier | null) => tier ? `tier ${tier}` : 'Unranked';
 export function modelTiersHtml(): string {
   return `<div class="settings-group model-tiers" role="group" aria-label="Rank models" aria-busy="true" tabindex="-1">
     <div class="setting-row"><div><strong>Rank models ${infoMark(HELP, 'About ranking models')}</strong></div>
-      <div class="tier-reset-area"><button type="button" class="secondary-button tier-reset" disabled>Reset</button>
+      <div class="tier-reset-area"><button type="button" class="secondary-button tier-add" aria-haspopup="menu" hidden>Add model…</button><button type="button" class="secondary-button tier-reset" disabled>Reset</button>
         <span class="tier-reset-confirm" hidden><span>Clear all tiers?</span><button type="button" class="secondary-button tier-reset-yes">Clear tiers</button><button type="button" class="secondary-button tier-reset-no">Cancel</button></span></div></div>
     <div class="tier-list">${ROWS.map(tier => tier
       ? `<div class="tier-row" data-tier="${tier}"><div class="tier-label" aria-hidden="true">${tier}</div><div class="tier-body" role="group" aria-label="Tier ${tier}"></div></div>`
@@ -53,7 +53,11 @@ export function mountModelTiers(group: HTMLElement, options: ModelTiersOptions):
   // A live pointer drag holds renders until it ends, so the dragged chip is never replaced under it.
   let dragging = false, renderLater = false;
   let closeMenu: (() => void) | null = null;
-  const harnessModels = installedModels(options);
+  const add = group.querySelector<HTMLButtonElement>('.tier-add')!;
+  let harnessModels = installedModels(options);
+  // Add model… shows once a harness's catalog is long enough to be limited.
+  const showAdd = () => void harnessModels.then(({ limited }) => { if (!disposed) add.hidden = limited.length === 0; });
+  showAdd();
 
   const placeOf = (key: string): Tier | null => held?.key === key ? held.at : shown[key] ?? null;
   const nameOf = (key: string) => models.find(m => m.key === key)?.name ?? key;
@@ -205,7 +209,7 @@ export function mountModelTiers(group: HTMLElement, options: ModelTiersOptions):
     void (async () => {
       try {
         // Native drops `default` entries that resolve to no card; resolved ones join their model's chip.
-        const pool = (await harnessModels).filter(m => !off.providers.includes(m.provider) && !off.models.some(x => x.provider === m.provider && x.model === m.model)
+        const pool = (await harnessModels).pool.filter(m => !off.providers.includes(m.provider) && !off.models.some(x => x.provider === m.provider && x.model === m.model)
           && !down.some(h => h.provider === m.provider && (h.providerDown || h.model === m.model))).slice(0, CATALOG_MAX);
         const [rows, tiers] = await Promise.all([options.call<TierModel[]>('model_routing_tier_models', { pool }), loaded ? null : options.call<Tiers>('model_routing_tiers')]);
         if (disposed || ticket !== poolTicket) return;
@@ -220,17 +224,43 @@ export function mountModelTiers(group: HTMLElement, options: ModelTiersOptions):
       }
     })();
   };
+  // Models added for teams join the pool; a ranked model that left it keeps its tier.
+  const onAdded = () => {
+    if (disposed) return;
+    harnessModels = installedModels(options); lastPool = ''; showAdd(); loadPool();
+  };
+  window.addEventListener(TEAM_MODELS_EVENT, onAdded);
+  add.addEventListener('click', () => void harnessModels.then(({ limited }) => {
+    if (disposed || !limited.length) return;
+    closeMenu?.();
+    let picked: ProviderId | null = null;
+    closeMenu = openChoiceMenu({
+      anchor: add, title: 'Add a model from', actions: true,
+      items: limited.map(p => ({ id: p.id, label: p.name, provider: p.id })),
+      onSelect: id => { picked = id as ProviderId; },
+      onClose: () => {
+        closeMenu = null;
+        const id = picked; picked = null;
+        if (!id) return;
+        void import('./team-model-add').then(({ openAddTeamModels }) => openAddTeamModels({ provider: id, name: limited.find(p => p.id === id)!.name, loadModels: options.loadModels, trigger: () => add }));
+      },
+    });
+  }));
   const setExclusions = (next: Exclusions) => { exclusions = next; loadPool(); };
   const setHealth = (list: Unhealthy[]) => { paused = list; loadPool(); };
 
   render();
-  return { dispose: () => { disposed = true; closeMenu?.(); }, setExclusions, setHealth };
+  return { dispose: () => { disposed = true; closeMenu?.(); window.removeEventListener(TEAM_MODELS_EVENT, onAdded); }, setExclusions, setHealth };
 }
 
-/** Each installed harness's discovered models (its built-in list when discovery fails), as tier pool entries. */
-async function installedModels(options: ModelTiersOptions): Promise<{ provider: ProviderId; model: string; name: string }[]> {
+/** Each installed harness's discovered models (its built-in list when discovery fails) that teams use, as tier pool
+ * entries, and the harnesses whose long catalogs are limited. */
+async function installedModels(options: ModelTiersOptions): Promise<{ pool: { provider: ProviderId; model: string; name: string }[]; limited: { id: ProviderId; name: string }[] }> {
   const installed = options.providers.filter(p => p.installed);
   const loaded = await Promise.allSettled(installed.map(p => options.loadModels(p.id)));
-  return installed.flatMap((p, i) => (loaded[i].status === 'fulfilled' && loaded[i].value.length ? loaded[i].value : p.models)
-    .filter(m => m.id).map(m => ({ provider: p.id, model: m.id, name: m.name })));
+  const teams = installed.map((p, i) => teamModels(p.id, loaded[i].status === 'fulfilled' && loaded[i].value.length ? loaded[i].value : p.models));
+  return {
+    pool: installed.flatMap((p, i) => teams[i].models.filter(m => m.id).map(m => ({ provider: p.id, model: m.id, name: m.name }))),
+    limited: installed.filter((_, i) => teams[i].limited).map(p => ({ id: p.id, name: p.name })),
+  };
 }

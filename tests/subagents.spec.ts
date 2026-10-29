@@ -229,7 +229,9 @@ test.describe('subagents', () => {
       await expect(response(page).locator('strong')).toHaveText('Found the issue.');
       await expect(panel(page).locator('.subagent-tools')).toContainText('Read');
       await panel(page).locator('.subagent-tools details.tool-activity > summary').click();
-      await expect(panel(page).locator('.subagent-tools')).toContainText('src/search.ts');
+      // The card names the file by basename; its chip carries the full path.
+      await expect(panel(page).locator('.subagent-tools')).toContainText('search.ts');
+      await expect(panel(page).locator('.subagent-tools .tool-trace-chip').first()).toHaveAttribute('title', 'src/search.ts');
       await expect(panel(page).locator('.subagent-tools')).toContainText('const index = buildIndex(items);');
       await page.screenshot({ path: `/private/tmp/pandacode-subagents-${view}-detail.png`, animations: 'disabled' });
       await upsert(page, [child('reader', 'Reader', { status: 'completed', response: 'Index reuse fixed.', updatedAt: 1_800_000_000_003 })]);

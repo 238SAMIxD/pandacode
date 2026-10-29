@@ -53,9 +53,48 @@ export function buildTeamCatalog(harnesses: readonly CatalogHarness[]): { roster
   return { roster, catalog };
 }
 
-/** Installed harnesses with their discovered models (falling back to the built-in list). */
+/** A harness with more than this many models (not counting `default`) offers teams only its most recent ones. */
+export const TEAM_LIMIT = 10;
+/** Models a user may add for teams per harness. */
+export const ADDED_MAX = 50;
+export interface TeamLimit { recent: readonly string[]; added: readonly string[]; unlimited?: boolean }
+export interface LimitedModels<M> { models: M[]; recent: Set<string>; total: number; limited: boolean }
+
+/** Long catalogs shrink to the `TEAM_LIMIT` most recent models in the catalog (`recent` is newest first)
+ * plus every added model; `default` always stays. Short catalogs and `unlimited` ones pass through. */
+export function limitTeamModels<M extends { id: string }>(models: readonly M[], { recent, added, unlimited = false }: TeamLimit): LimitedModels<M> {
+  const ids = new Set(models.map(m => m.id).filter(id => id && id !== 'default'));
+  if (unlimited || ids.size <= TEAM_LIMIT) return { models: [...models], recent: new Set(), total: ids.size, limited: false };
+  const latest = new Set([...new Set(recent)].filter(id => ids.has(id)).slice(0, TEAM_LIMIT));
+  const keep = new Set([...latest, ...added]);
+  return { models: models.filter(m => m.id === 'default' || keep.has(m.id)), recent: latest, total: ids.size, limited: true };
+}
+
+/** Fired on `window` with the provider id when its added models change. */
+export const TEAM_MODELS_EVENT = 'pandacode:team-models';
+let recency: { used(id: ProviderId): readonly string[]; unlimited(id: ProviderId): boolean } = { used: () => [], unlimited: () => false };
+/** main.ts hands over task recency (models by last prompt) and OpenCode's saved-selection flag. */
+export function setTeamRecency(source: typeof recency): void { recency = source; }
+function storedIds(key: string): string[] {
+  try {
+    const stored = JSON.parse(localStorage.getItem(key) || '[]');
+    return Array.isArray(stored) ? stored.filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 200) : [];
+  } catch { return []; }
+}
+const addedKey = (id: ProviderId) => `pandacode.team-models.added.${id}`;
+export const addedTeamModels = (id: ProviderId): string[] => storedIds(addedKey(id)).slice(0, ADDED_MAX);
+export function setAddedTeamModels(id: ProviderId, models: readonly string[]): void {
+  localStorage.setItem(addedKey(id), JSON.stringify([...new Set(models)].slice(0, ADDED_MAX)));
+  window.dispatchEvent(new CustomEvent(TEAM_MODELS_EVENT, { detail: id }));
+}
+/** The models of `id` teams may use: recent tasks first, then the model picker's recent list. */
+export function teamModels<M extends { id: string }>(id: ProviderId, models: readonly M[]): LimitedModels<M> {
+  return limitTeamModels(models, { recent: [...recency.used(id), ...storedIds(`pandacode.recent-models.${id}`)], added: addedTeamModels(id), unlimited: recency.unlimited(id) });
+}
+
+/** Installed harnesses with their discovered models (falling back to the built-in list), limited by `teamModels`. */
 export async function installedCatalog(providers: readonly { id: ProviderId; name: string; installed: boolean; models: ProviderModel[] }[], loadModels: (id: ProviderId) => Promise<ProviderModel[]>) {
   const installed = providers.filter(p => p.installed);
   const loaded = await Promise.allSettled(installed.map(p => loadModels(p.id)));
-  return buildTeamCatalog(installed.map((p, i) => ({ id: p.id, name: p.name, models: loaded[i].status === 'fulfilled' ? loaded[i].value : p.models })));
+  return buildTeamCatalog(installed.map((p, i) => ({ id: p.id, name: p.name, models: teamModels(p.id, loaded[i].status === 'fulfilled' ? loaded[i].value : p.models).models })));
 }

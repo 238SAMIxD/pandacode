@@ -36,3 +36,7 @@ html[data-theme=dark] .routing-modes>.segment-thumb{background:color-mix(in srgb
 .routing-pool-model-row>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
 /* Dark-ink marks get a light backing on dark surfaces so they stay visible. */
 html[data-theme=dark] img.routing-logo:is([data-provider=glm],[data-provider=mimo],[data-provider=commandcode],[data-provider=hermes]){box-sizing:border-box;padding:1px;border-radius:4px;background:rgb(255 255 255 / .9)}
+.routing-pool-models>p.routing-pool-limit{display:flex;align-items:center;gap:4px}
+.routing-pool-add{padding:2px 4px;border-radius:4px;background:none;color:var(--accent-ink);font:inherit;font-weight:600}
+.routing-pool-add:hover{background:var(--fill-hover)}
+.routing-pool-add:focus-visible{outline:2px solid var(--focus);outline-offset:1px}

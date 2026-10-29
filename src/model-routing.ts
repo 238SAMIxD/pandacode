@@ -3,7 +3,7 @@ import './model-routing.css';
 import { escape, icon } from './dom';
 import { providerLogo } from './provider-logos';
 import { trackSegment } from './motion';
-import { installedCatalog } from './team-catalog';
+import { installedCatalog, teamModels, TEAM_MODELS_EVENT } from './team-catalog';
 import { modelTiersHtml, mountModelTiers } from './model-tiers';
 import { infoMark } from './tooltip';
 import type { ProviderId, ProviderModel } from './types';
@@ -195,6 +195,7 @@ export function mountModelRouting(host: HTMLElement, options: ModelRoutingOption
 // the newest save reverts to the last set native confirmed.
 function mountPool(group: HTMLElement, options: ModelRoutingOptions, fail: (cause: unknown) => void, disposed: () => boolean, onChange: (shown: Exclusions) => void): void {
   const harnesses = options.providers.filter(p => p.installed);
+  // The full lists; teams see `teamModels` of each (a long catalog's recent and added models).
   const models = new Map<ProviderId, ProviderModel[]>(harnesses.map(p => [p.id, p.models]));
   const rows = group.querySelector<HTMLElement>('.routing-pool-rows')!, note = group.querySelector<HTMLElement>('.routing-pool-note')!;
   const warning = group.querySelector<HTMLElement>('.routing-pool-warning')!;
@@ -222,7 +223,7 @@ function mountPool(group: HTMLElement, options: ModelRoutingOptions, fail: (caus
     const counts = harnesses.filter(p => !providerOff(p.id)).map(p => {
       const list = models.get(p.id) ?? [];
       // A harness whose models are not listed still counts as one model on.
-      return list.length ? list.filter(m => !modelOff(p.id, m.id)).length : 1;
+      return list.length ? teamModels(p.id, list).models.filter(m => !modelOff(p.id, m.id)).length : 1;
     });
     const on = counts.reduce((sum, n) => sum + n, 0);
     note.textContent = `${on} model${on === 1 ? '' : 's'} on`;
@@ -252,20 +253,37 @@ function mountPool(group: HTMLElement, options: ModelRoutingOptions, fail: (caus
     button.setAttribute('aria-expanded', String(open)); list.hidden = !open;
     if (!open || list.dataset.loaded) return;
     list.dataset.loaded = '1'; list.textContent = 'Loading…';
-    const name = harnesses.find(p => p.id === id)!.name;
     const loaded = await options.loadModels(id).catch(() => [] as ProviderModel[]);
-    const entries = loaded.length ? loaded : models.get(id) ?? [];
     if (disposed()) return;
-    models.set(id, entries);
-    list.innerHTML = entries.length ? entries.map(m => `<label class="setting-row routing-pool-model-row" title="${escape(m.id)}"><span>${escape(m.name)}</span>`
+    models.set(id, loaded.length ? loaded : models.get(id) ?? []);
+    list.dataset.ready = '1';
+    renderModels(id);
+  };
+  const renderModels = (id: ProviderId) => {
+    const list = rows.querySelector<HTMLElement>(`#routing-pool-${CSS.escape(id)}`);
+    if (!list?.dataset.ready) return;
+    const name = harnesses.find(p => p.id === id)!.name;
+    const team = teamModels(id, models.get(id) ?? []);
+    const limit = team.limited ? `<p class="routing-pool-limit">Showing ${team.models.filter(m => m.id !== 'default').length} of ${team.total} models · <button type="button" class="link-button routing-pool-add" data-provider="${escape(id)}">Add model…</button></p>` : '';
+    list.innerHTML = limit + (team.models.length ? team.models.map(m => `<label class="setting-row routing-pool-model-row" title="${escape(m.id)}"><span>${escape(m.name)}</span>`
       + `<input type="checkbox" class="settings-switch routing-pool-model" data-model="${escape(m.id)}" aria-label="Use ${escape(m.name)} (${escape(name)}) for teams"></label>`).join('')
-      : '<p class="routing-pool-empty">No models listed.</p>';
+      : '<p class="routing-pool-empty">No models listed.</p>');
     sync();
   };
+  const onAdded = (event: Event) => {
+    if (disposed()) { window.removeEventListener(TEAM_MODELS_EVENT, onAdded); return; }
+    renderModels((event as CustomEvent<ProviderId>).detail);
+  };
+  window.addEventListener(TEAM_MODELS_EVENT, onAdded);
 
   rows.addEventListener('click', event => {
     const button = (event.target as Element).closest<HTMLElement>('.routing-pool-expand');
     if (button) void expand(button.closest<HTMLElement>('.routing-pool-harness')!, button);
+    const add = (event.target as Element).closest<HTMLElement>('.routing-pool-add');
+    if (add) {
+      const id = add.dataset.provider as ProviderId;
+      void import('./team-model-add').then(({ openAddTeamModels }) => openAddTeamModels({ provider: id, name: harnesses.find(p => p.id === id)!.name, loadModels: options.loadModels, trigger: () => rows.querySelector<HTMLElement>(`.routing-pool-add[data-provider="${CSS.escape(id)}"]`) }));
+    }
   });
   rows.addEventListener('change', event => {
     const box = event.target as HTMLInputElement, id = box.closest<HTMLElement>('.routing-pool-harness')!.dataset.provider as ProviderId;

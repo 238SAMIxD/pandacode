@@ -41,7 +41,8 @@ async function installControlledStreaming(page: Page): Promise<void> {
           messageStart() { persist(); agent({ sessionId: s.id, kind: 'message_start', text: '' }); },
           startTool() {
             persist();
-            liveTool = { id: 'controlled-background-' + s.id + '-' + ++toolIndex, name: 'Bash', status: 'running', input: 'npm test', output: '' };
+            // A command long enough to be clipped in the card, so the row keeps its full-data disclosure.
+            liveTool = { id: 'controlled-background-' + s.id + '-' + ++toolIndex, name: 'Bash', status: 'running', input: 'npm test -- --reporter=' + 'verbose,'.repeat(60), output: '' };
             const liveToolMessage = { id: ++id, sessionId: s.id, role: 'tool', content: encodeTool(liveTool), createdAt: Date.now() };
             recordedTools.set(liveTool.id, { tool: liveTool, message: liveToolMessage });
             messages[s.id].push(liveToolMessage);
@@ -207,8 +208,9 @@ test.describe('streamed responses', () => {
         return first;
       }, id);
       await expect(liveGroups(page)).toHaveCount(1);
-      // A live group with a running call reads in the present tense.
-      await expect(liveGroups(page).first().locator('.tool-group-label')).toHaveText('Running 1 command and reading 1 file…');
+      // Completed calls lead the live group's sentence; the running call is counted apart.
+      await expect(liveGroups(page).first().locator('.tool-group-label')).toHaveText('Read 1 file');
+      await expect(liveGroups(page).first().locator('.tool-group-status')).toHaveText(' · 1 running');
       // Live groups are the open step rail; the header carries the running sentence instead of a group summary.
       await expect(liveGroups(page).first()).toHaveAttribute('open', '');
       await expect(liveGroups(page).first().locator('.tool-group-summary')).toBeHidden();
