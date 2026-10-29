@@ -517,6 +517,7 @@ fn desktop_team(team: &Value, local: &str) -> Option<Value> {
                 "files": w["files"].as_array().map_or_else(Vec::new, |files| files.iter().filter(|file| file.is_string()).cloned().collect()),
                 "readOnly": w["readOnly"] == true, "abandoned": w["abandoned"] == true, "attempt": number(&w["attempt"]),
                 "checkpoint": w["checkpoint"].is_object().then(|| &w["checkpoint"]), "createdAt": number(&w["createdAt"]), "updatedAt": number(&w["updatedAt"]),
+                "parentWorker": w["parentWorker"].as_str(),
             })
         })
         .collect();
@@ -1798,6 +1799,10 @@ mod tests {
         assert_eq!(workers[0]["files"], json!(["a.md"]));
         assert_eq!(workers[0]["checkpoint"]["summary"], "half");
         assert_eq!((workers[0]["readOnly"].as_bool(), workers[0]["reasoningEffort"].is_null()), (Some(true), true));
+        assert!(workers[0]["parentWorker"].is_null());
+        let sub = json!({"workers": [{"id": "s1", "sessionId": "hs1", "status": "parked", "parentWorker": "w1"}]});
+        let sub = &desktop_team(&sub, "local").unwrap()["workers"][0];
+        assert_eq!((sub["status"].as_str(), sub["parentWorker"].as_str()), (Some("parked"), Some("w1")));
     }
 
     #[test]

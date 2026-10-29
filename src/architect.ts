@@ -17,6 +17,7 @@ import { infoMark } from './tooltip';
 import { workerQueueReason } from './worker-scheduling';
 import { Subagents } from './subagents';
 import { TeamMessages } from './team-messages';
+import { teamSignature } from './team-progress';
 import { renderCoordination } from './coordination-message';
 import { bindMessageActions, messageActionsHtml } from './message-actions';
 import type { AgentEvent, Message, MessagePage, Provider, ProviderId, ProviderModel, Session, ToolActivity } from './types';
@@ -28,9 +29,9 @@ type SetupOptions = {
   loadModels: (provider: ProviderId) => Promise<ProviderModel[]>;
   save: (config: TeamConfig | null, architect: ModelSelection, profileId: string | null) => Promise<void>;
 };
-const statusNames: Record<string, string> = { ready: 'Ready', running: 'Working', waiting: 'Waiting', paused: 'Paused', completed: 'Ready for review', failed: 'Needs attention', interrupted: 'Interrupted', queued: 'Queued', stopped: 'Stopped' };
+const statusNames: Record<string, string> = { ready: 'Ready', running: 'Working', waiting: 'Waiting', paused: 'Paused', completed: 'Ready for review', failed: 'Needs attention', interrupted: 'Interrupted', queued: 'Queued', stopped: 'Stopped', parked: 'Waiting on sub-workers' };
 // Worker rows: a status verb (with its colour tone) and a 28px glyph per state.
-const workerVerbs: Record<string, [string, string]> = { running: ['Working..', 'accent'], waiting: ['Waiting', 'accent'], queued: ['Queued', ''], completed: ['Done', 'success'], failed: ['Failed', 'danger'] };
+const workerVerbs: Record<string, [string, string]> = { running: ['Working..', 'accent'], waiting: ['Waiting', 'accent'], queued: ['Queued', ''], parked: ['Waiting on sub-workers', 'accent'], completed: ['Done', 'success'], failed: ['Failed', 'danger'] };
 const ring = (dash: string) => `<circle cx="14" cy="14" r="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="${dash}"/>`;
 const workerGlyphs: Record<string, string> = {
   running: `<svg viewBox="0 0 28 28" aria-hidden="true"><g class="architect-glyph-spin">${ring('2.5 4')}</g><circle cx="14" cy="14" r="3.5" fill="currentColor"/></svg>`,
@@ -264,6 +265,8 @@ export class ArchitectView {
   private paintedTools = new Map<string, ToolActivity>();
   private paintedWorker = '';
   private frame = 0;
+  private paintFrame = 0;
+  private agentsSignal = '';
   private request = 0;
   private historyWorker = '';
   private historyMessages = new Map<number, Message>();
@@ -294,12 +297,18 @@ export class ArchitectView {
     button.textContent = this.selected ? 'Review with Jev' : 'Suggest worker';
   }
   setTask(taskId: string, team: TeamSnapshot | null, providers: Provider[]): void {
+    const same = taskId === this.taskId && team;
     if (taskId !== this.taskId) this.close();
-    this.taskId = taskId; this.providers = providers; this.team = team; this.paint();
+    this.taskId = taskId; this.providers = providers; this.team = team;
+    // The same task repaints at most once a frame (renderComposer calls this on every render).
+    if (same) this.schedulePaint(); else this.paint();
   }
   update(team: TeamSnapshot): void {
     if (team.sessionId === this.taskId && (!this.team || team.revision >= this.team.revision)) {
-      this.team = team; this.paint();
+      const unchanged = this.team && teamSignature(this.team) === teamSignature(team);
+      this.team = team;
+      // Only a new revision: nothing to repaint, though team messages may have arrived.
+      if (!unchanged) this.schedulePaint(); else if (this.panel && !this.selected) this.teamMessages?.update(team);
       // A team on another computer streams no worker events here: reread the open transcript.
       if (this.selected && this.options.remote?.(team.sessionId)) void this.loadMessages();
     }
@@ -342,6 +351,7 @@ export class ArchitectView {
   /** A worker is asking for an approval or an answer the user has not given yet. */
   needsInput(sessionId: string): boolean { const live = this.live.get(sessionId); return Boolean(live?.approvals.size || live?.inputs.size); }
   private worker(): TeamWorker | undefined { return this.team?.workers.find(w => w.id === this.selected); }
+  private schedulePaint(): void { this.paintFrame ||= requestAnimationFrame(() => { this.paintFrame = 0; this.paint(); }); }
   private schedule(): void { if (this.frame || !this.panel) return; this.frame = requestAnimationFrame(() => { this.frame = 0; this.paintLive(); }); }
   /** For the dock's Agents item: whether a team exists, how many workers run, and the panel. */
   get present(): boolean { return Boolean(this.team); }
@@ -403,7 +413,12 @@ export class ArchitectView {
     finally { this.busy = false; this.paint(); }
   }
   private paint(): void {
-    const team = this.team; this.host.hidden = !team; dispatchEvent(new Event('pandacode:agents')); if (!team) { this.close(); return; }
+    cancelAnimationFrame(this.paintFrame); this.paintFrame = 0;
+    const team = this.team; this.host.hidden = !team;
+    // The dock's Agents item reads only whether a team exists and how many workers run.
+    const agents = team ? String(this.running) : '';
+    if (agents !== this.agentsSignal) { this.agentsSignal = agents; dispatchEvent(new Event('pandacode:agents')); }
+    if (!team) { this.close(); return; }
     const done = team.workers.filter(w => w.status === 'completed' || w.abandoned).length;
     const asking = team.workers.some(w => this.needsInput(w.sessionId));
     const progress = asking ? 'Needs input' : team.workers.length ? `${done}/${team.workers.length}` : 'Ready';
@@ -458,18 +473,21 @@ export class ArchitectView {
     const list = panel.querySelector<HTMLElement>('.architect-worker-list')!;
     if (!team.workers.length) { list.textContent = team.status === 'ready' ? 'Send a task to let the architect delegate the work.' : 'The architect is planning its first assignments.'; return; }
     if (!this.rows.size) list.replaceChildren();
-    for (const worker of team.workers) {
+    // Sub-workers sit indented under their parent.
+    const ordered = team.workers.filter(w => !w.parentWorker).flatMap(parent => [parent, ...team.workers.filter(w => w.parentWorker === parent.id)]);
+    ordered.forEach((worker, index) => {
       let row = this.rows.get(worker.id);
-      if (!row) { row = document.createElement('button'); row.className = 'architect-worker-row'; row.type = 'button'; row.dataset.workerId = worker.id; row.addEventListener('click', () => { this.selected = worker.id; this.paint(); void this.loadMessages(); }); this.rows.set(worker.id, row); list.append(row); }
+      if (!row) { row = document.createElement('button'); row.className = 'architect-worker-row'; row.type = 'button'; row.dataset.workerId = worker.id; row.addEventListener('click', () => { this.selected = worker.id; this.paint(); void this.loadMessages(); }); this.rows.set(worker.id, row); if (worker.parentWorker) row.style.paddingInlineStart = '32px'; }
+      if (list.children[index] !== row) list.insertBefore(row, list.children[index] ?? null);
       const live = this.live.get(worker.sessionId);
       const needsInput = Boolean(live?.approvals.size || live?.inputs.size);
       row.dataset.status = needsInput ? 'waiting' : worker.status;
       const queueReason = workerQueueReason(worker, team.workers, team.config.maxParallel);
       const [verb, tone] = worker.abandoned ? ['Resolved', ''] : needsInput ? ['Needs input', 'accent'] : workerVerbs[worker.status] ?? [statusNames[worker.status] ?? worker.status, ''];
-      const glyph = worker.abandoned ? 'idle' : needsInput || worker.status === 'queued' || worker.status === 'waiting' ? 'pending' : workerGlyphs[worker.status] ? worker.status : 'idle';
+      const glyph = worker.abandoned ? 'idle' : needsInput || ['queued', 'waiting', 'parked'].includes(worker.status) ? 'pending' : workerGlyphs[worker.status] ? worker.status : 'idle';
       const markup = `<span class="architect-worker-glyph" data-glyph="${glyph}">${workerGlyphs[glyph]}<span class="architect-worker-logo">${providerLogo(worker.provider)}</span></span><span class="architect-worker-copy"><strong>${escape(worker.name)}</strong><small${queueReason ? ` data-tip="${escape(queueReason)}"` : ''}><span class="architect-worker-state"${tone ? ` data-tone="${tone}"` : ''}>${escape(verb)}</span> ${escape(queueReason ?? modelName(worker, this.providers))}</small></span>${icon('chevron')}`;
       if (row.dataset.painted !== markup) { row.innerHTML = markup; row.dataset.painted = markup; }
-    }
+    });
     const scroll = panel.querySelector<HTMLElement>('.architect-panel-scroll')!;
     scroll.classList.toggle('is-overflowing', scroll.scrollHeight > scroll.clientHeight + 1);
   }

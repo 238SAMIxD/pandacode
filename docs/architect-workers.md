@@ -134,8 +134,32 @@ latest 200 messages and 64 KiB); the full visible transcript remains unchanged.
   counts as silent. A silent worker settles as failed and the architect handles it.
   A silent architect turn shows a notice; its workers keep running, and if
   nothing was dispatched the architect gets one **Continuing the plan** turn.
+- An architect turn ends with no pre-started spare process while its workers are
+  unsettled; the wake after they settle starts cold, so no idle process holds
+  memory meanwhile.
 - Explicit completion moves the parent task to Review. Marking the task complete
   and its seven-day archive policy work as before.
+
+## Sub-workers
+
+A direct worker can start its own sub-workers, only when genuinely needed (the
+work is truly parallel or needs a different model). This is one level deep:
+sub-workers cannot start workers. The worker gets `pandacode_dispatch_workers`
+and one `pandacode_sub_workers` tool (`action`: `list`, `read`, `followup`,
+`cancel`), both limited to its own children, with at most 3 unsettled and 6 in
+all; they count against the team's assignment limit. A sub-worker's write scope
+must lie inside its parent's, `dependsOn` names only its siblings, and a
+read-only parent starts only read-only children. A parent and its children never
+block each other's scopes.
+
+When a worker's run ends cleanly while its children still work, it is **parked**:
+its process exits, freeing its memory, and the team panel shows
+**Waiting on sub-workers**. When they settle, it resumes with one compact turn of
+their results, using no attempt and no architect round. A sub-worker's failure
+goes to its parent, never to the architect. Cancelling a parent, or its failure,
+stops its unfinished children; Pause and Stop stop them with the rest of the team,
+and a parked parent resumes after them. The team panel lists sub-workers indented
+under their parent.
 
 ## Communication and checkpoints
 
@@ -144,13 +168,22 @@ different harnesses. This is local team coordination, not a public A2A network
 endpoint. Open **Workers → Team messages** to inspect questions and handoffs.
 Select a worker to see its latest progress checkpoint alongside its transcript.
 
-- `pandacode_team_directory` returns teammate IDs, status, and advisory file scopes.
-- `pandacode_send_team_message` sends a bounded message to the architect or one
-  worker. Stable request keys deduplicate retried sends; different content cannot
-  reuse the same key.
+- `pandacode_team_directory` (workers; the architect's `list_workers` covers it)
+  returns teammate IDs, status, and advisory file scopes.
+- `pandacode_send_team_message` sends a bounded message to the architect, one
+  worker, or `all` (one copy per active teammate). `replyTo` threads a reply to a
+  message the sender received. Stable request keys deduplicate retried sends;
+  different content cannot reuse the same key. `urgent: true` also steers the text
+  into a running worker's current turn, at most once a minute per sender and
+  recipient; otherwise it stays in the mailbox. The architect is never steered.
 - `pandacode_read_team_mailbox` reads only messages addressed to the calling agent,
-  with a cursor for incremental reads. Agent identities are bound by the host;
+  with a cursor for incremental reads. Every team tool result carries a digest of
+  unread messages, so agents never poll. Agent identities are bound by the host;
   agents cannot supply another team or sender identity.
+- `pandacode_team_notes` (`set`, `get`, `list`) is a shared blackboard for durable
+  facts such as API shapes and decisions: up to 64 notes of 1 KiB per team; an
+  empty value deletes a note. Briefs include the newest notes in full, and later
+  turns only notes changed since.
 - `pandacode_checkpoint_worker` saves a worker's progress summary, concrete next
   steps, and optional blocker. It returns the worker's recent incoming messages.
   Checkpoints survive app restarts and are included in resumed worker prompts and
@@ -161,17 +194,27 @@ the harness resumes the same conversation, later turns get a one-line reminder (
 names the user's team guidance when one is set) and only the messages they have not
 seen. The full rules go out again when they change
 (for example new limits), when the harness starts a new conversation, and on every
-eighth turn so a compacted conversation never loses them for long.
+eighth turn so a compacted conversation never loses them for long. The architect's
+review, update, failure and continue turns quote the objective in full only on those
+turns or when it is under 2,000 bytes; otherwise they carry its first 1,400 and last 600 bytes, marked "objective unchanged".
 
-A new message to an idle architect, or a new blocker, can wake it while workers
-continue. Notification turns use the same round budget, reserving the final round
-for settled-result review. Workers check their mailbox at meaningful work
-boundaries; PandaCode does not interrupt a running model response or restart a
-completed worker to deliver a message. The architect uses a follow-up assignment
+Tool descriptions are terse and leave out what the rules already say; string
+limits, harness names and unknown fields are checked by the handlers, whose errors
+name the limit, rather than repeated in every turn's schemas.
+`team_turn_overhead_stays_within_budget` keeps the architect's team tools under
+4,200 bytes and a worker's under 3,000.
+
+Only an urgent message or a new blocker wakes an idle architect while workers
+continue; other messages wait for its next review or turn. Notification turns use
+the same round budget, reserving the final round for settled-result review.
+Workers see new messages in the digest on their next team tool call; apart from
+an urgent steer, PandaCode does not interrupt a running model response, and it
+never restarts a completed worker to deliver a message. The architect uses a follow-up assignment
 when a completed worker needs to do more work.
 
-Messages and checkpoints are stored in SQLite. Each team accepts at most 1,000
-messages of 2 KiB each; each worker can save up to 200 checkpoints. Only the latest
+Messages, notes and checkpoints are stored in SQLite. Each team accepts at most
+1,000 messages of 2 KiB each (a broadcast stores one per recipient) and 64 notes
+of 1 KiB; each worker can save up to 200 checkpoints. Only the latest
 checkpoint is included in team snapshots. Message history loads on demand and
 refreshes from team events, with no polling timer. These reports never override
 the user's instructions, file scopes, or harness approval policy.
@@ -223,7 +266,7 @@ run. It adds no Node/Python server, permanent configuration file, or resident
 service. ACP harnesses must advertise HTTP MCP support. Existing user integrations remain
 configured; this bridge does not grant access to PandaCode's broader app tools.
 Team tools (dispatch, list, read, follow up, cancel, finish, directory,
-messages and checkpoints) run without a Claude permission prompt: they only
+messages, notes and checkpoints) run without a Claude permission prompt: they only
 change this team's state and every call is checked against the caller's team,
 generation and role. Other tools keep the harness's normal approval modes.
 Team workers do not keep a pre-started process, so the architect's stays
@@ -233,12 +276,14 @@ Team snapshots also track the architect tool-catalog version. An older Codex
 architect gets a fresh native context on its next turn when its saved catalog
 cannot describe the new assignment fields. The visible transcript stays intact;
 the existing bounded conversation handoff restores its recent context. This is
-atomic and happens once; worker sessions and other tasks keep their native IDs.
+atomic and happens once. A Codex worker whose tools changed (sub-workers, team
+notes, the version 8 catalog) restarts its native context the same way; other
+tasks keep their native IDs.
 
 The architect has scoped tools for batch delegation, status, worker details,
 follow-ups, cancellation, and final review. Both roles receive team communication
-tools; workers additionally receive checkpoint saving. Workers cannot dispatch,
-cancel, or finish teams. Generation and attempt checks reject late calls after
+tools and team notes; workers additionally receive checkpoint saving. A direct
+worker's dispatch and `sub_workers` tools reach only its own sub-workers; sub-workers get none, and no worker can finish the team. Generation and attempt checks reject late calls after
 pause, cancellation, or retry. Native goals and team orchestration cannot be
 active together on the same task.
 

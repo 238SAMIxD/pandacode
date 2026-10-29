@@ -2,7 +2,7 @@
  * for the web (vendored WebAssembly, see src/vendor/enriched-markdown), rendered to HTML
  * with the node set its web renderer supports. Math renders through KaTeX on demand. */
 
-import { brandFor } from './trace-brands';
+import { brandFor } from './trace-brands.ts';
 
 type NodeType =
   | 'Document' | 'Paragraph' | 'Text' | 'Link' | 'Heading' | 'LineBreak' | 'SoftBreak' | 'Strong' | 'Emphasis'

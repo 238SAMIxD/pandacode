@@ -27,7 +27,7 @@ import { moved, queuePanel, type HoldReason, type QueuedMessage } from './messag
 import { afterRun as turnChecksAfterRun, enabled as turnChecksEnabled, noteManualSend, setEnabled as turnChecksSetEnabled } from './turn-checks';
 import { limitActive, limitBanner, resetLabel } from './usage-limit';
 import { cascade, enterView, glideIn, glideOut, hideToast, installDialogMotion, publishSpringEasings, revealIn, showToast } from './motion';
-import { updateTeamProgress } from './team-progress';
+import { teamSignature, updateTeamProgress } from './team-progress';
 import { installedCatalog } from './team-catalog';
 import { classicTeamSetup, isTeam, namedTeams, teamDetail, TEAM_MODE_EVENT } from './team-mode';
 import { renderCoordination } from './coordination-message';
@@ -212,15 +212,23 @@ function onArchitect(team: TeamEvent): void {
   if (team.sessionId === state.sessionId && team.error && team.error !== current?.error && !/^Team (paused|stopped)\./.test(team.error)) notify(team.error);
   const wasActive = teamActive(current);
   teams.set(team.sessionId, team);
-  const task = state.sessions.find(s => s.id === team.sessionId);
+  const task = state.sessions.find(s => s.id === team.sessionId), taskState = `${task?.status}:${task?.taskStage}`;
   if (task && teamActive(team)) { task.status = 'running'; task.taskStage = 'in_progress'; }
   if (task && !teamActive(team) && !state.streams.has(task.id)) task.status = 'idle';
   void ensureArchitectView().then(view => { if (!deletedSessions.has(team.sessionId)) view.update(team); });
-  if (team.sessionId === state.sessionId) {
-    if (wasActive !== teamActive(team)) renderComposer();
-    else refreshModelLabels();
-  }
+  // A snapshot that only moved its revision shows nothing new: no composer, thread or sidebar paint.
+  if (current && teamSignature(current) === teamSignature(team) && taskState === `${task?.status}:${task?.taskStage}`) return;
+  if (team.sessionId === state.sessionId) scheduleTeamRender(wasActive !== teamActive(team));
   scheduleNavigation();
+}
+/** Team snapshots can arrive many times a frame: the composer (and thread worker lines) paint once per frame. */
+let teamFrame = 0, teamComposer = false;
+function scheduleTeamRender(composer: boolean): void {
+  teamComposer ||= composer;
+  teamFrame ||= requestAnimationFrame(() => {
+    const full = teamComposer; teamFrame = 0; teamComposer = false;
+    if (full) renderComposer(); else refreshModelLabels();
+  });
 }
 async function loadTeam(id: string): Promise<TeamSnapshot | null> {
   const known = teams.has(id), before = teams.get(id);
@@ -1716,17 +1724,21 @@ function renderStream(): void {
   scheduleAnswerFolds(answered);
   if (region.dataset.revision !== String(current.revision)) {
     paintLiveActivity(region, current, transcript);
-    region.querySelector('.live-errors')!.innerHTML = current.tools.filter(tool => tool.statusOnly).map(tool => `<div class="message-error">${icon('alert')}<span>${escape(tool.content as string)}</span></div>`).join('') + (finishing?.error ? `<div class="message-error" role="alert"><span>Couldn't load the saved response. ${escape(finishing.error)}</span><button class="secondary-button" data-action="retry-response">Retry loading response</button></div>` : '');
+    const errors = region.querySelector<HTMLElement>('.live-errors')!;
+    const errorHtml = current.tools.filter(tool => tool.statusOnly).map(tool => `<div class="message-error">${icon('alert')}<span>${escape(tool.content as string)}</span></div>`).join('') + (finishing?.error ? `<div class="message-error" role="alert"><span>Couldn't load the saved response. ${escape(finishing.error)}</span><button class="secondary-button" data-action="retry-response">Retry loading response</button></div>` : '');
+    if (liveErrorHtml.get(errors) !== errorHtml) { errors.innerHTML = errorHtml; liveErrorHtml.set(errors, errorHtml); }
     // Approvals live in the bar above the prompt, not in the transcript.
-    region.querySelector('.live-approvals')!.innerHTML = '';
+    const approvals = region.querySelector('.live-approvals')!; if (approvals.firstChild) approvals.replaceChildren();
     renderApprovalBar();
     const inputs = region.querySelector('.live-inputs')!;
     for (const input of current.inputs.values()) if (input.element.parentElement !== inputs) inputs.append(input.element);
     region.dataset.revision = String(current.revision);
   }
-  // Every frame, text included: the open cards fold once the answer is under way.
-  if (activity.dataset.folded === undefined) {
-    choreograph(region.querySelector<HTMLElement>('.live-tools')!, current.turnKey, { answering: answered >= CARDS_FOLD_MS, expandAll: activityExpanded() });
+  // The open cards fold once the answer is under way; text-only frames change neither the tools nor that.
+  const answering = answered >= CARDS_FOLD_MS, expandAll = activityExpanded(), choreographed = `${current.turnKey}:${current.revision}:${answering}:${expandAll}`;
+  if (activity.dataset.folded === undefined && activity.dataset.choreographed !== choreographed) {
+    activity.dataset.choreographed = choreographed;
+    choreograph(region.querySelector<HTMLElement>('.live-tools')!, current.turnKey, { answering, expandAll });
   }
   // The answer to a traced turn hangs flush under the trace, as in the reference: no avatar/name row.
   region.querySelector<HTMLElement>('.live-message')!.classList.toggle('after-trace', liveToolRecords(current).length > 0);
@@ -1750,6 +1762,7 @@ function renderStream(): void {
   else followTranscript();
 }
 const liveGroupEntries = new WeakMap<HTMLElement, LiveTool[]>();
+const liveErrorHtml = new WeakMap<Element, string>();
 /** Patch only changed groups; text frames do not recreate tool controls or open details. */
 function paintLiveActivity(region: HTMLElement, current: Stream, transcript: HTMLElement): void {
   const host = region.querySelector<HTMLElement>('.live-tools')!;
@@ -1790,13 +1803,7 @@ function paintLiveActivity(region: HTMLElement, current: Stream, transcript: HTM
         const template = document.createElement('template'); template.innerHTML = html;
         node = template.content.firstElementChild as HTMLElement; node.dataset.streamKey = key;
       } else if (!previousEntries || previousEntries.length !== run.items.length || run.items.some((entry, index) => entry !== previousEntries[index])) {
-        const html = renderToolGroup(run.items, true, true);
-        const views = captureTools(node);
-        const template = document.createElement('template'); template.innerHTML = html;
-        const fresh = template.content.firstElementChild!;
-        node.querySelector('.tool-group-summary')!.innerHTML = fresh.querySelector('.tool-group-summary')!.innerHTML;
-        node.querySelector('.tool-group-body')!.innerHTML = fresh.querySelector('.tool-group-body')!.innerHTML;
-        restoreTools(node, views);
+        patchToolGroup(node, run.items, previousEntries ?? []);
       }
       liveGroupEntries.set(node, run.items);
       next.push(node);
@@ -1822,6 +1829,30 @@ function paintLiveActivity(region: HTMLElement, current: Stream, transcript: HTM
   });
   for (const entry of commentary) { bindFileLinkContext(entry.node, workspaceContext()); streamMarkdown(entry.node, entry.content, transcript); }
 }
+/** One changed call redraws its own row; the summary redraws only when a member's name or status changed. */
+function patchToolGroup(node: HTMLElement, items: LiveTool[], before: LiveTool[]): void {
+  const fragment = (html: string) => { const template = document.createElement('template'); template.innerHTML = html; return template.content.firstElementChild as HTMLElement; };
+  const tool = (entry: LiveTool) => typeof entry.content === 'string' ? decodeToolActivity(entry.content) : entry.content;
+  const summaryKey = (entries: LiveTool[]) => entries.map(entry => { const item = tool(entry); return `${entry.key}\0${item?.name}\0${item?.status}`; }).join('\n');
+  if (summaryKey(items) !== summaryKey(before)) {
+    // The summary reads only names and statuses, so it renders from the calls without their (large) input and output.
+    const bare = items.map(entry => { const item = tool(entry); return { key: entry.key, content: item ? { ...item, input: '', output: '' } : entry.content }; });
+    node.querySelector('.tool-group-summary')!.innerHTML = fragment(renderToolGroup(bare, true, true)).querySelector('.tool-group-summary')!.innerHTML;
+  }
+  const body = node.querySelector<HTMLElement>('.tool-group-body')!;
+  const rows = new Map([...body.children].map(row => [(row as HTMLElement).dataset.toolKey, row as HTMLElement]));
+  const kept = new Map(before.map(entry => [entry.key, entry]));
+  const changed = items.filter(entry => kept.get(entry.key) !== entry || !rows.has(entry.key));
+  const views = changed.length ? captureTools(body) : new Map<string, ToolView>();
+  for (const entry of changed) {
+    const fresh = fragment(renderToolActivity(entry.content, entry.key));
+    rows.get(entry.key)?.replaceWith(fresh); rows.set(entry.key, fresh);
+  }
+  const wanted = items.map(entry => rows.get(entry.key)!), keep = new Set(wanted);
+  for (const row of [...body.children]) if (!keep.has(row as HTMLElement)) row.remove();
+  wanted.forEach((row, index) => { if (body.children[index] !== row) body.insertBefore(row, body.children[index] ?? null); });
+  if (changed.length) restoreTools(body, new Map([...views].filter(([key]) => changed.some(entry => entry.key === key))));
+}
 // Measured from the reference at 30 fps: the answer starts at 7.20 s, the open cards fold at 8.25 s
 // and the turn folds to its summary at 9.6-9.8 s, mid-answer for any reply longer than the reference's.
 const CARDS_FOLD_MS = 1050;
@@ -1843,8 +1874,14 @@ function scheduleAnswerFolds(age: number): void {
   if (age < 0 || age >= TURN_FOLD_MS) return;
   answerTimer = window.setTimeout(() => { answerTimer = 0; renderStream(); }, (age < CARDS_FOLD_MS ? CARDS_FOLD_MS : TURN_FOLD_MS) - age + 16);
 }
+const toolRecords = new WeakMap<Stream, { revision: number; records: ToolActivity[] }>();
+/** Every tool change bumps the stream's revision, so text frames reuse the last scan. */
 function liveToolRecords(current: Stream): ToolActivity[] {
-  return current.tools.flatMap(tool => !tool.statusOnly && !tool.commentary && typeof tool.content !== 'string' ? [tool.content] : []);
+  const cached = toolRecords.get(current);
+  if (cached?.revision === current.revision) return cached.records;
+  const records = current.tools.flatMap(tool => !tool.statusOnly && !tool.commentary && typeof tool.content !== 'string' ? [tool.content] : []);
+  toolRecords.set(current, { revision: current.revision, records });
+  return records;
 }
 /** The header glyph, as in the reference: a dot cluster before the first step, the step's icon (a filled dot
  * stands in for its first frames, trace-motion.css) and level bars while the answer streams after the tools. */
@@ -2439,15 +2476,24 @@ async function editAtMessage(sessionId: string, messageId: number): Promise<void
 }
 
 /* Each thread's last page. Switching back draws it in the same frame as the click; the
- * saved history then refreshes behind it and redraws only if something changed. */
+ * saved history then refreshes behind it and redraws only if something changed. Bounded by
+ * size too: a thread scrolled far back keeps only its newest messages (older ones reload on
+ * scroll), and the least recently opened threads are forgotten first. */
 const THREAD_PAGES = 24;
-const threadPages = new Map<string, MessagePage>();
+const THREAD_PAGES_CHARS = 4_000_000, THREAD_PAGE_CHARS = 1_000_000;
+const threadPages = new Map<string, MessagePage & { chars: number }>();
 function rememberThread(id: string): void {
   const messages = state.messages.filter(message => message.id > 0);
   // Only a page that really is this thread's: other paths can switch tasks without a reload.
   if (!id || !messages.length || messages.some(message => message.sessionId !== id)) return;
-  threadPages.delete(id); threadPages.set(id, { messages, hasOlder: state.hasOlder });
-  if (threadPages.size > THREAD_PAGES) threadPages.delete(threadPages.keys().next().value as string);
+  let start = messages.length - 1, chars = messages[start].content.length;
+  while (start > 0 && chars + messages[start - 1].content.length <= THREAD_PAGE_CHARS) chars += messages[--start].content.length;
+  threadPages.delete(id); threadPages.set(id, { messages: start ? messages.slice(start) : messages, hasOlder: state.hasOlder || start > 0, chars });
+  let total = 0; for (const page of threadPages.values()) total += page.chars;
+  for (const [key, page] of threadPages) {
+    if (key === id || (threadPages.size <= THREAD_PAGES && total <= THREAD_PAGES_CHARS)) break;
+    threadPages.delete(key); total -= page.chars;
+  }
 }
 const pageSignature = (messages: Message[]): string => messages.filter(message => message.id > 0).map(message => `${message.id}:${message.content.length}`).join(',');
 

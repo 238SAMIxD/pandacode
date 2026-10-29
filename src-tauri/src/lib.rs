@@ -533,8 +533,13 @@ impl AppState {
     }
 }
 /// Fixed instructions for every task turn: sidebar titles, the run script, change tracking.
-/// Projectless chats have nothing to run, so they skip the run script.
-fn app_instructions(chat: bool) -> String {
+/// Projectless chats have nothing to run, so they skip the run script. Managed team workers
+/// report to their lead, not the user: no titles (they never get a title run), run script,
+/// rich questions or generative UI.
+fn app_instructions(chat: bool, worker: bool) -> String {
+    if worker {
+        return [turn_changes::instruction(), TURN_ENDS].concat();
+    }
     let run = if chat { "" } else { run_script::INSTRUCTIONS };
     [session_titles::GUIDANCE, run, turn_changes::instruction(), TURN_ENDS, RICH_QUESTIONS, GENERATIVE_UI].concat()
 }
@@ -563,12 +568,25 @@ mod instruction_tests {
         let reminded: Vec<i64> = (1..=20).filter(|turn| reminder_turn(*turn)).collect();
         assert_eq!(reminded, [1, 9, 17]);
         assert!(!reminder_turn(0));
-        let text = app_instructions(false);
+        let text = app_instructions(false, false);
         for part in ["Sidebar titles:", "Run and preview workflow:", "File change tracking:", "Questions you ask through the request_user_input tool", "Your turn ends when you reply", "Generative UI:"] {
             assert!(text.contains(part), "{part}");
         }
-        let chat = app_instructions(true);
+        let chat = app_instructions(true, false);
         assert!(!chat.contains("Run and preview workflow:") && chat.contains("Sidebar titles:"));
+    }
+
+    #[test]
+    fn team_workers_get_only_change_tracking_and_turn_end() {
+        let lead = app_instructions(false, false);
+        let worker = app_instructions(false, true);
+        assert_eq!(lead, [session_titles::GUIDANCE, run_script::INSTRUCTIONS, turn_changes::instruction(), TURN_ENDS, RICH_QUESTIONS, GENERATIVE_UI].concat());
+        assert_eq!(worker, [turn_changes::instruction(), TURN_ENDS].concat());
+        assert!(worker.contains("File change tracking:") && worker.contains("Your turn ends when you reply"));
+        for gone in ["Sidebar titles:", "Run and preview workflow:", "Generative UI:", "request_user_input"] {
+            assert!(!worker.contains(gone), "{gone}");
+        }
+        eprintln!("app instructions: lead {} B, worker {} B", lead.len(), worker.len());
     }
 }
 
@@ -1020,6 +1038,38 @@ fn flush_assistant(db: &Store, sid: &str, assistant: &Mutex<String>) -> Result<(
         text.clear();
     }
     Ok(())
+}
+
+/// Streams an agent event to the window and remote viewers, merging text deltas
+/// (`providers::Coalescer`). The lock is held while emitting so order is kept.
+fn emit_coalesced(app: &tauri::AppHandle, coalescer: &Arc<Mutex<providers::Coalescer>>, event: AgentEvent) {
+    let mut buffer = coalescer.lock().unwrap_or_else(|poison| poison.into_inner());
+    let now = std::time::Instant::now();
+    for event in buffer.push(event, now) {
+        remote::agent_event(app, &event);
+        let _ = app.emit("agent-event", event);
+    }
+    if buffer.started_at() == Some(now) {
+        let (app, coalescer) = (app.clone(), coalescer.clone());
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(providers::COALESCE_WINDOW).await;
+            let mut buffer = coalescer.lock().unwrap_or_else(|poison| poison.into_inner());
+            if buffer.started_at() == Some(now) {
+                if let Some(event) = buffer.flush() {
+                    remote::agent_event(&app, &event);
+                    let _ = app.emit("agent-event", event);
+                }
+            }
+        });
+    }
+}
+
+fn flush_coalesced(app: &tauri::AppHandle, coalescer: &Arc<Mutex<providers::Coalescer>>) {
+    let mut buffer = coalescer.lock().unwrap_or_else(|poison| poison.into_inner());
+    if let Some(event) = buffer.flush() {
+        remote::agent_event(app, &event);
+        let _ = app.emit("agent-event", event);
+    }
 }
 
 fn save_agent_activity(
@@ -1826,7 +1876,8 @@ async fn launch_operation_admitted(
         config.prompt.push_str(&title.instruction());
     }
     if restore_stage.is_none() {
-        let instructions = app_instructions(chats::is_chat_folder(&config.cwd));
+        let worker = team.as_ref().is_some_and(|admission| admission.parent != session_id);
+        let instructions = app_instructions(chats::is_chat_folder(&config.cwd), worker);
         if providers::takes_system_instructions(&config.provider) {
             // Cached with the system prompt: paid once, then read at a tenth of the price.
             config.instructions = instructions;
@@ -1875,6 +1926,8 @@ async fn launch_operation_admitted(
         let goal_agents_sink = agents.clone();
         let native_turn_sink = Mutex::new(String::new());
         let team_sink = team.clone();
+        let coalescer = Arc::new(Mutex::new(providers::Coalescer::default()));
+        let coalescer_sink = coalescer.clone();
         let sink: providers::Sink = Arc::new(move |mut e: AgentEvent| {
             if cloud && app_sink.state::<AppState>().shutdown.load(Ordering::SeqCst) != 0 {
                 return;
@@ -1993,10 +2046,9 @@ async fn launch_operation_admitted(
             ) {
                 architect::activity(&app_sink, &e.session_id, team_sink.as_ref());
             }
-            remote::agent_event(&app_sink, &e);
             // Cloned only for the turn boundary below.
             let completed = (e.kind == "turn_complete").then(|| e.session_id.clone());
-            let _ = app_sink.emit("agent-event", e);
+            emit_coalesced(&app_sink, &coalescer_sink, e);
             if let Some(changes_sid) = completed {
                 if let Some(tracker) = &tracker_sink {
                     let capture = blocking_snapshot(|| {
@@ -2020,7 +2072,7 @@ async fn launch_operation_admitted(
         let team_tools_missing = team.is_some() && host.is_none();
         let host = agent_tools::with_jev(host, app.clone(), session_id.clone(), stopped.clone());
         let host = bots::tools::with_bot(host, app.clone(), session_id.clone(), stopped.clone());
-        let host = simulator::tools::with_simulator(host, app.clone(), stopped.clone());
+        let host = simulator::tools::with_simulator_for(host, app.clone(), session_id.clone(), stopped.clone());
         let host = vm::tools::with_vm(host, app.clone(), session_id.clone(), stopped.clone());
         let host = design::with_design(host, app.clone(), session_id.clone(), stopped.clone());
         let host = cloud::deploy::with_deploy(host, app.clone(), session_id.clone(), stopped.clone());
@@ -2048,6 +2100,7 @@ async fn launch_operation_admitted(
         } else {
             providers::run_with_tools(config, sink, rx, host, reached_harness.clone()).await
         };
+        flush_coalesced(&app, &coalescer);
         if cloud && app.state::<AppState>().shutdown.load(Ordering::SeqCst) != 0 {
             // The remote run continues; the next launch re-attaches to it.
             if let Ok(mut registry) = agents.lock() {
@@ -2290,7 +2343,13 @@ async fn launch_operation_admitted(
                 [&session_id],
                 |row| row.get::<_, bool>(0),
             ).ok()).unwrap_or(false);
-            let task = store.lock().ok().filter(|_| replied).and_then(|db| db.session(&session_id).ok());
+            // A lead whose workers are still unsettled is woken only after they settle, often
+            // past the spare's idle limit: skip the spare (the wake starts cold, ~1.4 s).
+            let lead = team.as_ref().is_some_and(|admission| admission.parent == session_id);
+            let waiting_on_workers = lead && store.lock().ok().and_then(|db| architect::load(&db, &session_id).ok().flatten()).is_some_and(|snapshot| {
+                snapshot.workers.iter().any(|worker| !worker.abandoned && architect::unsettled(&worker.status))
+            });
+            let task = store.lock().ok().filter(|_| replied && !waiting_on_workers).and_then(|db| db.session(&session_id).ok());
             if let Some(task) = task {
                 next.resume_id = task.resume_id;
                 next.model = task.model;

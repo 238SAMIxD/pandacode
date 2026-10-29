@@ -687,7 +687,7 @@ async fn run(app: &tauri::AppHandle, from: &str, call: Call, full_access: bool) 
 fn remote_worker_status(status: &str) -> &str {
     match status {
         "waiting" => "running",
-        "queued" | "running" | "completed" | "failed" | "stopped" => status,
+        "queued" | "running" | "parked" | "completed" | "failed" | "stopped" => status,
         _ => "stopped",
     }
 }
@@ -735,6 +735,7 @@ fn remote_worker(worker: &crate::architect::Worker) -> Value {
         "readOnly": worker.read_only,
         "abandoned": worker.abandoned,
         "filesTruncated": false,
+        "parentWorker": worker.parent_worker,
     })
 }
 
@@ -3180,6 +3181,9 @@ mod tests {
             }),
             timed_out: false,
             failovers: 0,
+            parent_worker: None,
+            resume_prompt: None,
+            tool_catalog_version: 0,
         }
     }
 
@@ -3242,6 +3246,10 @@ mod tests {
     fn team_snapshot_and_worker_event_keep_the_phone_shape() {
         let team = team_fixture(vec![worker_fixture("w1", "waiting")]);
         let worker = remote_worker(&team.workers[0]);
+        let mut parked = worker_fixture("s1", "parked");
+        parked.parent_worker = Some("w1".into());
+        let parked = remote_worker(&parked);
+        assert_eq!((parked["status"].as_str(), parked["parentWorker"].as_str()), (Some("parked"), Some("w1")));
         let mut previous = HashMap::new();
         assert_eq!(changed_worker_rows(&team, &mut previous), std::slice::from_ref(&worker));
         assert!(

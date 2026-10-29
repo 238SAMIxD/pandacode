@@ -61,7 +61,10 @@ export interface TeamMessagePage {
 export interface TeamWorker extends WorkerProfile {
   sessionId: string;
   profileId: string;
-  status: 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'stopped';
+  /** `parked`: its run ended while its sub-workers work; it resumes with their results. */
+  status: 'queued' | 'running' | 'waiting' | 'parked' | 'completed' | 'failed' | 'stopped';
+  /** The direct worker that dispatched this sub-worker. */
+  parentWorker?: string;
   assignment: string;
   summary: string;
   error?: string | null;

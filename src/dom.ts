@@ -108,18 +108,32 @@ function workspaceHref(href: string): string {
 // rather than as raw text that reflows. A microtask, not a timer, so nothing delays it.
 void Promise.resolve().then(() => import('./enriched-markdown')).then(engine => engine.parseMarkdown('')).catch(() => { /* markdownHtml falls back when it is needed. */ });
 /* Formatted Markdown by source text. Reopening a thread draws its final layout in one
- * frame instead of raw text that reflows once the parser answers. */
-const RENDERED_LIMIT = 800;
+ * frame instead of raw text that reflows once the parser answers. An LRU bounded by size:
+ * source plus HTML, in UTF-16 code units (about 4 M characters, 8 MB). */
+const RENDERED_LIMIT = 4 * 1024 * 1024;
 const rendered = new Map<string, string>();
-function remember(value: string, html: string): void {
-  rendered.delete(value); rendered.set(value, html);
-  if (rendered.size > RENDERED_LIMIT) rendered.delete(rendered.keys().next().value as string);
+let renderedSize = 0;
+function forget(value: string): void {
+  const html = rendered.get(value);
+  if (html === undefined) return;
+  rendered.delete(value); renderedSize -= value.length + html.length;
 }
+function remember(value: string, html: string): void {
+  forget(value);
+  const size = value.length + html.length;
+  if (size > RENDERED_LIMIT) return;
+  rendered.set(value, html); renderedSize += size;
+  for (const oldest of rendered.keys()) { if (renderedSize <= RENDERED_LIMIT) break; forget(oldest); }
+}
+/** The formatted-Markdown cache, for the streaming painter (which keeps only its stream's latest
+ * value, so a finished reply draws at once) and tests. */
+export const markdownCache = { get: (value: string) => rendered.get(value), set: remember, delete: forget, size: () => renderedSize, limit: RENDERED_LIMIT };
 let sanitizer: Promise<(html: string) => string> | undefined;
 let fallback: Promise<(value: string) => string | Promise<string>> | undefined;
 /** Markdown to safe HTML through the Enriched Markdown engine (md4c), with `marked` as a
- * fallback if its WebAssembly cannot start. Math is typeset after sanitizing, from KaTeX. */
-export async function markdownHtml(value: string): Promise<string> {
+ * fallback if its WebAssembly cannot start. Math is typeset after sanitizing, from KaTeX.
+ * Pass `cache = false` for text that is still changing, so passing prefixes never fill the cache. */
+export async function markdownHtml(value: string, cache = true): Promise<string> {
   sanitizer ??= import('dompurify').then(d => (html: string) => d.default.sanitize(html, { ADD_TAGS: ['pandacode-ui', 'pandacode-code'], ALLOW_DATA_ATTR: false, FORBID_TAGS: ['style', 'img', 'iframe', 'form', 'input', 'button', 'textarea', 'select', 'option', 'video', 'audio'], FORBID_ATTR: ['style', 'id', 'name'] }));
   const engine = import('./enriched-markdown');
   // Defines <pandacode-ui> (generative UI views) before any HTML that holds one is used.
@@ -136,7 +150,7 @@ export async function markdownHtml(value: string): Promise<string> {
     html = await (await fallback)(value);
   }
   const result = pendingView(value, await enriched.typesetMath(sanitize(html)));
-  remember(value, result);
+  if (cache) remember(value, result);
   return result;
 }
 const FENCE_LINE = /^ {0,3}(`{3,}|~{3,})[ \t]*([^\s`]*)/;
@@ -160,7 +174,7 @@ function pendingView(value: string, html: string): string {
 export async function markdown(target: HTMLElement, value: string, scroll?: HTMLElement): Promise<void> {
   captureFileLinkContext(target);
   const known = rendered.get(value);
-  if (known !== undefined) { target.innerHTML = known; decorateFileLinks(target, target); return; }
+  if (known !== undefined) { remember(value, known); target.innerHTML = known; decorateFileLinks(target, target); return; }
   target.textContent = value;
   const html = await markdownHtml(value);
   if (target.isConnected && target.textContent === value) {

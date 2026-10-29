@@ -438,6 +438,55 @@ pub enum RunInput {
 }
 pub type Sink = Arc<dyn Fn(AgentEvent) + Send + Sync>;
 
+/// How long streamed text may wait before it reaches the window (about one frame at 30 Hz).
+pub const COALESCE_WINDOW: Duration = Duration::from_millis(33);
+const COALESCE_BYTES: usize = 8 * 1024;
+
+/// Merges consecutive plain `text`/`thinking` deltas into one event, so a long reply is a
+/// few dozen window events instead of thousands. Any other event flushes the buffer first,
+/// so ordering is preserved.
+#[derive(Default)]
+pub struct Coalescer {
+    pending: Option<(AgentEvent, std::time::Instant)>,
+}
+impl Coalescer {
+    /// Events to emit now, in order. A buffered delta waits until the window or size limit
+    /// passes, the next event of another kind, or `flush`.
+    pub fn push(&mut self, event: AgentEvent, now: std::time::Instant) -> Vec<AgentEvent> {
+        let plain = matches!(event.kind.as_str(), "text" | "thinking")
+            && event.request_id.is_none()
+            && event.data.is_none()
+            && event.tool.is_none();
+        let mut out = Vec::new();
+        match &mut self.pending {
+            Some((buffered, _)) if plain && buffered.kind == event.kind && buffered.session_id == event.session_id => {
+                buffered.text.push_str(&event.text);
+            }
+            _ => {
+                out.extend(self.flush());
+                if !plain {
+                    out.push(event);
+                    return out;
+                }
+                self.pending = Some((event, now));
+            }
+        }
+        if self.pending.as_ref().is_some_and(|(buffered, since)| {
+            buffered.text.len() >= COALESCE_BYTES || now.duration_since(*since) >= COALESCE_WINDOW
+        }) {
+            out.extend(self.flush());
+        }
+        out
+    }
+    pub fn flush(&mut self) -> Option<AgentEvent> {
+        self.pending.take().map(|(event, _)| event)
+    }
+    /// When the buffered delta arrived; a timer flushes it only if it is still that buffer.
+    pub fn started_at(&self) -> Option<std::time::Instant> {
+        self.pending.as_ref().map(|(_, since)| *since)
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderInfo {
@@ -3151,7 +3200,9 @@ async fn run_process_with_tools(
                     let previous_len=bytes.len();
                     bytes.extend_from_slice(&buf[..count]);
                     let mut consumed=0;
-                    for end in bytes.iter().enumerate().skip(previous_len).filter_map(|(i,b)|if *b==b'\n'{Some(i)}else{None}).collect::<Vec<_>>() {
+                    let mut scan=previous_len;
+                    while let Some(offset)=bytes[scan..].iter().position(|b|*b==b'\n') {
+                        let end=scan+offset;scan=end+1;
                         let line=&bytes[consumed..end];consumed=end+1;
                         if line.len()>MAX_FRAME{return Err("Provider sent an oversized JSON message".into());}
                         if line.iter().all(u8::is_ascii_whitespace){continue;}
@@ -3198,6 +3249,55 @@ async fn run_process_with_tools(
             .unwrap_or(error);
         diagnostics::failure(&error, &diagnostic)
     })
+}
+
+#[cfg(test)]
+mod coalesce_tests {
+    use super::*;
+    fn ev(kind: &str, text: &str) -> AgentEvent {
+        AgentEvent { session_id: "s".into(), kind: kind.into(), text: text.into(), request_id: None, data: None, tool: None }
+    }
+    #[test]
+    fn tiny_deltas_merge_and_flush_before_other_events() {
+        let start = std::time::Instant::now();
+        let mut c = Coalescer::default();
+        let mut out = Vec::new();
+        let mut sent = String::new();
+        for i in 0..2000 {
+            if i == 1000 {
+                let mut tool = ev("tool", "Bash");
+                tool.data = Some(json!({"id": "t1"}));
+                out.extend(c.push(tool, start));
+            }
+            let delta = format!("{}", i % 10);
+            sent.push_str(&delta);
+            // All within one 33 ms window.
+            out.extend(c.push(ev("text", &delta), start + Duration::from_micros(i)));
+        }
+        out.extend(c.flush());
+        eprintln!("coalesced 2000 text deltas into {} emits (was 2001)", out.len());
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[1].kind, "tool");
+        let text: String = out.iter().filter(|e| e.kind == "text").map(|e| e.text.as_str()).collect();
+        assert_eq!(text, sent);
+        assert_eq!(out[0].text, sent[..1000]);
+    }
+    #[test]
+    fn window_size_and_kind_changes_flush() {
+        let start = std::time::Instant::now();
+        let mut c = Coalescer::default();
+        assert!(c.push(ev("text", "a"), start).is_empty());
+        assert_eq!(c.started_at(), Some(start));
+        let late = c.push(ev("text", "b"), start + COALESCE_WINDOW);
+        assert_eq!(late.len(), 1);
+        assert_eq!(late[0].text, "ab");
+        assert!(c.push(ev("thinking", "x"), start).is_empty());
+        let switched = c.push(ev("text", "y"), start);
+        assert_eq!((switched[0].kind.as_str(), switched[0].text.as_str()), ("thinking", "x"));
+        let big = c.push(ev("text", &"z".repeat(COALESCE_BYTES)), start);
+        assert_eq!(big[0].text.len(), COALESCE_BYTES + 1);
+        assert!(c.flush().is_none());
+    }
 }
 
 #[cfg(test)]
