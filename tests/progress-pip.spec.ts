@@ -44,8 +44,9 @@ async function settled(page: Page, iteration: number, scope = card(page)): Promi
     return layers.length === 1 ? layers[0].querySelector('.pp-media')?.getAttribute('alt') ?? '' : '';
   })).toMatch(new RegExp(`^Iteration ${iteration}:`));
 }
-/** Every finite animation on the page has finished (looping status pulses keep going). */
-const still = (page: Page) => page.waitForFunction(() => document.getAnimations().every(a => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity));
+/** Every finite, time-based animation on the page has finished (looping status pulses and
+ * scroll-driven fades, such as the inspector tab strip's, keep going). */
+const still = (page: Page) => page.waitForFunction(() => document.getAnimations().every(a => a.playState !== 'running' || a.timeline !== document.timeline || a.effect?.getTiming().iterations === Infinity));
 async function shoot(page: Page, name: string, clip?: { width: number; height: number }): Promise<void> {
   await card(page).hover({ position: { x: 120, y: 14 } });
   await still(page);
@@ -323,7 +324,8 @@ test('glides to a new iteration when viewing the latest, nudges otherwise', asyn
   // The strip was appended to, not rebuilt: focus and the stage stay put.
   await expect(strip(page).getByRole('button', { name: /^Iteration 2/ })).toBeFocused();
   expect(await stage!.evaluate(el => el.isConnected && !el.classList.contains('is-leaving'))).toBe(true);
-  await page.locator('[data-action="board-view"]').click();
+  await page.locator('#view-menu').first().click();
+  await page.getByRole('menuitemradio', { name: 'Board', exact: true }).click();
   await expect(pip(page)).toBeHidden();
 });
 

@@ -1,6 +1,5 @@
 /* Visual progress picture-in-picture (progress-pip.ts, progress-lightbox.ts). Motion here
-   is keyframes and element.animate(), never transitions: the app's global
-   transition:none stays intact. */
+   is keyframes and element.animate(), never transitions. */
 
 /* Every colour comes from theme tokens. --pp-dark/--pp-light are the theme's darker and
    lighter ends (text and background swap in dark mode); --pp-ink is the dark glass that
@@ -23,7 +22,7 @@ html[data-theme="dark"]{--pp-spot:color-mix(in srgb,var(--pp-dark) 18%,transpare
 .progress-pip[data-corner$="l"]{left:14px}
 .progress-pip[data-corner$="r"]{right:22px;justify-content:flex-end}
 .progress-pip.is-dragging{z-index:7}
-.progress-pip.is-dragging :is(.pp-card,.pp-pill){cursor:grabbing;box-shadow:0 0 0 .5px var(--glass-ring),0 34px 80px -22px var(--glass-shadow-deep),inset 0 1px 0 var(--glass-highlight)}
+.progress-pip.is-dragging :is(.pp-card,.pp-pill){cursor:grabbing;box-shadow:0 34px 80px -22px var(--glass-shadow-deep),0 10px 24px -12px var(--glass-shadow-near)}
 /* During the morph the outgoing shape floats over the incoming one at the same corner. */
 .progress-pip .is-overlay{position:absolute;pointer-events:none}
 /* Softened (progress-dim.ts): clicks pass through to the transcript; only the header takes
@@ -35,23 +34,21 @@ html[data-theme="dark"]{--pp-spot:color-mix(in srgb,var(--pp-dark) 18%,transpare
 .progress-pip[data-corner$="l"] .is-overlay{left:0}
 .progress-pip[data-corner$="r"] .is-overlay{right:0}
 
-/* One warm glass, as every floating surface, with the accent light on the top edge. */
+/* The app's flat glass, as every floating surface: a translucent fill over a blur, no edge. */
 .pp-pill,.pp-card,.pp-lb-plate{
-  border:.5px solid var(--glass-edge);
-  background:radial-gradient(80% 60% at 50% -10%,var(--glass-glow),transparent 72%),linear-gradient(180deg,var(--glass-warm),var(--glass-tint) 52%);
-  box-shadow:0 0 0 .5px var(--glass-ring),0 22px 52px -24px var(--glass-shadow-deep),0 8px 18px -12px var(--glass-shadow-near),inset 0 1px 0 var(--glass-highlight);
+  border:0;background:var(--glass-warm);
+  box-shadow:0 22px 52px -24px var(--glass-shadow-deep),0 8px 18px -12px var(--glass-shadow-near);
   backdrop-filter:blur(26px) saturate(1.5);-webkit-backdrop-filter:blur(26px) saturate(1.5)
 }
-.pp-pill::before,.pp-card::before,.pp-lb-plate::before{content:"";position:absolute;inset:0 18% auto;height:1px;border-radius:1px;pointer-events:none;
-  background:linear-gradient(90deg,transparent,rgb(var(--accent-rgb) / .75),transparent)}
+.workspace[data-wallpaper] :is(.pp-pill,.pp-card){background:var(--header-glass);box-shadow:var(--floating-bar-shadow)}
 
 /* Collapsed pill */
 .pp-pill{position:relative;box-sizing:border-box;max-width:240px;display:flex;align-items:center;gap:12px;padding:7px 16px 7px 9px;border-radius:999px;color:var(--text);cursor:pointer;touch-action:none;font:inherit;text-align:left}
-.pp-pill:hover{background:radial-gradient(80% 60% at 50% -10%,var(--glass-glow),transparent 72%),linear-gradient(180deg,var(--glass-fill-hover),var(--glass-tint) 60%)}
+.pp-pill:hover{background:color-mix(in srgb,var(--glass-warm),var(--glass-fill-hover))}
 .pp-pill:active{scale:.97}
 .pp-stack{position:relative;width:70px;height:36px;flex-shrink:0}
 .pp-stack img{position:absolute;top:0;left:20px;width:50px;height:36px;object-fit:cover;border-radius:8px;background:var(--raised);
-  border:1.5px solid var(--glass-highlight);box-shadow:0 4px 10px -4px var(--glass-shadow-deep);
+  box-shadow:0 4px 10px -4px var(--glass-shadow-deep);
   translate:calc(var(--d) * -10px) calc(var(--d) * 1px);rotate:calc(var(--d) * -7deg);transform-origin:50% 100%;filter:brightness(calc(1 - var(--d) * .08))}
 .pp-pill-text{display:flex;flex-direction:column;min-width:0;line-height:1.25}
 .pp-pill-text strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;font-size:.85rem;letter-spacing:-.005em}
@@ -85,7 +82,7 @@ html[data-theme="dark"] .pp-icon[aria-pressed="true"]{background:rgb(var(--accen
 
 /* Stage */
 .pp-stage{position:relative;margin:0;border-radius:11px;overflow:hidden;aspect-ratio:1.6;flex:1 1 auto;min-height:120px;
-  background:radial-gradient(120% 90% at 50% 0%,rgb(var(--accent-rgb) / .08),transparent 60%),color-mix(in srgb,var(--pp-dark) 5%,transparent);box-shadow:inset 0 0 0 .5px var(--glass-line)}
+  background:color-mix(in srgb,var(--pp-dark) 6%,transparent)}
 html[data-theme="dark"] .pp-stage{background:color-mix(in srgb,var(--pp-dark) 40%,transparent)}
 /* Portrait images: the PiP stage stays short and the side bands hold a blurred copy. */
 .pp-card .pp-stage{max-height:240px}
@@ -170,7 +167,7 @@ html[data-theme="dark"] .pp-stage{background:color-mix(in srgb,var(--pp-dark) 40
 .pp-strip::-webkit-scrollbar{display:none}
 .pp-strip-inner{position:relative;display:flex;gap:7px;width:max-content;padding:0 6px}
 .pp-rail{position:absolute;left:6px;right:6px;bottom:-6px;height:3px;border-radius:2px;background:var(--glass-line)}
-.pp-rail-fill{position:absolute;left:0;top:0;bottom:0;border-radius:2px;background:linear-gradient(90deg,rgb(var(--accent-rgb) / .4),var(--accent))}
+.pp-rail-fill{position:absolute;left:0;top:0;bottom:0;border-radius:2px;background:var(--accent)}
 .pp-thumb{position:relative;scroll-snap-align:start;width:60px;height:40px;padding:0;border:0;border-radius:7px;background:var(--raised);cursor:pointer;flex-shrink:0;
   box-shadow:0 0 0 .5px var(--glass-line),0 2px 6px -3px var(--glass-shadow-near);opacity:.8}
 .pp-thumb img{width:100%;height:100%;object-fit:cover;border-radius:7px;display:block}
@@ -187,7 +184,7 @@ html[data-theme="dark"] .pp-stage{background:color-mix(in srgb,var(--pp-dark) 40
 @keyframes pp-nudge{0%,100%{opacity:.2;scale:.97}50%{opacity:1;scale:1.03}}
 
 /* Controls */
-.pp-bar,.pp-confirm{display:flex;align-items:center;gap:2px;padding-top:4px;border-top:.5px solid var(--glass-line)}
+.pp-bar,.pp-confirm{display:flex;align-items:center;gap:2px;padding-top:6px}
 .pp-bar[hidden],.pp-confirm[hidden]{display:none}
 .pp-bar-gap{flex:1}
 .pp-ring{position:absolute;inset:0;width:28px;height:28px;rotate:-90deg;pointer-events:none;opacity:0}
@@ -196,7 +193,7 @@ html[data-theme="dark"] .pp-stage{background:color-mix(in srgb,var(--pp-dark) 40
 .pp-play-icon{display:contents}
 .pp-confirm{gap:6px;padding:6px 2px 2px 6px;font-size:.76rem}
 .pp-confirm span{flex:1}
-.pp-text-button{border:0;border-radius:7px;padding:4px 10px;font:inherit;font-weight:600;background:var(--glass-fill);color:var(--text);cursor:pointer;box-shadow:inset 0 0 0 .5px var(--glass-line)}
+.pp-text-button{border:0;border-radius:7px;padding:4px 10px;font:inherit;font-weight:600;background:var(--glass-fill);color:var(--text);cursor:pointer}
 .pp-text-button:hover{background:var(--glass-fill-hover)}
 .pp-text-button:active{scale:.96}
 .pp-text-button.is-danger{color:var(--bg);background:var(--danger)}
@@ -243,7 +240,7 @@ dialog.pp-lightbox::backdrop{background:color-mix(in srgb,var(--pp-dark) 42%,tra
 }
 .pp-lb-side .pp-note[hidden]{display:none}
 /* A collapsed pill in a top corner keeps the first message clear of it. */
-.conversation-pane:has(#progress-pip[data-corner^="t"]:not([hidden]) > .pp-pill:not(.is-overlay)) .transcript{padding-top:64px}
+.conversation-pane:has(#progress-pip[data-corner^="t"]:not([hidden]) > .pp-pill:not(.is-overlay)) .transcript{padding-top:max(var(--transcript-top,28px),calc(var(--header-under,0px) + 76px))}
 /* Away in a narrow pane: nearly gone, so its text never doubles over the transcript's. */
 .progress-pip.is-away .pp-card > :not(.pp-head){animation:pp-away 300ms ease forwards}
 @keyframes pp-away{to{opacity:0;visibility:hidden}}

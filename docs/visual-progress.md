@@ -51,8 +51,8 @@ the conversation pane, one history per thread.
 
 ## Motion
 
-PandaCode is otherwise instant (`MOTION = false`, global `transition:none`). By request
-this surface animates, only with `element.animate()` and CSS `@keyframes`: the pill-to-card
+Like the live tool trace, this surface choreographs more than the rest of the app, with
+`element.animate()` and CSS `@keyframes` (never transitions): the pill-to-card
 clip morph, directional crossfades with a little scale and blur, annotation strokes drawing
 in with badges popping, the filmstrip cascade (capped at 8), a height glide when the image
 shape or note changes, and the lightbox entrance and 200 ms exit. Expand and collapse are
