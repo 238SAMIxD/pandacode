@@ -11,6 +11,7 @@ import { createPreviewTurnChanges } from './preview-turn-changes';
 import { invokeBots } from './preview-bots';
 import { invokeRemote } from './preview-remote';
 import { createPreviewDesign } from './preview-design';
+import { previewProgress } from './preview-progress';
 import { createPreviewSkills } from './preview-skills';
 import { previewCapabilities } from './preview-capabilities';
 import { recipesCommand } from './preview-recipes';
@@ -403,6 +404,7 @@ let browserHistory: string[] = [], browserIndex = -1;
 let browserState: BrowserStatus = { url: '', title: '', loading: false, canGoBack: false, canGoForward: false, picking: false };
 function browserChanged(): void { browserState.canGoBack = browserIndex > 0; browserState.canGoForward = browserIndex < browserHistory.length - 1; emit('browser-state', { ...browserState }); }
 function emit(name: string, event: unknown) { listeners.get(name)?.forEach(fn => fn(event)); }
+previewProgress.onChange = sessionId => emit('progress-changed', { sessionId });
 export function listen(name: string, callback: (event: any) => void): () => void { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name)!.add(callback); return () => listeners.get(name)?.delete(callback); }
 /** What the native picker "returns" in the browser preview, so attach flows can be exercised. */
 export function samplePick(kind: 'files' | 'folder'): string[] {
@@ -1297,6 +1299,10 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     case 'vm_frame': result = await previewVm.frame(args.name); break;
     case 'vm_input': result = previewVm.input(args.name, args.input); break;
     case 'vm_desktop': result = previewVm.desktop(args.name); break;
+    case 'progress_list': result = previewProgress.list(args.sessionId); break;
+    case 'progress_media': result = previewProgress.media(args.sessionId, args.id); break;
+    case 'progress_thumb': result = previewProgress.thumb(args.sessionId, args.id); break;
+    case 'progress_clear': result = previewProgress.clear(args.sessionId); break;
     case 'design_list': result = previewDesign.list(); break;
     case 'design_read': result = previewDesign.read(args.name); break;
     case 'design_comments': result = previewDesign.comments(); break;
