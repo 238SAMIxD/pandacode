@@ -19,17 +19,17 @@ test('puts every task in exactly one section', () => {
   ];
   const sections = split(tasks);
   assert.deepEqual(ids(sections.active), ['run']);
-  assert.deepEqual(ids(sections.review), ['fresh', 'old']);
-  assert.deepEqual(ids(sections.rest), ['idea']);
+  assert.deepEqual(ids(sections.review), ['fresh', 'old', 'idea']);
+  assert.deepEqual(ids(sections.rest), []);
   assert.deepEqual(ids(sections.completed), ['done']);
   assert.equal(Object.values(sections).flat().length, tasks.length);
 });
 
-test('Active lists the latest start first and Finished the latest response, whatever the manual order', () => {
+test('Active lists the latest start first; Finished keeps the sidebar sort it was given', () => {
   const tasks = [task('b', { running: true, lastPromptAt: 5 }), task('a', { running: true, lastPromptAt: 9 }), task('d', { taskStage: 'review', lastResponseAt: now - 2 }), task('c', { taskStage: 'review', lastResponseAt: now - 1 })];
   const sections = split(tasks);
   assert.deepEqual(ids(sections.active), ['a', 'b']);
-  assert.deepEqual(ids(sections.review), ['c', 'd']);
+  assert.deepEqual(ids(sections.review), ['d', 'c']);
 });
 
 test('lists completed tasks newest first, and a running completed task stays active', () => {
@@ -57,21 +57,32 @@ test('running threads are Active even when pinned or open; pinned review work st
 
 test('Finished keeps every finished task, open or not, until it is settled', () => {
   const tasks = [task('a', { taskStage: 'review', lastResponseAt: now - 2 }), task('b', { taskStage: 'review', lastResponseAt: now - 1 })];
-  assert.deepEqual(ids(split(tasks).review), ['b', 'a']);
-  assert.deepEqual(ids(split(tasks, { selectedId: 'a' }).review), ['b', 'a']);
-  assert.deepEqual(ids(split(tasks, { selectedId: 'a', hold: 'review' }).review), ['b', 'a']);
+  assert.deepEqual(ids(split(tasks).review), ['a', 'b']);
+  assert.deepEqual(ids(split(tasks, { selectedId: 'a' }).review), ['a', 'b']);
+  assert.deepEqual(ids(split(tasks, { selectedId: 'a', hold: 'review' }).review), ['a', 'b']);
   assert.deepEqual(ids(split([{ ...tasks[0], taskStage: 'completed' }], { selectedId: 'other' }).completed), ['a']);
 });
 
 test('the open thread holds its section, so a click on its row never moves it; running still wins', () => {
   const done = task('done', { taskStage: 'completed', completedAt: 5 }), idea = task('idea');
   assert.deepEqual(ids(split([{ ...done, taskStage: 'review' }], { selectedId: 'done', hold: 'completed' }).completed), ['done']);
-  assert.deepEqual(ids(split([done], { selectedId: 'done', hold: 'rest' }).rest), ['done']);
+  // Only Pinned is `rest`: an unpinned thread never holds there.
+  assert.deepEqual(ids(split([done], { selectedId: 'done', hold: 'rest' }).completed), ['done']);
+  assert.deepEqual(ids(split([{ ...done, pinned: true, taskStage: 'review' }], { selectedId: 'done', hold: 'rest' }).rest), ['done']);
+  // Pinning the open Finished thread moves it to Pinned at once.
+  assert.deepEqual(ids(split([{ ...done, pinned: true, taskStage: 'review' }], { selectedId: 'done', hold: 'review' }).rest), ['done']);
   assert.deepEqual(ids(split([done], { selectedId: 'other', hold: 'rest' }).completed), ['done']);
   assert.deepEqual(ids(split([{ ...idea, running: true }], { selectedId: 'idea', hold: 'rest' }).active), ['idea']);
   // Opened from Active, a finished run stays there while the thread is open.
   assert.deepEqual(ids(split([idea], { selectedId: 'idea', hold: 'active' }).active), ['idea']);
-  assert.deepEqual(ids(split([idea], { selectedId: 'other', hold: 'active' }).rest), ['idea']);
+  assert.deepEqual(ids(split([idea], { selectedId: 'other', hold: 'active' }).review), ['idea']);
+});
+
+test('only Active, Finished and Settled: new, interrupted and in-progress tasks are Finished', () => {
+  const tasks = [task('idea'), task('stopped', { taskStage: 'in_progress', status: 'interrupted' }), task('chat', { taskStage: 'review', lastResponseAt: 3 })];
+  const sections = split(tasks);
+  assert.deepEqual(ids(sections.review).sort(), ['chat', 'idea', 'stopped']);
+  assert.equal(sections.rest.length, 0);
 });
 
 test('sectionOf maps sidebar groups to the section a thread holds', () => {

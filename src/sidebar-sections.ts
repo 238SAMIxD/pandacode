@@ -1,6 +1,6 @@
 /** Sidebar sections: threads that need you (Active, Finished) above the tree, settled ones below it. */
 import type { Session, TaskStage } from './types';
-import { compareCompleted, compareResponded, compareStarted } from './sidebar-sort.ts';
+import { compareCompleted, compareStarted } from './sidebar-sort.ts';
 
 /** Whether the Settled section is open ('true') or closed (anything else). */
 export const COMPLETED_OPEN_KEY = 'pandacode.sidebar.completedOpen';
@@ -30,7 +30,7 @@ export function sectionOf(group: string | undefined): HeldSection | undefined {
 export interface Sections {
   active: Session[];
   review: Session[];
-  /** Pinned, Chats and project folders. */
+  /** Pinned only. */
   rest: Session[];
   /** Settled (stage `completed`), most recently settled first. */
   completed: Session[];
@@ -42,16 +42,19 @@ export function sidebarSections({ tasks, active, stage, selectedId, hold }: Sect
   const sections: Sections = { active: [], review: [], rest: [], completed: [] };
   for (const task of tasks) {
     const running = active(task), done = stage(task) === 'completed', open = task.id === selectedId;
+    // Only three states: Active, Finished, Settled. Anything not running or settled is Finished
+    // (new, interrupted, failed or board-staged alike); `rest` holds only Pinned.
+    // A pinned task is never held in Finished, an unpinned one never in Pinned.
+    const held = open && hold && (task.pinned ? hold !== 'review' : hold !== 'rest') ? hold : undefined;
     if (running) sections.active.push(task);
-    else if (open && hold) sections[hold].push(task);
+    else if (held) sections[held].push(task);
     else if (done) sections.completed.push(task);
     else if (task.pinned) sections.rest.push(task);
-    else if (stage(task) === 'review') sections.review.push(task);
-    else sections.rest.push(task);
+    else sections.review.push(task);
   }
-  // Each section has its own order, never the manual one, so arranging a folder never reshuffles them.
+  // Active and Settled keep their own order; Finished is the main list, so it keeps the sidebar
+  // sort it was given (Manual lists never-arranged work newest first, then the arranged rows).
   sections.active.sort(compareStarted);
-  sections.review.sort(compareResponded);
   sections.completed.sort(compareCompleted);
   return sections;
 }

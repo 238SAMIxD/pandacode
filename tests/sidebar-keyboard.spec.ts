@@ -5,8 +5,8 @@ const row = (page: Page, id: string) => page.locator(`#navigation .task-item[dat
 const tabStops = (page: Page) => page.locator('#navigation').evaluate(nav => [...nav.querySelectorAll<HTMLElement>('button')].filter(b => b.tabIndex >= 0 && b.getClientRects().length).map(b => b.dataset.id ?? b.dataset.action));
 
 async function open(page: Page): Promise<void> {
-  // The sample tasks have finished turns, so they would all sit in Finished; make them pending so
-  // Tasks has rows to move through.
+  // Pending tasks sit in Finished too (only Active, Finished and Settled exist); keep the sample
+  // tasks pending so they list in a known order.
   await page.route('**/src/preview.ts*', async route => {
     const response = await route.fetch();
     const body = (await response.text()).replace(/const providers\s*=/, `for (const s of sessions) s.taskStage = 'pending';\n$&`);
@@ -25,7 +25,7 @@ test('the list is a single Tab stop and arrow keys move between rows and heading
   expect(await tabStops(page)).toEqual(['session-2']);
   await page.keyboard.press('ArrowUp');
   await page.keyboard.press('ArrowUp');
-  const heading = page.locator('.section-fold[data-section="all"]');
+  const heading = page.locator('.section-fold[data-section="review"]');
   await expect(heading).toBeFocused();
   // ← closes the section, → opens it again; the closed state is remembered.
   await page.keyboard.press('ArrowLeft');
