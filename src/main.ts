@@ -77,6 +77,7 @@ import type { ArchitectView } from './architect';
 import { syncOverlayContext } from './overlay-client';
 import { initializeAgentUpdates } from './agent-updates';
 import { isChatProject, NO_PROJECT } from './chats';
+import { cachedDiff, invalidateDiffs, noteChangedPaths, preloadDiffs, preloadDiffsAfterPaint, primeDiffs } from './diff-prefetch';
 
 /* Visual thesis: calm surfaces, system typography, yellow selection, and bamboo details.
  * Content: project navigation → conversation → contextual source review.
@@ -110,8 +111,10 @@ const deletedSessions = new Set<string>();
 let inspectorRequest = 0;
 let fileRequest = 0;
 let selectedFileContext: FileLinkContext | undefined;
-let inspectorDiff: import('./diff-viewer').DiffViewerController | undefined;
-let inspectorDiffEpoch = 0;
+// The open inspector diff. renderInspector() moves its host into the new markup while
+// path, staged state and patch are unchanged, so refreshes never remount or blank it.
+interface InspectorDiff { path: string; staged: boolean; patch: string; host: HTMLElement; controller?: import('./diff-viewer').DiffViewerController }
+let inspectorDiff: InspectorDiff | undefined;
 let transientId = -1;
 const savedMarkdownSources = new WeakMap<HTMLElement, string>();
 let olderMessagesRequest: { sessionId: string; generation: number; beforeId: number } | undefined;
@@ -2551,7 +2554,7 @@ async function refreshInspector(): Promise<void> {
   void projectRunner.refresh();
   const request = ++inspectorRequest;
   const p = project(); if (!p) { state.git = null; state.jj = null; state.files = []; state.gitError = ''; state.filesError = ''; state.inspectorLoading = false; renderInspector(); return; }
-  state.inspectorLoading = true; renderInspector();
+  state.inspectorLoading = true; invalidateDiffs(); renderInspector();
   const id = p.id, folder = state.filePath, context = workspaceContext(), key = workspaceKey();
   const results = await Promise.allSettled([call<GitStatus>('git_status', context), call<FileEntry[]>('list_files', { ...context, path: folder }), call<JjStatus>('jj_status', context)]);
   if (request !== inspectorRequest || id !== state.projectId || key !== workspaceKey() || folder !== state.filePath) return;
@@ -2561,7 +2564,58 @@ async function refreshInspector(): Promise<void> {
   state.files = results[1].status === 'fulfilled' ? results[1].value : [];
   state.jj = results[2].status === 'fulfilled' ? results[2].value : null;
   state.filesError = results[1].status === 'rejected' ? errorText(results[1].reason) || 'The folder could not be read.' : '';
+  // Bump the generation before rendering, so the render's scheduleTopPrime() sees a new status.
+  if (state.git) { noteChangedPaths(state.git.files.map(file => file.path)); ++statusGeneration; }
   renderInspector(); renderHeader();
+  if (state.selectedKind === 'diff' && !state.filePreviewLoading) void refreshOpenDiff();
+}
+let openDiffCheck = 0;
+// The open diff could not be checked against the checkout; shown until a check succeeds.
+let openDiffStale = false;
+/** Refetches the open diff (after a refresh, or a click served from the prefetch cache) and redraws only if its patch changed; the newest check wins. */
+async function refreshOpenDiff(): Promise<void> {
+  const check = ++openDiffCheck, request = fileRequest, path = state.selectedFile, staged = state.selectedStaged, context = selectedFileContext ?? workspaceContext();
+  const patch = await call<string>('git_diff', { ...context, path, staged }).catch(() => undefined);
+  if (check !== openDiffCheck || request !== fileRequest || state.selectedKind !== 'diff' || path !== state.selectedFile || staged !== state.selectedStaged) return;
+  const stale = patch === undefined;
+  if (stale === openDiffStale && (stale || patch === state.selectedContent)) return;
+  openDiffStale = stale;
+  if (patch !== undefined) state.selectedContent = patch;
+  renderInspector();
+}
+function changeLists(files: GitStatus['files']): { staged: GitStatus['files']; unstaged: GitStatus['files'] } {
+  return {
+    staged: files.filter(file => ![' ', '?', '!', '.'].includes(file.index)),
+    unstaged: files.filter(file => ![' ', '!', '.'].includes(file.working) || file.index === '?'),
+  };
+}
+// Once the Changes list has been on screen for TOP_PRIME_DELAY_MS, its first few files get
+// their diffs fetched and first screens highlighted in the pool, so a click on them paints
+// coloured rows. A click sooner skips it (never while a diff is open), it runs once per git
+// status refresh and at most every TOP_PRIME_MS (refreshes during an agent run coalesce),
+// and a file whose patch is unchanged is not primed again.
+const TOP_PRIME_FILES = 3, TOP_PRIME_DELAY_MS = 1_000, TOP_PRIME_MS = 3_000;
+let statusGeneration = 0, topPrimedGeneration = 0, topPrimeAt = -Infinity, topPrimeTimer = 0;
+let topPrimed = new Map<string, string>();
+function scheduleTopPrime(): void {
+  if (topPrimeTimer || topPrimedGeneration === statusGeneration) return;
+  topPrimeTimer = window.setTimeout(primeTopChanges, Math.max(TOP_PRIME_DELAY_MS, topPrimeAt + TOP_PRIME_MS - performance.now()));
+}
+function primeTopChanges(): void {
+  topPrimeTimer = 0;
+  if (!state.inspector || inspectorSuppressed || state.inspectorTab !== 'changes' || state.selectedKind || !state.git?.isRepo || !project() || session()?.remoteDevice) return;
+  topPrimedGeneration = statusGeneration; topPrimeAt = performance.now();
+  const context = workspaceContext(), { staged, unstaged } = changeLists(state.git.files);
+  const top = [...staged.map(file => [file.path, true] as const), ...unstaged.map(file => [file.path, false] as const)].slice(0, TOP_PRIME_FILES);
+  const primed = new Map<string, string>();
+  for (const [path, isStaged] of top) {
+    const key = diffCacheKey(context, path, isStaged), before = topPrimed.get(key);
+    cachedDiff(key, () => call<string>('git_diff', { ...context, path, staged: isStaged })).diff.then(patch => {
+      primed.set(key, patch);
+      if (patch !== before) primeDiffs(path, patch);
+    }, () => {});
+  }
+  topPrimed = primed;
 }
 /** The simulator panel stays mounted once opened; hiding it stops its frames. */
 function syncSimulatorPanel(): void {
@@ -2685,8 +2739,11 @@ async function performAgentUiAction(request: AgentUiAction): Promise<unknown> {
 }
 const INSPECTOR_TITLES: Record<typeof state.inspectorTab, string> = { files: 'Files', search: 'Search', changes: 'Changes', browser: 'Browser', pull: 'Pull request', simulator: 'Simulators', vm: 'Virtual machines', design: 'Design' };
 function renderInspector(): void {
-  const diffEpoch = ++inspectorDiffEpoch;
-  inspectorDiff?.dispose(); inspectorDiff = undefined;
+  const previous = inspectorDiff; inspectorDiff = undefined;
+  if (state.selectedKind !== 'diff') openDiffStale = false;
+  try { renderInspectorContent(previous); } finally { if (previous && inspectorDiff !== previous) previous.controller?.dispose(); }
+}
+function renderInspectorContent(previousDiff: InspectorDiff | undefined): void {
   const visible = state.inspector && !inspectorSuppressed;
   const inspector = $('#inspector');
   inspector.hidden = !visible;
@@ -2719,6 +2776,8 @@ function renderInspector(): void {
   const remote = session()?.remoteDevice;
   if (remote) { $('#changes-count').textContent = ''; target.innerHTML = `<div class="inspector-empty">${icon('monitor')}<h3>Runs on ${escape(remote.name)}</h3><p>Its changes and files are on that computer, so review and commit them there.</p></div>`; return; }
   if (state.inspectorTab === 'search' && !state.selectedKind) { searchPanel.show(target); return; }
+  // An open diff stays up while the inspector reloads around it.
+  if (state.selectedKind === 'diff' && !state.filePreviewLoading) { renderInspectorDiff(target, previousDiff); return; }
   if (state.inspectorLoading) { target.innerHTML = `<div class="inspector-empty" role="status">${icon('refresh')}<p>${state.inspectorTab === 'changes' ? 'Loading changes…' : 'Loading files…'}</p></div>`; return; }
   const loadError = state.inspectorTab === 'changes' ? state.gitError : state.filesError;
   if (loadError) {
@@ -2728,22 +2787,15 @@ function renderInspector(): void {
   }
   if (state.selectedKind) {
     if (state.filePreviewLoading) { target.innerHTML = '<div class="inspector-empty" role="status">Loading file…</div>'; return; }
-    target.innerHTML = `<div class="file-preview-header"><button data-action="back-inspector">${icon('chevron', 'rotate-180')} Back</button><div class="file-preview-actions">${isPreviewableFile(state.selectedFile) ? button('preview-selected-file', 'Preview in browser', 'globe') : ''}${button('copy-file', 'Copy file', 'copy')}${state.selectedKind === 'file' ? selectedFileContext?.sessionId && selectedFileContext.sessionId !== state.sessionId ? '' : `<button data-action="attach-file" data-path="${escape(state.selectedFile)}">${icon('attach')} Attach</button>` : button('toggle-diff-stage', state.selectedStaged ? 'Unstage file' : 'Stage file', state.selectedStaged ? 'close' : 'plus')}</div></div><div class="file-preview-title">${icon('file')}<span title="${escape(state.selectedFile)}">${escape(state.selectedFile)}</span></div>${state.selectedKind === 'diff' ? '<div class="inspector-diff-host"></div>' : '<div class="document-host"></div>'}`;
-    if (state.selectedKind === 'file') renderDocument(target.querySelector<HTMLElement>('.document-host')!, state.selectedFile, state.selectedContent);
-    if (state.selectedKind === 'diff' && state.inspector) {
-      const host = target.querySelector<HTMLElement>('.inspector-diff-host')!;
-      const patch = state.selectedContent, path = state.selectedFile;
-      host.innerHTML = '<p class="inspector-hint" role="status">Loading diff…</p>';
-      void import('./diff-viewer').then(({ mountDiffViewer }) => {
-        if (diffEpoch !== inspectorDiffEpoch || !host.isConnected) return;
-        inspectorDiff = mountDiffViewer(host, { patch, path, layout: 'unified', truncated: patch.includes('[Diff truncated') });
-      }).catch(error => { if (host.isConnected && diffEpoch === inspectorDiffEpoch) host.textContent = errorText(error); });
-    }
+    target.innerHTML = `${filePreviewHeader()}<div class="document-host"></div>`;
+    renderDocument(target.querySelector<HTMLElement>('.document-host')!, state.selectedFile, state.selectedContent);
     return;
   }
   if (state.inspectorTab === 'files') {
     target.innerHTML = `<div class="file-folder-path"><span>${escape(project()?.name)}${state.filePath ? ' / ' + escape(state.filePath) : ''}</span>${state.filePath ? button('parent-folder', 'Go to parent folder', 'arrow') : ''}</div><div class="file-list">${state.files.map(file => `<div class="file-row"><button data-action="${file.isDir ? 'open-folder' : isPreviewableFile(file.path) ? 'preview-file' : 'open-file'}" data-path="${escape(file.path)}">${fileIcon(file.name, file.isDir)}<span>${escape(file.name)}</span>${file.isDir ? icon('chevron') : ''}</button>${!file.isDir && /\.(html?|svg)$/i.test(file.path) ? button('open-file', 'View source of ' + file.name, 'file', 'file-attach', `data-path="${escape(file.path)}"`) : ''}${!file.isDir ? button('attach-file', 'Attach ' + file.name, 'plus', 'file-attach', `data-path="${escape(file.path)}"`) : ''}</div>`).join('') || '<div class="inspector-empty">This folder is empty.</div>'}</div>`; return;
   }
+  preloadDiffsAfterPaint();
+  if (state.git?.isRepo) scheduleTopPrime();
   if (state.jj?.isRepo && !state.jj.colocated) {
     showJjPanel(target, state.jj, {
       call, notify, context: () => workspaceContext(), changed: status => { state.jj = status; },
@@ -2752,10 +2804,59 @@ function renderInspector(): void {
     return;
   }
   if (!state.git?.isRepo) { target.innerHTML = '<div class="inspector-empty">'+icon('branch')+'<h3>No Git repository</h3><p>Open a Git repository to review changes.</p></div>'; return; }
-  const staged = state.git.files.filter(file => ![' ', '?', '!', '.'].includes(file.index));
-  const unstaged = state.git.files.filter(file => ![' ', '!', '.'].includes(file.working) || file.index === '?');
+  const { staged, unstaged } = changeLists(state.git.files);
   const fileRows = (files: typeof staged, isStaged: boolean) => files.map(file => `<div class="change-row"><button class="change-file" data-action="open-diff" data-path="${escape(file.path)}" data-staged="${isStaged}">${fileIcon(file.path.split('/').pop() ?? file.path, false)}<span><strong>${escape(file.path.split('/').pop())}</strong><small>${escape(file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : 'root')}</small></span><span class="file-status ${file.index === '?' ? 'new' : ''}">${file.index === '?' ? 'A' : escape(isStaged ? file.index : file.working)}</span></button>${button(isStaged ? 'unstage-file' : 'stage-file', isStaged ? 'Unstage file' : 'Stage file', isStaged ? 'close' : 'plus', 'stage-button', `data-path="${escape(file.path)}"`)}</div>`).join('');
   target.innerHTML = `<div class="branch-card"><span>${icon('branch')}<span>${escape(state.git.branch || 'No commits yet')}</span>${jjChip(state.jj)}</span><button data-action="worktree" title="Create isolated worktree" aria-label="Create isolated worktree">${icon('plus')}</button></div><div class="change-summary"><span>${state.git.files.length ? state.git.files.length + ' changed files' : 'Working tree clean'}</span>${state.git.files.length ? '' : icon('check')}</div>${staged.length ? `<section class="change-group"><div class="change-group-title"><span>Staged <small>${staged.length}</small></span><button data-action="unstage-all">Unstage all</button></div>${fileRows(staged, true)}</section>` : ''}${unstaged.length ? `<section class="change-group"><div class="change-group-title"><span>Changes <small>${unstaged.length}</small></span><button data-action="stage-all">Stage all</button></div>${fileRows(unstaged, false)}</section>` : ''}<form id="commit-form" class="commit-form"><label for="commit-message">Commit message</label><textarea id="commit-message" placeholder="Describe these changes…" rows="3" aria-label="Commit message"></textarea><button class="commit-button" ${!staged.length ? 'disabled' : ''}>${icon('check')}Commit${staged.length ? ' ' + staged.length + ' file' + (staged.length > 1 ? 's' : '') : ''}</button></form>`;
+}
+function filePreviewHeader(): string {
+  return `<div class="file-preview-header"><button data-action="back-inspector">${icon('chevron', 'rotate-180')} Back</button><div class="file-preview-actions">${isPreviewableFile(state.selectedFile) ? button('preview-selected-file', 'Preview in browser', 'globe') : ''}${button('copy-file', 'Copy file', 'copy')}${state.selectedKind === 'file' ? selectedFileContext?.sessionId && selectedFileContext.sessionId !== state.sessionId ? '' : `<button data-action="attach-file" data-path="${escape(state.selectedFile)}">${icon('attach')} Attach</button>` : button('toggle-diff-stage', state.selectedStaged ? 'Unstage file' : 'Stage file', state.selectedStaged ? 'close' : 'plus')}</div></div><div class="file-preview-title">${icon('file')}<span title="${escape(state.selectedFile)}">${escape(state.selectedFile)}</span></div>`;
+}
+function renderInspectorDiff(target: HTMLElement, previous: InspectorDiff | undefined): void {
+  const path = state.selectedFile, staged = state.selectedStaged, patch = state.selectedContent;
+  const sameFile = previous && previous.path === path && previous.staged === staged ? previous : undefined;
+  const reuse = sameFile?.patch === patch ? sameFile : undefined;
+  // Detaching a scroller loses its position, and a changed patch remounts, so carry it across either.
+  const scroller = sameFile?.host.querySelector<HTMLElement>('.diff-viewer-content');
+  const top = scroller?.scrollTop ?? 0, left = scroller?.scrollLeft ?? 0;
+  target.innerHTML = `${filePreviewHeader()}${openDiffStale ? `<p class="diff-refresh-error" role="status">Couldn’t refresh this diff. It may be out of date. <button data-action="refresh-inspector">Retry</button></p>` : ''}<div class="inspector-diff-host"></div>`;
+  if (!state.inspector) return;
+  const slot = target.querySelector<HTMLElement>('.inspector-diff-host')!;
+  if (reuse) {
+    slot.replaceWith(reuse.host);
+    if (scroller) { scroller.scrollTop = top; scroller.scrollLeft = left; }
+    inspectorDiff = reuse;
+    return;
+  }
+  const view: InspectorDiff = { path, staged, patch, host: slot };
+  inspectorDiff = view;
+  slot.innerHTML = '<p class="inspector-hint" role="status">Loading diff…</p>';
+  void import('./diff-viewer').then(({ mountDiffViewer }) => {
+    if (inspectorDiff !== view) return;
+    const controller = view.controller = mountDiffViewer(slot, { patch, path, layout: 'unified', truncated: patch.includes('[Diff truncated') });
+    if (top || left) void controller.ready.then(() => {
+      const content = inspectorDiff === view ? slot.querySelector<HTMLElement>('.diff-viewer-content') : null;
+      if (content) { content.scrollTop = top; content.scrollLeft = left; }
+    });
+  }).catch(error => { if (inspectorDiff === view) slot.textContent = errorText(error); });
+}
+function diffCacheKey(context: { projectId: string; sessionId?: string }, path: string, staged: boolean): string {
+  return JSON.stringify([context.projectId, context.sessionId ?? '', path, staged]);
+}
+// A pointer resting this long on a change row fetches its diff and highlights its first
+// screen; sweeping across the list starts nothing.
+const HOVER_DWELL_MS = 70;
+let hoverRow: HTMLElement | null = null, hoverTimer = 0;
+function hoverChangeRow(event: Event): void {
+  const row = event.type === 'pointerleave' ? null : (event.target as Element).closest?.<HTMLElement>('#inspector-content .change-file[data-action="open-diff"]') ?? null;
+  if (row === hoverRow) return;
+  hoverRow = row; clearTimeout(hoverTimer);
+  if (row) hoverTimer = window.setTimeout(() => prefetchChangeDiff(row), event.type === 'focusin' ? 0 : HOVER_DWELL_MS);
+}
+function prefetchChangeDiff(row: HTMLElement): void {
+  if (!row.isConnected || !project() || session()?.remoteDevice) return;
+  void preloadDiffs();
+  const context = workspaceContext(), path = row.dataset.path!, staged = row.dataset.staged === 'true';
+  cachedDiff(diffCacheKey(context, path, staged), () => call<string>('git_diff', { ...context, path, staged })).diff.then(patch => primeDiffs(path, patch), () => {});
 }
 async function openRunPreview(url: string, context: { projectId: string; sessionId?: string }): Promise<void> {
   const current = () => state.projectId === context.projectId && state.sessionId === (context.sessionId ?? '');
@@ -2781,9 +2882,14 @@ async function previewFile(path: string, context = workspaceContext(), active?: 
 }
 async function openFile(path: string, kind: 'file' | 'diff', staged = false, context = workspaceContext()): Promise<void> {
   const p = project(); if (!p) return;
-  const request = ++fileRequest, generation = state.generation; const content = await call<string>(kind === 'file' ? 'read_file' : 'git_diff', { ...context, path, staged }); if (request !== fileRequest || p.id !== state.projectId || generation !== state.generation) return;
-  selectedFileContext = { ...context };
+  const request = ++fileRequest, generation = state.generation;
+  const cached = kind === 'diff' ? cachedDiff(diffCacheKey(context, path, staged), () => call<string>('git_diff', { ...context, path, staged })) : undefined;
+  const content = cached ? await cached.diff : await call<string>('read_file', { ...context, path, staged });
+  if (request !== fileRequest || p.id !== state.projectId || generation !== state.generation) return;
+  selectedFileContext = { ...context }; openDiffStale = false; ++openDiffCheck;
   state.selectedFile = path; state.selectedContent = content; state.selectedKind = kind; state.selectedStaged = staged; state.filePreviewLoading = false; state.inspector = true; renderInspector();
+  // A prefetched patch paints at once, then is checked against the checkout.
+  if (cached?.reused) void refreshOpenDiff();
 }
 function attachFile(path: string): void {
   if (!session()) { notify('Start a task before attaching files.'); return; }
@@ -3871,6 +3977,7 @@ async function action(name: string, element: HTMLElement): Promise<void> {
 }
 mountExternalLinks(document, url => call('open_external_url', { url }), report);
 document.addEventListener('click', event => { if ((event.target as Element).closest('.markdown,.streaming-content,.message-content')) return; const element = (event.target as Element).closest<HTMLElement>('[data-action]'); if (!element || element instanceof HTMLButtonElement && element.disabled) return; event.preventDefault(); run(action(element.dataset.action!, element)); });
+for (const type of ['pointerover', 'pointerleave', 'focusin']) $('#inspector-content').addEventListener(type, hoverChangeRow);
 document.addEventListener('submit', event => {
   const form = event.target as HTMLFormElement; event.preventDefault();
   if (form.id === 'composer') { run(send()); return; }
@@ -4056,4 +4163,6 @@ const agentUpdates = initializeAgentUpdates({
 });
 window.addEventListener('pagehide', () => agentUpdates.dispose(), { once: true });
 renderThemeToggle(); render(); renderInspector(); run(boot());
+// The diff engine (module, highlighter workers, themes) starts right after the first paint.
+preloadDiffsAfterPaint();
 if (!preview) initializeNativeAppearance();

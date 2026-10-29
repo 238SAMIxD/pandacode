@@ -86,6 +86,8 @@
 }
 .diff-viewer-file { min-width: 0; }
 .diff-viewer-file + .diff-viewer-file { margin-top: 16px; }
+/* A long file is mounted in hunk groups; its continuations sit flush. */
+.diff-viewer-file + .diff-viewer-continued { margin-top: 0; }
 .diff-viewer-file diffs-container {
   display: block;
   --diffs-font-family: var(--mono);
@@ -102,4 +104,22 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .diff-viewer-button { transition: none; }
+}
+.diff-refresh-error {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: .82rem;
+  background: color-mix(in srgb, var(--raised) 62%, transparent);
+}
+.diff-refresh-error button {
+  margin-left: 6px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 3px;
+  background: var(--raised);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
 }

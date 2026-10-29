@@ -201,7 +201,52 @@ const catalogs: Record<ProviderId, ProviderModel[]> = {
     { id: 'grok-4.7-build-fast', name: 'Grok 4.7 Fast', description: 'Fast variant. 2x the price.', reasoningEfforts: [{ id: 'low', name: 'Low', description: 'Fastest responses.' }, { id: 'high', name: 'High', description: 'Thorough reasoning and quality.' }], defaultReasoningEffort: 'high', contextWindow: 500000 },
   ],
 };
-let git: GitStatus = { branch: 'feat/instant-search', isRepo: true, files: [{ path: 'src/components/search.ts', index: ' ', working: 'M' }, { path: 'src/lib/search-index.ts', index: '?', working: '?' }, { path: 'src/components/search.test.ts', index: ' ', working: 'M' }] };
+// `?bench=diff` (or localStorage `pandacode.bench` = `diff`) adds synthetic, deterministic
+// patches of known size for tests/diff-perf.spec.ts; other runs never see them.
+const benchDiffs = typeof location !== 'undefined' && (new URLSearchParams(location.search).get('bench') === 'diff' || localStorage.getItem('pandacode.bench') === 'diff');
+const BENCH_LINES: Record<string, (n: number, word: string) => string> = {
+  ts: (n, w) => [`export function ${w}${n}(input: ${w[0].toUpperCase()}${w.slice(1)}Options): number {`, `  const ${w} = input.items.filter(item => item.weight > ${n % 17});`, `  if (!${w}.length) return ${n};`, `  return ${w}.reduce((total, item) => total + item.weight * ${n % 9 + 1}, 0);`, `}`, `// ${w} keeps the index warm between keystrokes (${n})`, `const ${w}Cache = new Map<string, ${w[0].toUpperCase()}${w.slice(1)}Entry>();`][n % 7],
+  rs: (n, w) => [`pub fn ${w}_${n}(input: &[u32]) -> u64 {`, `    let ${w}: u64 = input.iter().map(|v| *v as u64 * ${n % 9 + 1}).sum();`, `    if ${w} > ${n} { return ${w}; }`, `    ${w}.saturating_sub(${n % 13})`, `}`, `// ${w} runs on the background pool (${n})`][n % 6],
+  css: (n, w) => [`.${w}-${n} {`, `  padding: ${n % 12}px ${n % 7}px;`, `  color: rgb(var(--accent-rgb) / 0.${n % 9 + 1});`, `  border-radius: ${n % 5}px;`, `}`][n % 5],
+  json: (n, w) => `  "${w}${n}": { "weight": ${n % 97}, "enabled": ${n % 2 === 0}, "label": "${w} ${n}" },`,
+  md: (n, w) => [`## ${w[0].toUpperCase()}${w.slice(1)} ${n}`, ``, `The ${w} step runs after indexing and takes about ${n % 40} ms on a warm cache.`, `- Keep ${w} under ${n % 9 + 1} passes`, `- See \`${w}${n}()\` for details`][n % 5],
+};
+const BENCH_WORDS = ['search', 'index', 'render', 'token', 'cache', 'query', 'layout', 'stream', 'parse', 'merge'];
+/** One file of `changed` added+removed lines in hunks of ~40, from a fixed seed so every run gets the same bytes. */
+function benchPatch(path: string, lang: string, changed: number, seed: number): string {
+  let state = seed >>> 0;
+  const random = () => { state = (state * 1664525 + 1013904223) >>> 0; return state / 2 ** 32; };
+  const line = () => BENCH_LINES[lang](Math.floor(random() * 10_000), BENCH_WORDS[Math.floor(random() * BENCH_WORDS.length)]);
+  const out = [`diff --git a/${path} b/${path}`, 'index 64d221a..0e6c9ef 100644', `--- a/${path}`, `+++ b/${path}`];
+  let oldLine = 1, newLine = 1, left = changed;
+  while (left > 0) {
+    const size = Math.min(left, 40), body: string[] = [];
+    let oldCount = 0, newCount = 0;
+    for (let i = 0; i < 3; i++, oldCount++, newCount++) body.push(' ' + line());
+    for (let done = 0; done < size;) {
+      const run = Math.min(size - done, 1 + Math.floor(random() * 6)), kind = random();
+      for (let i = 0; i < run; i++) {
+        if (kind < 0.4) { body.push('-' + line()); oldCount++; } else if (kind < 0.8) { body.push('+' + line()); newCount++; } else { body.push(' ' + line()); oldCount++; newCount++; }
+      }
+      if (kind < 0.8) done += run;
+    }
+    for (let i = 0; i < 3; i++, oldCount++, newCount++) body.push(' ' + line());
+    out.push(`@@ -${oldLine},${oldCount} +${newLine},${newCount} @@`, ...body);
+    oldLine += oldCount + 20; newLine += newCount + 20; left -= size;
+  }
+  return out.join('\n') + '\n';
+}
+// Sizes are changed lines; with context the patches are ~47, ~1.1k, ~4k, ~30k and ~3k lines.
+const BENCH_DIFFS: Record<string, () => string> = {
+  'bench/small.ts': () => benchPatch('bench/small.ts', 'ts', 30, 1),
+  'bench/medium.ts': () => benchPatch('bench/medium.ts', 'ts', 800, 2),
+  'bench/large.ts': () => benchPatch('bench/large.ts', 'ts', 2800, 3),
+  'bench/huge.ts': () => benchPatch('bench/huge.ts', 'ts', 21_200, 4),
+  'bench/multi': () => Array.from({ length: 10 }, (_, i) => { const lang = ['ts', 'rs', 'css', 'json', 'md'][i % 5]; return benchPatch(`bench/multi/file-${i}.${lang}`, lang, 200, 10 + i); }).join(''),
+};
+// Production builds have no /src/preview.ts to import, so the benchmark reads patches here.
+if (benchDiffs) (window as any).__benchDiffs = BENCH_DIFFS;
+let git: GitStatus = { branch: 'feat/instant-search', isRepo: true, files: [{ path: 'src/components/search.ts', index: ' ', working: 'M' }, { path: 'src/lib/search-index.ts', index: '?', working: '?' }, { path: 'src/components/search.test.ts', index: ' ', working: 'M' }, ...(benchDiffs ? Object.keys(BENCH_DIFFS).map(path => ({ path, index: ' ', working: 'M' })) : [])] };
 const worktreeGit = new Map<string, GitStatus>();
 const previewBranches = new Set<string>(), pushedBranches = new Set<string>(['feat/instant-search']), mergedBranches = new Set<string>();
 function checkoutGit(sessionId: unknown): GitStatus {
@@ -1134,7 +1179,7 @@ export async function invoke<T>(command: string, args: Record<string, any>): Pro
     }
     case 'respond_approval': case 'respond_user_input': break;
     case 'git_status': result = checkoutGit(args.sessionId); break;
-    case 'git_diff': result = `diff --git a/${args.path ?? 'src/components/search.ts'} b/${args.path ?? 'src/components/search.ts'}\nindex 64d221a..0e6c9ef 100644\n--- a/${args.path ?? 'src/components/search.ts'}\n+++ b/${args.path ?? 'src/components/search.ts'}\n@@ -12,5 +12,6 @@ export function mountSearch(items) {\n+  const index = createSearchIndex(items);\n+\n   input.addEventListener("input", () => {\n-    const index = createSearchIndex(items);\n-    renderAll(index.search(input.value));\n+    renderResults(index.search(input.value));\n   });\n }`; break;
+    case 'git_diff': if (benchDiffs && BENCH_DIFFS[args.path]) { result = BENCH_DIFFS[args.path](); break; } result = `diff --git a/${args.path ?? 'src/components/search.ts'} b/${args.path ?? 'src/components/search.ts'}\nindex 64d221a..0e6c9ef 100644\n--- a/${args.path ?? 'src/components/search.ts'}\n+++ b/${args.path ?? 'src/components/search.ts'}\n@@ -12,5 +12,6 @@ export function mountSearch(items) {\n+  const index = createSearchIndex(items);\n+\n   input.addEventListener("input", () => {\n-    const index = createSearchIndex(items);\n-    renderAll(index.search(input.value));\n+    renderResults(index.search(input.value));\n   });\n }`; break;
     case 'git_stage': checkoutGit(args.sessionId).files.forEach(file => { if (args.paths.includes(file.path)) { file.index = args.staged ? 'M' : ' '; file.working = args.staged ? ' ' : 'M'; } }); break;
     case 'git_commit': {
       const checkout = checkoutGit(args.sessionId);
