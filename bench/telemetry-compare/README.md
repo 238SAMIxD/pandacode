@@ -2,6 +2,8 @@
 
 This benchmark launches the production desktop builds of PandaCode and T3 Code as a brand-new user would see them, leaves each one idle for 60 s, and records what it did: every outbound connection made by any process attributed to the app, memory, CPU time, process and thread counts, the data it wrote, and when its first window appeared. Nothing is clicked and no agent runs.
 
+Summary of all findings, with references: [SUMMARY.md](SUMMARY.md).
+
 Results: [results/summary.md](results/summary.md). Raw per-run numbers, per-process breakdowns and every flow: `results/<date>.json`. A static reading of each app's telemetry code is in [static-audit.md](static-audit.md) (written separately).
 
 ## What is measured
